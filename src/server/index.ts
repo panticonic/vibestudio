@@ -2167,15 +2167,45 @@ async function main() {
         capabilityGrantStore.priorInteractiveApprovalCount(input),
       invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
         acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+      /**
+       * Record that a closure-scoped call wanted authority the closure lacks.
+       *
+       * Best effort by construction: the caller has ALREADY decided to deny, and
+       * this only offers the decision somewhere a person can act on it. Anything
+       * unrecordable is therefore logged, never thrown — throwing here replaced
+       * a clean `EMISSIONCHANGE` denial with a raw error, which reached a
+       * Durable Object as an uncaught 500 and killed it mid-activation. A
+       * closure compiled from a product spec (quickfire's, for one) has no
+       * mission document to revise at all, so that path is ordinary, not
+       * exceptional: the capability gap belongs in the closure's checked-in
+       * exposure list, and this log is where a developer finds out which one.
+       */
       proposeReviewedClosureRevision: ({ snapshot, tier, resource }) => {
+        const unrecordable = (reason: string): void => {
+          console.warn(
+            `[ReviewedClosure] ${reason}; the call is denied and no revision was proposed`,
+            {
+              subject: snapshot.reviewedClosureSubject,
+              capability: snapshot.capability,
+              resource: resource.kind === "exact" ? resource.key : resource,
+              tier,
+            }
+          );
+        };
         if (snapshot.reviewedClosureSubject === "-") {
-          throw new Error("Authority revision proposal requires a reviewed-closure invocation");
+          unrecordable("Authority revision proposal requires a reviewed-closure invocation");
+          return;
         }
         const source = reviewedClosureRegistry.sourceForSession(snapshot.sessionId);
         const ref = source ? parseDoTargetId(source.issuer) : null;
         const dispatcher = resolvedDoDispatchForTitles;
         if (!source || source.sourceDocument.kind !== "mission" || !ref || !dispatcher) {
-          throw new Error("Reviewed closure has no reachable source-document owner");
+          unrecordable(
+            `Reviewed closure ${
+              source ? `is compiled from a ${source.sourceDocument.kind} document` : "is unknown"
+            } and has no reachable source-document owner`
+          );
+          return;
         }
         void dispatcher
           .dispatch(ref, "proposeAuthorityRevision", {
@@ -3713,7 +3743,19 @@ async function main() {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        const hostCtx = { caller: createHostCaller("server") };
+        const quickfireWorkerd = assertPresent(
+          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        );
+        // The synthetic system owner is not decoration here. `createEntity`
+        // attributes an entity to `initiatingCaller.subject`, and a subject-less
+        // host caller mints an OWNERLESS vessel: its own outbound RPC then
+        // resolves no subject, the membership gate answers 403 "Not a member of
+        // this workspace", and the object dies during activation — surfacing as
+        // `[runtime.createEntity] DO dispatch failed (500)` in the overlay. The
+        // conversation's vessel is workspace infrastructure the server launched,
+        // which is exactly what `isSystemOwnedRuntime` admits, so it carries the
+        // same owner as the root-template caller above.
+        const hostCtx = { caller: createHostCaller("server", "server", SYSTEM_SUBJECT) };
         const vesselRef = (key: string) => ({
           source: QUICKFIRE_HARNESS.source,
           className: QUICKFIRE_HARNESS.className,
@@ -3836,6 +3878,26 @@ async function main() {
             );
           },
           log: (message, detail) => console.warn(`[Quickfire] ${message}`, detail ?? {}),
+          placeChannel: async ({ channelId, contextId }) => {
+            const { resolveWorkspaceService } = await import("./workspaceServices.js");
+            const channel = resolveWorkspaceService(
+              workspaceDecls,
+              "vibestudio.channel.v1",
+              channelId
+            );
+            if (channel.kind !== "durable-object") {
+              throw new Error(`Channel ${channelId} is not a durable object`);
+            }
+            await activateDurableObjectEntity(doDispatch, quickfireWorkerd, {
+              source: channel.source,
+              className: channel.className,
+              objectKey: channel.objectKey,
+              contextId,
+              // Place it here if it has no placement yet; accept the existing one
+              // if something already activated it. Never move it.
+              contextPolicy: "initial",
+            });
+          },
           resolveSlotContext: async (slotId) => {
             const detail = (await dispatcher.dispatch(
               hostCtx,

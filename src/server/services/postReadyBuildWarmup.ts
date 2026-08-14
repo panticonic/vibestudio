@@ -1,6 +1,17 @@
 import type { BuildSystemV2 } from "../buildV2/index.js";
 
 const NEW_PANEL_SOURCE = "about/new";
+/**
+ * The command agent's harness unit.
+ *
+ * Worth warming because the cost is shared: `ensureDOClass` keys its runtime
+ * binding by SOURCE AND CLASS, not by object key, so the build the first
+ * conversation pays for is reused by every later conversation on every other
+ * panel. Only the per-conversation work (entity, channel, vessel activation)
+ * remains, and none of that can be warmed without creating a conversation the
+ * user never asked for — binding one is a consent gesture, not a cache fill.
+ */
+const COMMAND_AGENT_SOURCE = "workers/quickfire-agent";
 
 export interface PostReadyBuildWarmup {
   start(options?: { includeEvalLibraries?: boolean }): Promise<void>;
@@ -43,6 +54,13 @@ export function createPostReadyBuildWarmup(deps: PostReadyBuildWarmupDeps): Post
 
   const run = async (includeEvalLibraries: boolean): Promise<void> => {
     await runStep(NEW_PANEL_SOURCE, () => deps.buildSystem.bindRuntimeImage(NEW_PANEL_SOURCE));
+    // After the launcher, before the eval libraries: the command overlay is one
+    // keystroke away from any panel, and its first conversation otherwise stalls
+    // on a cold worker build (~2s warm-cache, far worse on a cold one).
+    if (cancelled) return;
+    await runStep(COMMAND_AGENT_SOURCE, () =>
+      deps.buildSystem.bindRuntimeImage(COMMAND_AGENT_SOURCE)
+    );
 
     if (!includeEvalLibraries) return;
     const engineSource = deps.evalEngineSource?.trim();

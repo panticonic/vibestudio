@@ -64,8 +64,9 @@ export type PanelCommandId =
 export const PANEL_CONTEXT_MENU_SECTIONS = [
   ["back", "forward", "stop"],
   ["reload-panel"],
-  // The command agent is offered per panel because the conversation binds to
-  // the panel the user pointed at, not to whatever happens to be focused.
+  // Offered per panel because the overlay binds to the panel the user pointed
+  // at, not to whatever happens to be focused — and because that binding decides
+  // which conversation Ctrl+K would resume.
   ["command-agent"],
   ["open-child-beside", "add-child", "add-child-below", "open-in-new-column", "duplicate"],
   ["copy-address", "open-external", "copy-panel-id"],
@@ -319,9 +320,10 @@ export function getPanelCommandDefinitions(
     },
     {
       id: "command-agent",
-      label: "Command Agent…",
-      description: "Ask the command agent about this panel",
-      shortcut: "Cmd/Ctrl+Shift+K",
+      label: "Command…",
+      description:
+        "Open the command palette over this panel, resuming its command agent conversation if it has one",
+      shortcut: "Cmd/Ctrl+K",
       visible: true,
       enabled: Boolean(chrome),
     },

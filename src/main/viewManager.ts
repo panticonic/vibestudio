@@ -37,6 +37,7 @@ import {
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
 import { ContentOverlayManager } from "./contentOverlayManager.js";
+import { interceptCommandOverlayShortcut, isCommandOverlayInput } from "./menu.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
@@ -269,6 +270,8 @@ export class ViewManager {
   private bootstrapShellAttached = true;
   private nativeShellOverlay: ShellOverlayView;
   private shellContentOverlay: ContentOverlayManager;
+  /** Deliver a surface intent to the chrome owner; also used by key interception. */
+  private forwardContentOverlayIntent: (payload: unknown) => void;
   private currentThemeCss: string | null = null;
   /** Per-view locks to prevent concurrent withViewVisible operations */
   private visibilityLocks = new Map<string, Promise<unknown>>();
@@ -364,16 +367,17 @@ export class ViewManager {
       }
     );
     this.nativeShellOverlay.setWindow(this.window);
+    this.forwardContentOverlayIntent = (payload) => {
+      const target = this.getShellChromeWebContents();
+      target?.send("vibestudio:content-overlay:forward", payload);
+    };
     this.shellContentOverlay = new ContentOverlayManager(
       options.contentOverlayPreload ?? options.shellPreload,
       () => {
         const wc = this.getShellChromeWebContents();
         return wc && !wc.isDestroyed() ? wc.getURL() : null;
       },
-      (payload) => {
-        const target = this.getShellChromeWebContents();
-        target?.send("vibestudio:content-overlay:forward", payload);
-      }
+      (payload) => this.forwardContentOverlayIntent(payload)
     );
     this.shellContentOverlay.setWindow(this.window);
 
@@ -451,6 +455,7 @@ export class ViewManager {
     });
 
     this.installShellKeyForwarding(this.shellView.webContents);
+    this.installContentOverlayKeys(this.shellView.webContents);
 
     // Update shell and panel bounds whenever the native content surface changes.
     // Maximize/full-screen transitions are separate native events on some
@@ -481,6 +486,27 @@ export class ViewManager {
     this.compositorRecovery.start();
   }
 
+  /**
+   * Keys the content overlays own, from any web contents that could eat them.
+   *
+   * `Ctrl/Cmd+K` is app-global by design (spec §1.3): the shell forwards its own
+   * keystrokes into the focused panel and a focused panel page consumes them, so
+   * without this the chord only worked while an interactive chrome field held
+   * focus. `Escape` is forwarded only while an overlay is actually visible, and
+   * as an ordinary surface intent — the chrome owner decides what it means
+   * (quickfire closes, the approval card deliberately ignores it), because
+   * "should Escape dismiss this" is presentation policy the host must not own.
+   */
+  private installContentOverlayKeys(contents: WebContents): void {
+    interceptCommandOverlayShortcut(contents);
+    contents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown" || input.key !== "Escape") return;
+      if (this.shellContentOverlay.getVisibleViews().length === 0) return;
+      event.preventDefault();
+      this.forwardContentOverlayIntent({ type: "host-escape" });
+    });
+  }
+
   private installShellKeyForwarding(contents: WebContents): void {
     contents.on("before-input-event", (event, input) => {
       if (this.hidePanelViewsUntilHostedShellReady && !this.nativePanelSlots.hostedShellReady) {
@@ -489,6 +515,9 @@ export class ViewManager {
       const panelId = this.getFocusedPanelId();
       if (!panelId || this.nativeShellOverlay.isVisible() || this.shellChromeInteractiveFocus)
         return;
+      // The command chord belongs to the overlay, not to the panel: forwarding
+      // it let the panel swallow the key and the menu accelerator never ran.
+      if (isCommandOverlayInput(input)) return;
       // These keys operate focused shell controls and navigation widgets. Never
       // teleport them into a panel even if focus state is momentarily racing.
       if (
@@ -672,6 +701,7 @@ export class ViewManager {
     this.views.set(config.id, managed);
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
     if (hostChrome) this.installShellKeyForwarding(view.webContents);
+    this.installContentOverlayKeys(view.webContents);
     log.trace(` Created view for ${config.id}, type: ${config.type}`);
 
     // Create named handlers for proper cleanup in destroyView

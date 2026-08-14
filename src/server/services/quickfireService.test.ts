@@ -140,6 +140,36 @@ describe("quickfire service", () => {
     }
   });
 
+  it("places the channel in the panel's context before the vessel exists", async () => {
+    // Placement goes to whoever activates the Durable Object first and is
+    // permanent. If the vessel — or worse, a client — got there first, the
+    // conversation's channel would live in that caller's context instead of the
+    // panel's, and nothing would ever move it back.
+    const order: string[] = [];
+    const placeChannel = vi.fn(async () => {
+      order.push("placeChannel");
+    });
+    const { call, store } = makeService({
+      placeChannel,
+      createAgent: vi.fn(async ({ channelId, contextId }) => {
+        order.push("createAgent");
+        return {
+          entityId: `do:workers/quickfire-agent:QuickfireAgentWorker:${channelId}`,
+          contextId,
+        };
+      }),
+    });
+
+    await call<QuickfireSession>("sessionFor", [{ slotId: "slot-a" }]);
+
+    expect(order).toEqual(["placeChannel", "createAgent"]);
+    expect(placeChannel).toHaveBeenCalledWith({
+      channelId: "quickfire-1",
+      contextId: "ctx-panel",
+    });
+    expect(store.sessions.get("slot-a")?.contextId).toBe("ctx-panel");
+  });
+
   it("creates the backing exactly once and resumes the same conversation afterwards", async () => {
     const { call, createAgent } = makeService();
 

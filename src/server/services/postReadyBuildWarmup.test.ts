@@ -34,6 +34,8 @@ describe("post-ready build warmup", () => {
 
     expect(calls).toEqual([
       "about/new",
+      // A failed launcher build must not skip the command agent behind it.
+      "workers/quickfire-agent",
       "packages/eval",
       "packages/runtime/hosted",
       "packages/runtime/panel-runtime",
@@ -70,9 +72,9 @@ describe("post-ready build warmup", () => {
     const warn = vi.fn();
     const warmup = createPostReadyBuildWarmup({
       buildSystem: {
-        bindRuntimeImage: vi.fn(async () => {
-          calls.push("about/new");
-          throw new Error("launcher build failed");
+        bindRuntimeImage: vi.fn(async (source: string) => {
+          calls.push(source);
+          throw new Error(`${source} build failed`);
         }),
         getBuild: vi.fn(async (source: string) => {
           calls.push(source);
@@ -88,16 +90,18 @@ describe("post-ready build warmup", () => {
 
     expect(calls).toEqual([
       "about/new",
+      // A failed launcher build must not skip the units queued behind it.
+      "workers/quickfire-agent",
       "packages/eval",
       "packages/runtime/hosted",
       "packages/runtime/panel-runtime",
       "packages/runtime/portable",
     ]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("launcher build failed"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("about/new build failed"));
   });
 
   it("warms only the launcher for ephemeral workspaces", async () => {
-    const bindRuntimeImage = vi.fn(async () => ({}) as never);
+    const bindRuntimeImage = vi.fn(async (_source: string) => ({}) as never);
     const getBuild = vi.fn(async () => ({}) as never);
     const warmup = createPostReadyBuildWarmup({
       buildSystem: { bindRuntimeImage, getBuild },
@@ -108,7 +112,12 @@ describe("post-ready build warmup", () => {
 
     await warmup.start();
 
-    expect(bindRuntimeImage).toHaveBeenCalledWith("about/new");
+    // The two units a user can reach from anywhere without opening anything:
+    // the launcher, and the command agent one keystroke behind the overlay.
+    expect(bindRuntimeImage.mock.calls.map(([source]) => source)).toEqual([
+      "about/new",
+      "workers/quickfire-agent",
+    ]);
     expect(getBuild).not.toHaveBeenCalled();
   });
 });

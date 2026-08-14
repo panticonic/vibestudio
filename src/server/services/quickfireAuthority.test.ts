@@ -352,8 +352,21 @@ describe("quickfire reviewed closure", () => {
       expect(serviceMethods).toContain(method);
     }
     expect(serviceMethods).not.toContain("panelCdp.hostProvider.open");
-    expect(serviceMethods.some((method) => method.startsWith("runtime."))).toBe(false);
     expect(serviceMethods.some((method) => method.startsWith("eval."))).toBe(false);
+    // The vessel's own plumbing is exposed by exact name — a vessel that cannot
+    // title itself or set its alarms never activates — but nothing else in
+    // `runtime.*` is: quickfire still cannot launch, retire, or reserve.
+    expect(serviceMethods).toContain("runtime.setTitle");
+    expect(serviceMethods.filter((method) => method.startsWith("runtime."))).toEqual([
+      "runtime.setTitle",
+    ]);
+    expect(serviceMethods).toContain("workspace-state.alarmSet");
+    expect(serviceMethods.filter((method) => method.startsWith("workspace-state."))).toEqual([
+      "workspace-state.alarmClear",
+      "workspace-state.alarmSet",
+      "workspace-state.lifecycleLeaseClear",
+      "workspace-state.lifecycleLeaseUpsert",
+    ]);
     // Sorted and deduped, so the digest is a pure function of checked-in files.
     expect([...serviceMethods].sort()).toEqual(serviceMethods);
   });

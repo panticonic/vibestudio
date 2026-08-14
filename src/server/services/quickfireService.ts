@@ -85,6 +85,17 @@ export interface QuickfireServiceDeps {
   }): Promise<void>;
   /** Resolve the context a slot currently lives in, for a fresh binding. */
   resolveSlotContext(slotId: string): Promise<string | null>;
+  /**
+   * Place the conversation's channel in the panel's context, before any client
+   * can resolve it.
+   *
+   * Placement goes to whoever activates the Durable Object first, and it is
+   * permanent; `contextPolicy: "initial"` only makes later resolvers accept an
+   * existing placement instead of erroring on a mismatch. Without this call the
+   * channel lands wherever the first resolver happened to be — today the vessel,
+   * but any client that got there first would move it, silently and for good.
+   */
+  placeChannel?(input: { channelId: string; contextId: string }): Promise<void>;
   /** Best-effort resume-chip inputs. Failure degrades to "unknown", never to zero. */
   channelActivity?(channelId: string): Promise<QuickfireChannelActivity>;
   /**
@@ -273,6 +284,8 @@ export function createQuickfireService(deps: QuickfireServiceDeps): ServiceDefin
         const contextId = await deps.resolveSlotContext(input.slotId);
         if (!contextId) throw new Error(`Panel slot is not open: ${input.slotId}`);
         const channelId = (deps.newChannelId ?? defaultChannelId)(input.slotId);
+        // Before the vessel, and before the result reaches any client.
+        await deps.placeChannel?.({ channelId, contextId });
         const agent = await deps.createAgent({
           slotId: input.slotId,
           channelId,

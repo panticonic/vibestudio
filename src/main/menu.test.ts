@@ -19,18 +19,19 @@ describe("overlay accelerators", () => {
   const items = () => flatten(buildHamburgerMenuTemplate({} as never, async () => {}));
   const find = (label: string) => items().find((item) => item.label?.startsWith(label));
 
-  it("binds the command palette to CmdOrCtrl+K on every platform", () => {
-    // Off-mac this used to be Ctrl+Shift+K, which quickfire now owns.
-    expect(find("Command Palette")?.accelerator).toBe("CmdOrCtrl+K");
+  it("binds the overlay to CmdOrCtrl+K on every platform", () => {
+    // Off-mac this used to be Ctrl+Shift+K.
+    expect(find("Command")?.accelerator).toBe("CmdOrCtrl+K");
   });
 
-  it("binds the command agent to CmdOrCtrl+Shift+K", () => {
-    expect(find("Command Agent")?.accelerator).toBe("CmdOrCtrl+Shift+K");
-  });
-
-  it("offers exactly one item per overlay entry point", () => {
-    expect(items().filter((item) => item.label?.startsWith("Command Palette"))).toHaveLength(1);
-    expect(items().filter((item) => item.label?.startsWith("Command Agent"))).toHaveLength(1);
+  it("offers exactly one overlay entry point and no shift chord", () => {
+    // One door: the overlay itself decides whether the input is a command, a
+    // destination, or something to say to the panel's agent, and it resumes an
+    // existing conversation on its own. A second accelerator would only
+    // pre-expand the transcript.
+    const overlayItems = items().filter((item) => item.label?.startsWith("Command"));
+    expect(overlayItems).toHaveLength(1);
+    expect(items().filter((item) => item.accelerator === "CmdOrCtrl+Shift+K")).toHaveLength(0);
   });
 });
 

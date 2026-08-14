@@ -16,6 +16,7 @@ let _menuPanelRegistry: PanelRegistry | null = null;
 let _menuViewManager: ViewManager | null = null;
 let _menuEventService: EventService | null = null;
 const panelDevToolsShortcutInterceptors = new WeakSet<WebContents>();
+const commandOverlayShortcutInterceptors = new WeakSet<WebContents>();
 
 /** Set the event service for menu operations. Called from index.ts. */
 export function setMenuEventService(es: EventService): void {
@@ -136,6 +137,37 @@ function isPanelDevToolsInput(input: Electron.Input): boolean {
   return hasPrimary && input.shift && !input.alt;
 }
 
+/**
+ * The one command chord (§1.3). Shift and alt are excluded so this never
+ * shadows a panel's own shifted bindings.
+ */
+export function isCommandOverlayInput(input: Electron.Input): boolean {
+  if (input.type !== "keyDown") return false;
+  if (input.key.toLowerCase() !== "k" && input.code !== "KeyK") return false;
+  const hasPrimary = process.platform === "darwin" ? input.meta : input.control;
+  return hasPrimary && !input.shift && !input.alt;
+}
+
+/**
+ * Open the command overlay from any web contents that can steal the chord.
+ *
+ * The menu accelerator alone is not enough. The shell chrome forwards its
+ * keystrokes into the focused panel (`installShellKeyForwarding`), and a focused
+ * panel page consumes them itself — so `Ctrl+K` only ever reached the menu when
+ * an interactive chrome field held focus, which is exactly the "nothing happens"
+ * report. Intercepting here means the chord is app-global as the spec intends,
+ * and `preventDefault` keeps the menu accelerator from firing a second time.
+ */
+export function interceptCommandOverlayShortcut(contents: WebContents): void {
+  if (commandOverlayShortcutInterceptors.has(contents)) return;
+  commandOverlayShortcutInterceptors.add(contents);
+  contents.on("before-input-event", (event, input) => {
+    if (!isCommandOverlayInput(input)) return;
+    event.preventDefault();
+    emitMenuEvent("open-command-palette");
+  });
+}
+
 function interceptPanelDevToolsShortcut(shellContents: WebContents): void {
   if (panelDevToolsShortcutInterceptors.has(shellContents)) {
     return;
@@ -201,10 +233,12 @@ export function buildHamburgerMenuTemplate(
   const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
-  // One key on every platform (spec §2.3). `Ctrl+Shift+K` off-mac was an
-  // accident of history; the quickfire accelerator now uses that slot.
+  // One key, one door. The overlay decides what the input meant: prose talks to
+  // the command agent, a panel name switches panels, `>` and `@` narrow to
+  // commands and destinations. A second press cycles those scopes. There is
+  // deliberately no shift chord for the agent — it would only pre-expand the
+  // transcript, which typing already does.
   const commandPaletteAccelerator = "CmdOrCtrl+K";
-  const quickfireAccelerator = "CmdOrCtrl+Shift+K";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
 
   // Panel: everything acting on the panel in the focused pane.
@@ -333,14 +367,9 @@ export function buildHamburgerMenuTemplate(
     {
       // Filed with the other "how do I reach things" entries rather than at the
       // top: it is a discovery surface, not a frequent menu click.
-      label: "Command Palette…",
+      label: "Command…",
       accelerator: commandPaletteAccelerator,
       click: () => emitMenuEvent("open-command-palette"),
-    },
-    {
-      label: "Command Agent…",
-      accelerator: quickfireAccelerator,
-      click: () => emitMenuEvent("open-quickfire"),
     },
     {
       label: "Keyboard Shortcuts",
@@ -393,6 +422,7 @@ export function setupMenu(
   options?: { onHistoryBack?: () => void; onHistoryForward?: () => void }
 ): void {
   interceptPanelDevToolsShortcut(shellContents);
+  interceptCommandOverlayShortcut(shellContents);
 
   const isMac = process.platform === "darwin";
   const newPanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.newPanel;
@@ -400,10 +430,12 @@ export function setupMenu(
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   const closePanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.closePanel;
-  // One key on every platform (spec §2.3). `Ctrl+Shift+K` off-mac was an
-  // accident of history; the quickfire accelerator now uses that slot.
+  // One key, one door. The overlay decides what the input meant: prose talks to
+  // the command agent, a panel name switches panels, `>` and `@` narrow to
+  // commands and destinations. A second press cycles those scopes. There is
+  // deliberately no shift chord for the agent — it would only pre-expand the
+  // transcript, which typing already does.
   const commandPaletteAccelerator = "CmdOrCtrl+K";
-  const quickfireAccelerator = "CmdOrCtrl+Shift+K";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const viewSubmenu: MenuItemConstructorOptions[] = [];
 
@@ -456,14 +488,9 @@ export function setupMenu(
         },
         { type: "separator" },
         {
-          label: "Command Palette...",
+          label: "Command...",
           accelerator: commandPaletteAccelerator,
           click: () => emitMenuEvent("open-command-palette"),
-        },
-        {
-          label: "Command Agent...",
-          accelerator: quickfireAccelerator,
-          click: () => emitMenuEvent("open-quickfire"),
         },
         {
           label: "Focus Pending Approval",

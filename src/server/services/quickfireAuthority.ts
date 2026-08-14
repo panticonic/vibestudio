@@ -78,8 +78,9 @@ export const QUICKFIRE_LINEAGE_CLASSES = [
  * against the generated host authority catalog at compile time, so the compiled
  * list — and the closure digest — is a pure function of checked-in files.
  *
- * Deliberately absent: `eval.*`, `runtime.*`, `panelTree.*`, `extensions.*`.
- * Quickfire looks and makes small edits; it does not launch things.
+ * Deliberately absent: `eval.*`, `panelTree.*`, `extensions.*`, and all of
+ * `runtime.*` except the one titling call below. Quickfire looks and makes small
+ * edits; it does not launch things.
  */
 export const QUICKFIRE_EXPOSURE_PATTERNS = [
   // §5.3 debug tools.
@@ -93,6 +94,19 @@ export const QUICKFIRE_EXPOSURE_PATTERNS = [
   "vcs.*",
   "blobstore.*",
   "provenance.*",
+  // Vessel plumbing: what `DurableObjectBase` itself calls to exist. A vessel
+  // that cannot title itself or drive its own alarms is not a conversation that
+  // merely lacks a tool — it fails activation outright, and under a reviewed
+  // closure whose source document is this spec rather than a mission, the
+  // missing-capability path has no revision owner to appeal to and surfaces as
+  // an opaque 500. All five are open-tier, so listing them grants no more than
+  // being allowed to run. Enumerated exactly, never by prefix, so `runtime.*`
+  // and the rest of `workspace-state.*` stay out.
+  "runtime.setTitle",
+  "workspace-state.alarmSet",
+  "workspace-state.alarmClear",
+  "workspace-state.lifecycleLeaseUpsert",
+  "workspace-state.lifecycleLeaseClear",
   // Conversation plumbing: workspace-service resolution, the latch, probes.
   "workers.resolveService",
   "workers.resolveDurableObject",

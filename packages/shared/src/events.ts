@@ -42,7 +42,6 @@ export type EventName =
   | "open-workspace-switcher"
   | "open-connection-settings"
   | "open-command-palette"
-  | "open-quickfire"
   | "focus-approval-card"
   | "toggle-address-bar"
   | "focus-address-bar"
@@ -260,9 +259,13 @@ export interface EventPayloads {
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
   "open-connection-settings": undefined;
+  /**
+   * Open the command overlay over the focused panel. One event for one key: the
+   * overlay resumes that panel's agent conversation when it has one and shows
+   * the ranked palette when it does not, so there is no second "open straight
+   * into the conversation" entry point to keep in sync.
+   */
   "open-command-palette": undefined;
-  /** Open the overlay straight into quickfire (`/`) mode over the focused panel. */
-  "open-quickfire": undefined;
   "focus-approval-card": undefined;
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
@@ -471,7 +474,6 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "open-workspace-switcher",
   "open-connection-settings",
   "open-command-palette",
-  "open-quickfire",
   "focus-approval-card",
   "toggle-address-bar",
   "focus-address-bar",
