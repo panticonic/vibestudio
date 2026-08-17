@@ -88,6 +88,12 @@ export class ContentOverlayManager {
     });
   }
 
+  ownsWebContentsId(webContentsId: number): boolean {
+    return [...this.instances.values()].some((instance) =>
+      instance.ownsWebContentsId(webContentsId)
+    );
+  }
+
   /** Re-raise the visible overlays, in stacking order, above the panels. */
   bringToFront(): void {
     for (const entry of this.orderedInstances()) entry.instance.bringToFront();

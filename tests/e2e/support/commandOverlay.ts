@@ -18,6 +18,7 @@ import { expect } from "@playwright/test";
 
 import type { TestApp } from "../../setup/electronSetup";
 import { retryIdempotentAutomationRead } from "../../setup/automationContext";
+import { clickWindowPointThroughNativeInput } from "../../setup/nativeInput";
 
 export interface CommandOverlaySnapshot {
   /** The palette card is mounted in the overlay document. */
@@ -127,15 +128,8 @@ export async function pressChordOnFocusedContents(
  * no DOM backdrop can observe the press.
  */
 export async function clickOutsideCommandOverlay(testApp: TestApp): Promise<boolean> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    const shell = webContents
-      .getAllWebContents()
-      .find((contents) => !contents.isDestroyed() && contents.getTitle() === "@workspace-apps/shell");
-    if (!shell) return false;
-    shell.sendInputEvent({ type: "mouseDown", x: 8, y: 80, button: "left", clickCount: 1 });
-    shell.sendInputEvent({ type: "mouseUp", x: 8, y: 80, button: "left", clickCount: 1 });
-    return true;
-  });
+  await clickWindowPointThroughNativeInput(testApp.app, { x: 8, y: 80 });
+  return true;
 }
 
 /**
@@ -276,6 +270,22 @@ async function evaluateInOverlayDocument<T>(
   return result;
 }
 
+/** Exercise the browser Clipboard API from the isolated overlay document. */
+export async function writeClipboardInCommandOverlay(
+  testApp: TestApp,
+  value: string
+): Promise<boolean> {
+  const result = await evaluateInOverlayDocument<boolean>(
+    testApp,
+    `navigator.clipboard.writeText(${JSON.stringify(value)}).then(() => true, () => false)`
+  );
+  if (result?.value !== true) return false;
+  return testApp.app.evaluate(
+    ({ clipboard }, expected) => clipboard.readText() === expected,
+    value
+  );
+}
+
 /** Type into the overlay's input and dispatch the events the surface listens for. */
 export async function typeIntoCommandOverlay(testApp: TestApp, value: string): Promise<boolean> {
   const result = await evaluateInOverlayDocument<boolean>(
@@ -325,9 +335,25 @@ export async function clickInCommandOverlay(testApp: TestApp, label: string): Pr
     `(() => {
       const button = Array.from(document.querySelectorAll("button"))
         .find((candidate) => (candidate.textContent ?? "").includes(${JSON.stringify(label)}));
-      if (!button) return false;
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       button.click();
       return true;
+    })()`
+  );
+  return result?.value === true;
+}
+
+/** Whether a named overlay action is present and currently actionable. */
+export async function isCommandOverlayButtonEnabled(
+  testApp: TestApp,
+  label: string
+): Promise<boolean> {
+  const result = await evaluateInOverlayDocument<boolean>(
+    testApp,
+    `(() => {
+      const button = Array.from(document.querySelectorAll("button"))
+        .find((candidate) => (candidate.textContent ?? "").includes(${JSON.stringify(label)}));
+      return button instanceof HTMLButtonElement && !button.disabled;
     })()`
   );
   return result?.value === true;

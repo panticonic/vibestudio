@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { CdpHostProvider, type CdpHostProviderSocket } from "./cdpHostProvider.js";
+import {
+  CdpHostProvider,
+  type CdpHostProviderOptions,
+  type CdpHostProviderSocket,
+} from "./cdpHostProvider.js";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 class FakeSocket extends EventEmitter implements CdpHostProviderSocket {
@@ -16,7 +20,10 @@ class FakeSocket extends EventEmitter implements CdpHostProviderSocket {
   }
 }
 
-function createHarness(serverUrl = "ws://127.0.0.1:1234") {
+function createHarness(
+  serverUrl = "ws://127.0.0.1:1234",
+  options: Pick<CdpHostProviderOptions, "onHostCommand"> = {}
+) {
   const socket = new FakeSocket();
   const openDevTools = vi.fn();
   let socketUrl = "";
@@ -73,6 +80,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
         openDevTools,
         captureView,
       }) as never,
+    ...options,
   });
   return {
     provider,
@@ -848,6 +856,32 @@ describe("CdpHostProvider", () => {
       targetId: "panel-1",
       requestId: "h2",
       result: { rebuilt: true },
+    });
+  });
+
+  it("keeps built-in host commands available when extension commands are configured", async () => {
+    const onHostCommand = vi.fn(async () => ({ rebuilt: true }));
+    const { provider, socket, contents } = createHarness("ws://127.0.0.1:1234", {
+      onHostCommand,
+    });
+    contents.executeJavaScript.mockResolvedValueOnce({ ok: true, value: "result" } as never);
+    provider.start();
+    socket.emit("open");
+
+    await provider.handleProviderMessageForTest({
+      type: "host:command",
+      targetId: "panel-1",
+      requestId: "h-evaluate",
+      action: "evaluate",
+      args: ["document.title"],
+    });
+
+    expect(onHostCommand).not.toHaveBeenCalled();
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "host:result",
+      targetId: "panel-1",
+      requestId: "h-evaluate",
+      result: expect.objectContaining({ ok: true, value: "result" }),
     });
   });
 

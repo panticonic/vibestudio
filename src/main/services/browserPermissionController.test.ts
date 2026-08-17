@@ -8,7 +8,7 @@ import {
   viewMayRequestPeripheral,
 } from "./browserPermissionController.js";
 
-function controllerHarness() {
+function controllerHarness(options: { contentOverlay?: boolean } = {}) {
   const url = "https://workspace.test/panel";
   const viewInfo = {
     type: "panel",
@@ -53,11 +53,12 @@ function controllerHarness() {
   };
   const manager = {
     findViewIdByWebContentsId: (id: number) => (id === 42 ? "panel:terminal" : null),
+    isContentOverlayWebContentsId: (id: number) => options.contentOverlay === true && id === 43,
     getViewInfo: (id: string) => (id === "panel:terminal" ? viewInfo : null),
     getViewPartition: (id: string) => (id === "panel:terminal" ? undefined : null),
   };
   const contents = {
-    id: 42,
+    id: options.contentOverlay ? 43 : 42,
     getURL: () => url,
     isDestroyed: () => false,
     on: () => undefined,
@@ -95,6 +96,29 @@ describe("browser permission capability mapping", () => {
     } as Electron.PermissionRequest);
 
     expect(decisions).toEqual([true, true]);
+    expect(listener()).toBeNull();
+  });
+
+  it("allows user-activated copy from an isolated shell content overlay", () => {
+    const { controller, contents, url, listener } = controllerHarness({ contentOverlay: true });
+    const decisions: boolean[] = [];
+
+    expect(
+      controller.checkPermission(contents, "clipboard-sanitized-write", url, {
+        requestingUrl: url,
+      } as Electron.PermissionCheckHandlerHandlerDetails)
+    ).toBe(true);
+    controller.requestPermission(
+      contents,
+      "clipboard-sanitized-write",
+      (allowed) => decisions.push(allowed),
+      { requestingUrl: url } as Electron.PermissionRequest
+    );
+    controller.requestPermission(contents, "clipboard-read", (allowed) => decisions.push(allowed), {
+      requestingUrl: url,
+    } as Electron.PermissionRequest);
+
+    expect(decisions).toEqual([true, false]);
     expect(listener()).toBeNull();
   });
 

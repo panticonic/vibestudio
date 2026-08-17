@@ -28,6 +28,7 @@ const log = createDevLogger("CdpHostProvider");
 const CONSOLE_LOG_HISTORY_CAPACITY = 1_000;
 const CONSOLE_ERROR_HISTORY_CAPACITY = 500;
 const PANEL_PAGE_OBSERVATION_TIMEOUT_MS = 2_000;
+const HOST_COMMAND_NOT_BUILT_IN = Symbol("host-command-not-built-in");
 
 export interface CdpHostProviderSocket {
   readonly readyState: number;
@@ -527,9 +528,12 @@ export class CdpHostProvider {
     if (!targetId || !requestId || !action) return;
     try {
       const args = Array.isArray(message.args) ? message.args : [];
-      const result = this.options.onHostCommand
-        ? await this.options.onHostCommand(targetId, action, args)
-        : await this.handleBuiltInHostCommand(targetId, action, args);
+      const builtInResult = await this.tryHandleBuiltInHostCommand(targetId, action, args);
+      let result = builtInResult;
+      if (builtInResult === HOST_COMMAND_NOT_BUILT_IN) {
+        if (!this.options.onHostCommand) throw new Error(`Unknown host command: ${action}`);
+        result = await this.options.onHostCommand(targetId, action, args);
+      }
       this.send({ type: "host:result", targetId, requestId, result });
     } catch (error) {
       this.send({
@@ -541,11 +545,11 @@ export class CdpHostProvider {
     }
   }
 
-  private async handleBuiltInHostCommand(
+  private async tryHandleBuiltInHostCommand(
     targetId: string,
     action: string,
     args: unknown[]
-  ): Promise<unknown> {
+  ): Promise<unknown | typeof HOST_COMMAND_NOT_BUILT_IN> {
     if (action === "openDevTools") {
       const mode = args[0] === "right" || args[0] === "bottom" ? args[0] : "detach";
       this.options.getViewManager()?.openDevTools(targetId, mode);
@@ -566,7 +570,7 @@ export class CdpHostProvider {
     if (action === "evaluate") {
       return this.evaluate(targetId, String(args[0] ?? ""), normalizeEvaluateOptions(args[1]));
     }
-    throw new Error(`Unknown host command: ${action}`);
+    return HOST_COMMAND_NOT_BUILT_IN;
   }
 
   private attachConsoleHistory(targetId: string): void {

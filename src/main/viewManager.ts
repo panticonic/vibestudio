@@ -2595,6 +2595,11 @@ export class ViewManager {
     return viewId;
   }
 
+  /** Whether this renderer is one of the shell's isolated rich overlay documents. */
+  isContentOverlayWebContentsId(webContentsId: number): boolean {
+    return this.shellContentOverlay.ownsWebContentsId(webContentsId);
+  }
+
   /**
    * Get WebContents for a view by ID.
    * Returns null if view doesn't exist or is destroyed.

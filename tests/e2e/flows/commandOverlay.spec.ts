@@ -11,13 +11,16 @@ import {
   captureShellConsole,
   clickOutsideCommandOverlay,
   clickInCommandOverlay,
+  isCommandOverlayButtonEnabled,
   pressChordOnFocusedContents,
   readShellConsole,
   pressInCommandOverlay,
   probeCommandOverlay,
   typeIntoCommandOverlay,
   waitHostedShellReady,
+  writeClipboardInCommandOverlay,
 } from "../support/commandOverlay";
+import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -75,6 +78,31 @@ test.describe("command overlay", () => {
     expect(snapshot?.conversation).toBe(false);
   });
 
+  test("allows user-activated clipboard writes from the isolated overlay document", async () => {
+    test.skip(
+      !hasOwnedX11Display(),
+      "Clipboard mutation coverage requires the isolated Playwright-owned X11 desktop"
+    );
+    const previousClipboard = await testApp.app.evaluate(({ clipboard }) => clipboard.readText());
+    try {
+      if ((await probeCommandOverlay(testApp))?.open !== true) {
+        expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+        await expect
+          .poll(async () => (await probeCommandOverlay(testApp))?.open === true, {
+            timeout: 20_000,
+          })
+          .toBe(true);
+      }
+
+      expect(await writeClipboardInCommandOverlay(testApp, "quickfire clipboard test")).toBe(true);
+    } finally {
+      await testApp.app.evaluate(
+        ({ clipboard }, previous) => clipboard.writeText(previous),
+        previousClipboard
+      );
+    }
+  });
+
   test("closes on Escape when focus is not in the input", async () => {
     await expect
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, { timeout: 20_000 })
@@ -91,6 +119,10 @@ test.describe("command overlay", () => {
   });
 
   test("closes when the user clicks a sibling panel or shell surface", async () => {
+    test.skip(
+      !hasOwnedX11Display(),
+      "Native outside-click coverage requires the isolated Playwright-owned X11 desktop"
+    );
     expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
     await expect
       .poll(async () => (await probeCommandOverlay(testApp))?.open === true, { timeout: 20_000 })
@@ -203,6 +235,12 @@ test.describe("command overlay", () => {
   });
 
   test("promotes the same conversation into a ready chat panel", async () => {
+    await expect
+      .poll(() => isCommandOverlayButtonEnabled(testApp, "Move to chat panel"), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
     expect(await clickInCommandOverlay(testApp, "Move to chat panel")).toBe(true);
 
     await expect

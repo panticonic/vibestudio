@@ -2582,14 +2582,7 @@ app.on("ready", async () => {
         statePath: serverSession.statePath,
       }),
       forwardDiagnostic: forwardPanelDiagnostic,
-      onHostCommand: async (panelId, action, args) => {
-        if (action === "openDevTools") {
-          const viewManager = applicationWindow.viewManager;
-          if (!viewManager) throw new Error("ViewManager not initialized");
-          const mode = args[0] === "right" || args[0] === "bottom" ? args[0] : "detach";
-          viewManager.openDevTools(panelId, mode);
-          return null;
-        }
+      onHostCommand: async (panelId, action) => {
         if (action === "rebuildPanel") {
           return panelOrchestrator?.rebuildPanel(panelId) ?? null;
         }
@@ -2600,14 +2593,6 @@ app.on("ready", async () => {
         // server is the sole panel-tree writer (panelManager.navigate /
         // navigateHistory) and broadcasts; the desktop reloads views reactively
         // (panel-tree invalidation reconcile).
-        if (action === "accessibilityTree") {
-          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
-          return cdpHostProvider.getAccessibilityTree(panelId);
-        }
-        if (action === "domSnapshot") {
-          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
-          return cdpHostProvider.getDomSnapshot(panelId);
-        }
         if (action === "panelObservation") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           if (!panelOrchestrator) throw new Error("Panel orchestrator not initialized");
@@ -2619,21 +2604,6 @@ app.on("ready", async () => {
                 panelOrchestrator!.getPanelHostObservation(id, boot),
             },
             panelId
-          );
-        }
-        if (action === "consoleHistory") {
-          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
-          return cdpHostProvider.getConsoleHistory(
-            panelId,
-            (args[0] as import("./cdpHostProvider.js").PanelConsoleHistoryOptions | undefined) ??
-              undefined
-          );
-        }
-        if (action === "captureScreenshot") {
-          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
-          return cdpHostProvider.captureScreenshot(
-            panelId,
-            (args[0] as { format?: string; quality?: number } | undefined) ?? {}
           );
         }
         throw new Error(`Unknown host command: ${action}`);

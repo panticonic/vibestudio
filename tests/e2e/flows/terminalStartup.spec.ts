@@ -35,6 +35,7 @@ import {
   pressTerminalShortcutThroughNativeInput,
   typeTerminalThroughNativeInput,
 } from "../../setup/nativeInput";
+import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -851,7 +852,7 @@ test.describe("Terminal Startup", () => {
     await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
     await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
 
-    if (process.platform === "linux") {
+    if (hasOwnedX11Display()) {
       await typeTerminalThroughNativeInput(
         app,
         terminalPanelId,
@@ -870,7 +871,7 @@ test.describe("Terminal Startup", () => {
     await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-os-keyboard-input");
 
     await setElectronClipboardText(app, "printf 'vibestudio-paste-input\\n'\n");
-    if (process.platform === "linux") {
+    if (hasOwnedX11Display()) {
       await pressTerminalShortcutThroughNativeInput(app, terminalPanelId, "v");
     } else {
       await clickTerminalThroughWindow(testApp, terminalPanelId);

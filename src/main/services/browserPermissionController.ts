@@ -175,10 +175,18 @@ export class BrowserPermissionController {
 
     const capabilities = capabilitiesForCheck(permission, details);
     const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
-    if (!panelId || this.isAutomationTainted(contents, panelId)) return false;
+    const isContentOverlay =
+      this.deps.getViewManager()?.isContentOverlayWebContentsId(contents.id) === true;
+    if (
+      (!panelId && !isContentOverlay) ||
+      (panelId != null && this.isAutomationTainted(contents, panelId))
+    ) {
+      return false;
+    }
     // Chromium already constrains sanitized writes to its secure-context and
     // user-activation path. A Copy action must not require read capability.
     if (permission === "clipboard-sanitized-write") return true;
+    if (isContentOverlay || !panelId) return false;
     if (deniedPeripheralCapability(capabilities)) return false;
     if (this.hasApprovedUnitCapability(contents, capabilities, origin.serialized)) return true;
     if (!this.mayRequest(contents, capabilities, origin.serialized)) return false;
@@ -212,6 +220,8 @@ export class BrowserPermissionController {
       return;
     }
     const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
+    const isContentOverlay =
+      this.deps.getViewManager()?.isContentOverlayWebContentsId(contents.id) === true;
     const topLevelUrl = contents.getURL();
     const topLevelOrigin = browserSecurityOrigin(topLevelUrl, `contents:${contents.id}:top-level`);
     const mediaDetails = details as MediaAccessPermissionRequest;
@@ -221,12 +231,12 @@ export class BrowserPermissionController {
     );
     const capabilities = capabilitiesForRequest(permission, details);
     if (
-      !panelId ||
+      (!panelId && !isContentOverlay) ||
       origin.kind !== "tuple" ||
       topLevelOrigin.kind !== "tuple" ||
       origin.serialized !== topLevelOrigin.serialized ||
       capabilities.length === 0 ||
-      this.isAutomationTainted(contents, panelId)
+      (panelId != null && this.isAutomationTainted(contents, panelId))
     ) {
       this.notifyDenied(
         panelId ?? null,
@@ -241,6 +251,18 @@ export class BrowserPermissionController {
     // reading the device clipboard.
     if (permission === "clipboard-sanitized-write") {
       finish(true);
+      return;
+    }
+    // Isolated shell overlays are application chrome, not workspace units.
+    // They may perform Chromium's user-activated sanitized Copy operation,
+    // but they cannot read the clipboard or request any peripheral authority.
+    if (isContentOverlay) {
+      this.notifyDenied(null, capabilities, "Shell overlays cannot read from the clipboard.");
+      finish(false);
+      return;
+    }
+    if (!panelId) {
+      finish(false);
       return;
     }
     const osDenied = deniedPeripheralCapability(capabilities);

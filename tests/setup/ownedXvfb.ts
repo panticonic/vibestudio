@@ -13,6 +13,15 @@ export interface OwnedXvfbSession {
   stop: () => Promise<void>;
 }
 
+/** Whether this test worker owns an isolated X11 desktop and its device state. */
+export function hasOwnedX11Display(): boolean {
+  return (
+    process.platform === "linux" &&
+    process.env[E2E_OWNED_X11_ENV] === "1" &&
+    Boolean(process.env.DISPLAY)
+  );
+}
+
 function requireExecutable(name: string): void {
   try {
     execFileSync(name, [name === "xauth" ? "-V" : "-help"], { stdio: "ignore" });

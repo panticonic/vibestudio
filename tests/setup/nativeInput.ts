@@ -2,7 +2,7 @@ import type { ElectronApplication } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getPanelSelectorWindowPoint } from "./electronSetup.js";
-import { E2E_OWNED_X11_ENV } from "./ownedXvfb.js";
+import { hasOwnedX11Display } from "./ownedXvfb.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,11 +31,8 @@ async function nativeWindowInfo(app: ElectronApplication): Promise<NativeWindowI
 }
 
 function requireOwnedLinuxInput(): void {
-  if (process.platform !== "linux") {
-    throw new Error("The native-input backend currently supports Linux/X11 only");
-  }
-  if (process.env[E2E_OWNED_X11_ENV] !== "1" || !process.env.DISPLAY) {
-    throw new Error("Linux native-input coverage requires the Playwright-owned Xvfb display");
+  if (!hasOwnedX11Display()) {
+    throw new Error("Native-input coverage requires the Playwright-owned Linux/X11 display");
   }
 }
 
@@ -52,6 +49,32 @@ async function validatedWindowId(app: ElectronApplication): Promise<NativeWindow
   return windowInfo;
 }
 
+async function focusNativeWindow(app: ElectronApplication): Promise<NativeWindowInfo> {
+  const windowInfo = await validatedWindowId(app);
+  await execFileAsync("xdotool", ["windowfocus", "--sync", windowInfo.id]);
+  const { stdout } = await execFileAsync("xdotool", ["getwindowfocus"]);
+  if (stdout.trim() !== windowInfo.id) {
+    throw new Error(`Native focus did not converge on Electron window ${windowInfo.id}`);
+  }
+  return windowInfo;
+}
+
+export async function clickWindowPointThroughNativeInput(
+  app: ElectronApplication,
+  point: { x: number; y: number }
+): Promise<void> {
+  const windowInfo = await focusNativeWindow(app);
+  await execFileAsync("xdotool", [
+    "mousemove",
+    "--window",
+    windowInfo.id,
+    String(windowInfo.contentOffset.x + point.x),
+    String(windowInfo.contentOffset.y + point.y),
+    "click",
+    "1",
+  ]);
+}
+
 async function focusTerminalThroughNativeInput(
   app: ElectronApplication,
   panelId: string
@@ -60,12 +83,7 @@ async function focusTerminalThroughNativeInput(
     (await getPanelSelectorWindowPoint(app, panelId, ".xterm-helper-textarea")) ??
     (await getPanelSelectorWindowPoint(app, panelId, ".xterm"));
   if (!point) throw new Error("Terminal input surface does not have a native-window point");
-  const windowInfo = await validatedWindowId(app);
-  await execFileAsync("xdotool", ["windowfocus", "--sync", windowInfo.id]);
-  const { stdout } = await execFileAsync("xdotool", ["getwindowfocus"]);
-  if (stdout.trim() !== windowInfo.id) {
-    throw new Error(`Native focus did not converge on Electron window ${windowInfo.id}`);
-  }
+  const windowInfo = await focusNativeWindow(app);
   await execFileAsync("xdotool", [
     "mousemove",
     "--window",

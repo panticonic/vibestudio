@@ -242,6 +242,10 @@ export class ShellContentOverlayView {
     return this.isVisible() ? this.view : null;
   }
 
+  ownsWebContentsId(webContentsId: number): boolean {
+    return this.overlayWcId === webContentsId && this.view?.webContents.isDestroyed() === false;
+  }
+
   /** Apply a focus request after an owner has finished re-stacking overlays. */
   applyRequestedFocus(): void {
     this.applyPendingFocus();
