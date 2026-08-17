@@ -12,6 +12,7 @@ import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http"
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
+import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -100,17 +101,26 @@ const { PanelHttpServer } = await import("./panelHttpServer.js");
 
 function createMockResponse(): ServerResponse & {
   body?: unknown;
+  // Optional so the intersection stays assignable from a bare ServerResponse,
+  // which is what the method casts below produce.
+  chunks?: Buffer[];
   statusCodeWritten?: number;
   headersWritten?: OutgoingHttpHeaders;
 } {
   const res = {
     headersSent: false,
+    chunks: [] as Buffer[],
   } as unknown as ServerResponse & {
     body?: unknown;
+    chunks?: Buffer[];
     statusCodeWritten?: number;
     headersWritten?: OutgoingHttpHeaders;
     headersSent: boolean;
   };
+  res.write = vi.fn((chunk: unknown) => {
+    (res.chunks ??= []).push(Buffer.from(chunk as Uint8Array));
+    return true;
+  }) as unknown as ServerResponse["write"];
   res.setHeader = vi.fn() as unknown as ServerResponse["setHeader"];
   res.writeHead = vi.fn((statusCode: number, headers?: OutgoingHttpHeaders) => {
     res.headersSent = true;
@@ -305,6 +315,200 @@ describe("PanelHttpServer build cache", () => {
         },
       })
     ).not.toThrow();
+  });
+
+  describe("build prefetch surfaces", () => {
+    const digestOf = (content: string): string =>
+      createHash("sha256").update(content).digest("hex");
+    const lazy = "console.log('lazy')";
+    const sharedCss = "body { color: rebeccapurple; }";
+    const prefetchBuild = {
+      ...buildResult,
+      artifacts: [
+        ...buildResult.artifacts.map((artifact) => ({
+          ...artifact,
+          integrity: `sha256-${digestOf((artifact as { content: string }).content)}`,
+          byteLength: Buffer.byteLength((artifact as { content: string }).content),
+        })),
+        {
+          path: "chunk-lazy.js",
+          role: "asset",
+          contentType: "application/javascript; charset=utf-8",
+          encoding: "utf8",
+          content: lazy,
+          byteLength: Buffer.byteLength(lazy),
+          integrity: `sha256-${digestOf(lazy)}`,
+        },
+        {
+          path: `shared-style-${digestOf(sharedCss)}.css`,
+          role: "shared-style",
+          contentType: "text/css; charset=utf-8",
+          encoding: "utf8",
+          content: sharedCss,
+          byteLength: Buffer.byteLength(sharedCss),
+          integrity: `sha256-${digestOf(sharedCss)}`,
+        },
+      ],
+      metadata: {
+        ...buildResult.metadata,
+        bundleReport: { initialArtifacts: ["bundle.js", "bundle.css"] },
+      },
+    } as unknown as import("./buildV2/buildStore.js").BuildResult;
+
+    const serverWithBuild = () => {
+      const server = new PanelHttpServer();
+      server.setCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => prefetchBuild),
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey: vi.fn(() => prefetchBuild),
+      });
+      return server;
+    };
+
+    const manifest = async (): Promise<{
+      artifacts: {
+        path: string;
+        contentType: string;
+        byteLength?: number;
+        integrity?: string;
+        initial?: boolean;
+      }[];
+    }> => {
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__manifest.json`
+      );
+      expect(response.statusCodeWritten).toBe(200);
+      return JSON.parse(String(response.body));
+    };
+
+    it("lists every artifact with the digest the bundle will key it under", async () => {
+      const { artifacts } = await manifest();
+      expect(artifacts.map((artifact) => artifact.path)).toEqual([
+        "index.html",
+        "bundle.js",
+        "bundle.css",
+        "chunk-lazy.js",
+        `shared-style-${digestOf(sharedCss)}.css`,
+      ]);
+      const bundleJs = artifacts.find((artifact) => artifact.path === "bundle.js");
+      expect(bundleJs?.integrity).toBe(`sha256-${digestOf("console.log('hi')")}`);
+      expect(bundleJs?.byteLength).toBe(Buffer.byteLength("console.log('hi')"));
+      expect(bundleJs?.contentType).toBe("application/javascript; charset=utf-8");
+    });
+
+    it("marks only what a first paint needs as initial", async () => {
+      // The whole point of the flag: a client that prefetched every artifact it
+      // lacked would move the lazy chunks and source maps a panel may never
+      // request. Shared styles are initial for every panel regardless of the
+      // bundle report.
+      const { artifacts } = await manifest();
+      const initial = artifacts
+        .filter((artifact) => artifact.initial)
+        .map((artifact) => artifact.path);
+      expect(initial).toEqual([
+        "bundle.js",
+        "bundle.css",
+        `shared-style-${digestOf(sharedCss)}.css`,
+      ]);
+    });
+
+    it("does not read artifact payloads to answer the manifest", async () => {
+      // The inventory must stay cheap enough to serve on every panel open; the
+      // build store's content getters hit disk.
+      const artifacts = prefetchBuild.artifacts.map((artifact) => {
+        const copy = { ...artifact } as Record<string, unknown>;
+        Object.defineProperty(copy, "content", {
+          enumerable: true,
+          get() {
+            throw new Error("manifest read an artifact payload");
+          },
+        });
+        return copy;
+      });
+      const server = new PanelHttpServer();
+      server.setCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => prefetchBuild),
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey: vi.fn(
+          () =>
+            ({
+              ...prefetchBuild,
+              artifacts,
+            }) as unknown as import("./buildV2/buildStore.js").BuildResult
+        ),
+      });
+
+      const response = await handlePanelRequest(
+        server,
+        `/__vibestudio/panel-build/${BUILD_KEY}/__manifest.json`
+      );
+      expect(response.statusCodeWritten).toBe(200);
+    });
+
+    it("streams exactly the requested indices as digest-framed records", async () => {
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__bundle?want=2,1`
+      );
+
+      expect(response.statusCodeWritten).toBe(200);
+      const reader = createBlobBundleReader();
+      const blobs = reader.push(Buffer.concat(response.chunks ?? []));
+      reader.end();
+      // Requested order, not manifest order: the client asked for css first.
+      expect(blobs.map((blob) => blob.digest)).toEqual([
+        digestOf("body{}"),
+        digestOf("console.log('hi')"),
+      ]);
+      expect(Buffer.from(blobs[1]!.bytes).toString("utf8")).toBe("console.log('hi')");
+    });
+
+    it("ignores duplicate and out-of-range indices instead of failing the transfer", async () => {
+      // A client whose manifest is one build behind should still receive the
+      // bytes it CAN use rather than nothing at all.
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__bundle?want=1,1,99,-1,abc`
+      );
+
+      const reader = createBlobBundleReader();
+      const blobs = reader.push(Buffer.concat(response.chunks ?? []));
+      reader.end();
+      expect(blobs.map((blob) => blob.digest)).toEqual([digestOf("console.log('hi')")]);
+    });
+
+    it("answers an empty selection with an empty, well-formed stream", async () => {
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__bundle`
+      );
+
+      expect(response.statusCodeWritten).toBe(200);
+      const reader = createBlobBundleReader();
+      expect(reader.push(Buffer.concat(response.chunks ?? []))).toEqual([]);
+      expect(() => reader.end()).not.toThrow();
+    });
+
+    it("refuses both surfaces for a build that is no longer activated", async () => {
+      const server = new PanelHttpServer();
+      server.setCallbacks({
+        onBuildComplete: vi.fn(),
+        getBuild: vi.fn(async () => prefetchBuild),
+        getUnitIcon: vi.fn(async () => null),
+        getBuildByKey: vi.fn(() => null),
+      });
+
+      for (const resource of ["__manifest.json", "__bundle?want=1"]) {
+        const response = await handlePanelRequest(
+          server,
+          `/__vibestudio/panel-build/${"c".repeat(64)}/${resource}`
+        );
+        expect(response.statusCodeWritten).toBe(410);
+      }
+    });
   });
 
   it("serves shared styles from one digest-addressed URL across panel sources", async () => {

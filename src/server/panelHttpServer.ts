@@ -923,13 +923,26 @@ export class PanelHttpServer {
    * returns lazy content getters, and nothing here touches `.content`.
    * `integrity` is the sha256 of the artifact's raw bytes and doubles as the
    * record identity in the bundle below.
+   *
+   * `initial` marks the artifacts a FIRST paint actually needs, and it is the
+   * difference between this being an optimization and a regression. A real build
+   * measured 35.8 MB across 364 artifacts while the panel's cold load touched
+   * 1.4 MB of it — lazy route chunks, source maps and images make up the rest and
+   * may never be requested at all. A client that prefetched everything it lacked
+   * would move 25× more bytes than the round trips it saved were worth. This is
+   * the same set `scheduleTransportDerivatives` warms (the bundle report's
+   * initial outputs, plus shared styles, which every panel loads).
    */
   private servePanelBuildManifest(res: import("http").ServerResponse, build: CachedBuild): void {
+    const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
     const artifacts = build.artifacts.map((artifact) => ({
       path: artifact.path,
       contentType: artifact.contentType,
       ...(artifact.byteLength === undefined ? {} : { byteLength: artifact.byteLength }),
       ...(artifact.integrity === undefined ? {} : { integrity: artifact.integrity }),
+      ...(artifact.role === "shared-style" || initialArtifacts.has(artifact.path)
+        ? { initial: true }
+        : {}),
     }));
     const body = JSON.stringify({ artifacts });
     res.writeHead(200, {
