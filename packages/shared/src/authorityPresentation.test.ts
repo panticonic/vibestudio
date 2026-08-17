@@ -225,19 +225,23 @@ describe("authority request presentation", () => {
       action: "open and manage workspace apps",
     });
     expect(describeCapability("workspace-units.manage")).toMatchObject({
-      action: "manage workspace apps, panels, workers, and extensions",
+      action: "manage apps, panels, background tasks, and extensions",
     });
     expect(describeCapability("workspace-units.publish")).toMatchObject({
-      action: "publish workspace apps, panels, workers, and extensions",
+      action: "publish apps, panels, and services from your workspace",
     });
     expect(describeCapability("extensions.reload")).toMatchObject({
-      action: "reload workspace extensions",
+      action: "reload workspace extensions after changes",
     });
     expect(describeCapability("channel.members.remove")).toMatchObject({
       action: "remove a person from a shared conversation",
     });
-    expect(describeCapability("approvals.read", "panel").description).toContain("this panel");
-    expect(describeCapability("approvals.read", "worker").description).toContain("this worker");
+    expect(describeCapability("approvals.read", "panel").description).toBe(
+      "See which requests are waiting for you to decide."
+    );
+    expect(describeCapability("approvals.read", "worker").description).toBe(
+      "See which requests are waiting for you to decide."
+    );
     expect(describeCapability("approvals.read", "worker").description).not.toContain("unit");
   });
 

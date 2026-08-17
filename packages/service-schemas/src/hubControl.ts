@@ -627,7 +627,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Change a workspace member's role",
       action: "change a workspace member's role",
-      description: "Change what a workspace member is allowed to do (e.g. admin or member).",
+      description: "Change a workspace member's access level (for example, admin or member).",
       group: "accounts",
       authorityCategory: {
         domain: "people",

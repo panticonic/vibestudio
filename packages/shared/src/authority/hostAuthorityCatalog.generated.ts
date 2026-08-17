@@ -614,7 +614,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Allow a new client connection",
       action: "allow a new client connection",
-      description: "Grant a new app or panel access to connect to your workspace.",
+      description: "Approve a new app or panel to connect to your workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "computer",
@@ -3842,7 +3842,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change a workspace member's role",
       action: "change a workspace member's role",
-      description: "Change what a workspace member is allowed to do (e.g. admin or member).",
+      description: "Change a workspace member's access level (for example, admin or member).",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -5444,7 +5444,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Approve initial workspace access",
       action: "approve initial workspace access",
-      description: "Grant or deny the permissions a workspace needs when it first starts.",
+      description: "Approve or deny the permissions a workspace needs when it first starts.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -8166,7 +8166,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "connections.approve": {
     title: "Allow a new client connection",
     action: "allow a new client connection",
-    description: "Grant a new app or panel access to connect to your workspace.",
+    description: "Approve a new app or panel to connect to your workspace.",
     group: "accounts",
     authorityCategory: {
       domain: "computer",

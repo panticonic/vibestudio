@@ -95,7 +95,7 @@ export const authMethods = defineServiceMethods({
     presentation: {
       title: "Allow a new client connection",
       action: "allow a new client connection",
-      description: "Grant a new app or panel access to connect to your workspace.",
+      description: "Approve a new app or panel to connect to your workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "computer",

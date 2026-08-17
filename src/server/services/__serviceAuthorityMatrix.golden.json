@@ -351,7 +351,7 @@
         "presentation": {
           "title": "Allow a new client connection",
           "action": "allow a new client connection",
-          "description": "Grant a new app or panel access to connect to your workspace.",
+          "description": "Approve a new app or panel to connect to your workspace.",
           "group": "accounts",
           "authorityCategory": {
             "domain": "computer",
@@ -9685,7 +9685,7 @@
         "presentation": {
           "title": "Approve initial workspace access",
           "action": "approve initial workspace access",
-          "description": "Grant or deny the permissions a workspace needs when it first starts.",
+          "description": "Approve or deny the permissions a workspace needs when it first starts.",
           "group": "approvals",
           "authorityCategory": {
             "domain": "safety",

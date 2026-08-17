@@ -1028,7 +1028,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Approve initial workspace access",
       action: "approve initial workspace access",
-      description: "Grant or deny the permissions a workspace needs when it first starts.",
+      description: "Approve or deny the permissions a workspace needs when it first starts.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
