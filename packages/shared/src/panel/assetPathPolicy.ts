@@ -144,6 +144,20 @@ export function panelAssetCacheKey(
   // content-addressed identity, so credential rotation, WebView revalidation,
   // or UA changes must not fragment it across app/server restarts.
   if (PINNED_ENTRY_REPRESENTATION.test(representationPath)) return representationPath;
+  // A build subresource is content-addressed by construction: its path contains
+  // the build key and its bytes never change. No FORWARDED header can select a
+  // different representation for one — the only header that does is
+  // `accept-encoding` (panelHttpServer.writeArtifact, which sets
+  // `Vary: Accept-Encoding`), and that is deliberately not in
+  // FORWARD_REQUEST_HEADERS; the facade always asks for gzip. Range and
+  // conditional requests answer non-200 and are never cacheable.
+  //
+  // Keying them by header digest therefore bought nothing and cost twice: the
+  // same immutable chunk was stored once per `accept` value the webview happened
+  // to send (script, style, image all differ), and no key could be computed
+  // ahead of a request — which makes prefetching them impossible, because the
+  // key is only knowable once the fetch it was meant to avoid has occurred.
+  if (PANEL_BUILD_ASSET_PATH.test(representationPath)) return representationPath;
   const vary = Object.entries(forwardHeaders)
     // Authorization admits the request but does not select the immutable
     // representation. Workspace credentials are rotated when the server

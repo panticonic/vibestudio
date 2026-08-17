@@ -110,4 +110,29 @@ describe("panel asset representation keys", () => {
     );
     expect(panelAssetCacheKey(path, {})).toBe(`/panels/chat/?buildKey=${buildKey}`);
   });
+
+  it("keys a build subresource independently of forwarded headers", () => {
+    // The webview sends a different `accept` per fetch destination, so keying
+    // build artifacts by header digest stored the same immutable chunk once per
+    // destination AND made the key unknowable before the request — which is what
+    // made prefetching them impossible.
+    const path = `/__vibestudio/panel-build/${"a".repeat(64)}/chunk-ABC123.js`;
+    const asScript = panelAssetCacheKey(path, { accept: "*/*", "user-agent": "RN" });
+    const asStyle = panelAssetCacheKey(path, { accept: "text/css,*/*;q=0.1" });
+    const bare = panelAssetCacheKey(path, {});
+    expect(asScript).toBe(path);
+    expect(asStyle).toBe(path);
+    expect(bare).toBe(path);
+  });
+
+  it("still separates non-build paths by forwarded headers", () => {
+    // The relaxation is justified only by the build path being content-addressed
+    // with bytes that no forwarded header can select; everything else keeps the
+    // vary digest.
+    const path = "/about/new/thing.js";
+    const a = panelAssetCacheKey(path, { accept: "text/css" });
+    const b = panelAssetCacheKey(path, { accept: "*/*" });
+    expect(a).not.toBe(b);
+    expect(a.startsWith(`${path}#h=`)).toBe(true);
+  });
 });

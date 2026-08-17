@@ -17,6 +17,7 @@ import type {
   BuildMetadata,
 } from "./buildV2/buildStore.js";
 import { artifactFilePath } from "./buildV2/buildStore.js";
+import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { CdpBridge } from "./cdpBridge.js";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
@@ -481,7 +482,23 @@ export class PanelHttpServer {
       const buildKey = assertPresent(activatedArtifactMatch[1]);
       const resource = assertPresent(activatedArtifactMatch[2]);
       const build = this.resolveActivatedBuild(res, buildKey);
-      if (build) await this.servePanelResource(req, res, build, resource);
+      if (!build) return;
+      // Prefetch surfaces live INSIDE the build-pinned namespace on purpose:
+      // that path is already reachable from the panel origin and already
+      // content-addressed by its build key, so they inherit the existing
+      // allowlist and add no new authority surface. A remote client that would
+      // otherwise spend one round trip per subresource (~92 of them, each ~6ms
+      // of server work against ~560ms observed) asks for the inventory once and
+      // then for exactly what it lacks, once.
+      if (resource === "/__manifest.json") {
+        this.servePanelBuildManifest(res, build);
+        return;
+      }
+      if (resource === "/__bundle" || resource.startsWith("/__bundle?")) {
+        await this.servePanelBuildBundle(req, res, build);
+        return;
+      }
+      await this.servePanelResource(req, res, build, resource);
       return;
     }
 
@@ -896,6 +913,82 @@ export class PanelHttpServer {
       "X-Vibestudio-Build-Revision": String(build.revision),
     });
     res.end(build.htmlArtifact.content);
+  }
+
+  /**
+   * The build's inventory: one JSON body listing every artifact a client could
+   * need, so it can decide what it lacks WITHOUT a request per file.
+   *
+   * Costs one already-parsed manifest and no file reads — `buildStore.get`
+   * returns lazy content getters, and nothing here touches `.content`.
+   * `integrity` is the sha256 of the artifact's raw bytes and doubles as the
+   * record identity in the bundle below.
+   */
+  private servePanelBuildManifest(res: import("http").ServerResponse, build: CachedBuild): void {
+    const artifacts = build.artifacts.map((artifact) => ({
+      path: artifact.path,
+      contentType: artifact.contentType,
+      ...(artifact.byteLength === undefined ? {} : { byteLength: artifact.byteLength }),
+      ...(artifact.integrity === undefined ? {} : { integrity: artifact.integrity }),
+    }));
+    const body = JSON.stringify({ artifacts });
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      // The inventory is a pure function of an immutable build key, so it is as
+      // cacheable as the artifacts it describes.
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-length": String(Buffer.byteLength(body)),
+    });
+    res.end(body);
+  }
+
+  /**
+   * Stream the requested artifacts as one framed blob bundle.
+   *
+   * Selection is by INDEX into the manifest above, not by path: a client asking
+   * for ~90 files would otherwise put several kilobytes of repeated path text in
+   * a query string, and the manifest order is already a shared vocabulary both
+   * ends agree on. Out-of-range or duplicate indices are ignored rather than
+   * failing the transfer — a partially-stale client should still get the bytes
+   * it can use.
+   *
+   * Bodies are the artifacts' raw (identity) bytes. Compressing per blob here
+   * would fight the pipe, which already negotiates gzip for the whole response,
+   * and would put the receiver's digests in a different space from the
+   * manifest's `integrity`.
+   */
+  private async servePanelBuildBundle(
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+    build: CachedBuild
+  ): Promise<void> {
+    const query = new URL(req.url ?? "/", "http://panel-gateway.invalid").searchParams;
+    const wanted = (query.get("want") ?? "")
+      .split(",")
+      .map((raw) => Number.parseInt(raw, 10))
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < build.artifacts.length);
+    const unique = [...new Set(wanted)];
+
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "cache-control": "no-store",
+    });
+    for (const index of unique) {
+      const artifact = build.artifacts[index]!;
+      if (!artifact.integrity) continue;
+      const digest = artifact.integrity.replace(/^sha256-/u, "");
+      // `.content` re-verifies integrity on first read (buildStore), so a
+      // corrupt build fails here rather than shipping bad bytes to a device
+      // that will cache them under a digest they do not match.
+      const bytes =
+        artifact.encoding === "base64"
+          ? Buffer.from(artifact.content, "base64")
+          : Buffer.from(artifact.content, "utf8");
+      if (!res.write(encodeBlobRecord(digest, new Uint8Array(bytes)))) {
+        await new Promise<void>((resolve) => res.once("drain", () => resolve()));
+      }
+    }
+    res.end();
   }
 
   private resolvePanelArtifact(
