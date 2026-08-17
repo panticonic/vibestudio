@@ -104,6 +104,16 @@ export function createFrameScheduler(options: {
   getChannel: () => RtcDataChannelLike | null;
   perKeyCapBytes?: number;
   totalCapBytes?: number;
+  /**
+   * Last touch before a part is handed to the channel, for stamping a wire
+   * sequence.
+   *
+   * It has to happen here rather than at encode time: this scheduler interleaves
+   * streams round-robin, so the order parts are built in is not the order they
+   * reach the wire, and a receiver checking for gaps can only reason about wire
+   * order. Called exactly once per part actually sent.
+   */
+  beforeSend?: (part: Uint8Array) => void;
 }): FrameScheduler {
   const perKeyCap = options.perKeyCapBytes ?? DEFAULT_PER_KEY_CAP_BYTES;
   const totalCap = options.totalCapBytes ?? DEFAULT_TOTAL_CAP_BYTES;
@@ -257,6 +267,7 @@ export function createFrameScheduler(options: {
         const batch = live.batches[0]!;
         const part = batch.parts[batch.next]!;
         try {
+          options.beforeSend?.(part);
           channel.send(part);
         } catch {
           // A refused write says nothing about whether the message was sent.

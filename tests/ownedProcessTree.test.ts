@@ -80,6 +80,36 @@ describe.skipIf(process.platform === "win32")("owned POSIX process tree", () => 
     }
   }, 10_000);
 
+  it("retires a child sharing the caller's process group without signalling the caller", async () => {
+    // Every other case here spawns `detached`, which is why this went unnoticed:
+    // a child spawned *without* it stays in the caller's own process group, so
+    // its pgid is ours. Signalling that group SIGKILLs the test runner itself —
+    // the failure mode reads as an external kill, not as a bug in here.
+    const owned = spawn(
+      process.execPath,
+      ["-e", `process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000);`],
+      { stdio: ["ignore", "pipe", "ignore"] }
+    );
+    await once(owned.stdout!, "data");
+    expect(processTreeAlive(owned.pid!)).toBe(true);
+
+    try {
+      const result = await terminateOwnedProcessTree(owned.pid!, {
+        termTimeoutMs: 100,
+        killTimeoutMs: 5_000,
+      });
+
+      expect(result).toMatchObject({ gone: true });
+      expect(processTreeAlive(owned.pid!)).toBe(false);
+      // Reaching this line at all is the point: the caller was not signalled.
+      expect(() => process.kill(process.pid, 0)).not.toThrow();
+    } finally {
+      try {
+        process.kill(owned.pid!, "SIGKILL");
+      } catch {}
+    }
+  }, 10_000);
+
   it("classifies an already-exited owner as gone", async () => {
     const owned = spawn(process.execPath, ["-e", ""], {
       detached: true,

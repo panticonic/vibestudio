@@ -14,6 +14,10 @@ export function processTreeAlive(pid, platform = process.platform) {
       throw error;
     }
   }
+  // A child spawned without `detached` is not a group leader, so no group bears
+  // its pid and group liveness alone reports it as already gone. Ask about the
+  // process itself first.
+  if (pidAlive(pid)) return true;
   return [...ownedProcessGroups(pid, platform)].some((group) => processGroupAlive(group));
 }
 
@@ -42,14 +46,18 @@ export async function terminateOwnedProcessTree(
   // graceful shutdown, but remember every descendant group while the owner
   // is still alive. If graceful shutdown stalls, SIGKILL every group we
   // observed; killing only the owner's group would orphan a detached child.
-  const ownedGroups = new Set([pid]);
+  const ownedGroups = new Set();
   refreshOwnedProcessGroups(pid, platform, ownedGroups);
+  // Signal the process as well as its groups: a non-detached child leads no
+  // group, so the group signal alone is an ESRCH that retires nothing.
   signalGroup(pid, "SIGTERM");
+  signalPid(pid, "SIGTERM");
   if (await waitUntilOwnedGroupsGone(pid, termTimeoutMs, platform, ownedGroups)) {
     return { gone: true, escalated: false };
   }
   refreshOwnedProcessGroups(pid, platform, ownedGroups);
   for (const group of ownedGroups) signalGroup(group, "SIGKILL");
+  signalPid(pid, "SIGKILL");
   const gone = await waitUntilOwnedGroupsGone(pid, killTimeoutMs, platform, ownedGroups);
   return {
     gone,
@@ -63,6 +71,24 @@ function signalGroup(pid, signal) {
     process.kill(-pid, signal);
   } catch (error) {
     if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+function signalPid(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
   }
 }
 
@@ -105,9 +131,17 @@ function ownedProcessGroups(rootPid, platform) {
 
   const groups = new Set([rootPid]);
   for (const pid of owned) {
-    const process = table.get(pid);
-    if (process) groups.add(process.pgid);
+    const entry = table.get(pid);
+    if (entry) groups.add(entry.pgid);
   }
+  // Never signal the group we are ourselves in. A child spawned without
+  // `detached` stays in its parent's process group, so its pgid is *ours*;
+  // SIGKILLing that group takes down the caller and everything else sharing it.
+  // The exit then looks like an external kill rather than a bug in here, which
+  // is how this hid: a cleanup loop that reliably killed its own run. What we
+  // own is a group we created, never the one we were born into.
+  const self = table.get(process.pid);
+  if (self) groups.delete(self.pgid);
   return groups;
 }
 
@@ -167,13 +201,17 @@ async function waitUntilGone(pid, timeoutMs, platform) {
 
 async function waitUntilOwnedGroupsGone(rootPid, timeoutMs, platform, groups) {
   const deadline = Date.now() + timeoutMs;
+  // The root leads no group when it was spawned without `detached`, so its own
+  // liveness is the only evidence that it retired.
+  const settled = () =>
+    !pidAlive(rootPid) && ![...groups].some((group) => processGroupAlive(group));
   do {
     refreshOwnedProcessGroups(rootPid, platform, groups);
-    if (![...groups].some((group) => processGroupAlive(group))) return true;
+    if (settled()) return true;
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   } while (Date.now() < deadline);
   refreshOwnedProcessGroups(rootPid, platform, groups);
-  return ![...groups].some((group) => processGroupAlive(group));
+  return settled();
 }
 
 function runTaskkill(pid) {

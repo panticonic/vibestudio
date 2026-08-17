@@ -66,11 +66,17 @@ import {
 } from "../protocol/streamCodec.js";
 import {
   BULK_MUX_HEADER_BYTES,
+  BULK_MUX_SEQ_HEADER_BYTES,
+  stampBulkSequence,
   createBulkDemux,
   encodeBulkMessage,
   type StreamFrameType,
 } from "../protocol/bulkMux.js";
-import { createControlCodec } from "./controlFraming.js";
+import {
+  createControlCodec,
+  isSequencedControlMessage,
+  stampControlSequence,
+} from "./controlFraming.js";
 import {
   createFrameScheduler,
   type EnqueueOutcome,
@@ -384,6 +390,14 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   let pinVerified = false;
   let helloSent = false;
   let remoteHello: SessionHelloFrame | null = null;
+  /** Both ends advertised `bulkSeq`; set at hello, cleared with the pipe. */
+  let bulkSequenceEnabled = false;
+  /** Both ends advertised `ctrlSeq`; set at hello, cleared with the pipe. */
+  let controlSequenceEnabled = false;
+  /** Monotonic per-pipe control sequence, stamped at send (wire order). */
+  let controlSequence = 0;
+  /** Monotonic per-pipe wire sequence, stamped at send (wire order, not encode order). */
+  let bulkSequence = 0;
   let helloTimer: ReturnType<typeof setTimeout> | null = null;
   /** What our hello advertised: min(chunkSize option, channel max, 16 KiB floor). */
   let advertisedMaxMsg = DEFAULT_CHUNK_SIZE;
@@ -519,7 +533,29 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       }
       settleStream(streamId);
     },
+    onUnknownStream: (streamId, type, byteLength) => {
+      bulkDiag.unknown += 1;
+      if (bulkDiag.unknown <= BULK_DIAG_MAX) {
+        logWarn(
+          `${log} bulk frame for unknown stream=${streamId} type=${type} bytes=${byteLength}`
+        );
+      }
+    },
   });
+
+  // Receive-path diagnostics. Every drop below this point is otherwise silent,
+  // which makes "the bridge stopped delivering" and "the demux desynced and is
+  // discarding garbage stream ids" produce identical evidence: nothing at all.
+  // Counting arrivals separates them. Capped so a wedged pipe cannot flood the
+  // log while still proving whether bytes are still landing.
+  const BULK_DIAG_MAX = 40;
+  // Heartbeat interval, in arrivals. Set this to 1 when diagnosing a stall: the
+  // question "did ANY byte reach the JS layer after it?" is only as sharp as
+  // this interval, and a lost run shorter than the interval reads as a frozen
+  // counter either way — sampling coarser than the effect proves nothing. It
+  // was 25 that made a 21-message loss look like total bridge death.
+  const BULK_DIAG_EVERY = 25;
+  const bulkDiag = { messages: 0, bytes: 0, unknown: 0, staleGeneration: 0, unpinned: 0 };
 
   // Bulk channel → self-describing mux messages → per-stream bodies (§1.2).
   // Reset on reconnect (a fresh pipe's continuations never concatenate onto a
@@ -542,12 +578,35 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
     inboundMux.push(streamId, type, payload);
     if (type === FRAME_END || type === FRAME_ERROR) settleStream(streamId);
+  }, {
+    // Whole messages went missing between SCTP and here — the exact loss that
+    // used to surface only as a 20s HEAD timeout inside a panel, with nothing
+    // logged near the transport. The lost ids are unrecoverable (they were in
+    // the lost bytes), so the pipe is the only scope that can be failed
+    // honestly; dropping it fails the affected streams at once and reconnects.
+    onSequenceGap: (expected, received, missing) => {
+      onPipeDown(
+        `bulk sequence gap: ${missing} message(s) lost (expected ${expected}, received ${received})`
+      );
+    },
   });
 
   // Control-channel framing: fragment large frames on send + reassemble on receive,
   // plus the frame-id counter — bundled in one codec, reset on reconnect. RN corrupts
   // >16 KiB messages, so the fragmentation is what keeps large RPC envelopes intact.
-  const controlCodec = createControlCodec();
+  const controlCodec = createControlCodec({
+    sequenceWholeMessages: () => controlSequenceEnabled,
+    // A lost control message means a frame we believe we sent — most
+    // consequentially a `stream-open` — never reached the server, so the
+    // request can only fail as a distant timeout with both ends looking
+    // healthy. Which frames were lost is unknowable, so drop the pipe: the
+    // reconnect plus the façade's retry re-drive the work.
+    onSequenceGap: (expected, received, missing) => {
+      onPipeDown(
+        `control sequence gap: ${missing} message(s) lost (expected ${expected}, received ${received})`
+      );
+    },
+  });
   let nextStreamId = 1;
 
   function setStatus(next: RpcConnectionStatus): void {
@@ -622,6 +681,24 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
    * up). These frames are tiny, so this is one whole-tagged codec message,
    * protocol-safe between fragment sets.
    */
+  /**
+   * Number a control part on its way to the wire.
+   *
+   * EVERY whole control message must pass through here, including the ones that
+   * bypass the scheduler (hello, ping, pong). Stamping only the scheduled ones
+   * leaves unstamped placeholders on the wire, and skipping them instead leaves
+   * holes in the sequence — the receiver cannot tell either from real loss, so
+   * it tears down a perfectly healthy pipe.
+   */
+  function stampControlPart(part: Uint8Array): void {
+    if (!controlSequenceEnabled) return;
+    // Only sequenced whole messages consume a number; fragments keep their own
+    // frame id, so the sequence stays contiguous either way.
+    if (!isSequencedControlMessage(part)) return;
+    stampControlSequence(part, controlSequence);
+    controlSequence = (controlSequence + 1) >>> 0;
+  }
+
   function writeControlDirect(frame: SessionControlFrame): void {
     const channel = control;
     if (!channel || channel.readyState !== "open") {
@@ -629,6 +706,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
     const bytes = encoder.encode(encodeControlFrame(frame));
     for (const part of controlCodec.frame(bytes, Math.max(advertisedMaxMsg, DEFAULT_CHUNK_SIZE))) {
+      stampControlPart(part);
       channel.send(part);
     }
   }
@@ -640,9 +718,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     type: StreamFrameType,
     payload: Uint8Array
   ): Uint8Array[] {
-    const budget = Math.max(1, effectiveChunk - BULK_MUX_HEADER_BYTES);
+    const budget = Math.max(
+      1,
+      effectiveChunk - (bulkSequenceEnabled ? BULK_MUX_SEQ_HEADER_BYTES : BULK_MUX_HEADER_BYTES)
+    );
     if (payload.byteLength <= budget) {
-      return [encodeBulkMessage(streamId, type, payload)];
+      return [encodeBulkMessage(streamId, type, payload, false, bulkSequenceEnabled)];
     }
     if (type === FRAME_DATA) {
       // DATA has no wire-level frame: each message's bytes simply append to
@@ -653,7 +734,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           encodeBulkMessage(
             streamId,
             type,
-            payload.subarray(offset, Math.min(offset + budget, payload.byteLength))
+            payload.subarray(offset, Math.min(offset + budget, payload.byteLength)),
+            false,
+            bulkSequenceEnabled
           )
         );
       }
@@ -671,7 +754,13 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     for (let offset = 0; offset < payload.byteLength; offset += budget) {
       const end = Math.min(offset + budget, payload.byteLength);
       parts.push(
-        encodeBulkMessage(streamId, type, payload.subarray(offset, end), end < payload.byteLength)
+        encodeBulkMessage(
+          streamId,
+          type,
+          payload.subarray(offset, end),
+          end < payload.byteLength,
+          bulkSequenceEnabled
+        )
       );
     }
     return parts;
@@ -825,11 +914,33 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   }
 
   function handleBulkMessage(data: Uint8Array, forGeneration: number): void {
-    if (forGeneration !== generation || closed) return;
+    bulkDiag.messages += 1;
+    bulkDiag.bytes += data.byteLength;
+    if (bulkDiag.messages % BULK_DIAG_EVERY === 0) {
+      logWarn(
+        `${log} bulk rx heartbeat messages=${bulkDiag.messages} bytes=${bulkDiag.bytes} ` +
+          `unknown=${bulkDiag.unknown} stale=${bulkDiag.staleGeneration} unpinned=${bulkDiag.unpinned}`
+      );
+    }
+    if (forGeneration !== generation || closed) {
+      bulkDiag.staleGeneration += 1;
+      if (bulkDiag.staleGeneration <= BULK_DIAG_MAX) {
+        logWarn(
+          `${log} bulk message dropped: generation ${forGeneration} != ${generation} or closed=${closed}`
+        );
+      }
+      return;
+    }
     // FAIL-CLOSED pin gate (bug #3): bulk (stream-body) frames only flow after a
     // stream-open, i.e. well after pinVerified — drop anything arriving over an
     // unpinned pipe rather than demuxing it. A mismatch has already hard-closed.
-    if (!pinVerified) return;
+    if (!pinVerified) {
+      bulkDiag.unpinned += 1;
+      if (bulkDiag.unpinned <= BULK_DIAG_MAX) {
+        logWarn(`${log} bulk message dropped: pipe not pin-verified`);
+      }
+      return;
+    }
     if (!remoteHello) {
       onPipeDown("protocol violation: bulk message before hello");
       return;
@@ -868,6 +979,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return;
     }
     remoteHello = frame;
+    bulkSequenceEnabled = frame.bulkSeq === true;
+    controlSequenceEnabled = frame.ctrlSeq === true;
     clearHelloTimer();
     tryComplete(forGeneration);
   }
@@ -923,6 +1036,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         maxMsg: advertisedMaxMsg,
         ...(options.platform ? { platform: options.platform } : {}),
         keepalive: { ...LOCAL_KEEPALIVE },
+        bulkSeq: true,
+        ctrlSeq: true,
       };
       try {
         writeControlDirect(hello);
@@ -1136,6 +1251,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     pinVerified = false;
     helloSent = false;
     remoteHello = null;
+    bulkSequenceEnabled = false;
+    bulkSequence = 0;
+    controlSequenceEnabled = false;
+    controlSequence = 0;
     advertisedMaxMsg = DEFAULT_CHUNK_SIZE;
     effectiveChunk = DEFAULT_CHUNK_SIZE;
     // A fresh pipe must not reassemble against the dead pipe's leftovers: drop any
@@ -1245,8 +1364,18 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     bulkChannel.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
     // One scheduler pair per pipe generation, bound to THESE channels: queued
     // bytes can never leak into the next generation (teardown settles them).
-    controlScheduler = createFrameScheduler({ getChannel: () => controlChannel });
-    bulkScheduler = createFrameScheduler({ getChannel: () => bulkChannel });
+    controlScheduler = createFrameScheduler({
+      getChannel: () => controlChannel,
+      beforeSend: stampControlPart,
+    });
+    bulkScheduler = createFrameScheduler({
+      getChannel: () => bulkChannel,
+      beforeSend: (part) => {
+        if (!bulkSequenceEnabled) return;
+        stampBulkSequence(part, bulkSequence);
+        bulkSequence = (bulkSequence + 1) >>> 0;
+      },
+    });
 
     unsubs.push(
       controlChannel.onMessage((d) => handleControlMessage(d, thisGeneration)),

@@ -61,12 +61,18 @@ import {
   CONTROL_LABEL,
   DEFAULT_CHUNK_SIZE,
 } from "./webrtcPeer.js";
-import { createControlCodec } from "./controlFraming.js";
+import {
+  createControlCodec,
+  isSequencedControlMessage,
+  stampControlSequence,
+} from "./controlFraming.js";
 import { createFrameScheduler, type EnqueueOutcome } from "./frameScheduler.js";
 import {
   BULK_MUX_HEADER_BYTES,
+  BULK_MUX_SEQ_HEADER_BYTES,
   createBulkDemux,
   encodeBulkMessage,
+  stampBulkSequence,
   type StreamFrameType,
 } from "../protocol/bulkMux.js";
 import { FRAME_DATA, FRAME_END } from "../protocol/streamCodec.js";
@@ -101,6 +107,22 @@ const MAX_CHUNK_SIZE = 256 * 1024;
 const LOCAL_KEEPALIVE = { intervalMs: 15_000, timeoutMs: 45_000 } as const;
 /** The remote hello must arrive within this of control-channel open (§1.1). */
 const HELLO_TIMEOUT_MS = 10_000;
+/**
+ * Ceiling on one offer→answer establish.
+ *
+ * Every step of `processDescriptions` is an unbounded await into the native
+ * stack — `provider.create`, `setRemoteDescription`, `createAnswer`,
+ * `setLocalDescription`. One of those failing to settle parks the single
+ * in-flight establish forever, and because `pumpDescriptions` skips while that
+ * is set, the answerer goes permanently deaf: every later offer queues behind a
+ * promise that will never resolve, until the process restarts.
+ *
+ * There is no lifecycle event for "a native call wedged", so this is a genuine
+ * clock rather than one standing in for a signal we could have observed. It is
+ * set well above a real establish (which completes in well under a second on a
+ * healthy link) so it only ever fires on a stall.
+ */
+const ESTABLISH_TIMEOUT_MS = 20_000;
 /** ICE `disconnected` grace before teardown (§2.2 — split-brain fix). */
 const ICE_DISCONNECTED_GRACE_MS = 20_000;
 /** Signaling rejoin backoff — the exact `wsClient` policy. */
@@ -237,6 +259,12 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   let localMaxMsg = DEFAULT_CHUNK_SIZE;
   let localHelloSent = false;
   let remoteHello: SessionHelloFrame | null = null;
+  /** Both ends advertised `bulkSeq`; set at hello, cleared on teardown. */
+  let bulkSequenceEnabled = false;
+  /** Both ends advertised `ctrlSeq`; set at hello, cleared with the pipe. */
+  let controlSequenceEnabled = false;
+  /** Monotonic per-pipe control sequence, stamped at send (wire order). */
+  let controlSequence = 0;
   let effectiveChunk = DEFAULT_CHUNK_SIZE;
   let keepaliveTimeoutMs: number = LOCAL_KEEPALIVE.timeoutMs;
   /** Hello exchange complete AND both channels open — the pipe is usable. */
@@ -256,7 +284,19 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   const pendingCandidates: RtcIceCandidate[] = [];
 
   // --- codecs / handlers ----------------------------------------------------
-  const controlCodec = createControlCodec();
+  const controlCodec = createControlCodec({
+    sequenceWholeMessages: () => controlSequenceEnabled,
+    // A lost control message means a frame the peer believes it sent — most
+    // consequentially a `stream-open` — never arrived, so the request it
+    // carried can only fail as a distant timeout. Which frames were lost is
+    // unknowable, so the pipe is the only honest scope: drop it, and the
+    // client's reconnect + the façade's retry re-drive the work.
+    onSequenceGap: (expected, received, missing) => {
+      pipeDown(
+        `control sequence gap: ${missing} message(s) lost (expected ${expected}, received ${received})`
+      );
+    },
+  });
   const outboundBulkStats = new Map<
     number,
     { dataFrames: number; dataBytes: number; messages: number }
@@ -265,9 +305,23 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   let bulkFrameHandler:
     | ((streamId: number, type: StreamFrameType, payload: Uint8Array) => void)
     | null = null;
-  const demux = createBulkDemux((streamId, type, payload) => {
-    bulkFrameHandler?.(streamId, type, payload);
-  });
+  const demux = createBulkDemux(
+    (streamId, type, payload) => {
+      bulkFrameHandler?.(streamId, type, payload);
+    },
+    {
+      // A gap means whole messages vanished between SCTP and here. Which streams
+      // they belonged to is unknowable — the ids were in the lost bytes — so the
+      // only honest scope is the pipe. Dropping it fails every affected stream
+      // at once and reconnects, instead of leaving some of them to hang until a
+      // 20s HEAD timeout with nothing logged near the transport.
+      onSequenceGap: (expected, received, missing) => {
+        pipeDown(
+          `bulk sequence gap: ${missing} message(s) lost (expected ${expected}, received ${received})`
+        );
+      },
+    }
+  );
   const downHandlers = new Set<(reason: string) => void>();
   const candidateTypeListeners = new Set<(type: RtcCandidateType | null) => void>();
   /** Last value handed to the candidate-type feed — de-dupes re-emits so the
@@ -279,11 +333,38 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   // One scheduler per channel for the pipe's LIFETIME: `getChannel` gates on
   // `pipeUp`, so on down the pump settles everything queued (and writes issued
   // while down settle silently), while the next generation's enqueues send.
+  /**
+   * Number a control part on its way to the wire.
+   *
+   * EVERY whole control message must pass through here, including the ones that
+   * bypass the scheduler (hello, pong). Stamping only the scheduled ones leaves
+   * unstamped placeholders on the wire, and skipping them instead leaves holes
+   * in the sequence — the receiver cannot tell either from real loss, so it
+   * tears down a perfectly healthy pipe. Both mistakes were live for one device
+   * run: "control sequence gap: expected 1, received 0", repeatedly.
+   */
+  const stampControlPart = (part: Uint8Array): void => {
+    if (!controlSequenceEnabled) return;
+    // Only sequenced whole messages consume a number; fragments keep their own
+    // frame id, so the sequence stays contiguous either way.
+    if (!isSequencedControlMessage(part)) return;
+    stampControlSequence(part, controlSequence);
+    controlSequence = (controlSequence + 1) >>> 0;
+  };
   const controlScheduler = createFrameScheduler({
     getChannel: () => (pipeUp ? control : null),
+    beforeSend: stampControlPart,
   });
+  // Monotonic per-pipe wire sequence, stamped at the moment of send so it
+  // reflects wire order rather than encode order. Reset with the pipe.
+  let bulkSequence = 0;
   const bulkScheduler = createFrameScheduler({
     getChannel: () => (pipeUp ? bulk : null),
+    beforeSend: (part) => {
+      if (!bulkSequenceEnabled) return;
+      stampBulkSequence(part, bulkSequence);
+      bulkSequence = (bulkSequence + 1) >>> 0;
+    },
   });
 
   // ---------------------------------------------------------------------------
@@ -417,6 +498,21 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   function onSignalDescription(desc: RtcSessionDescription): void {
     if (closed) return;
     pendingDescriptions.push(desc);
+    // Say so when an offer cannot be looked at yet. `pumpDescriptions` returns
+    // silently while an establish is in flight, and the "inbound offer" line
+    // lives INSIDE the work it gates — so a stuck establish made a peer that was
+    // reconnecting every 35s for nine minutes leave no trace on this side at
+    // all. An offer that arrived is now always evidenced, whatever happens next.
+    if (establishInFlight !== null) {
+      // Not a warning: the offerer deliberately re-sends its current offer when
+      // it sees a peer-joined event, so racing an in-flight establish is normal
+      // and usually clears on the next turn. What was missing was any record
+      // that the offer arrived — a queue that never drains is the fault, and
+      // that one is loud on its own via `pipe down: establish stalled`.
+      console.log(
+        `${log} offer queued behind an in-flight establish (${pendingDescriptions.length} pending)`
+      );
+    }
     pumpDescriptions();
   }
 
@@ -448,7 +544,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   /** One in-flight establish, always; new descriptions queue behind it. */
   function pumpDescriptions(): void {
     if (closed || establishInFlight !== null || pendingDescriptions.length === 0) return;
-    establishInFlight = processDescriptions()
+    establishInFlight = withEstablishDeadline(processDescriptions())
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         pipeDown(`establish failed: ${message}`);
@@ -463,6 +559,33 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
         // Candidates that arrived while the establish was in flight.
         flushCandidates();
       });
+  }
+
+  /**
+   * Reject if an establish has not settled within the ceiling, so the in-flight
+   * slot is released and the next offer is looked at. The stalled work is not
+   * cancellable — the native call keeps whatever it holds — so the rejection
+   * routes through `pipeDown`, which tears the peer down and returns to
+   * lazy-armed with signaling still joined. That is what makes the next offer
+   * land on a clean peer rather than a half-built one.
+   */
+  function withEstablishDeadline(work: Promise<void>): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`establish stalled (no answer within ${ESTABLISH_TIMEOUT_MS}ms)`));
+      }, ESTABLISH_TIMEOUT_MS);
+      unrefTimer(timer);
+      work.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      );
+    });
   }
 
   async function processDescriptions(): Promise<void> {
@@ -645,13 +768,18 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       maxMsg: localMaxMsg,
       platform: "server",
       keepalive: { ...LOCAL_KEEPALIVE },
+      bulkSeq: true,
+      ctrlSeq: true,
     };
     // DIRECT send — the hello must be the FIRST control message and cannot sit
     // behind the scheduler (which only opens once the pipe is up). A hello is
     // tiny, so this is one whole-tagged codec message.
     const parts = controlCodec.frame(encoder.encode(encodeControlFrame(hello)), localMaxMsg);
     try {
-      for (const part of parts) channel.send(part);
+      for (const part of parts) {
+        stampControlPart(part);
+        channel.send(part);
+      }
     } catch (error) {
       pipeDown(`hello send failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
@@ -709,6 +837,9 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       return;
     }
     remoteHello = frame;
+    // Both ends must be able to read the 9-byte header before either writes it.
+    bulkSequenceEnabled = frame.bulkSeq === true;
+    controlSequenceEnabled = frame.ctrlSeq === true;
     clearHelloTimeout();
     maybePipeUp();
   }
@@ -909,7 +1040,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       effectiveChunk
     );
     try {
-      for (const part of parts) channel.send(part);
+      for (const part of parts) {
+        stampControlPart(part);
+        channel.send(part);
+      }
     } catch (error) {
       pipeDown(`pong send failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -941,9 +1075,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     type: StreamFrameType,
     payload: Uint8Array
   ): Uint8Array[] {
-    const budget = Math.max(1, effectiveChunk - BULK_MUX_HEADER_BYTES);
+    const headerBytes = bulkSequenceEnabled ? BULK_MUX_SEQ_HEADER_BYTES : BULK_MUX_HEADER_BYTES;
+    const budget = Math.max(1, effectiveChunk - headerBytes);
     if (payload.byteLength <= budget) {
-      return [encodeBulkMessage(streamId, type, payload)];
+      return [encodeBulkMessage(streamId, type, payload, false, bulkSequenceEnabled)];
     }
     if (type === FRAME_DATA) {
       // DATA has no wire-level frame: each message's bytes simply append to
@@ -954,7 +1089,9 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
           encodeBulkMessage(
             streamId,
             type,
-            payload.subarray(offset, Math.min(offset + budget, payload.byteLength))
+            payload.subarray(offset, Math.min(offset + budget, payload.byteLength)),
+            false,
+            bulkSequenceEnabled
           )
         );
       }
@@ -972,7 +1109,13 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     for (let offset = 0; offset < payload.byteLength; offset += budget) {
       const end = Math.min(offset + budget, payload.byteLength);
       parts.push(
-        encodeBulkMessage(streamId, type, payload.subarray(offset, end), end < payload.byteLength)
+        encodeBulkMessage(
+          streamId,
+          type,
+          payload.subarray(offset, end),
+          end < payload.byteLength,
+          bulkSequenceEnabled
+        )
       );
     }
     return parts;
@@ -1025,6 +1168,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     prePipeUpControlFrames.length = 0;
     prePipeUpControlBytes = 0;
     remoteHello = null;
+    bulkSequenceEnabled = false;
+    bulkSequence = 0;
+    controlSequenceEnabled = false;
+    controlSequence = 0;
     localHelloSent = false;
     controlOpen = false;
     bulkOpen = false;

@@ -148,6 +148,14 @@ export interface InboundStreamMuxOptions {
    * a wire-level cancel), keeping exactly one failure path per transport.
    */
   onStreamOverflow?: (streamId: number, bufferedBytes: number) => void;
+  /**
+   * Fired when a frame names a stream this mux has no controller for. Normally
+   * benign (the caller cancelled), but it is also the exact place a desynced
+   * demux disappears into: garbage bytes decode to wild stream ids and every
+   * one of them lands here. Silence at this site is indistinguishable from a
+   * dead receive path, so the owner gets told rather than guessing.
+   */
+  onUnknownStream?: (streamId: number, type: FrameType, byteLength: number) => void;
 }
 
 export function createInboundStreamMux(options?: InboundStreamMuxOptions): InboundStreamMux {
@@ -215,7 +223,10 @@ export function createInboundStreamMux(options?: InboundStreamMuxOptions): Inbou
     },
     push(streamId: number, type: FrameType, payload: Uint8Array): void {
       const controller = controllers.get(streamId);
-      if (!controller) return; // unknown/closed stream — drop (caller cancelled)
+      if (!controller) {
+        options?.onUnknownStream?.(streamId, type, payload.byteLength);
+        return; // unknown/closed stream — drop (caller cancelled)
+      }
       // Re-emit the inner v1 frame so decodeFramedResponseToStreaming sees the
       // exact bytes it expects. HEAD/DATA flow through; END/ERROR also terminate.
       controller.enqueue(encodeFrame(type, payload));

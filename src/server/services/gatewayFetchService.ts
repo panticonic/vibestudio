@@ -308,6 +308,16 @@ export function createGatewayFetchService(deps: {
 
         const port = deps.getGatewayPort();
         const url = `http://127.0.0.1:${port}${target}`;
+        // Every panel asset a remote client loads passes through here, and until
+        // now none of them were recorded: the panel HTTP server logs only the
+        // entry document, so 79 of 81 requests in a device run were invisible on
+        // this side. That gap is why a fetch that never produced a response
+        // header could not be told apart from one that was never received — the
+        // client saw a 20s timeout and the server said nothing at all. Log the
+        // receipt and the outcome so the two are always distinguishable.
+        const startedAt = Date.now();
+        const label = target.length > 96 ? `${target.slice(0, 96)}…` : target;
+        console.log(`[gateway.fetch] -> ${descriptor.method ?? "GET"} ${label}`);
 
         // STREAMING both ways (via the pipe's stream path, handleWsStreamRequest):
         // the response body rides the bulk channel chunked under the data-channel
@@ -330,6 +340,9 @@ export function createGatewayFetchService(deps: {
                   : {}),
               } as RequestInit);
 
+        console.log(
+          `[gateway.fetch] <- ${response.status} ${label} in ${Date.now() - startedAt}ms`
+        );
         const hasRangeSemantics =
           requestHasRange || response.status === 206 || response.headers.has("content-range");
         if (

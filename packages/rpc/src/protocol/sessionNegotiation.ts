@@ -214,6 +214,19 @@ export interface SessionHelloFrame {
   maxMsg: number;
   platform?: "desktop" | "mobile" | "server" | "headless";
   keepalive?: { intervalMs: number; timeoutMs: number };
+  /**
+   * Sender can read a sequence-numbered bulk header. Numbering is enabled only
+   * when BOTH ends advertise it, so a peer from before the flag existed keeps
+   * the 5-byte header rather than rejecting every message as an unknown flag
+   * bit. Absent means false.
+   */
+  bulkSeq?: boolean;
+  /**
+   * Sender can read a sequence-numbered whole control message. Enabled only
+   * when BOTH ends advertise it: an un-upgraded peer's defragmenter returns
+   * null for an unknown tag, silently dropping the frame.
+   */
+  ctrlSeq?: boolean;
 }
 
 export type SessionControlFrame =

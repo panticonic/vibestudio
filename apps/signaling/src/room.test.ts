@@ -676,4 +676,51 @@ describe("SignalingRoom", () => {
     } as unknown as Request);
     expect(res.status).toBe(426);
   });
+
+  it("re-delivers the retained offer to a rejoining answerer whose predecessor was a zombie", async () => {
+    // The bug this covers: `sendRaw` reports whether a socket ACCEPTED bytes,
+    // which a socket whose peer is already gone still does. The offer therefore
+    // counted as delivered, skipped the buffer, and was lost — so a
+    // reconnecting answerer never saw it and the offerer re-offered until its
+    // 35s deadline, four times over, while the room logged healthy relays.
+    const { room } = makeRoom();
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
+    const [offerer, zombie] = createdServers;
+
+    // Relayed to a socket that accepts bytes for a peer that is already gone.
+    await deliver(room, offerer!, offer);
+    expect(zombie!.sent).toContain(offer);
+
+    // The dead answerer is reaped and a fresh one rejoins.
+    await drop(room, zombie!, 1006);
+    await room.fetch(upgradeRequest("answerer"));
+    const rejoined = createdServers[2]!;
+
+    // Without retention this socket receives only "peer-joined" and waits
+    // forever; the offerer has no reason to send again.
+    expect(rejoined.sent).toContain(offer);
+  });
+
+  it("never re-delivers a retained answer to a rejoining offerer", async () => {
+    // The asymmetry that matters: a rejoining offerer has already built a new
+    // PeerConnection with a new offer, so an answer from the previous
+    // negotiation is not stale-but-harmless — `setRemoteDescription` rejects it
+    // with "Called in wrong state" and the pipe drops. Retaining both roles put
+    // the device into a four-attempt reconnect loop.
+    const { room } = makeRoom();
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
+    const [firstOfferer, answerer] = createdServers;
+
+    await deliver(room, firstOfferer!, offer);
+    await deliver(room, answerer!, answer);
+
+    // The offerer drops and reconnects.
+    await drop(room, firstOfferer!, 1006);
+    await room.fetch(upgradeRequest("offerer"));
+    const rejoinedOfferer = createdServers[2]!;
+
+    expect(rejoinedOfferer.sent).not.toContain(answer);
+  });
 });

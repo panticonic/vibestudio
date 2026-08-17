@@ -365,7 +365,7 @@ export function selectedCandidateTypeFromStats(
 // Wrappers — map react-native-webrtc's WHATWG surface onto the contract.
 // ===========================================================================
 
-class WrappedDataChannel implements RtcDataChannelLike {
+export class WrappedDataChannel implements RtcDataChannelLike {
   readonly label: string;
   private readonly openFanout: Fanout<[]>;
   private readonly closeFanout: Fanout<[]>;

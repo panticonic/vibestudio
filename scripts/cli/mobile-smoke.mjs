@@ -57,6 +57,7 @@ function parseArgs(argv) {
     noTap: false,
     realModel: false,
     productionBase: false,
+    baseCheckout: null,
     localSignaling: false,
     requireTurn: false,
     signalUrl: null,
@@ -92,6 +93,8 @@ function parseArgs(argv) {
       options.noTap = true;
     } else if (arg === "--real-model") {
       options.realModel = true;
+    } else if (arg === "--base-checkout") {
+      options.baseCheckout = argv[++i] ?? null;
     } else if (arg === "--production-base") {
       options.productionBase = true;
     } else if (arg === "--local-signaling") {
@@ -162,6 +165,11 @@ Runner options:
                        the deterministic E2E model stub.
   --production-base   Create the workspace from the canonical pinned Base
                        release instead of the selected development checkout.
+  --base-checkout <dir>
+                       Use this Base checkout for THIS RUN only. Prefer it over
+                       the shared git config vibestudio.baseCheckout, which every
+                       process in the repo reads — repointing that redirects
+                       other agents workspace write-back into your checkout.
   --signal-url <url>  Use a specific existing signaling service.
   --local-signaling   Start local Wrangler signaling (and coturn for an emulator)
                        instead of using the hosted production service.
@@ -339,13 +347,52 @@ function runCommandBuffer(command, args, options = {}) {
  * ABI moves ahead of that publication. Resolution is TypeScript, so it runs
  * through the shared resolver rather than a second copy living here.
  */
-async function resolveDevelopmentBase(checkpointTarget, productionBase) {
+
+/**
+ * Fail fast on a Base checkout the workspace cannot boot from.
+ *
+ * Every one of these conditions used to surface the same way: reset the phone,
+ * pair, wait, and finally read a Node stack trace rendered on the device while
+ * the smoke timed out on an unrelated phase two minutes later. They are all
+ * decidable from the checkout alone in well under a second, so decide them
+ * before touching the device.
+ */
+async function assertBaseCheckoutBootable(checkout) {
+  let failure = null;
+  try {
+    await runCommandBuffer(process.execPath, [
+      "--import",
+      "tsx",
+      path.join(repoRoot, "scripts", "validate-template-repository.ts"),
+      checkout,
+      // Only conditions that stop a workspace booting — not publishing policy.
+      "--boot-only",
+    ]);
+  } catch (error) {
+    // runCommandBuffer rejects with the child's stderr embedded in the message.
+    failure = error instanceof Error ? error.message : String(error);
+  }
+  if (failure === null) return;
+  const detail = failure
+    .split("\n")
+    .filter((line) => line.trim() && !/^\s+at /.test(line))
+    .join("\n");
+  throw new Error(
+    `Base checkout at ${checkout} cannot boot a workspace:\n${detail}\n\n` +
+      `Fix the checkout (for a stale generated manifest: ` +
+      `npx tsx scripts/validate-template-repository.ts ${checkout} --fix), ` +
+      `or point this run elsewhere with --base-checkout <dir>.`
+  );
+}
+
+async function resolveDevelopmentBase(checkpointTarget, productionBase, explicitCheckout = null) {
   const { stdout } = await runCommandBuffer(process.execPath, [
     "--import",
     "tsx",
     path.join(repoRoot, "scripts", "resolve-development-base.ts"),
     "--checkpoint-target",
     checkpointTarget,
+    ...(explicitCheckout ? ["--checkout", explicitCheckout] : []),
     ...(productionBase ? ["--production-base"] : []),
   ]);
   return JSON.parse(stdout.toString().trim());
@@ -568,6 +615,10 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     cwd: repoRoot,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    // Cleanup retires this child as an owned process tree, and owning a tree
+    // means owning its group. Left in the runner's own group, the teardown
+    // signal lands on the runner instead.
+    detached: process.platform !== "win32",
   });
   const phases = new Map();
   const recentLines = [];
@@ -1096,6 +1147,27 @@ async function assertNoVisiblePanelCrash(device, xml, context) {
   }
 }
 
+// Cadence for the visual poll inside `waitForInitialAgentTurn`.
+//
+// Each pass runs a full `uiautomator dump`, which is far more invasive than it
+// looks: registering and tearing down a UiAutomation makes the system
+// reconfigure every accessibility client, and the tree walk itself runs on the
+// target app's main thread. Polling here does not observe the app, it competes
+// with it.
+//
+// Measured on device across three cadences. At ~1s the app's JS thread went
+// silent for 5-14s at a stretch; at ~7.5s it still froze for 42s inside a
+// single dump storm (490 AccessibilityUserState events, 84 failed
+// service-bind retries) — long enough to blow the 45s WebRTC keepalive and have
+// the pipe torn down as dead mid-panel-load. The harness was producing the
+// failure it was there to detect.
+//
+// So this is deliberately slow. The authoritative turn signals are the durable
+// state probe and the logcat phases, which cost the device nothing; the dump
+// only catches a visible crash and taps approval buttons, and a turn budget is
+// minutes, so tens of seconds of latency on those is free.
+const AGENT_TURN_VISUAL_POLL_MS = 20_000;
+
 async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options = {}) {
   let lastLabels = [];
   let lastAgentState = "not checked";
@@ -1210,7 +1282,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       }
     }
 
-    await sleep(1_000);
+    await sleep(AGENT_TURN_VISUAL_POLL_MS);
   }
 
   throw new Error(
@@ -1719,7 +1791,8 @@ async function main() {
     };
     const developmentBase = await resolveDevelopmentBase(
       path.join(tempRoot, "base-checkpoint"),
-      options.productionBase
+      options.productionBase,
+      options.baseCheckout
     );
     if (developmentBase) {
       serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
@@ -1730,6 +1803,7 @@ async function main() {
       console.log(
         `[mobile-smoke] Base:      ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
       );
+      await assertBaseCheckoutBootable(developmentBase.checkout);
     } else {
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;

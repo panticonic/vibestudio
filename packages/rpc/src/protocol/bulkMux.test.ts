@@ -5,6 +5,9 @@ import {
   BULK_MUX_PARTIAL_STREAM_CAP,
   BulkProtocolViolation,
   MUX_FLAG_MORE,
+  MUX_FLAG_SEQ,
+  BULK_MUX_SEQ_HEADER_BYTES,
+  stampBulkSequence,
   createBulkDemux,
   decodeBulkMessage,
   encodeBulkMessage,
@@ -71,7 +74,9 @@ describe("bulk mux codec", () => {
     });
 
     it("rejects unknown flag bits", () => {
-      for (const badBits of [0x10, 0x40, 0x80]) {
+      // 0x10 is no longer among these — it is MUX_FLAG_SEQ. The remaining
+      // reserved bits must still fail loud.
+      for (const badBits of [0x20, 0x40, 0x80]) {
         const message = encodeBulkMessage(1, FRAME_DATA, bytes(1));
         message[4] = FRAME_DATA | badBits;
         expect(() => decodeBulkMessage(message)).toThrow(/unknown bulk flag bits/);
@@ -206,5 +211,75 @@ describe("bulk demux", () => {
     demux.push(encodeBulkMessage(8, FRAME_HEAD, bytes(3)));
     expect(frames).toHaveLength(1);
     expect([...frames[0]!.payload]).toEqual([3]);
+  });
+});
+
+describe("bulk mux wire sequence", () => {
+  const sequenced = (streamId: number, seq: number, payload: Uint8Array): Uint8Array => {
+    const message = encodeBulkMessage(streamId, FRAME_DATA, payload, false, true);
+    stampBulkSequence(message, seq);
+    return message;
+  };
+
+  it("round-trips a stamped sequence and keeps the payload intact", () => {
+    const message = sequenced(7, 42, bytes(1, 2, 3));
+    expect(message.byteLength).toBe(BULK_MUX_SEQ_HEADER_BYTES + 3);
+    const decoded = decodeBulkMessage(message);
+    expect(decoded.sequence).toBe(42);
+    expect(decoded.streamId).toBe(7);
+    expect([...decoded.payload]).toEqual([1, 2, 3]);
+  });
+
+  it("reports null for an unsequenced message", () => {
+    expect(decodeBulkMessage(encodeBulkMessage(1, FRAME_DATA, bytes(9))).sequence).toBeNull();
+    expect((encodeBulkMessage(1, FRAME_DATA, bytes(9))[4]! & MUX_FLAG_SEQ) === 0).toBe(true);
+  });
+
+  it("survives the u32 wrap without reporting a gap", () => {
+    const gaps: number[] = [];
+    const demux = createBulkDemux(
+      () => {},
+      { onSequenceGap: (_e, _r, missing) => gaps.push(missing) }
+    );
+    demux.push(sequenced(1, 0xffffffff, bytes(1)));
+    demux.push(sequenced(1, 0, bytes(2)));
+    expect(gaps).toEqual([]);
+  });
+
+  it("reports how many messages were skipped", () => {
+    const seen: Array<{ expected: number; received: number; missing: number }> = [];
+    const demux = createBulkDemux(
+      () => {},
+      { onSequenceGap: (expected, received, missing) => seen.push({ expected, received, missing }) }
+    );
+    demux.push(sequenced(1, 10, bytes(1)));
+    demux.push(sequenced(1, 11, bytes(2)));
+    demux.push(sequenced(1, 15, bytes(3))); // 12, 13, 14 lost
+    expect(seen).toEqual([{ expected: 12, received: 15, missing: 3 }]);
+  });
+
+  it("does not report a gap across a reset — a fresh pipe renumbers", () => {
+    const gaps: number[] = [];
+    const demux = createBulkDemux(
+      () => {},
+      { onSequenceGap: (_e, _r, missing) => gaps.push(missing) }
+    );
+    demux.push(sequenced(1, 900, bytes(1)));
+    demux.reset();
+    demux.push(sequenced(1, 0, bytes(2)));
+    expect(gaps).toEqual([]);
+  });
+
+  it("delivers the frame even when a gap precedes it", () => {
+    // The gap is reported, not swallowed: whatever did arrive still flows, and
+    // the owner decides what to do about what did not.
+    const frames: number[] = [];
+    const demux = createBulkDemux(
+      (_streamId, _type, payload) => frames.push(payload[0]!),
+      { onSequenceGap: () => {} }
+    );
+    demux.push(sequenced(1, 1, bytes(11)));
+    demux.push(sequenced(1, 9, bytes(99)));
+    expect(frames).toEqual([11, 99]);
   });
 });

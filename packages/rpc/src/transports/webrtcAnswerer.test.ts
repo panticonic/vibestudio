@@ -10,7 +10,12 @@ import type {
 } from "./webrtcPeer.js";
 import type { SignalingClient } from "./webrtcSignaling.js";
 import { createControlDefragmenter, frameControlMessage } from "./controlFraming.js";
-import { createBulkDemux, decodeBulkMessage, encodeBulkMessage } from "../protocol/bulkMux.js";
+import {
+  createBulkDemux,
+  decodeBulkMessage,
+  encodeBulkMessage,
+  stampBulkSequence,
+} from "../protocol/bulkMux.js";
 import { FRAME_DATA, FRAME_HEAD } from "../protocol/streamCodec.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 
@@ -330,6 +335,10 @@ describe("WebRTC answerer pipe (v2)", () => {
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
+      // Advertised unconditionally; numbering only turns on if the peer
+      // advertises it too, so an older peer keeps the unsequenced framing.
+      bulkSeq: true,
+      ctrlSeq: true,
     });
     expect(h.pipe.status()).toBe("connected");
 
@@ -916,5 +925,125 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(seen).toEqual(["host"]);
     await h.pipe.close();
     expect(seen).toEqual(["host", null]);
+  });
+  it("recovers from an establish that never settles instead of going deaf", async () => {
+    // The failure this guards: every step of an establish is an unbounded await
+    // into the native stack, and `pumpDescriptions` skips while one is in
+    // flight. A wedged call therefore parked the single in-flight slot forever,
+    // and since the "inbound offer" log lives inside the gated work, a peer
+    // reconnecting every 35s for nine minutes left no trace on this side at all.
+    vi.useFakeTimers();
+    const peers: FakePeer[] = [];
+    const signals: FakeSignaling[] = [];
+    let wedgeNext = true;
+    const pipe = createWebRtcAnswererPipe({
+      provider: {
+        create: async () => {
+          if (wedgeNext) {
+            wedgeNext = false;
+            await new Promise<void>(() => {}); // never settles
+          }
+          const peer = new FakePeer();
+          peers.push(peer);
+          return peer;
+        },
+      },
+      createSignaling: () => {
+        const signaling = new FakeSignaling();
+        signals.push(signaling);
+        return signaling;
+      },
+      pairing: { iceServers: [], certificatePemFile: "/server.pem", keyPemFile: "/server.key" },
+    });
+    const downs: string[] = [];
+    pipe.onDown((reason) => downs.push(reason));
+    void pipe.connect().catch(() => {});
+    await tick();
+
+    signals.at(-1)!.deliverOffer("offer-1");
+    await tick();
+    expect(peers).toHaveLength(0); // wedged inside provider.create
+
+    // The reconnecting peer publishes again while the first establish is stuck.
+    signals.at(-1)!.deliverOffer("offer-2");
+    await tick();
+    expect(peers).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await tick();
+
+    expect(downs.some((reason) => reason.includes("establish stalled"))).toBe(true);
+    // The queued offer is looked at on a fresh peer — the answerer is not deaf.
+    expect(peers.length).toBeGreaterThan(0);
+
+    await pipe.close();
+  });
+  it("numbers bulk messages in wire order once both ends advertise bulkSeq", async () => {
+    const h = makeHarness();
+    const { bulk } = await pairUp(h, { bulkSeq: true });
+    const before = bulk.sent.length;
+    await h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(4));
+    await h.pipe.writeBulkFrame(2, FRAME_DATA, bytes(4));
+    const sequences = bulk.sent.slice(before).map((m) => decodeBulkMessage(m).sequence);
+    // Contiguous and in send order — this is what makes a gap detectable.
+    expect(sequences).toEqual([0, 1]);
+  });
+
+  it("keeps the unnumbered header when the peer does not advertise bulkSeq", async () => {
+    // An older peer must not be handed a 9-byte header it would reject as an
+    // unknown flag bit.
+    const h = makeHarness();
+    const { bulk } = await pairUp(h);
+    const before = bulk.sent.length;
+    await h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(4));
+    const sent = bulk.sent.slice(before);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(decodeBulkMessage(sent[0]!).sequence).toBeNull();
+  });
+
+  it("drops the pipe when inbound bulk messages skip a sequence", async () => {
+    const h = makeHarness();
+    const { bulk } = await pairUp(h, { bulkSeq: true });
+    const numbered = (seq: number, payload: Uint8Array): Uint8Array => {
+      const message = encodeBulkMessage(1, FRAME_DATA, payload, false, true);
+      stampBulkSequence(message, seq);
+      return message;
+    };
+    bulk.deliver(numbered(0, bytes(1)));
+    expect(h.downs).toEqual([]);
+    bulk.deliver(numbered(3, bytes(1))); // 1 and 2 lost
+    expect(h.downs.some((reason) => /bulk sequence gap: 2 message\(s\) lost/.test(reason))).toBe(
+      true
+    );
+  });
+
+  it("numbers every control message contiguously, including direct sends", async () => {
+    // The bug this covers: hello/pong bypass the scheduler, so stamping only in
+    // the scheduler's beforeSend put unstamped placeholder zeros on the wire and
+    // the peer tore the pipe down with "control sequence gap: expected 1,
+    // received 0". Skipping them instead would leave holes, which is equally
+    // indistinguishable from loss. Every whole message must carry the next
+    // number, whichever path it took.
+    const h = makeHarness();
+    const { control } = await pairUp(h, { ctrlSeq: true });
+
+    // A direct send (pong, answering a pipe-level ping) interleaved with a
+    // scheduled one.
+    deliverControl(control, { t: "ping", ts: 1 });
+    await tick();
+    await h.pipe.writeControl(enc.encode(JSON.stringify({ t: "rpc", sid: "s1" })));
+    await tick();
+    deliverControl(control, { t: "ping", ts: 2 });
+    await tick();
+
+    const TAG_WHOLE_SEQ = 0x02;
+    const sequences = control.sent
+      .filter((message) => message[0] === TAG_WHOLE_SEQ)
+      .map((message) => new DataView(message.buffer, message.byteOffset).getUint32(1));
+
+    expect(sequences.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < sequences.length; i++) {
+      expect(sequences[i]).toBe(sequences[i - 1]! + 1);
+    }
   });
 });

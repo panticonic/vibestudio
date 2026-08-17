@@ -62,6 +62,22 @@ const CLOSE_SUPERSEDED = 4001;
 // per-value storage cap. The zero-padded seq orders the keys lexicographically.
 const PENDING_FRAME_PREFIX = "pending-frame:";
 const PENDING_SEQ_KEY = "pending-seq";
+/**
+ * Latest `description` seen from each role, kept even after it was relayed.
+ *
+ * `sendRaw` reports whether a socket ACCEPTED bytes, which a socket whose peer
+ * is already gone still does — it is only reaped later. That made a relayed
+ * offer count as delivered and skip the buffer, so a reconnecting peer could
+ * re-offer into a dead counterpart and simply never be answered. Observed on
+ * device: four re-offers, each timing out after 35s, while the room reported a
+ * healthy relay every time.
+ *
+ * Retaining the last description makes a join self-healing: whatever the room
+ * thought it delivered, the newly-joined counterpart is handed the current
+ * offer. Re-delivery is safe because the answerer already treats a repeated
+ * identical SDP as a no-op ("duplicate offer — keeping current peer").
+ */
+const LAST_DESCRIPTION_PREFIX = "last-description:";
 interface PendingFrame {
   sourceRole: SignalingRole;
   text: string;
@@ -319,8 +335,28 @@ export class SignalingRoom implements DurableObject {
 
     // This join completes the pair: deliver anything the counterpart sent while
     // it was alone, in order, before any live frame can reach the new joiner.
+    const counterpartRole: SignalingRole = role === "offerer" ? "answerer" : "offerer";
     if (others.length > 0) {
-      await this.flushPendingTo(server, role === "offerer" ? "answerer" : "offerer");
+      await this.flushPendingTo(server, counterpartRole);
+    }
+    // Re-hand the offerer's current offer to a (re)joining ANSWERER even when
+    // the room believed it was already relayed: the previous delivery may have
+    // gone into a socket that accepted bytes on behalf of a peer that was
+    // already gone. Without this a reconnect can stall forever, each side
+    // convinced the other has its description.
+    //
+    // Only this direction — an answer handed back to a fresh offerer would be
+    // applied against a negotiation that no longer exists (see the retention
+    // site).
+    const retained =
+      counterpartRole === "offerer"
+        ? await this.state.storage.get<string>(LAST_DESCRIPTION_PREFIX + counterpartRole)
+        : undefined;
+    if (retained) {
+      sendRaw(server, retained);
+      console.log(
+        `[signaling] room=${this.roomId} re-delivered retained ${counterpartRole} description to ${role}`
+      );
     }
 
     return new Response(null, { status: 101, webSocket: client });
@@ -372,10 +408,26 @@ export class SignalingRoom implements DurableObject {
     // counterpart accepted the frame (the sole peer is already gone), fall back
     // to the pre-join buffer so the frame is delivered to a genuine (re)joiner
     // instead of silently lost.
+    const sourceRole: SignalingRole = roleTag === "role:offerer" ? "offerer" : "answerer";
+    // Relay FIRST: a description is on the critical path of establishing a pipe,
+    // and must never wait on a storage write.
     let delivered = 0;
     for (const other of others) if (sendRaw(other, text)) delivered++;
+    // OFFERS only, and retained regardless of the relay outcome.
+    //
+    // The two directions are NOT symmetric. Re-handing an offer to a rejoining
+    // answerer is safe: the answerer treats a repeated identical SDP as a no-op
+    // and can always answer afresh. Re-handing an ANSWER to a rejoining offerer
+    // is never safe — that peer has already built a new PeerConnection with a
+    // new offer, so the previous answer belongs to a dead negotiation and
+    // `setRemoteDescription` rejects it with "Called in wrong state", dropping
+    // the pipe. Retaining both roles did exactly that on device: four straight
+    // re-establish attempts, each killed by the answer it had just been handed.
+    if (type === "description" && sourceRole === "offerer") {
+      await this.state.storage.put(LAST_DESCRIPTION_PREFIX + sourceRole, text);
+    }
     if (delivered === 0) {
-      await this.bufferFrame(roleTag === "role:offerer" ? "offerer" : "answerer", text);
+      await this.bufferFrame(sourceRole, text);
     } else {
       console.log(`[signaling] room=${this.roomId} relay from=${roleTag} type=${type} -> ${delivered}`);
     }
@@ -404,7 +456,14 @@ export class SignalingRoom implements DurableObject {
       // replayed into a later occupancy of this room id. Disarm too, so a
       // recycled room id must be re-armed by a real join before minting TURN.
       await this.clearPendingFrames();
-      await this.state.storage.delete([PAIRING_ARMED_KEY, ICE_COLD_GRANT_KEY]);
+      await this.state.storage.delete([
+        PAIRING_ARMED_KEY,
+        ICE_COLD_GRANT_KEY,
+        // Retained descriptions belong to the occupancy that produced them; a
+        // recycled room id must never re-deliver a previous pair's SDP.
+        `${LAST_DESCRIPTION_PREFIX}offerer`,
+        `${LAST_DESCRIPTION_PREFIX}answerer`,
+      ]);
     }
   }
 

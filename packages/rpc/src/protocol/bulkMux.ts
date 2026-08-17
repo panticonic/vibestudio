@@ -39,8 +39,22 @@ export const BULK_MUX_HEADER_BYTES = 5;
 /** Continuation flag — the frame's payload continues in the next message. */
 export const MUX_FLAG_MORE = 0x08;
 
+/**
+ * SEQ present — the header carries a `[seq: u32 BE]` after the flags, and the
+ * payload starts 4 bytes later.
+ *
+ * Per-message rather than per-connection so a message is self-describing: a
+ * decoder never needs out-of-band state to know where the payload begins, and a
+ * peer that predates the flag rejects it as an unknown bit (fail loud) instead
+ * of reading the sequence as payload.
+ */
+export const MUX_FLAG_SEQ = 0x10;
+
+/** `[streamId: u32 BE][flags: u8][seq: u32 BE]` */
+export const BULK_MUX_SEQ_HEADER_BYTES = 9;
+
 const MUX_TYPE_MASK = 0x07;
-const MUX_KNOWN_BITS = 0x0f;
+const MUX_KNOWN_BITS = 0x1f;
 
 /**
  * Catastrophe fuse on the bytes a single continued HEAD/ERROR may accumulate
@@ -57,6 +71,21 @@ export interface BulkDemuxLimits {
   maxAccumulationBytes?: number;
   /** Defaults to `BULK_MUX_PARTIAL_STREAM_CAP`. */
   maxPartialStreams?: number;
+  /**
+   * Called when a sequenced message does not follow its predecessor, reporting
+   * how many were skipped.
+   *
+   * This is the channel's conservation law. The mux is otherwise unable to
+   * notice loss at all: every message is self-describing, so losing whole
+   * messages leaves the parser perfectly in sync and simply starves whichever
+   * streams they belonged to. Measured on a device, that surfaced only as a 20s
+   * HEAD timeout in a panel, with nothing logged anywhere near the transport.
+   *
+   * Reported rather than thrown so the owner decides — the frames are gone
+   * either way, and which streams they belonged to is unknowable, so the honest
+   * response is at the pipe level.
+   */
+  onSequenceGap?: (expected: number, received: number, missing: number) => void;
 }
 
 /**
@@ -86,28 +115,50 @@ export function encodeBulkMessage(
   streamId: number,
   type: StreamFrameType,
   payload: Uint8Array,
-  more = false
+  more = false,
+  withSequence = false
 ): Uint8Array {
   if (more && (type === FRAME_DATA || type === FRAME_END)) {
     throw new BulkProtocolViolation(
       `MORE flag is only valid on HEAD/ERROR frames (got type 0x${type.toString(16)})`
     );
   }
-  const message = new Uint8Array(BULK_MUX_HEADER_BYTES + payload.byteLength);
+  const headerBytes = withSequence ? BULK_MUX_SEQ_HEADER_BYTES : BULK_MUX_HEADER_BYTES;
+  const message = new Uint8Array(headerBytes + payload.byteLength);
   const id = streamId >>> 0;
   message[0] = (id >>> 24) & 0xff;
   message[1] = (id >>> 16) & 0xff;
   message[2] = (id >>> 8) & 0xff;
   message[3] = id & 0xff;
-  message[4] = type | (more ? MUX_FLAG_MORE : 0);
-  message.set(payload, BULK_MUX_HEADER_BYTES);
+  message[4] = type | (more ? MUX_FLAG_MORE : 0) | (withSequence ? MUX_FLAG_SEQ : 0);
+  // The sequence stays zero here and is stamped at send. Numbering at encode
+  // time would be wrong: the scheduler interleaves streams round-robin, so the
+  // order messages are built in is not the order they reach the wire, and a
+  // receiver checking for gaps needs wire order.
+  message.set(payload, headerBytes);
   return message;
+}
+
+/**
+ * Write the wire sequence into an already-encoded message, immediately before it
+ * is handed to the channel. No-op for a message encoded without the SEQ flag.
+ */
+export function stampBulkSequence(message: Uint8Array, sequence: number): void {
+  if (message.byteLength < BULK_MUX_SEQ_HEADER_BYTES) return;
+  if (((message[4] ?? 0) & MUX_FLAG_SEQ) === 0) return;
+  const value = sequence >>> 0;
+  message[5] = (value >>> 24) & 0xff;
+  message[6] = (value >>> 16) & 0xff;
+  message[7] = (value >>> 8) & 0xff;
+  message[8] = value & 0xff;
 }
 
 export interface DecodedBulkMessage {
   streamId: number;
   type: StreamFrameType;
   more: boolean;
+  /** Wire sequence, or null when the sender did not number this message. */
+  sequence: number | null;
   /**
    * A subarray VIEW into `message` (zero-copy) — valid only as long as the
    * caller's buffer is; copy (`payload.slice()`) before retaining it past the
@@ -149,7 +200,29 @@ export function decodeBulkMessage(message: Uint8Array): DecodedBulkMessage {
       `MORE flag set on ${type === FRAME_DATA ? "DATA" : "END"} frame (stream ${streamId})`
     );
   }
-  return { streamId, type, more, payload: message.subarray(BULK_MUX_HEADER_BYTES) };
+  const sequenced = (flags & MUX_FLAG_SEQ) !== 0;
+  if (!sequenced) {
+    return { streamId, type, more, sequence: null, payload: message.subarray(BULK_MUX_HEADER_BYTES) };
+  }
+  if (message.byteLength < BULK_MUX_SEQ_HEADER_BYTES) {
+    throw new BulkProtocolViolation(
+      `sequenced bulk message shorter than the ${BULK_MUX_SEQ_HEADER_BYTES}-byte header ` +
+        `(${message.byteLength} bytes)`
+    );
+  }
+  const sequence =
+    (((message[5] ?? 0) << 24) |
+      ((message[6] ?? 0) << 16) |
+      ((message[7] ?? 0) << 8) |
+      (message[8] ?? 0)) >>>
+    0;
+  return {
+    streamId,
+    type,
+    more,
+    sequence,
+    payload: message.subarray(BULK_MUX_SEQ_HEADER_BYTES),
+  };
 }
 
 export interface BulkDemux {
@@ -206,9 +279,19 @@ export function createBulkDemux(
   );
   // Partial HEAD/ERROR continuations, keyed by streamId.
   let pending = new Map<number, { type: StreamFrameType; chunks: Uint8Array[]; bytes: number }>();
+  // Wire sequence of the last message accepted, for gap detection.
+  let lastSequence: number | null = null;
   return {
     push(message: Uint8Array): void {
-      const { streamId, type, more, payload } = decodeBulkMessage(message);
+      const { streamId, type, more, sequence, payload } = decodeBulkMessage(message);
+      if (sequence !== null) {
+        if (lastSequence !== null && sequence !== ((lastSequence + 1) >>> 0)) {
+          // Unsigned arithmetic so the check survives the u32 wrap.
+          const missing = (sequence - lastSequence - 1) >>> 0;
+          limits.onSequenceGap?.((lastSequence + 1) >>> 0, sequence, missing);
+        }
+        lastSequence = sequence;
+      }
       const partial = pending.get(streamId);
       if (partial && partial.type !== type) {
         pending.delete(streamId);
@@ -251,6 +334,9 @@ export function createBulkDemux(
     },
     reset(): void {
       pending = new Map();
+      // A new pipe numbers from the start; carrying the old high-water over
+      // would report the restart itself as a gap.
+      lastSequence = null;
     },
   };
 }
