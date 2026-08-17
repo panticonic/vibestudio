@@ -28,13 +28,13 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`,
       `CREATE INDEX idx_entities_agent_entity
         ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`,
+      `CREATE INDEX idx_runtime_resource_bindings_resource
+         ON runtime_resource_bindings(resource_kind, resource_id)`,
       `CREATE INDEX idx_slots_parent ON slots(parent_slot_id)`,
       `CREATE INDEX idx_slots_current ON slots(current_entity_id)`,
       `CREATE INDEX idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`,
       `CREATE INDEX idx_panel_close_cleanup_page ON panel_close_cleanup(close_id, slot_id)`,
       `CREATE INDEX idx_panel_close_cleanup_owner_page ON panel_close_cleanup(owner_user_id, slot_id)`,
-      `CREATE INDEX idx_quickfire_sessions_channel ON quickfire_sessions(channel_id)`,
-      `CREATE INDEX idx_quickfire_close_cleanup_page ON quickfire_close_cleanup(close_id, channel_id)`,
       `CREATE INDEX idx_history_entity ON slot_history(entity_id)`,
       `CREATE INDEX idx_history_entry ON slot_history(entry_key)`,
       `CREATE INDEX idx_context_edges_owner ON context_edges(owner_context_id, kind)`,
@@ -82,6 +82,22 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`
     );
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_resource_bindings (
+        entity_id TEXT NOT NULL REFERENCES entities(id),
+        resource_kind TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        capabilities TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_channel_id TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (entity_id, resource_kind, resource_id)
+      )
+    `);
+    sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_runtime_resource_bindings_resource
+         ON runtime_resource_bindings(resource_kind, resource_id)`
+    );
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS slots (
         slot_id TEXT PRIMARY KEY,
         parent_slot_id TEXT REFERENCES slots(slot_id),
@@ -114,37 +130,6 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_panel_close_cleanup_owner_page
          ON panel_close_cleanup(owner_user_id, slot_id)`
-    );
-    // Keep in sync with WorkspaceDO.createTables() — this fixture hand-copies
-    // the durable schema so unit tests can run under sql.js.
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS quickfire_sessions (
-        slot_id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        agent_entity_id TEXT,
-        context_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        cleared_at INTEGER,
-        promoted_at INTEGER
-      )
-    `);
-    sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_quickfire_sessions_channel
-         ON quickfire_sessions(channel_id)`
-    );
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS quickfire_close_cleanup (
-        channel_id TEXT PRIMARY KEY,
-        slot_id TEXT NOT NULL,
-        close_id TEXT NOT NULL,
-        agent_entity_id TEXT,
-        context_id TEXT NOT NULL,
-        queued_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_quickfire_close_cleanup_page
-         ON quickfire_close_cleanup(close_id, channel_id)`
     );
     sql.exec(`
       CREATE TABLE IF NOT EXISTS slot_history (

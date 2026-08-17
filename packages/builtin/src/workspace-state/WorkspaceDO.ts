@@ -21,6 +21,7 @@ import {
   type EntityKind,
   type EntityRecord,
   type EntityReservationInput,
+  type RuntimeResourceBindingInput,
 } from "@vibestudio/shared/runtime/entitySpec";
 import {
   parseUnitAuthorityManifest,
@@ -45,35 +46,9 @@ import type {
   WorkspacePanelTreePlacement,
   WorkspacePanelTreeRootGroupPage,
   WorkspacePanelTreeRootGroupPageInput,
-  WorkspaceQuickfireBindResult,
-  WorkspaceQuickfireCleanupPage,
-  WorkspaceQuickfireCleanupPageInput,
-  WorkspaceQuickfireSession,
 } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 
 const PANEL_TREE_ORDER_STEP = 1_024;
-
-interface DbQuickfireRow {
-  slot_id: string;
-  channel_id: string;
-  agent_entity_id: string | null;
-  context_id: string;
-  created_at: number;
-  cleared_at: number | null;
-  promoted_at: number | null;
-}
-
-function toQuickfireSession(row: DbQuickfireRow): WorkspaceQuickfireSession {
-  return {
-    slotId: row.slot_id as WorkspaceQuickfireSession["slotId"],
-    channelId: row.channel_id,
-    agentEntityId: row.agent_entity_id ?? null,
-    contextId: row.context_id,
-    createdAt: Number(row.created_at),
-    clearedAt: row.cleared_at === null ? null : Number(row.cleared_at),
-    promotedAt: row.promoted_at === null ? null : Number(row.promoted_at),
-  };
-}
 
 interface DbEntityRow {
   id: string;
@@ -243,8 +218,6 @@ const WORKSPACE_REQUIRED_TABLES = [
   "do_alarm_test_policies",
   "durable_work_owners",
   "context_edges",
-  "quickfire_sessions",
-  "quickfire_close_cleanup",
 ] as const;
 
 function serializeActiveAuthority(authority: UnitAuthorityManifest | undefined): string | null {
@@ -337,7 +310,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 
 export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 33;
+  static override schemaVersion = 35;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -389,6 +362,22 @@ export class WorkspaceDO extends DurableObjectBase {
       `CREATE INDEX IF NOT EXISTS idx_entities_agent_entity
         ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`
     );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_resource_bindings (
+        entity_id TEXT NOT NULL REFERENCES entities(id),
+        resource_kind TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        capabilities TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_channel_id TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (entity_id, resource_kind, resource_id)
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_runtime_resource_bindings_resource
+         ON runtime_resource_bindings(resource_kind, resource_id)`
+    );
 
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS slots (
@@ -437,43 +426,6 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_panel_close_cleanup_owner_page
          ON panel_close_cleanup(owner_user_id, slot_id)`
-    );
-
-    // quickfire_sessions — the panel-slot ↔ micro-conversation mapping. At most
-    // one live mapping per slot; `cleared_at`/`promoted_at` are lifecycle
-    // markers, never expiry inputs (quickfire has no TTL by design).
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS quickfire_sessions (
-        slot_id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        agent_entity_id TEXT,
-        context_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        cleared_at INTEGER,
-        promoted_at INTEGER
-      )
-    `);
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_quickfire_sessions_channel
-         ON quickfire_sessions(channel_id)`
-    );
-    // The DO never archives anything itself. Clearing a conversation and
-    // closing a slot only RECORD durable work here; the host drains it exactly
-    // as it drains panel_close_cleanup. Keyed by channel because a slot may
-    // start a fresh conversation before the previous archival is acknowledged.
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS quickfire_close_cleanup (
-        channel_id TEXT PRIMARY KEY,
-        slot_id TEXT NOT NULL,
-        close_id TEXT NOT NULL,
-        agent_entity_id TEXT,
-        context_id TEXT NOT NULL,
-        queued_at INTEGER NOT NULL
-      )
-    `);
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_quickfire_close_cleanup_page
-         ON quickfire_close_cleanup(close_id, channel_id)`
     );
 
     this.sql.exec(`
@@ -622,10 +574,6 @@ export class WorkspaceDO extends DurableObjectBase {
          ON panel_close_cleanup(close_id, slot_id)`,
       `CREATE INDEX idx_panel_close_cleanup_owner_page
          ON panel_close_cleanup(owner_user_id, slot_id)`,
-      `CREATE INDEX idx_quickfire_sessions_channel
-         ON quickfire_sessions(channel_id)`,
-      `CREATE INDEX idx_quickfire_close_cleanup_page
-         ON quickfire_close_cleanup(close_id, channel_id)`,
       `CREATE INDEX idx_history_entity ON slot_history(entity_id)`,
       `CREATE INDEX idx_history_entry ON slot_history(entry_key)`,
       `CREATE INDEX idx_context_edges_owner ON context_edges(owner_context_id, kind)`,
@@ -947,6 +895,7 @@ export class WorkspaceDO extends DurableObjectBase {
       const row = this.readEntityRow(id);
       if (!row) return null;
       if (row.status === "retired") {
+        this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
         this.clearEntityDoLifecycle(row);
         return this.rowToEntity(row);
       }
@@ -956,10 +905,63 @@ export class WorkspaceDO extends DurableObjectBase {
         now,
         id
       );
+      this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
       this.clearEntityDoLifecycle(row);
       const updated = this.readEntityRow(id);
       return updated ? this.rowToEntity(updated) : null;
     });
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingsReplace(entityId: string, bindings: RuntimeResourceBindingInput[]): void {
+    this.ctx.storage.transactionSync(() => {
+      const entity = this.readEntityRow(entityId);
+      if (!entity || entity.status !== "active") {
+        throw new Error(`runtime resource binding target is not active: ${entityId}`);
+      }
+      this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, entityId);
+      const createdAt = Date.now();
+      for (const binding of bindings) {
+        this.sql.exec(
+          `INSERT INTO runtime_resource_bindings
+             (entity_id, resource_kind, resource_id, capabilities,
+              scope_kind, scope_channel_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          entityId,
+          binding.resource.kind,
+          binding.resource.id,
+          JSON.stringify(binding.capabilities),
+          binding.scope.kind,
+          binding.scope.kind === "agent-channel" ? binding.scope.channelId : null,
+          createdAt
+        );
+      }
+    });
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingsRelease(entityId: string): void {
+    this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, entityId);
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingEntities(resourceKind: string, resourceIds: string[]): string[] {
+    if (resourceIds.length === 0) return [];
+    const placeholders = resourceIds.map(() => "?").join(", ");
+    return this.sql
+      .exec<{ entity_id: string }>(
+        `SELECT DISTINCT binding.entity_id
+           FROM runtime_resource_bindings binding
+           JOIN entities entity ON entity.id = binding.entity_id
+          WHERE binding.resource_kind = ?
+            AND binding.resource_id IN (${placeholders})
+            AND entity.status = 'active'
+          ORDER BY binding.entity_id`,
+        resourceKind,
+        ...resourceIds
+      )
+      .toArray()
+      .map((row) => row.entity_id);
   }
 
   /** A retired DO cannot retain runnable lifecycle work: its principal is no
@@ -2611,41 +2613,6 @@ export class WorkspaceDO extends DurableObjectBase {
             .one() as { count: number }
         ).count
       );
-      // Quickfire rides the identical record-then-drain discipline: a closing
-      // slot enqueues archival for the conversations it still owns. Promoted
-      // conversations were handed to a chat panel, so their mapping is dropped
-      // without archival — the panel now owns the channel's lifetime (§1.4).
-      this.sql.exec(
-        `WITH RECURSIVE subtree(slot_id) AS (
-           SELECT slot_id FROM slots WHERE slot_id = ? AND closed_at IS NULL
-           UNION ALL
-           SELECT child.slot_id
-             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
-            WHERE child.closed_at IS NULL
-         )
-         INSERT OR IGNORE INTO quickfire_close_cleanup
-           (channel_id, slot_id, close_id, agent_entity_id, context_id, queued_at)
-         SELECT q.channel_id, q.slot_id, ?, q.agent_entity_id, q.context_id, ?
-           FROM quickfire_sessions q
-          WHERE q.slot_id IN (SELECT slot_id FROM subtree)
-            AND q.cleared_at IS NULL
-            AND q.promoted_at IS NULL`,
-        slotId,
-        closeId,
-        now
-      );
-      this.sql.exec(
-        `WITH RECURSIVE subtree(slot_id) AS (
-           SELECT slot_id FROM slots WHERE slot_id = ? AND closed_at IS NULL
-           UNION ALL
-           SELECT child.slot_id
-             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
-            WHERE child.closed_at IS NULL
-         )
-         DELETE FROM quickfire_sessions
-          WHERE slot_id IN (SELECT slot_id FROM subtree)`,
-        slotId
-      );
       this.sql.exec(
         `WITH RECURSIVE subtree(slot_id) AS (
            SELECT slot_id FROM slots WHERE slot_id = ? AND closed_at IS NULL
@@ -2742,206 +2709,6 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(
       `DELETE FROM panel_close_cleanup WHERE slot_id IN (${slotIds.map(() => "?").join(", ")})`,
       ...slotIds
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // quickfire.* — panel-slot-scoped micro-conversation mappings
-  // ─────────────────────────────────────────────────────────────
-
-  private quickfireRow(slotId: string): WorkspaceQuickfireSession | null {
-    const row = this.sql
-      .exec(
-        `SELECT slot_id, channel_id, agent_entity_id, context_id, created_at, cleared_at, promoted_at
-           FROM quickfire_sessions
-          WHERE slot_id = ?`,
-        slotId
-      )
-      .toArray()[0] as DbQuickfireRow | undefined;
-    return row ? toQuickfireSession(row) : null;
-  }
-
-  @schemaRpc()
-  quickfireSessionGet(slotId: string): WorkspaceQuickfireSession | null {
-    return this.quickfireRow(slotId);
-  }
-
-  /**
-   * Bind a slot to a conversation. Never overwrites a live mapping: a caller
-   * that lost the race is told so (`created: false`) and must retire the
-   * channel/vessel it speculatively created rather than orphan the winner.
-   * `replace` is the explicit "start a new conversation here" gesture over a
-   * cleared or promoted slot — a promoted mapping is dropped without archival.
-   */
-  @schemaRpc()
-  quickfireSessionBind(input: {
-    slotId: string;
-    channelId: string;
-    agentEntityId?: string | null;
-    contextId: string;
-    replace?: boolean;
-  }): WorkspaceQuickfireBindResult {
-    return this.ctx.storage.transactionSync(() => {
-      this.requireSlot(input.slotId);
-      const existing = this.quickfireRow(input.slotId);
-      if (existing && existing.clearedAt === null && existing.promotedAt === null) {
-        return { session: existing, created: false };
-      }
-      if (existing && !input.replace) return { session: existing, created: false };
-      if (existing) {
-        this.sql.exec(`DELETE FROM quickfire_sessions WHERE slot_id = ?`, input.slotId);
-      }
-      const now = Date.now();
-      this.sql.exec(
-        `INSERT INTO quickfire_sessions
-           (slot_id, channel_id, agent_entity_id, context_id, created_at, cleared_at, promoted_at)
-         VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
-        input.slotId,
-        input.channelId,
-        input.agentEntityId ?? null,
-        input.contextId,
-        now
-      );
-      const session = this.quickfireRow(input.slotId);
-      if (!session) throw new Error(`Quickfire mapping for ${input.slotId} did not persist`);
-      return { session, created: true };
-    });
-  }
-
-  /**
-   * Detach a slot's mapping and enqueue its archival. Promoted conversations
-   * are dropped without archival: the chat panel owns their lifetime.
-   */
-  @schemaRpc()
-  quickfireSessionClear(slotId: string): WorkspaceQuickfireSession | null {
-    return this.ctx.storage.transactionSync(() => {
-      const existing = this.quickfireRow(slotId);
-      if (!existing || existing.clearedAt !== null) return null;
-      const now = Date.now();
-      if (existing.promotedAt === null) {
-        this.sql.exec(
-          `INSERT OR IGNORE INTO quickfire_close_cleanup
-             (channel_id, slot_id, close_id, agent_entity_id, context_id, queued_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          existing.channelId,
-          existing.slotId,
-          `clear:${existing.channelId}`,
-          existing.agentEntityId,
-          existing.contextId,
-          now
-        );
-      }
-      this.sql.exec(`DELETE FROM quickfire_sessions WHERE slot_id = ?`, slotId);
-      return { ...existing, clearedAt: now };
-    });
-  }
-
-  /**
-   * Record that a live mapping now names a different context, after the host
-   * re-minted its authority for that context (quickfire-overlay-spec §6.2).
-   * The conversation itself is untouched: a slot that navigates keeps talking.
-   */
-  @schemaRpc()
-  quickfireSessionRetarget(slotId: string, contextId: string): WorkspaceQuickfireSession | null {
-    return this.ctx.storage.transactionSync(() => {
-      const existing = this.quickfireRow(slotId);
-      if (!existing || existing.clearedAt !== null) return null;
-      if (existing.contextId === contextId) return existing;
-      this.sql.exec(
-        `UPDATE quickfire_sessions SET context_id = ? WHERE slot_id = ?`,
-        contextId,
-        slotId
-      );
-      return this.quickfireRow(slotId);
-    });
-  }
-
-  /** Mark a mapping promoted: the chat panel now owns the channel's lifetime. */
-  @schemaRpc()
-  quickfireSessionPromote(slotId: string): WorkspaceQuickfireSession | null {
-    return this.ctx.storage.transactionSync(() => {
-      const existing = this.quickfireRow(slotId);
-      if (!existing || existing.clearedAt !== null) return null;
-      if (existing.promotedAt !== null) return existing;
-      this.sql.exec(
-        `UPDATE quickfire_sessions SET promoted_at = ? WHERE slot_id = ?`,
-        Date.now(),
-        slotId
-      );
-      return this.quickfireRow(slotId);
-    });
-  }
-
-  @schemaRpc()
-  quickfireSessionList(): WorkspaceQuickfireSession[] {
-    return (
-      this.sql
-        .exec(
-          `SELECT slot_id, channel_id, agent_entity_id, context_id, created_at, cleared_at, promoted_at
-             FROM quickfire_sessions
-            WHERE cleared_at IS NULL
-            ORDER BY created_at DESC, slot_id
-            LIMIT 200`
-        )
-        .toArray() as unknown as DbQuickfireRow[]
-    ).map(toQuickfireSession);
-  }
-
-  @schemaRpc()
-  quickfireCleanupPage(
-    input: WorkspaceQuickfireCleanupPageInput
-  ): WorkspaceQuickfireCleanupPage {
-    const limit = Math.max(1, Math.min(200, input.limit ?? 100));
-    const clauses: string[] = [];
-    const bindings: Array<string | number> = [];
-    if (input.closeId !== undefined) {
-      clauses.push("close_id = ?");
-      bindings.push(input.closeId);
-    }
-    if (input.cursor !== undefined) {
-      clauses.push("channel_id > ?");
-      bindings.push(input.cursor);
-    }
-    const rows = this.sql
-      .exec(
-        `SELECT channel_id, slot_id, agent_entity_id, context_id
-           FROM quickfire_close_cleanup
-          ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
-          ORDER BY channel_id
-          LIMIT ?`,
-        ...bindings,
-        limit + 1
-      )
-      .toArray() as Array<{
-      channel_id: string;
-      slot_id: string;
-      agent_entity_id: string | null;
-      context_id: string;
-    }>;
-    const hasMore = rows.length > limit;
-    const visible = hasMore ? rows.slice(0, limit) : rows;
-    return {
-      items: visible.map((row) => ({
-        channelId: row.channel_id,
-        slotId: row.slot_id as WorkspaceQuickfireCleanupPage["items"][number]["slotId"],
-        agentEntityId: row.agent_entity_id ?? null,
-        contextId: row.context_id,
-      })),
-      nextCursor: hasMore ? (visible.at(-1)?.channel_id ?? null) : null,
-    };
-  }
-
-  @schemaRpc()
-  quickfireCleanupAck(channelIds: string[]): void {
-    if (channelIds.length === 0) return;
-    if (channelIds.length > 200) {
-      throw new Error("Quickfire cleanup acknowledgement exceeds 200 items");
-    }
-    this.sql.exec(
-      `DELETE FROM quickfire_close_cleanup WHERE channel_id IN (${channelIds
-        .map(() => "?")
-        .join(", ")})`,
-      ...channelIds
     );
   }
 

@@ -31,6 +31,7 @@ import type {
   EntityKind,
   EntityRecord,
   EntityReservationInput,
+  RuntimeResourceBindingInput,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type {
   ContextEdge,
@@ -144,6 +145,18 @@ export class WorkspaceEntityStore {
   /** Mark post-retire cleanup complete (durable only — no cache state changes). */
   async cleanupComplete(id: string): Promise<void> {
     await this.dispatch<undefined>("entityCleanupComplete", id);
+  }
+
+  replaceResourceBindings(id: string, bindings: RuntimeResourceBindingInput[]): Promise<void> {
+    return this.dispatch<void>("runtimeResourceBindingsReplace", id, bindings);
+  }
+
+  releaseResourceBindings(id: string): Promise<void> {
+    return this.dispatch<void>("runtimeResourceBindingsRelease", id);
+  }
+
+  entitiesBoundToResources(resourceKind: string, resourceIds: string[]): Promise<string[]> {
+    return this.dispatch<string[]>("runtimeResourceBindingEntities", resourceKind, resourceIds);
   }
 
   // --- reads: cache-first, WorkspaceDO fallback ---

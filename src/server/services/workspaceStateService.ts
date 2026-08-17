@@ -47,7 +47,8 @@ export type SlotStateChange =
       currentEntityId: string;
       presentation: "awaiting-execution" | "executable";
     }
-  | { kind: "tree" };
+  | { kind: "tree" }
+  | { kind: "closed"; slotIds: string[] };
 
 export interface WorkspaceStateServiceDeps {
   doDispatch: DoDispatcher;
@@ -387,7 +388,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           cursor = page.nextCursor ?? undefined;
         } while (cursor);
         if (removed.length > 0) await deps.presentationDispatch("removeSlots", [removed]);
-        deps.onSlotStateChanged?.();
+        deps.onSlotStateChanged?.({ kind: "closed", slotIds: removed });
         return result;
       },
       "slot.closeCleanupPage": (_ctx, [input]) =>
@@ -400,7 +401,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         if (result.closedIds.length > 0) {
           await deps.presentationDispatch("removeSlots", [result.closedIds]);
         }
-        deps.onSlotStateChanged?.();
+        deps.onSlotStateChanged?.({ kind: "closed", slotIds: result.closedIds });
         return result;
       },
       "slot.closeCleanupAck": (_ctx, [slotIds]) =>

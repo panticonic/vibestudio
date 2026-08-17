@@ -32,6 +32,22 @@ export interface RuntimeAgentBindingInput {
 }
 
 /**
+ * A caller-requested, host-validated resource relationship for a new runtime.
+ * Resource kinds are resolved by host registries; worker configuration remains
+ * opaque to the runtime service.
+ */
+export interface RuntimeResourceBindingInput {
+  resource: { kind: string; id: string };
+  capabilities: string[];
+  scope: { kind: "entity" } | { kind: "agent-channel"; channelId: string };
+}
+
+/** Durable host record of a validated resource relationship owned by an entity. */
+export interface RuntimeResourceBindingRecord extends RuntimeResourceBindingInput {
+  entityId: string;
+}
+
+/**
  * Durable runtime lifecycle.
  *
  * Panels may be reserved before their immutable runtime image is ready. A
@@ -329,6 +345,7 @@ export interface InertExecution {
 interface RuntimeEntityCreateCommon {
   contextId?: string | null;
   key?: string;
+  resourceBindings?: RuntimeResourceBindingInput[];
 }
 
 export type RuntimeEntityCreateSpec =

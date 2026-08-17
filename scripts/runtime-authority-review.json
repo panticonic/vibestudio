@@ -450,9 +450,17 @@
       "review": "receiver-bound-bounded-page-evaluation",
       "change": "Adds a one-RPC Runtime.evaluate against the exact native view already selected by receiver-bound panel target authority, so the common inspect-and-poke case no longer needs a raw CDP WebSocket endpoint. The expression runs under a shared wrapper with an 8s RPC bound and a serialized result; the cross-context leaf and the external ingestion record are identical to panelCdp.screenshot."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionRetarget": {
-      "review": "schema-authority",
-      "change": "Records that a live quickfire slot mapping now names a different context, after the host re-minted that conversation's authority for the new context. It moves no conversation and creates no mapping; the internal write policy is the same as quickfireSessionPromote."
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace": {
+      "review": "host-only-runtime-resource-binding-commit",
+      "change": "Commits the generic resource relationships already validated by runtime.createEntity into the workspace runtime registry. The method is host-only, requires runtime-state authority, accepts no executable policy, and records only entity, resource, capability, and agent-channel coordinates."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsRelease": {
+      "review": "host-only-runtime-resource-binding-release",
+      "change": "Deletes every durable resource relationship owned by one runtime entity. This removes authority and lifecycle coupling only; it cannot create a relationship or grant a capability."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities": {
+      "review": "host-only-runtime-resource-binding-lookup",
+      "change": "Returns active entity ids bound to an exact resource kind and bounded id list so the runtime can apply resource-owned lifecycle events. It is a host-only read and exposes no user content or capability grant material."
     }
   }
 }

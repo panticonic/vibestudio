@@ -169,6 +169,16 @@ export class ShellContentOverlayView {
     }
   }
 
+  /**
+   * Create and navigate the surface while keeping it hidden. The hosted shell
+   * calls this once its own document is ready, removing WebContents creation
+   * and bundle navigation from the user's first invocation.
+   */
+  prewarm(surface: string): void {
+    if (!this.window) return;
+    this.loadSurface(this.ensureView(), surface);
+  }
+
   show(options: ContentOverlayShowOptions): void {
     if (!this.window) return;
     const view = this.ensureView();
@@ -189,8 +199,11 @@ export class ShellContentOverlayView {
     if (!this.view || this.view.webContents.isDestroyed()) return;
     if (options.surface && options.surface !== this.surface) {
       this.surface = options.surface;
-      this.loadSurface(this.view, options.surface);
     }
+    // This is deliberately idempotent. Besides navigating a changed surface,
+    // it retries the only legitimate initial race: the host had not acquired a
+    // hosted-shell URL yet when the view was first asked to load.
+    if (this.surface) this.loadSurface(this.view, this.surface);
     if (options.props !== undefined) this.props = options.props;
     if (options.theme) this.theme = options.theme;
     if (options.bounds) this.anchor = options.bounds;
@@ -287,7 +300,9 @@ export class ShellContentOverlayView {
   private loadSurface(view: WebContentsView, surface: string): void {
     const base = this.getBaseUrl();
     if (!base) {
-      log.warn("No hosted-shell base URL available to load content overlay surface");
+      // Readiness and URL publication are separate Electron lifecycle signals.
+      // A later update or readiness reassertion retries this idempotently.
+      log.trace("Hosted-shell base URL is not available for content overlay prewarm yet");
       return;
     }
     const url = withSurfaceHash(base, surface);
@@ -305,6 +320,9 @@ export class ShellContentOverlayView {
         this.markLoaded(view, url);
       })
       .catch((error: unknown) => {
+        // Leave the surface retryable after a failed navigation. Do not let a
+        // rejected first load permanently masquerade as the current document.
+        if (this.loadedUrl === url) this.loadedUrl = null;
         log.warn(
           `Failed to load content overlay surface: ${error instanceof Error ? error.message : String(error)}`
         );

@@ -82,6 +82,18 @@ const entityRecordSchema = entityActivationSchema.extend({
   cleanupComplete: z.boolean(),
   error: z.string().optional(),
 });
+const runtimeResourceBindingSchema = z
+  .object({
+    resource: z.object({ kind: z.string().min(1), id: z.string().min(1) }).strict(),
+    capabilities: z.array(z.string().min(1)).max(16),
+    scope: z.union([
+      z.object({ kind: z.literal("entity") }).strict(),
+      z
+        .object({ kind: z.literal("agent-channel"), channelId: z.string().min(1).max(200) })
+        .strict(),
+    ]),
+  })
+  .strict();
 
 const lifecycleEpochSchema = z
   .object({
@@ -112,28 +124,6 @@ const lifecycleOpResultSchema = LifecycleKeySchema.extend({
   detail: z.unknown().nullable(),
   updatedAt: z.number().int().nonnegative(),
 });
-
-/** Durable quickfire mapping row, as stored by WorkspaceDO (§2.4). */
-const quickfireSessionRowSchema = z
-  .object({
-    slotId: z.string().min(1),
-    channelId: z.string().min(1),
-    agentEntityId: z.string().min(1).nullable(),
-    contextId: z.string().min(1),
-    createdAt: z.number().int().nonnegative(),
-    clearedAt: z.number().int().nonnegative().nullable(),
-    promotedAt: z.number().int().nonnegative().nullable(),
-  })
-  .strict();
-
-const quickfireCleanupItemSchema = z
-  .object({
-    channelId: z.string().min(1),
-    slotId: z.string().min(1),
-    agentEntityId: z.string().min(1).nullable(),
-    contextId: z.string().min(1),
-  })
-  .strict();
 
 const durableWorkQueueSchema = z.enum(DURABLE_WORK_QUEUES);
 const durableWorkReadyHintSchema = z
@@ -253,6 +243,21 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     ...internal("write"),
     args: z.tuple([z.string().min(1)]),
     returns: z.void(),
+  },
+  runtimeResourceBindingsReplace: {
+    ...internal("write"),
+    args: z.tuple([z.string().min(1), z.array(runtimeResourceBindingSchema).max(16)]),
+    returns: z.void(),
+  },
+  runtimeResourceBindingsRelease: {
+    ...internal("write"),
+    args: z.tuple([z.string().min(1)]),
+    returns: z.void(),
+  },
+  runtimeResourceBindingEntities: {
+    ...internal("read"),
+    args: z.tuple([z.string().min(1), z.array(z.string().min(1)).max(256)]),
+    returns: z.array(z.string().min(1)),
   },
   entityFindIncompleteCleanups: {
     ...internal("read"),
@@ -474,71 +479,6 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotCloseOwnedRoots: { ...workspaceStateMethods["slot.closeOwnedRoots"] },
   slotCloseCleanupPage: { ...workspaceStateMethods["slot.closeCleanupPage"] },
   slotCloseCleanupAck: { ...workspaceStateMethods["slot.closeCleanupAck"] },
-  quickfireSessionGet: {
-    ...internal("read"),
-    args: z.tuple([z.string().min(1)]),
-    returns: quickfireSessionRowSchema.nullable(),
-  },
-  quickfireSessionBind: {
-    ...internal("write"),
-    args: z.tuple([
-      z
-        .object({
-          slotId: z.string().min(1),
-          channelId: z.string().min(1),
-          agentEntityId: z.string().min(1).nullable().optional(),
-          contextId: z.string().min(1),
-          replace: z.boolean().optional(),
-        })
-        .strict(),
-    ]),
-    returns: z
-      .object({ session: quickfireSessionRowSchema, created: z.boolean() })
-      .strict(),
-  },
-  quickfireSessionClear: {
-    ...internal("destructive"),
-    args: z.tuple([z.string().min(1)]),
-    returns: quickfireSessionRowSchema.nullable(),
-  },
-  quickfireSessionRetarget: {
-    ...internal("write"),
-    args: z.tuple([z.string().min(1), z.string().min(1)]),
-    returns: quickfireSessionRowSchema.nullable(),
-  },
-  quickfireSessionPromote: {
-    ...internal("write"),
-    args: z.tuple([z.string().min(1)]),
-    returns: quickfireSessionRowSchema.nullable(),
-  },
-  quickfireSessionList: {
-    ...internal("read"),
-    args: z.tuple([]),
-    returns: z.array(quickfireSessionRowSchema),
-  },
-  quickfireCleanupPage: {
-    ...internal("read"),
-    args: z.tuple([
-      z
-        .object({
-          closeId: z.string().min(1).optional(),
-          cursor: z.string().min(1).optional(),
-          limit: z.number().int().positive().max(200).optional(),
-        })
-        .strict(),
-    ]),
-    returns: z
-      .object({
-        items: z.array(quickfireCleanupItemSchema),
-        nextCursor: z.string().nullable(),
-      })
-      .strict(),
-  },
-  quickfireCleanupAck: {
-    ...internal("destructive"),
-    args: z.tuple([z.array(z.string().min(1)).max(200)]),
-    returns: z.void(),
-  },
   slotGet: { ...workspaceStateMethods["slot.get"], returns: RawSlotRowSchema.nullable() },
   slotHistoryRelative: { ...workspaceStateMethods["slot.historyRelative"] },
   slotHistoryEntry: { ...workspaceStateMethods["slot.historyEntry"] },

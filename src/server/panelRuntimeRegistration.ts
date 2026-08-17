@@ -570,9 +570,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
-    // Server-resident panel identity for server-side callers (the quickfire
-    // agent's per-turn snapshot). The chrome owner keeps composing locally from
-    // `panel.getChromeState`; this exists for the agent path only (§5.2).
+    // Server-resident panel identity for server-side callers and configured
+    // agent tools. The chrome owner keeps composing locally from
+    // `panel.getChromeState` because it already owns those presentation facts.
     const { createPanelContextService } = await import("./services/panelContextService.js");
     const serverCtx: ServiceContext = { caller: createHostCaller("server") };
     container.registerRpc(

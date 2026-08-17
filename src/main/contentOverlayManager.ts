@@ -46,6 +46,11 @@ export class ContentOverlayManager {
     for (const instance of this.instances.values()) instance.setWindow(window);
   }
 
+  /** Prepare a surface without making it visible or giving it focus. */
+  prewarm(surface: string): void {
+    this.ensure(surface).prewarm(surface);
+  }
+
   show(options: ContentOverlayShowOptions): void {
     const instance = this.ensure(options.surface);
     instance.show(options);

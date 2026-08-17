@@ -373,6 +373,19 @@ export const ExternalDocumentExecutionSchema = z
 
 export const InertExecutionSchema = z.object({ surface: z.literal("inert") }).strict();
 
+const RuntimeResourceBindingSchema = z
+  .object({
+    resource: z.object({ kind: z.string().min(1), id: z.string().min(1) }).strict(),
+    capabilities: z.array(z.string().min(1)).max(16),
+    scope: z.union([
+      z.object({ kind: z.literal("entity") }).strict(),
+      z
+        .object({ kind: z.literal("agent-channel"), channelId: z.string().min(1).max(200) })
+        .strict(),
+    ]),
+  })
+  .strict();
+
 export const PanelEntityCreateSpecSchema = z
   .object({
     kind: z.literal("panel"),
@@ -388,6 +401,7 @@ export const PanelEntityCreateSpecSchema = z
         "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
       ),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the panel runtime."),
   })
   .strict();
@@ -416,6 +430,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
         "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
       ),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the app runtime."),
   }),
   z.object({
@@ -429,6 +444,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
         "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
       ),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
     stateArgs: z
       .unknown()
       .optional()
@@ -449,6 +465,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
     execution: CodeExecutionSchema,
     className: z.string().describe("Durable Object class name exported by the source."),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
+    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
     contextId: z
       .string()
       .nullable()
@@ -477,6 +494,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .optional()
       .describe("Target context; omit/null to mint a fresh one (reused on key re-attach)."),
     key: z.string().optional().describe("Stable session key; omit to mint a random UUID."),
+    resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
     title: z.string().optional().describe("Display title surfaced by approval UIs."),
     agentChannelId: z
       .string()
@@ -720,6 +738,21 @@ export const runtimeMethods = defineServiceMethods({
     authority: runtimeContextBoundaryAuthority("retireEntity", "critical"),
     access: RETIRE_ACCESS,
     examples: [{ args: [{ id: "do:workers/agent:AgentDO:agent-1", removeContext: true }] }],
+  },
+  releaseResourceBindings: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "runtime.resource-binding",
+      rationale:
+        "The runtime owner may end an existing host-validated resource relationship without gaining authority",
+    },
+    description: "Release every host-owned resource binding attached to one owned runtime entity.",
+    args: z.tuple([z.object({ id: z.string().min(1) }).strict()]),
+    returns: z.void(),
+    authority: { principals: ["host", "user", "code"] },
+    access: { sensitivity: "write" },
   },
   recoverExecution: {
     capability: "runtime.execution.recover",
@@ -1040,8 +1073,7 @@ export const runtimeMethods = defineServiceMethods({
     presentation: {
       title: "Delete a workspace copy",
       action: "delete a workspace copy",
-      description:
-        "Permanently remove a workspace copy that is no longer needed.",
+      description: "Permanently remove a workspace copy that is no longer needed.",
       group: "runtime",
       authorityCategory: { domain: "files", verb: "manage" },
     },
@@ -1324,8 +1356,7 @@ export const runtimeMethods = defineServiceMethods({
     presentation: {
       title: "Start a workspace app or service",
       action: "start a workspace app or service",
-      description:
-        "Start an approved version of an app or service in your workspace.",
+      description: "Start an approved version of an app or service in your workspace.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -1348,8 +1379,7 @@ export const runtimeMethods = defineServiceMethods({
     presentation: {
       title: "Prepare a new app version",
       action: "prepare a new version of a workspace app or service",
-      description:
-        "Get a new version of an app or service ready without starting it yet.",
+      description: "Get a new version of an app or service ready without starting it yet.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -1408,8 +1438,7 @@ export const runtimeMethods = defineServiceMethods({
     presentation: {
       title: "Restore a previous version",
       action: "restore a workspace component to an earlier version",
-      description:
-        "Roll back a workspace app or service to an earlier saved version.",
+      description: "Roll back a workspace app or service to an earlier saved version.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },

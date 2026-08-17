@@ -2,7 +2,9 @@
 
 Status: draft for review
 Date: 2026-08-14
-Revised: 2026-08-14 — addressed review findings: content overlay goes
+Revised: 2026-08-17 — unified quickfire with the standard `AiChatWorker`
+identity and removed the redundant reviewed-mission boundary (§2.4, §6).
+Previously: 2026-08-14 — addressed review findings: content overlay goes
 multi-instance (§2.3a) so approvals work while the overlay is up; contributed
 commands get a declarative wire schema split from the chrome-local spec
 (§3.1); promotion transfers channel ownership to the chat panel (§1.4, §2.4);
@@ -17,17 +19,16 @@ apps that unifies three things:
 2. **The launcher** — everything the `about/new` panel does today (open panels,
    history, URLs, "ask an agent"), abstracted into a shared engine consumed by
    both the panel and the overlay.
-3. **Quickfire** — an instant agentic micro-session *bound to the panel the
-   user is currently looking at*, with a panel-aware system prompt, pre-granted
+3. **Quickfire** — an instant agentic micro-session _bound to the panel the
+   user is currently looking at_, with a panel-aware system prompt, pre-granted
    CDP/debug capability, per-panel conversation persistence (reopen over the
    same panel → same conversation; clearable), and a one-keystroke promotion
    path to a full chat panel.
 
-Quickfire is deliberately positioned as the first shipping consumer of the
-system-agent machinery (`docs/system-agent-design.md`, SA0/SA1): it is the
-"panel-scoped micro-session" those drafts describe, realized under the
-mission/reviewed-closure authority model that has landed since they were
-written.
+Quickfire is a panel-scoped presentation profile of the standard chat agent.
+Its durable identity, model credentials, channel membership, and execution
+authority are exactly the normal `AiChatWorker` path; only its focused prompt,
+tool selection, and panel binding differ.
 
 ---
 
@@ -48,7 +49,7 @@ written.
   with `stateArgs.initialPrompt` via `buildPanelLink`
   (`packages/runtime/src/core/panelLinks.ts`), and the chat panel's
   `useDeferredAgent` queue does session creation.
-- Known divergence: the shell address bar and mobile use the *other* omnibox
+- Known divergence: the shell address bar and mobile use the _other_ omnibox
   pipeline (`buildAddressAutocompleteItems` in
   `packages/shared/src/panelChrome.ts`). The workspace currently has **two
   parallel ranking engines**; this plan consolidates on the launcher engine.
@@ -60,17 +61,17 @@ written.
   floating above live panels. Surface gets serialized `props` in and emits
   opaque `intent`s out; **no RPC inside the surface**. Chrome-side owner holds
   all state and RPC. Files: `base/apps/shell/overlay/{types,registry,
-  OverlaySurfaceHost,overlayBridge}.tsx`, `shell/useShellContentOverlay.ts`,
+OverlaySurfaceHost,overlayBridge}.tsx`, `shell/useShellContentOverlay.ts`,
   host `src/main/shellContentOverlayView.ts`, wire contract
   `packages/service-schemas/src/view.ts` (`showContentOverlay` etc.).
   Today's only surface key is `"approval-card"`. **Caveat this plan fixes**:
   the main-process view is a singleton — one instance, one loaded surface,
   a global `hide()` with no surface argument (`show()` with a different key
-  *replaces* the current surface). §2.3a extends it to per-surface instances
+  _replaces_ the current surface). §2.3a extends it to per-surface instances
   so the approval card and quickfire can be visible at once.
 - **`AppCommandPalette`** (`base/apps/shell/components/AppCommandPalette.tsx`)
-  exists but is a DOM dialog + `useShellOverlay(true)`, which *hides every
-  panel view* while open. It will be replaced by the new surface.
+  exists but is a DOM dialog + `useShellOverlay(true)`, which _hides every
+  panel view_ while open. It will be replaced by the new surface.
 - **`HostCommandRegistry`** (`packages/shell-core/src/panelCommandRegistry.ts`)
   is the existing panel-contributed-command channel, already shared with
   mobile. It carries flat `{id, title}` items; this plan extends the schema
@@ -125,20 +126,20 @@ written.
 Press the palette key anywhere. A compact bar floats over your current panel.
 Type to run a command, jump to a panel, open a URL — or just talk: the agent
 you get already knows what panel you're looking at, can see its console and
-screenshot it, and remembers your last conversation about *this* panel.
+screenshot it, and remembers your last conversation about _this_ panel.
 
 ### 1.2 Modes and prefixes
 
 One input, four scopes, same grammar as `about/new` but with commands added
-and panels demoted from the `>` prefix (in an overlay, *actions* are the
-primary citizens; in a new-tab page, *destinations* are):
+and panels demoted from the `>` prefix (in an overlay, _actions_ are the
+primary citizens; in a new-tab page, _destinations_ are):
 
-| Prefix | Scope | Notes |
-|---|---|---|
-| *(none)* | Mixed: top commands, open panels, launchables, history, URL, quickfire | Default ranking; quickfire row surfaces when `isLikelyAgentPrompt` fires |
-| `>` | Commands only | The full action slate (§3) |
-| `@` | Open panels + history + launchable panels | "Go to" scope |
-| `/` | Quickfire — talk to the panel-scoped agent | Also entered by the dedicated quickfire accelerator |
+| Prefix   | Scope                                                                  | Notes                                                                    |
+| -------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| _(none)_ | Mixed: top commands, open panels, launchables, history, URL, quickfire | Default ranking; quickfire row surfaces when `isLikelyAgentPrompt` fires |
+| `>`      | Commands only                                                          | The full action slate (§3)                                               |
+| `@`      | Open panels + history + launchable panels                              | "Go to" scope                                                            |
+| `/`      | Quickfire — talk to the panel-scoped agent                             | Also entered by the dedicated quickfire accelerator                      |
 
 The mode set is **per-host-surface configuration** of the shared engine
 (§2.2): `about/new` keeps its existing `>`-means-panels grammar unchanged in
@@ -153,18 +154,18 @@ the prefix, preserving the query.
 
 Desktop (menu accelerators; the source of truth):
 
-| Key | Action |
-|---|---|
-| `Cmd+K` / `Ctrl+K` | Open overlay in mixed mode (retire `Ctrl+Shift+K`; keep it as a hidden alias for one release) |
-| `Cmd+Shift+K` / `Ctrl+Shift+K` | Open overlay directly in quickfire (`/`) mode with the transcript expanded |
-| `Cmd+K` again while open | Cycle mode: mixed → `>` → `@` → `/` → mixed |
-| `Esc` | Collapse quickfire transcript → close overlay → focus returns to the panel |
-| `↑`/`↓` | Move selection (grouped display order) |
-| `Tab` / `→` at end | Accept ghost completion |
-| `Enter` | Run selected / advance argument / send quickfire message |
-| `Shift+Enter` | Newline (quickfire compose) |
-| `Cmd+Enter` | In quickfire: send and promote to full chat panel |
-| `Backspace` on empty input | Pop argument step / drop mode prefix |
+| Key                            | Action                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `Cmd+K` / `Ctrl+K`             | Open overlay in mixed mode (retire `Ctrl+Shift+K`; keep it as a hidden alias for one release) |
+| `Cmd+Shift+K` / `Ctrl+Shift+K` | Open overlay directly in quickfire (`/`) mode with the transcript expanded                    |
+| `Cmd+K` again while open       | Cycle mode: mixed → `>` → `@` → `/` → mixed                                                   |
+| `Esc`                          | Collapse quickfire transcript → close overlay → focus returns to the panel                    |
+| `↑`/`↓`                        | Move selection (grouped display order)                                                        |
+| `Tab` / `→` at end             | Accept ghost completion                                                                       |
+| `Enter`                        | Run selected / advance argument / send quickfire message                                      |
+| `Shift+Enter`                  | Newline (quickfire compose)                                                                   |
+| `Cmd+Enter`                    | In quickfire: send and promote to full chat panel                                             |
+| `Backspace` on empty input     | Pop argument step / drop mode prefix                                                          |
 
 Mobile: palette = searchable command sheet (§7); quickfire = bottom sheet over
 the active panel; entry via a persistent ✦ button in the `AppBar` and
@@ -177,24 +178,24 @@ long-press on the tab strip.
   within a slot keeps the conversation; the agent is told about navigations.
 - **Resume**: opening quickfire over a slot with an existing conversation
   shows the last exchange collapsed above the input with a `Resumed ·
-  3 messages · 2h ago` chip. Typing continues it.
+3 messages · 2h ago` chip. Typing continues it.
 - **Clear**: an explicit ⟲ affordance (and `>quickfire: clear` command).
   Clearing archives the channel and detaches the mapping; the next open
   starts fresh. No TTL, no auto-expiry — lifecycle events only: a
   conversation dies when the user clears it or the slot is closed
   (slot close → archive after the close is committed, not on a timer).
 - **Promotion**: `Cmd+Enter` or the "Open as chat panel" row hands the
-  *same channel* to `panels/chat` (via `stateArgs.channelName`), created as a
+  _same channel_ to `panels/chat` (via `stateArgs.channelName`), created as a
   sibling of the target panel. The overlay conversation and the chat panel are
   the same durable transcript; promotion is a view change, not a copy.
   **Promotion transfers lifecycle ownership**: the quickfire mapping row is
   marked `promoted`, after which closing the original slot deletes the
-  mapping *without* archiving the channel — the chat panel now owns the
+  mapping _without_ archiving the channel — the chat panel now owns the
   conversation's lifetime. Reopening quickfire over a promoted slot shows a
   "continued in chat panel →" row (focuses the panel) plus "start a new
   conversation here". Without this rule, closing the source slot would
   destroy a conversation still open as a chat panel.
-- **Scope honesty**: quickfire is for *look, explain, poke, small fix*. The
+- **Scope honesty**: quickfire is for _look, explain, poke, small fix_. The
   compose hint and the system prompt both say so; anything that grows beyond
   a few turns gets nudged toward promotion ("This is getting substantial —
   continue in a full chat panel?" as a passive row, never a modal).
@@ -229,11 +230,12 @@ long-press on the tab strip.
 │ Host repo (/home/werg/vibestudio)                                  │
 │                                                                    │
 │  packages/shell-core/src/panelCommandRegistry.ts  ← extend schema  │
-│  packages/service-schemas/src/quickfire.ts        ← NEW service    │
-│  src/server/services/quickfireService.ts          ← NEW            │
 │  src/server/services/panelContextService.ts       ← NEW (§5.2)     │
+│  src/server/services/runtimeResourceBindings.ts   ← generic bind   │
 │  src/main/menu.ts                                 ← accelerators   │
-│  workers/agent-worker:QuickfireAgentWorker ← command-agent class   │
+│ Base userland                                                       │
+│  workers/quickfire-service:QuickfireSessionsDO ← session owner     │
+│  workers/agent-worker:AiChatWorker ← standard configurable agent   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -248,9 +250,9 @@ the overlay surface, and React Native unchanged.
 ```ts
 // Host surfaces configure the engine; data flows in, suggestions flow out.
 export interface OmniboxConfig {
-  modes: ModeSpec[];              // prefix → scope mapping, per surface
-  sources: SuggestionSource[];    // injected data providers
-  defaultGroups: GroupOrder;      // idle-state ordering
+  modes: ModeSpec[]; // prefix → scope mapping, per surface
+  sources: SuggestionSource[]; // injected data providers
+  defaultGroups: GroupOrder; // idle-state ordering
 }
 
 export interface SuggestionSource {
@@ -259,8 +261,8 @@ export interface SuggestionSource {
 }
 
 export interface SurfaceContext {
-  focusedPanel?: PanelDescriptor;   // powers availability predicates & ranking
-  openPanels: OpenPanelIndex;       // "already open" dedup, @-scope
+  focusedPanel?: PanelDescriptor; // powers availability predicates & ranking
+  openPanels: OpenPanelIndex; // "already open" dedup, @-scope
   platform: "desktop" | "mobile" | "panel";
 }
 ```
@@ -279,13 +281,13 @@ later phase (P6) so we end with **one** ranking engine.
 ### 2.3a Content overlay goes multi-instance
 
 Required so the user can act on approvals while the overlay is up (and so an
-approval *raised by the quickfire agent itself* is never hidden behind the
+approval _raised by the quickfire agent itself_ is never hidden behind the
 palette). `ShellContentOverlayView` is instantiated, not a module singleton,
 and its IPC handlers already filter by sender id (`isOwnSender`), so this is
 a contained extension:
 
 - Main keeps a small **`ContentOverlayManager`**: `Map<surfaceKey,
-  ShellContentOverlayView>`, creating instances lazily per surface key.
+ShellContentOverlayView>`, creating instances lazily per surface key.
   Existing single-instance wiring moves behind it.
 - Wire schema (`view.ts`): `updateContentOverlay` and `hideContentOverlay`
   gain a required `surface` key (mirroring `show`'s existing field);
@@ -299,7 +301,7 @@ a contained extension:
   the overlay pair as a fixed-order group above all panel views.
 - **Focus arbitration**: quickfire holds keyboard focus while open. An
   approval whose kind takes focus today (`client-config`,
-  `credential-input`, `device-code`) does *not* steal it while quickfire is
+  `credential-input`, `device-code`) does _not_ steal it while quickfire is
   open — the card renders with its attention treatment and takes focus when
   quickfire closes, or when the user clicks it (which dismisses the palette
   input focus but keeps the overlay visible). All other approval kinds
@@ -321,11 +323,11 @@ exactly:
   `useShellContentOverlay`.
 - **`QuickfireSurface.tsx`** (overlay document): pure view. Receives
   `{mode, query, groups, argSession, transcript, panelBadge, composeState,
-  theme}` as props; emits intents `{type: "input", value}`,
+theme}` as props; emits intents `{type: "input", value}`,
   `{type: "activate", suggestionId}`, `{type: "send", text}`,
   `{type: "clear-confirm"}`, `{type: "promote"}`, `{type: "dismiss"}`, etc.
   Latency note: keystrokes round-trip surface → chrome → surface. The surface
-  therefore owns the *text input state locally* (uncontrolled input, echoing
+  therefore owns the _text input state locally_ (uncontrolled input, echoing
   to chrome on change) so typing never stutters; chrome only pushes
   suggestion/transcript/arg-session updates. This is the one deviation from
   the approval card's fully-controlled props model, and it's confined to the
@@ -335,7 +337,7 @@ exactly:
   the overlay horizontally, top-aligned at ~18% of viewport height. The
   overlay auto-fits height to content (existing content-overlay behavior);
   max height 62% of the anchor rect (transcript scrolls internally).
-- **Focus**: unlike the approval card, the palette *always* takes keyboard
+- **Focus**: unlike the approval card, the palette _always_ takes keyboard
   focus on open (one-shot `focusRequest`). `Esc`/dismiss restores focus to
   the previously focused panel via `panel.focusPanel`.
 - **Menu**: `src/main/menu.ts` gains `open-quickfire`
@@ -348,42 +350,32 @@ exactly:
 
 Reuses the native agent path end-to-end — no new agent kind, no new loop:
 
-- **`quickfire` service** (host, `src/server/services/quickfireService.ts`,
-  schema `packages/service-schemas/src/quickfire.ts`), principals
-  `["user", "host"]`:
+- **`vibestudio.quickfire.v1` service** (Base userland,
+  `workers/quickfire-service/`), resolved identically by desktop and mobile:
 
 ```ts
-quickfire.sessionFor({ slotId })      // → { channelId, contextId, state:
-                                      //     "fresh" | "resumed", messageCount,
-                                      //     lastActivityAt } — creates lazily
-quickfire.clear({ slotId })           // archive channel, detach mapping,
-                                      // revoke session-scoped grants (§6)
-quickfire.list()                      // slots with live conversations (for
-                                      //   the "Quickfire conversations" view)
+quickfire.sessionFor({ slotId }); // → { channelId, contextId, state:
+//     "fresh" | "resumed", messageCount,
+//     lastActivityAt } — creates lazily
+quickfire.clear({ slotId }); // archive channel, detach mapping,
+// revoke session-scoped grants (§6)
+quickfire.list(); // slots with live conversations (for
+//   the "Quickfire conversations" view)
 ```
 
-- **Persistence**: a `quickfire_sessions` table in the workspace-state DO
-  (`WorkspaceDO`): `slot_id PK, channel_id, agent_entity_id, context_id,
-  created_at, cleared_at NULL, promoted_at NULL`. Keyed by slot per §1.4.
-  **Archival mechanism**: the DO never performs archival itself — slot close
-  already only *records* durable cleanup work (`panel_close_cleanup`) that
-  `PanelManager.drainCloseCleanup` executes host-side via
-  `runtime.retireEntity`. Quickfire rides the identical pattern: `slotClose`
-  additionally records quickfire cleanup rows for non-promoted mappings in
-  the closed subtree, and the host-side drain calls the `quickfire` service
-  to archive the channel and retire the agent entity, acknowledging rows on
-  success. Promoted rows (`promoted_at` set) are deleted without channel
-  archival (§1.4).
-- **Agent**: `quickfire.sessionFor` creates (per conversation) a channel and
-  an agent vessel entity exactly as the chat path does, but with the
-  **`QuickfireAgentWorker`** class in the standard `workers/agent-worker`
-  userland unit as harness (a thin configuration of the standard harness:
-  quickfire system prompt §5.1, quickfire tool exposure §5.3, low default
-  thinking). A distinct class selects those construction-time policies; the
-  shared unit/version identity deliberately reuses the normal agent's reviewed
-  model-credential grant. Entity is
-  host-managed (`kind: "session"` semantics — callers cannot supply
-  coordinates).
+- **Persistence**: the Base-owned `QuickfireSessionsDO` stores
+  `quickfire_sessions(slot_id PK, channel_id, agent_entity_id, context_id,
+created_at, promoted_at)`. The host stores no quickfire schema or session
+  policy. The standard runtime registry stores only the generic relationship
+  between an entity and a resource. Closing a resource retires attached
+  entities; promotion releases the relationship first, so the same agent and
+  channel survive in chat.
+- **Agent**: `QuickfireSessionsDO.sessionFor` creates a channel and a standard
+  **`AiChatWorker`** vessel. Ordinary agent subscription configuration selects
+  its prompt, low thinking level, participant identity, named panel resource,
+  per-turn context providers, and exact tool set. There is no mode, profile,
+  subclass, alternate credential path, or quickfire-specific state inside
+  `AiChatWorker`.
 - **Streaming to the overlay**: `QuickfireOwner` (chrome) subscribes to the
   channel (`useChannelMessages` reduction, same as the chat panel), throttles
   to ~30 Hz, and pushes the reduced tail (last N=20 messages + live delta)
@@ -392,8 +384,8 @@ quickfire.list()                      // slots with live conversations (for
   local IPC; measure in P3 and, only if it visibly janks, add a dedicated
   `updateContentOverlay` patch op (partial props merge) to the view schema.
 - **Promotion**: owner calls `panel.createChild(parentSlot,
-  "panels/chat", { contextId: <quickfireContextId>, stateArgs: {
-  channelName: <channelId> }, focus: true })` — the chat panel attaches to both
+"panels/chat", { contextId: <quickfireContextId>, stateArgs: {
+channelName: <channelId> }, focus: true })` — the chat panel attaches to both
   the existing channel and its existing semantic context. The
   quickfire mapping stays; the overlay and the panel are two views of one
   conversation.
@@ -403,16 +395,16 @@ quickfire.list()                      // slots with live conversations (for
 Quickfire deliberately implements slices of SA0/SA1 rather than a parallel
 system:
 
-| SA concept | Quickfire realization |
-|---|---|
-| Per-turn complete `ShellOverview` | Per-turn `PanelContextSnapshot` (§5.1) — same "re-describe, don't diff" principle, scoped to one panel |
-| Micro-session under mission subject | Quickfire conversation under `mission:quickfire@<closureDigest>` (§6) |
-| `workers/system-agent` reserved conduit slot | No additional conduit unit: the sibling `QuickfireAgentWorker` class uses the standard agent unit's identity and conduit policy |
-| Log Watcher | Not built here; quickfire's console/log tools (§5.3) define the read surface the watcher will later share |
+| SA concept                                   | Quickfire realization                                                                                     |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Per-turn complete `ShellOverview`            | Per-turn `PanelContextSnapshot` (§5.1) — same "re-describe, don't diff" principle, scoped to one panel    |
+| Panel-scoped micro-session                   | Ordinary `AiChatWorker` conversation with declarative channel features (§6)                               |
+| `workers/system-agent` reserved conduit slot | No additional conduit unit or class: quickfire uses `AiChatWorker` directly                               |
+| Log Watcher                                  | Not built here; quickfire's console/log tools (§5.3) define the read surface the watcher will later share |
 
 When the full system agent lands, quickfire becomes its panel-scoped
 entry point (the SA channel is workspace-scoped; quickfire is slot-scoped)
-— the harness unit, prompt assembly, and mission machinery are shared. This
+— the harness unit, prompt assembly, and authority machinery are shared. This
 plan does not build SA's workspace-wide channel, delegation store, or
 watcher.
 
@@ -424,27 +416,27 @@ watcher.
 
 ```ts
 export interface CommandSpec {
-  id: string;                        // "panel.move", "view.theme" …
-  title: string;                     // "Move Panel"
-  aliases?: string[];                // "mv", "relocate"
-  keywords?: string[];               // extra match terms, never displayed
-  section: CommandSection;           // groups in the palette
+  id: string; // "panel.move", "view.theme" …
+  title: string; // "Move Panel"
+  aliases?: string[]; // "mv", "relocate"
+  keywords?: string[]; // extra match terms, never displayed
+  section: CommandSection; // groups in the palette
   icon?: string;
-  args?: ArgSpec[];                  // ordered; prompted in sequence
+  args?: ArgSpec[]; // ordered; prompted in sequence
   availability?: (ctx: SurfaceContext) => boolean | "hidden";
   surfaces: ("desktop" | "mobile")[];
-  danger?: boolean;                  // renders red, requires explicit Enter
-  accelerator?: string;              // displayed hint only; menu.ts is truth
+  danger?: boolean; // renders red, requires explicit Enter
+  accelerator?: string; // displayed hint only; menu.ts is truth
 }
 
 export interface ArgSpec {
   name: string;
-  label: string;                     // placeholder while prompting
+  label: string; // placeholder while prompting
   type: "string" | "enum" | "panel" | "source" | "url" | "workspace" | "number";
-  required: boolean;                 // optional args skippable with Enter
+  required: boolean; // optional args skippable with Enter
   suggest?: (query: string, ctx: SurfaceContext) => Suggestion[];
-  validate?: (value: string) => string | null;   // error message or null
-  options?: { value: string; label: string }[];  // for "enum"
+  validate?: (value: string) => string | null; // error message or null
+  options?: { value: string; label: string }[]; // for "enum"
 }
 ```
 
@@ -461,11 +453,11 @@ Contributions therefore use a declarative subset:
 ```ts
 export interface WireCommandSpec {
   id: string;
-  label: string;                    // wire field stays `label`; the palette
-  description?: string;             //   maps it to CommandSpec.title
-  group?: string;                   // maps to a section under the panel name
+  label: string; // wire field stays `label`; the palette
+  description?: string; //   maps it to CommandSpec.title
+  group?: string; // maps to a section under the panel name
   args?: WireArgSpec[];
-  requiresFocus?: boolean;          // declarative availability only
+  requiresFocus?: boolean; // declarative availability only
   danger?: boolean;
 }
 export interface WireArgSpec {
@@ -473,8 +465,8 @@ export interface WireArgSpec {
   label: string;
   type: "string" | "enum" | "number" | "url";
   required: boolean;
-  options?: { value: string; label: string }[];  // enum: inline, static
-  pattern?: string;                              // regex validation
+  options?: { value: string; label: string }[]; // enum: inline, static
+  pattern?: string; // regex validation
 }
 ```
 
@@ -490,86 +482,86 @@ validation.
 
 ### 3.2 Built-in slate (v1 — complete list)
 
-Sections in display order. *Availability* column: `always` unless noted.
+Sections in display order. _Availability_ column: `always` unless noted.
 All commands run in `QuickfireOwner` (chrome) unless marked (main)/(server).
 
 **Panel** — section "Panel"
 
-| id | title | args | notes |
-|---|---|---|---|
-| `panel.new` | New Panel | `source: source` (optional) | No arg → opens `about/new` child (existing `Cmd+T` path); with arg → `createFromSource` |
-| `panel.close` | Close Panel | — | Focused panel; `danger` when panel has children |
-| `panel.focus` | Go to Panel | `panel: panel` | Suggest = open-panel index, same rows as `@` scope |
-| `panel.move` | Move Panel | `direction: enum(left,right,up,down)` | Layout move of focused pane |
-| `panel.pin` / `panel.unpin` | Pin / Unpin Panel | — | Availability from pin state |
-| `panel.collapse` | Collapse Panel | — | |
-| `panel.reload` | Reload Panel | — | Existing palette item, migrated |
-| `panel.duplicate` | Duplicate Panel | — | New sibling slot, same source + stateArgs |
-| `panel.copy-link` | Copy Panel Link | — | `buildPanelLink` for addressable sources; hidden otherwise |
+| id                          | title             | args                                  | notes                                                                                   |
+| --------------------------- | ----------------- | ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `panel.new`                 | New Panel         | `source: source` (optional)           | No arg → opens `about/new` child (existing `Cmd+T` path); with arg → `createFromSource` |
+| `panel.close`               | Close Panel       | —                                     | Focused panel; `danger` when panel has children                                         |
+| `panel.focus`               | Go to Panel       | `panel: panel`                        | Suggest = open-panel index, same rows as `@` scope                                      |
+| `panel.move`                | Move Panel        | `direction: enum(left,right,up,down)` | Layout move of focused pane                                                             |
+| `panel.pin` / `panel.unpin` | Pin / Unpin Panel | —                                     | Availability from pin state                                                             |
+| `panel.collapse`            | Collapse Panel    | —                                     |                                                                                         |
+| `panel.reload`              | Reload Panel      | —                                     | Existing palette item, migrated                                                         |
+| `panel.duplicate`           | Duplicate Panel   | —                                     | New sibling slot, same source + stateArgs                                               |
+| `panel.copy-link`           | Copy Panel Link   | —                                     | `buildPanelLink` for addressable sources; hidden otherwise                              |
 
 **Navigate** — section "Navigate"
 
-| id | title | args | notes |
-|---|---|---|---|
-| `nav.back` / `nav.forward` | Back / Forward | — | Availability from `canGoBack/Forward` |
-| `nav.open-url` | Open URL | `url: url` | Validates with `browserUrlFromEntry`; opens browser child |
-| `nav.history` | Search History | `query: string` | Jumps into `@` scope pre-filtered to history |
-| `nav.address` | Edit Address | — | Closes overlay, focuses title-bar address (`toggle-address-bar`) |
+| id                         | title          | args            | notes                                                            |
+| -------------------------- | -------------- | --------------- | ---------------------------------------------------------------- |
+| `nav.back` / `nav.forward` | Back / Forward | —               | Availability from `canGoBack/Forward`                            |
+| `nav.open-url`             | Open URL       | `url: url`      | Validates with `browserUrlFromEntry`; opens browser child        |
+| `nav.history`              | Search History | `query: string` | Jumps into `@` scope pre-filtered to history                     |
+| `nav.address`              | Edit Address   | —               | Closes overlay, focuses title-bar address (`toggle-address-bar`) |
 
 **Quickfire** — section "Quickfire"
 
-| id | title | args | notes |
-|---|---|---|---|
-| `quickfire.ask` | Ask About This Panel | `prompt: string` (optional) | Switches to `/` mode, prefilled |
-| `quickfire.clear` | Clear Panel Conversation | — | `danger`; availability: conversation exists |
-| `quickfire.promote` | Open Conversation as Chat Panel | — | Availability: conversation exists |
-| `quickfire.list` | Quickfire Conversations | — | Opens picker of `quickfire.list()` rows; activate = focus slot + open overlay |
-| `agent.new-chat` | New Chat | `prompt: string` (optional) | Existing `panels/chat` deep-link path from `about/new` |
+| id                  | title                           | args                        | notes                                                                         |
+| ------------------- | ------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| `quickfire.ask`     | Ask About This Panel            | `prompt: string` (optional) | Switches to `/` mode, prefilled                                               |
+| `quickfire.clear`   | Clear Panel Conversation        | —                           | `danger`; availability: conversation exists                                   |
+| `quickfire.promote` | Open Conversation as Chat Panel | —                           | Availability: conversation exists                                             |
+| `quickfire.list`    | Quickfire Conversations         | —                           | Opens picker of `quickfire.list()` rows; activate = focus slot + open overlay |
+| `agent.new-chat`    | New Chat                        | `prompt: string` (optional) | Existing `panels/chat` deep-link path from `about/new`                        |
 
 **Debug** — section "Debug" (availability: focused panel is a code/browser
 panel; all record context ingestion server-side)
 
-| id | title | args | notes |
-|---|---|---|---|
-| `debug.devtools` | Open Panel DevTools | — | Existing item, migrated |
-| `debug.screenshot` | Screenshot Panel | — | `panelCdp.screenshot` → downloads/clipboard toast |
-| `debug.console` | Copy Console History | — | `panelCdp.consoleHistory` → clipboard |
-| `debug.shell-devtools` | Open Shell DevTools | — | (main) |
-| `debug.worker-inspector` | Inspect Worker… | `entity: string` | (server) `workerdInspectorService`; hidden unless dev features on |
+| id                       | title                | args             | notes                                                             |
+| ------------------------ | -------------------- | ---------------- | ----------------------------------------------------------------- |
+| `debug.devtools`         | Open Panel DevTools  | —                | Existing item, migrated                                           |
+| `debug.screenshot`       | Screenshot Panel     | —                | `panelCdp.screenshot` → downloads/clipboard toast                 |
+| `debug.console`          | Copy Console History | —                | `panelCdp.consoleHistory` → clipboard                             |
+| `debug.shell-devtools`   | Open Shell DevTools  | —                | (main)                                                            |
+| `debug.worker-inspector` | Inspect Worker…      | `entity: string` | (server) `workerdInspectorService`; hidden unless dev features on |
 
 **View** — section "Appearance & Layout"
 
-| id | title | args |
-|---|---|---|
-| `view.theme` | Theme | `mode: enum(system,light,dark)` |
-| `view.accent` | Accent Color | `accent: enum(…)` |
-| `view.sidebar` | Toggle Sidebar | — |
-| `view.zoom-in` / `view.zoom-out` / `view.zoom-reset` | Zoom | — |
+| id                                                   | title          | args                            |
+| ---------------------------------------------------- | -------------- | ------------------------------- |
+| `view.theme`                                         | Theme          | `mode: enum(system,light,dark)` |
+| `view.accent`                                        | Accent Color   | `accent: enum(…)`               |
+| `view.sidebar`                                       | Toggle Sidebar | —                               |
+| `view.zoom-in` / `view.zoom-out` / `view.zoom-reset` | Zoom           | —                               |
 
 **Workspace** — section "Workspace"
 
-| id | title | args | notes |
-|---|---|---|---|
-| `workspace.switch` | Switch Workspace | `workspace: workspace` | Existing item, gains picker arg |
-| `workspace.permissions` | Permissions & Agents | — | Opens `about/permissions` |
-| `workspace.downloads` | Downloads | — | `about/downloads` |
-| `workspace.about` | About This Workspace | — | `about/about` |
+| id                      | title                | args                   | notes                           |
+| ----------------------- | -------------------- | ---------------------- | ------------------------------- |
+| `workspace.switch`      | Switch Workspace     | `workspace: workspace` | Existing item, gains picker arg |
+| `workspace.permissions` | Permissions & Agents | —                      | Opens `about/permissions`       |
+| `workspace.downloads`   | Downloads            | —                      | `about/downloads`               |
+| `workspace.about`       | About This Workspace | —                      | `about/about`                   |
 
 **Authority** — section "Approvals & Safety"
 
-| id | title | args | notes |
-|---|---|---|---|
-| `authority.focus-approval` | Focus Pending Approval | — | Availability: pending exists; existing `Cmd+Shift+A` path |
-| `authority.pause-agents` | Pause All Agents | — | `danger`; `permissions` service pause-all |
-| `authority.lock` | Lock Workspace Authority | — | `danger`; `setWorkspaceAuthorityLock` |
+| id                         | title                    | args | notes                                                     |
+| -------------------------- | ------------------------ | ---- | --------------------------------------------------------- |
+| `authority.focus-approval` | Focus Pending Approval   | —    | Availability: pending exists; existing `Cmd+Shift+A` path |
+| `authority.pause-agents`   | Pause All Agents         | —    | `danger`; `permissions` service pause-all                 |
+| `authority.lock`           | Lock Workspace Authority | —    | `danger`; `setWorkspaceAuthorityLock`                     |
 
 **App** — section "Application"
 
-| id | title | args |
-|---|---|---|
-| `app.shortcuts` | Keyboard Shortcuts | — |
-| `app.reload-shell` | Reload App Shell | — |
-| `app.check-updates` | Check for Updates | — |
+| id                  | title              | args |
+| ------------------- | ------------------ | ---- |
+| `app.shortcuts`     | Keyboard Shortcuts | —    |
+| `app.reload-shell`  | Reload App Shell   | —    |
+| `app.check-updates` | Check for Updates  | —    |
 
 Mobile surface flags: everything except `debug.shell-devtools`,
 `debug.worker-inspector`, `view.zoom-*`, `nav.address`; `panel.move` remaps to
@@ -577,8 +569,8 @@ the drawer's reorder affordance.
 
 ### 3.3 Argument flow (the state machine)
 
-Selecting a command with args does **not** execute — it enters an *argument
-session* rendered as breadcrumb chips:
+Selecting a command with args does **not** execute — it enters an _argument
+session_ rendered as breadcrumb chips:
 
 ```
 State: ArgSession { spec: CommandSpec, filled: Record<string,string>,
@@ -673,7 +665,7 @@ never closes on error.
             │  ┌ agent ──────────────────────────────────────┐ │
             │  │ The container clamps at 720px — .chart-wrap │ │
             │  │ sets overflow:hidden and the flex basis…    │ │
-            │  │ ▣ screenshot.png   ▤ console (2 errors)     │ │  ← tool chips
+            │  │ ✓ panel_screenshot  ✕ panel_eval            │ │  ← tool records
             │  └─────────────────────────────────────────────┘ │
             │                                                  │
             │ ⌕ and on mobile widths?_                         │  ← compose
@@ -681,17 +673,26 @@ never closes on error.
             ╰──────────────────────────────────────────────────╯
 ```
 
-- Header: ✦ + panel title; `⟲` clear (two-step: turns into `⟲ really clear?`
-  for the next click — no modal); `⧉` promote to chat panel.
-- Transcript: last 20 messages, internal scroll, streaming delta renders
-  live. Tool invocations render as compact chips (screenshot thumbnails
-  inline at 120px, click → opens image in a viewer panel). "show all →"
-  promotes.
-- While the agent is working, the compose row shows a stop button and the
-  streaming status line ("running panel console tool…").
+- Header: ✦ + panel title; `⟲` clears immediately into a fresh conversation;
+  `⧉` promotes to a chat panel.
+- Transcript: last 20 entries, internal scroll, streaming delta renders live,
+  and every conversational entry uses the shared compact Markdown projection.
+  Thinking is a distinct expandable record. Each invocation is a
+  running/done/failed record that expands to its bounded input, progress,
+  output, and failure details. "show all →" promotes.
+- Activity is never inferred independently by the two renderers. The shared
+  quickfire projection emits one live row from the accepted send onward:
+  `starting` before the durable turn arrives, then `thinking`, `using tools`,
+  or `responding` from channel turn/message/invocation state. Desktop and
+  mobile both render that row with a spinner, keep it visible beside streaming
+  prose, and show every tool call as a running/done/failed record. A parked turn
+  becomes a non-spinning `waiting` row carrying the canonical lifecycle
+  summary. Terminal failures remain ordinary transcript diagnostics.
+- While the agent is working, the compose row shows a stop button. Stopping or
+  a terminal turn removes the live row; there is no timer-based activity state.
 - Approvals raised by the quickfire agent flow through the **existing
   approval card**, rendered in its own overlay instance and visible
-  *simultaneously* with quickfire (§2.3a) — the user can resolve an
+  _simultaneously_ with quickfire (§2.3a) — the user can resolve an
   approval without dismissing the conversation. The quickfire surface never
   renders approval UI; focus arbitration per §2.3a.
 - Clearing while the agent is mid-turn stops the turn first (existing
@@ -699,18 +700,18 @@ never closes on error.
 
 ### 4.4 States & transitions
 
-| State | Trigger | Render |
-|---|---|---|
-| `closed` | — | nothing |
-| `palette(mode, query, argSession?)` | accelerator / chip / prefix | §4.1–4.2 |
-| `quickfire(idle)` | `/` or accelerator, no conversation | header + empty transcript + compose, hint text: "Ask about this panel. I can see its console and take screenshots." |
-| `quickfire(resumed)` | conversation exists | §4.3 |
-| `quickfire(streaming)` | send | live delta + stop |
-| `panel-lost` | focused slot closed while open | context strip → "panel closed"; quickfire compose disabled; palette still works |
+| State                               | Trigger                             | Render                                                                                                              |
+| ----------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `closed`                            | —                                   | nothing                                                                                                             |
+| `palette(mode, query, argSession?)` | accelerator / chip / prefix         | §4.1–4.2                                                                                                            |
+| `quickfire(idle)`                   | `/` or accelerator, no conversation | header + empty transcript + compose, hint text: "Ask about this panel. I can see its console and take screenshots." |
+| `quickfire(resumed)`                | conversation exists                 | §4.3                                                                                                                |
+| `quickfire(streaming)`              | send                                | phase row + live delta/thinking/tool records + stop                                                                 |
+| `panel-lost`                        | focused slot closed while open      | context strip → "panel closed"; quickfire compose disabled; palette still works                                     |
 
 Overlay closes on: `Esc` chain, activating a navigation suggestion, executing
 a command that moves focus (e.g. `panel.focus`), clicking outside (the
-content overlay's existing outside-dismiss). It does *not* close on
+content overlay's existing outside-dismiss). It does _not_ close on
 executing non-navigating commands (`view.theme` etc.) — it shows a 900ms
 success flash on the row instead, staying open for chained commands.
 
@@ -720,12 +721,18 @@ success flash on the row instead, staying open for chained commands.
 
 ### 5.1 System prompt & per-turn context
 
-The `QuickfireAgentWorker` class in `workers/agent-worker` composes the standard base prompt plus
-a quickfire preamble (identity: "you are the quick inspector attached to one
-panel; bias to observation and small fixes; suggest promotion for large
-work") and — following the SA0 "complete overview per turn, no diffs"
-principle — prepends a fresh **`PanelContextSnapshot`** to every user turn
-via `buildTurnInput`:
+The quickfire service supplies an ordinary replacement system prompt and a
+declarative `panel.description` turn-context provider. The standard
+`AiChatWorker` resolves that provider before every model request and prepends a
+fresh **`PanelContextSnapshot`** — following the SA0 "complete overview per
+turn, no diffs" principle:
+
+The prompt makes the attached panel salient without asserting what a human
+means. Contextual language may refer to the panel, its contents, the command
+agent, or this compact conversation. When the panel is itself a chat, the
+rendered chat and the command-agent chat remain two distinct possible
+referents; live inspection and dialogue context should resolve the ambiguity,
+and material ambiguity is asked about rather than silently decided.
 
 ```
 <panel-context>
@@ -753,7 +760,7 @@ favicon, display/editable address, and back/forward state are
 presentation-local and a plain server service cannot read them.
 
 ```ts
-panelContext.describe({ panelId })  // → PanelContextSnapshot, two halves:
+panelContext.describe({ panelId }); // → PanelContextSnapshot, two halves:
 // SERVER-RESIDENT (always present): tree detail (slot, parent, siblings,
 //   stateArgs, title from workspace-state) + source identity (source,
 //   repoPath, effectiveVersion, executionDigest, contextId) +
@@ -773,7 +780,7 @@ exists for the agent path, where the caller is server-side.
 
 Principals `["user", "host", "code", "agent"]`; for non-user callers the
 target-context `context.boundary` rule applies exactly as in `panelCdp` —
-same-context free, foreign gated. Console *bodies* stay behind the tool
+same-context free, foreign gated. Console _bodies_ stay behind the tool
 surface (§5.3) so reading them records ingestion; `describe` returns counts
 only and records nothing.
 
@@ -782,15 +789,15 @@ only and records nothing.
 Exposed via the harness's `getLoopTools()`, all thin wrappers over existing
 services — no new capability kinds:
 
-| Tool | Backing | Notes |
-|---|---|---|
-| `panel_screenshot` | `panelCdp.screenshot` | Force-paints hidden views; returns image blob ref |
-| `panel_console` | `panelCdp.consoleHistory` | Records `log:panel:<id>` ingestion |
-| `panel_eval` | **NEW** `panelCdp.evaluate(panelId, expr)` one-RPC helper (add beside screenshot/consoleHistory in `panelCdpService`) | `Runtime.evaluate` w/ 8s bound, result serialized; avoids handing the model a raw WS endpoint for the 90% case |
-| `panel_cdp_endpoint` | `panelCdp.getCdpEndpoint` | The full firehose, for genuinely interactive debugging |
-| `panel_describe` | `panelContext.describe` | Refresh mid-turn |
-| `read_source` / `edit_source` | existing workspace source RPCs, scoped to the panel's unit path | Small-fix loop; edits flow through normal review/approval machinery |
-| `say` / `complete` | standard channel tools | |
+| Tool                          | Backing                                                                                                               | Notes                                                                                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `panel_screenshot`            | `panelCdp.screenshot`                                                                                                 | Force-paints hidden views; returns image blob ref                                                              |
+| `panel_console`               | `panelCdp.consoleHistory`                                                                                             | Records `log:panel:<id>` ingestion                                                                             |
+| `panel_eval`                  | **NEW** `panelCdp.evaluate(panelId, expr)` one-RPC helper (add beside screenshot/consoleHistory in `panelCdpService`) | `Runtime.evaluate` w/ 8s bound, result serialized; avoids handing the model a raw WS endpoint for the 90% case |
+| `panel_cdp_endpoint`          | `panelCdp.getCdpEndpoint`                                                                                             | The full firehose, for genuinely interactive debugging                                                         |
+| `panel_describe`              | `panelContext.describe`                                                                                               | Refresh mid-turn                                                                                               |
+| `read_source` / `edit_source` | existing workspace source RPCs, scoped to the panel's unit path                                                       | Small-fix loop; edits flow through normal review/approval machinery                                            |
+| `say` / `complete`            | standard channel tools                                                                                                |                                                                                                                |
 
 `panel_eval` is the one genuinely new server surface besides
 `panelContext.describe` and the `quickfire` service; it also closes a gap for
@@ -805,38 +812,25 @@ Requirement: quickfire must reach `panel_screenshot`/`panel_console`/
 inside the canonical grant store (no bypass flags) and the no-clock-authority
 principle.
 
-Design — a reviewed closure + per-conversation grants:
+Design — standard code identity + per-conversation panel grants:
 
-1. **Reviewed closure `quickfire`** (source document: this spec) with
-   `subjectPrefix: mission:quickfire`, `harness: {unit:
-   "workers/agent-worker", ev: <blessed>}`, exposure = the §5.3 tool
-   list, and `grants[]` = **`panel.inspect` only** (tier `gated`, resource
-   exact). The `context.boundary` grant is deliberately *not* a standing
-   closure grant: `<boundCtx>` is a runtime value a static document cannot
-   name, and the only static scope available (`context/`) would hand every
-   conversation the boundary for every context in the workspace — exactly
-   what binding-time minting (point 2) exists to prevent. The boundary
-   grant is minted per binding at prefix `context/<boundCtx>/requester/`
-   (prefix scope because the requester entity id is re-minted per
-   conversation; the *target* context is the interesting half), on the same
-   subject. The quickfire agent runs under subject
-   `mission:quickfire@<closureDigest>` — per SA1's own changelog, the
-   harness code principal holds no standing grants. (Implementation note:
-   `quickfire-bind` is a sibling constant of `CLEARANCE_DECISION_SURFACE`,
-   not a new key — that map is typed by `UnitAdmissionOrigin` and describes
-   install decisions.)
+1. **Standard execution identity**: the vessel runs as
+   `code:workers/agent-worker@<effectiveVersion>`, exactly like chat. There is
+   no separate session charter and no second service-exposure list.
+   Model resolution, credential injection, and outbound requests therefore use
+   the already reviewed unit manifest and the user's existing version grant.
 2. **Binding-time minting**: the target context id is a runtime value, so
-   closure grants can't name it statically. Instead, `quickfire.sessionFor`
+   `quickfire.sessionFor`
    (running as host, on an explicit user gesture — opening the overlay over
-   that panel *is* the consent act) mints the concrete grant pair
+   that panel _is_ the consent act) mints the concrete grant pair
    (`panel.inspect` + `context.boundary` at
    `context/<targetCtx>/requester/` prefix) with subject
-   `mission:quickfire@<digest>`, `scope: "session"`, `decision_surface:
-   "quickfire-bind"` (new value in `CLEARANCE_DECISION_SURFACE`'s enum
+   `code:workers/agent-worker@<effectiveVersion>`, `scope: "session"`, `decision_surface:
+"quickfire-bind"` (new value in `CLEARANCE_DECISION_SURFACE`'s enum
    family), `provenance` pointing at the user's open action, and — because
    we don't do clock-bound authority — revocation tied to **lifecycle
    events only**: `quickfire.clear`, slot close, or panel navigation to a
-   *different context* (context change re-mints for the new context after
+   _different context_ (context change re-mints for the new context after
    the overlay is next opened, which is the fresh user gesture).
 3. **Severity gate**: if the bound panel's target is `privileged`
    (`panelAccessSeverityForTarget` → `critical`), binding-time minting is
@@ -844,18 +838,20 @@ Design — a reviewed closure + per-conversation grants:
    ("Quickfire wants debug access to Permissions panel"), and the resulting
    grant persists for the conversation. Ordinary panels: zero prompts.
 4. **Visibility & revocation**: minted grants appear in
-   `permissions.list` like any other (`origin: quickfire`, revoke works and
+   `permissions.list` like any other (`runtime-resource-binding` decision
+   surface; revoke works and
    immediately kills the tools); `authority.pause-agents` and the workspace
    lock apply. Context-integrity: every CDP read still records external
    ingestion, so a quickfire conversation that has looked at page content
    carries the latch like any agent session — no exemption.
-5. **Conduit**: use the existing `workers/agent-worker` conduit identity and
-   exact-EV resolution. The distinct durable-object class selects quickfire
-   behavior without creating a second code-version identity.
+5. **Agent configuration**: ordinary subscription config selects the focused
+   prompt, per-turn panel snapshot, low thinking level, and §5.3 tools.
+   Promotion preserves the same channel and vessel; changing UI surfaces never
+   changes execution identity.
 
-What we explicitly do **not** do: no standing `code:` grant on the harness
-unit (product bootstrap policy forbids it and it would grant every
-conversation everything), no TTL'd grants, no bypass of the ingestion latch.
+What we explicitly do **not** do: no mission wrapper, no second durable class,
+no standing broad panel grant, no TTL'd grants, and no bypass of the ingestion
+latch.
 
 ---
 
@@ -893,7 +889,7 @@ structure as §4.3 rendered natively (reuses the `ApprovalSheet` sheet shell
 and the same `useChannelMessages` reduction the mobile chat surface uses —
 mobile talks RPC directly, so no props-bridge constraint exists here).
 Promote opens the chat panel in the detail pane. Swipe-down = dismiss
-(conversation persists); clear is the same two-step header affordance.
+(conversation persists); clear immediately replaces it with a fresh conversation.
 
 ---
 
@@ -917,9 +913,9 @@ Each phase lands independently shippable; P1–P3 are the core deliverable.
   the overlay over a live visible panel; approval card and palette visible
   and operable simultaneously (e2e: resolve an approval while the palette
   stays open); open→arg→execute and focus restore covered.
-- **P3 — Quickfire sessions.** `quickfire` service + `quickfire_sessions`
-  table + `QuickfireAgentWorker` sibling class in the standard agent unit +
-  `panelContext.describe`.
+- **P3 — Quickfire sessions.** Base `QuickfireSessionsDO` service + its
+  userland `quickfire_sessions` table + declaratively configured standard
+  `AiChatWorker` + `panelContext.describe`.
   Overlay `/` mode with transcript, resume, clear, promote (with
   ownership transfer: `promoted_at`, cleanup-queue archival per §2.4).
   Tools limited to `panel_describe` + `say` (no CDP yet — conversations
@@ -927,8 +923,8 @@ Each phase lands independently shippable; P1–P3 are the core deliverable.
   clear, promote-then-close-slot (channel survives, chat panel still
   live), and slot-close archival of non-promoted conversations all
   e2e-tested.
-- **P4 — Debug authority.** `panel_eval` RPC; reviewed closure +
-  binding-time mission grants + `quickfire-bind` decision surface +
+- **P4 — Debug authority.** `panel_eval` RPC; binding-time session grants on
+  the standard code principal + `runtime-resource-binding` decision surface +
   conduit entry; severity gate for privileged panels; full §5.3 tool set.
   Exit: screenshot/console/eval prompt-free on an ordinary panel, prompted
   once on a privileged one; revoke-from-permissions kills tools live;

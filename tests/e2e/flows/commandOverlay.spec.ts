@@ -9,6 +9,8 @@ import {
 import {
   callWorkspaceService,
   captureShellConsole,
+  clickOutsideCommandOverlay,
+  clickInCommandOverlay,
   pressChordOnFocusedContents,
   readShellConsole,
   pressInCommandOverlay,
@@ -88,6 +90,22 @@ test.describe("command overlay", () => {
       .toBe(false);
   });
 
+  test("closes when the user clicks a sibling panel or shell surface", async () => {
+    expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
+    await expect
+      .poll(async () => (await probeCommandOverlay(testApp))?.open === true, { timeout: 20_000 })
+      .toBe(true);
+
+    expect(await clickOutsideCommandOverlay(testApp)).toBe(true);
+
+    await expect
+      .poll(async () => (await probeCommandOverlay(testApp))?.open === true, {
+        timeout: 10_000,
+        intervals: [250, 500],
+      })
+      .toBe(false);
+  });
+
   test("routes typed prose to the panel's agent and binds a conversation", async () => {
     expect(await pressChordOnFocusedContents(testApp, "K", ["control"])).toBe(true);
     await expect
@@ -105,29 +123,6 @@ test.describe("command overlay", () => {
       .toMatch(/Ask about/i);
 
     expect(await pressInCommandOverlay(testApp, "Enter")).toBe(true);
-
-    // Two failures look identical on screen — the send never reached the
-    // channel, or it did and this client never saw it come back. Ask the
-    // workspace directly, and report it as a STRING: a structural matcher only
-    // diffs the keys it was given, so the reason for a falsy answer kept
-    // vanishing from the failure output.
-    await expect
-      .poll(
-        async () => {
-          const listed = await callWorkspaceService(testApp, "quickfire", "list");
-          if (!listed.ok) return `bound=false refused=${listed.error ?? "unknown"}`;
-          const rows = (listed.value ?? []) as Array<{ slotId: string }>;
-          if (rows.length === 0) return "bound=false reason=no-session-row";
-          const session = await callWorkspaceService(testApp, "quickfire", "sessionFor", [
-            { slotId: rows[0]!.slotId },
-          ]);
-          if (!session.ok) return `bound=true sessionFor-refused=${session.error ?? "unknown"}`;
-          const facts = session.value as { messageCount: number | null; state: string };
-          return `bound=true state=${facts.state} messageCount=${facts.messageCount}`;
-        },
-        { timeout: 120_000, intervals: [1000, 2000, 5000] }
-      )
-      .toMatch(/^bound=true state=\w+ messageCount=[1-9]/);
 
     // The overlay runs in the shell CHROME, not in a panel. A `context:
     // "creator"` workspace service (which is how `channel` is declared) resolves
@@ -153,12 +148,14 @@ test.describe("command overlay", () => {
     const consoleLines = await readShellConsole(testApp);
     console.log(
       "[diagnostic] shell console:",
-      consoleLines.filter((line) => /channel|subscri|quickfire|replay|participant/i.test(line))
+      consoleLines
+        .filter((line) => /channel|subscri|quickfire|replay|participant/i.test(line))
         .slice(-20)
         .join("\n") || "(nothing matched)"
     );
 
-    // Assert on the TRANSCRIPT, never on the surface text: the ask row quotes
+    // Assert on the TRANSCRIPT, never on the surface text: the Base service is
+    // deliberately not exposed as a host schema, and the ask row quotes
     // the query back, so a whole-surface match passes the moment you type and
     // says nothing about the conversation. A rendered message has been through
     // createEntity, vessel activation, subscribeChannel and the channel's own
@@ -203,5 +200,39 @@ test.describe("command overlay", () => {
         intervals: [250, 500, 1000],
       })
       .toBe(true);
+  });
+
+  test("promotes the same conversation into a ready chat panel", async () => {
+    expect(await clickInCommandOverlay(testApp, "Move to chat panel")).toBe(true);
+
+    await expect
+      .poll(async () => (await probeCommandOverlay(testApp))?.open === true, {
+        timeout: 120_000,
+        intervals: [500, 1000, 2000],
+      })
+      .toBe(false);
+
+    await expect
+      .poll(
+        async () =>
+          testApp.app.evaluate(async ({ webContents }) => {
+            const texts: string[] = [];
+            for (const contents of webContents.getAllWebContents()) {
+              if (contents.isDestroyed() || contents.getTitle() !== "Agentic Chat") continue;
+              try {
+                texts.push(
+                  String(await contents.executeJavaScript("document.body?.innerText ?? ''", true))
+                );
+              } catch {
+                // A view can disappear while the panel tree is settling.
+              }
+            }
+            return texts;
+          }),
+        { timeout: 120_000, intervals: [500, 1000, 2000] }
+      )
+      .toEqual(
+        expect.arrayContaining([expect.stringContaining("why is this panel laid out this way?")])
+      );
   });
 });

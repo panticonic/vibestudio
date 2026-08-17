@@ -1,12 +1,11 @@
 /**
  * panelContext — one aggregate "what panel is this?" read for server-side
- * callers (quickfire-overlay-spec §5.2).
+ * callers and configurable agent tools.
  *
- * The quickfire agent re-describes its bound panel every turn (SA0's "complete
- * overview, no diffs" principle), so this has to be a single cheap RPC over
- * facts the server already holds: the durable slot/history/entity join from
- * workspace-state, and the presentation lease from the panel-runtime
- * coordinator.
+ * This is a single cheap RPC over facts the server already holds: the durable
+ * slot/history/entity join from workspace-state, and the presentation lease
+ * from the panel-runtime coordinator. Callers choose when fresh state matters;
+ * the service does not inject snapshots into model requests.
  *
  * Two halves are deliberately NOT served here and say so on the wire:
  *
@@ -105,7 +104,7 @@ export function createPanelContextService(deps: PanelContextServiceDeps): Servic
         reason: "counts-require-cdp-read",
         via: "panel_console",
       },
-      // TODO(quickfire P4): fetch favicon / editable address / canGoBack /
+      // TODO(panel-context): fetch favicon / editable address / canGoBack /
       // canGoForward from the active lease holder over the CDP host-provider
       // connection (`src/server/cdpBridge.ts` sendHostCommand) once a
       // `describePresentation` host command exists on both the Electron shell

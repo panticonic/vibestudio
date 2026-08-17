@@ -492,8 +492,9 @@ export class ViewManager {
    * `Ctrl/Cmd+K` is app-global by design (spec §1.3): the shell forwards its own
    * keystrokes into the focused panel and a focused panel page consumes them, so
    * without this the chord only worked while an interactive chrome field held
-   * focus. `Escape` is forwarded only while an overlay is actually visible, and
-   * as an ordinary surface intent — the chrome owner decides what it means
+   * focus. Keys and pointer presses that land in sibling native views are
+   * forwarded only while an overlay is actually visible, and as ordinary
+   * surface intents — the chrome owner decides what they mean
    * (quickfire closes, the approval card deliberately ignores it), because
    * "should Escape dismiss this" is presentation policy the host must not own.
    */
@@ -504,6 +505,14 @@ export class ViewManager {
       if (this.shellContentOverlay.getVisibleViews().length === 0) return;
       event.preventDefault();
       this.forwardContentOverlayIntent({ type: "host-escape" });
+    });
+    contents.on("before-mouse-event", (_event, mouse) => {
+      if (mouse.type !== "mouseDown" || !this.shellContentOverlay.isVisible("quickfire")) return;
+      // The overlay is a small sibling WebContentsView, so a press elsewhere
+      // never reaches its DOM backdrop. Forward presentation intent without
+      // consuming the press: the clicked panel/chrome control must still own
+      // its normal action and resulting focus.
+      this.forwardContentOverlayIntent({ type: "host-pointer-down" });
     });
   }
 
@@ -1168,6 +1177,7 @@ export class ViewManager {
         );
         this.hideBootstrapShell();
         this.setViewVisible(ownerViewId, true);
+        this.shellContentOverlay.prewarm("quickfire");
         this.refreshActivePanelSlots();
         return;
       }
@@ -1188,6 +1198,7 @@ export class ViewManager {
       }
       this.hideBootstrapShell();
       this.setViewVisible(ownerViewId, true);
+      this.shellContentOverlay.prewarm("quickfire");
       this.reconcileNativeLayerOrder();
       return;
     }

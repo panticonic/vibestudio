@@ -1,9 +1,9 @@
 /**
- * Wire schemas for `panelContext.describe` (quickfire-overlay-spec §5.2).
+ * Wire schemas for `panelContext.describe`.
  *
  * One aggregate read that answers "what panel am I attached to?" for a
- * SERVER-SIDE caller — the quickfire agent's per-turn `PanelContextSnapshot`
- * builder. The shell chrome deliberately does not use it: it already has
+ * server-side caller or configured agent tool. The shell chrome deliberately
+ * does not use it: it already has
  * main-process access via `panel.getChromeState` and composes locally.
  *
  * The snapshot is split by *who owns the fact*, and says so on the wire:

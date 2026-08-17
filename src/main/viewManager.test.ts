@@ -532,6 +532,100 @@ describe("ViewManager", () => {
       expect(focus).toBeGreaterThan(lastRaise!);
     });
 
+    it("prewarms quickfire when the hosted shell becomes ready", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const hostedShellView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
+        "file:///hosted-shell/index.html"
+      );
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+
+      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      expect(overlayView.webContents.loadURL).toHaveBeenCalledWith(
+        "file:///hosted-shell/index.html#overlaySurface=quickfire"
+      );
+      expect(overlayView.setVisible).toHaveBeenCalledWith(false);
+      expect(overlayView.setVisible).not.toHaveBeenCalledWith(true);
+      expect(overlayView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    it("retries surface navigation after the hosted-shell URL becomes available", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellContents = vm.getShellWebContents();
+      (shellContents.getURL as unknown as Mock).mockReturnValue("");
+
+      vm.showContentOverlay({
+        surface: "quickfire",
+        bounds: { x: 20, y: 40, width: 420, height: 300 },
+        props: { mode: "all" },
+        theme: { appearance: "light" },
+      });
+      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      expect(overlayView.webContents.loadURL).not.toHaveBeenCalled();
+
+      (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
+      vm.updateContentOverlay("quickfire", { props: { mode: "commands" } });
+
+      expect(overlayView.webContents.loadURL).toHaveBeenCalledWith(
+        "file:///shell/index.html#overlaySurface=quickfire"
+      );
+    });
+
+    it("forwards an outside pointer press without consuming the clicked view's event", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const hostedShellView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
+        "file:///hosted-shell/index.html"
+      );
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.showContentOverlay({
+        surface: "quickfire",
+        bounds: { x: 20, y: 40, width: 420, height: 300 },
+        props: { mode: "all" },
+        theme: { appearance: "light" },
+      });
+      (hostedShellView.webContents.send as unknown as Mock).mockClear();
+
+      const mouseHandler = (panelView.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "before-mouse-event"
+      )?.[1] as ((event: { preventDefault: Mock }, mouse: { type: string }) => void) | undefined;
+      const event = { preventDefault: vi.fn() };
+      mouseHandler?.(event, { type: "mouseDown" });
+
+      expect(hostedShellView.webContents.send).toHaveBeenCalledWith(
+        "vibestudio:content-overlay:forward",
+        { type: "host-pointer-down" }
+      );
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
     it("keeps content overlays top-left anchored while expanding to reported content size", () => {
       const vm = new ViewManager({
         window: mockWindow,

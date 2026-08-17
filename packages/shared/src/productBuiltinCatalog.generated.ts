@@ -1251,6 +1251,51 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      runtimeResourceBindingsReplace: {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      runtimeResourceBindingsRelease: {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      runtimeResourceBindingEntities: {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "read",
+        principals: ["host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       entityFindIncompleteCleanups: {
         capability: "workspace.runtime-state.manage",
         tier: "gated",
@@ -2362,126 +2407,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
             verb: "manage",
           },
         },
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireSessionGet: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireSessionBind: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireSessionClear: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "destructive",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireSessionRetarget: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireSessionPromote: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireSessionList: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireCleanupPage: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      quickfireCleanupAck: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "destructive",
-        principals: ["host"],
-        presentation: null,
         effect: {
           kind: "host-capability",
           capability: "workspace.runtime-state.manage",

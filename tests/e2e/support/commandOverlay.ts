@@ -9,7 +9,7 @@
  *
  * Why this exists at all: every command-overlay defect found so far — the
  * accelerator being swallowed by panel key forwarding, an ownerless agent vessel
- * failing activation with a 403, `subscribeChannel` refusing the host origin —
+ * failing activation with a 403, and resource-bound subscription failures —
  * was invisible to unit tests because each one lives in the seam between the
  * main process, the server, and a userland worker. Only a real app run crosses
  * all three.
@@ -119,6 +119,23 @@ export async function pressChordOnFocusedContents(
     },
     { key, modifiers }
   );
+}
+
+/**
+ * Press the hosted shell outside the overlay's sibling WebContentsView. The
+ * main process must translate this native-view boundary into a dismiss intent;
+ * no DOM backdrop can observe the press.
+ */
+export async function clickOutsideCommandOverlay(testApp: TestApp): Promise<boolean> {
+  return testApp.app.evaluate(async ({ webContents }) => {
+    const shell = webContents
+      .getAllWebContents()
+      .find((contents) => !contents.isDestroyed() && contents.getTitle() === "@workspace-apps/shell");
+    if (!shell) return false;
+    shell.sendInputEvent({ type: "mouseDown", x: 8, y: 80, button: "left", clickCount: 1 });
+    shell.sendInputEvent({ type: "mouseUp", x: 8, y: 80, button: "left", clickCount: 1 });
+    return true;
+  });
 }
 
 /**
@@ -301,14 +318,28 @@ export async function pressInCommandOverlay(
   return result?.value === true;
 }
 
+/** Click a named control in the overlay conversation header. */
+export async function clickInCommandOverlay(testApp: TestApp, label: string): Promise<boolean> {
+  const result = await evaluateInOverlayDocument<boolean>(
+    testApp,
+    `(() => {
+      const button = Array.from(document.querySelectorAll("button"))
+        .find((candidate) => (candidate.textContent ?? "").includes(${JSON.stringify(label)}));
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`
+  );
+  return result?.value === true;
+}
+
 /**
  * Call a WORKSPACE service (server-side) from the test process.
  *
  * Not the app's `serviceCall` bridge: that dispatches to the MAIN-process
- * services (`view.*`, `panel.*`, …), so asking it for `quickfire.list` fails
- * with "unknown service" and looks exactly like "there is no conversation" —
- * the same collapse of two meanings this helper exists to avoid. `__testApi`
- * targets the workspace server, which is where quickfire's durable rows live.
+ * services (`view.*`, `panel.*`, …). `__testApi` targets the workspace server
+ * and is only appropriate for actual host service schemas; Base-owned durable
+ * services are exercised through their product clients.
  */
 export async function callWorkspaceService(
   testApp: TestApp,
@@ -319,11 +350,16 @@ export async function callWorkspaceService(
   return testApp.app.evaluate(
     async (_electron, request) => {
       const testApi = (
-        globalThis as { __testApi?: { rpcCall(s: string, m: string, a: unknown[]): Promise<unknown> } }
+        globalThis as {
+          __testApi?: { rpcCall(s: string, m: string, a: unknown[]): Promise<unknown> };
+        }
       ).__testApi;
       if (!testApi) return { ok: false, error: "Test API not available" };
       try {
-        return { ok: true, value: await testApi.rpcCall(request.service, request.method, request.args) };
+        return {
+          ok: true,
+          value: await testApi.rpcCall(request.service, request.method, request.args),
+        };
       } catch (error) {
         return { ok: false, error: String((error as { message?: string })?.message ?? error) };
       }

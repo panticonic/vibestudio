@@ -48,6 +48,7 @@ import {
   type RuntimeAgentBindingInput,
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
+  type RuntimeResourceBindingInput,
   type RuntimeCodeEntityCreateSpec,
   type WorkspaceContext,
 } from "@vibestudio/shared/runtime/entitySpec";
@@ -255,6 +256,15 @@ export interface RuntimeServiceDeps {
   entityStore: WorkspaceEntityStore;
   /** Host-only task closure membership, snapshotted at runtime creation. */
   taskAuthorities: import("./taskAuthorityRegistry.js").TaskAuthorityRegistry;
+  /** Resolve host-owned resources before activation, then bind the exact active identity. */
+  prepareResourceBindings?: (input: {
+    bindings: RuntimeResourceBindingInput[];
+    initiatingCaller: VerifiedCaller;
+  }) => Promise<{
+    contextId: string;
+    bind(record: EntityRecord): Promise<void>;
+  }>;
+  releaseResourceBindings?: (record: EntityRecord) => Promise<void>;
   hooks: RuntimeEntityHooks;
   contextBoundary: ContextBoundaryDeps;
   contextFolders: RuntimeContextFolders;
@@ -572,6 +582,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         })
       : null;
     const create = async (): Promise<RuntimeEntityHandle> => {
+      const preparedResourceBindings = spec.resourceBindings?.length
+        ? await deps.prepareResourceBindings?.({
+            bindings: spec.resourceBindings,
+            initiatingCaller: actors.initiatingCaller,
+          })
+        : undefined;
+      if (spec.resourceBindings?.length && !preparedResourceBindings) {
+        throw new Error("Runtime resource bindings are unavailable");
+      }
       const requestedContextId =
         spec.contextId == null || spec.contextId === "" ? undefined : spec.contextId;
       const agentBinding = await resolveAgentBinding(
@@ -580,10 +599,57 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         requestedContextId,
         bindingFromSpec(spec)
       );
-      const contextId = await resolveTargetContext(caller, spec.contextId, agentBinding);
-      return activateEntity(actors, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
+      if (
+        preparedResourceBindings &&
+        requestedContextId !== undefined &&
+        requestedContextId !== preparedResourceBindings.contextId
+      ) {
+        throw new Error("Runtime resource context does not match the requested context");
+      }
+      if (
+        preparedResourceBindings &&
+        agentBinding &&
+        agentBinding.contextId !== preparedResourceBindings.contextId
+      ) {
+        throw new Error("Runtime resource context does not match the agent binding context");
+      }
+      const contextId =
+        preparedResourceBindings?.contextId ??
+        (await resolveTargetContext(caller, spec.contextId, agentBinding));
+      const handle = await activateEntity(
+        actors,
+        spec,
+        contextId,
+        agentBinding,
+        selfAgentChannelFromSpec(spec)
+      );
+      if (preparedResourceBindings) {
+        const record = await store.resolveRecord(handle.id);
+        if (!record || record.status !== "active") {
+          throw new Error(`Runtime resource binding target is not active: ${handle.id}`);
+        }
+        try {
+          await preparedResourceBindings.bind(record);
+        } catch (error) {
+          await retireEntity(record.id, false).catch(() => undefined);
+          throw error;
+        }
+      }
+      return handle;
     };
     return canonicalId ? serializeByKey(creationChains, canonicalId, create) : create();
+  }
+
+  async function releaseResourceBindings(caller: VerifiedCaller, id: string): Promise<void> {
+    const record = await store.resolveRecord(id);
+    if (!record || record.status !== "active") return;
+    if (!isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, record)) {
+      throw new Error(`runtime.releaseResourceBindings caller does not own ${id}`);
+    }
+    if (!deps.releaseResourceBindings) {
+      throw new Error("Runtime resource bindings are unavailable");
+    }
+    await deps.releaseResourceBindings(record);
   }
 
   const entityHandle = (record: EntityRecord, targetId = record.id): RuntimeEntityHandle => ({
@@ -1899,6 +1965,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (
       spec.contextId == null ||
       spec.contextId === "" ||
+      spec.resourceBindings?.length ||
       isExtensionOrchestratedCreate(ctx.caller, spec)
     ) {
       return { selections: [], payload: null };
@@ -2064,6 +2131,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       },
       retireEntity: async (_ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
+      },
+      releaseResourceBindings: async (ctx, [{ id }]) => {
+        await releaseResourceBindings(ctx.caller, id);
       },
       recoverExecution: (ctx, [input]) => recoverExecution(ctx.caller, input),
       listEntities: (_ctx, [input]) => listEntities(input?.kind),

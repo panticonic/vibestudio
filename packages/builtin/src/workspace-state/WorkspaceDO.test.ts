@@ -12,6 +12,7 @@ const SOURCE = "panels/example";
 const VERSION = "v1";
 const WORKSPACE_TABLES = [
   "entities",
+  "runtime_resource_bindings",
   "slots",
   "panel_close_cleanup",
   "slot_history",
@@ -23,8 +24,6 @@ const WORKSPACE_TABLES = [
   "do_alarm_test_policies",
   "durable_work_owners",
   "context_edges",
-  "quickfire_sessions",
-  "quickfire_close_cleanup",
 ];
 const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
 const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
@@ -559,6 +558,45 @@ describe("WorkspaceDO.entityRetire", () => {
 
   it("returns null when retiring a missing row", () => {
     expect(instance.entityRetire("panel:missing")).toBeNull();
+  });
+});
+
+describe("WorkspaceDO runtime resource bindings", () => {
+  let instance: WorkspaceDO;
+  beforeEach(async () => {
+    ({ instance } = await createTestDO(WorkspaceDOTestable));
+  });
+
+  const binding = (slotId: string) => ({
+    resource: { kind: "panel-slot", id: slotId },
+    capabilities: ["panel.inspect"],
+    scope: { kind: "agent-channel" as const, channelId: "channel-1" },
+  });
+
+  it("persists validated relationships independently of revocable grants", () => {
+    const entity = instance.entityActivate(doInput());
+    instance.runtimeResourceBindingsReplace(entity.id, [binding("slot-a"), binding("slot-b")]);
+
+    expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-b", "slot-c"])).toEqual([
+      entity.id,
+    ]);
+    instance.runtimeResourceBindingsRelease(entity.id);
+    expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-a"])).toEqual([]);
+  });
+
+  it("removes relationships atomically with entity retirement", () => {
+    const entity = instance.entityActivate(doInput());
+    instance.runtimeResourceBindingsReplace(entity.id, [binding("slot-a")]);
+
+    instance.entityRetire(entity.id);
+
+    expect(instance.runtimeResourceBindingEntities("panel-slot", ["slot-a"])).toEqual([]);
+  });
+
+  it("rejects relationships for inactive entities", () => {
+    expect(() =>
+      instance.runtimeResourceBindingsReplace("do:panels/example:MyDO:missing", [binding("slot-a")])
+    ).toThrow(/not active/u);
   });
 });
 
@@ -1277,162 +1315,6 @@ describe("WorkspaceDO slot operations", () => {
     expect(cleanupCount).toBe(1201);
     expect(instance.slotCloseCleanupPage({ closeId: "deep-0000", limit: 200 }).items).toEqual([]);
     expect(instance.slotGet("deep-1200")?.closed_at).toBeTypeOf("number");
-  });
-});
-
-describe("WorkspaceDO quickfire mappings", () => {
-  let instance: WorkspaceDO;
-
-  const makeSlot = (slotId: string, parentSlotId: string | null = null): void => {
-    const rec = instance.entityActivate(panelInput({ key: `${slotId}-entry` }));
-    instance.slotCreate({
-      slotId,
-      parentSlotId,
-      initialEntry: {
-        entryKey: rec.key,
-        entityId: rec.id,
-        source: SOURCE,
-        contextId: "ctx-1",
-      },
-    });
-  };
-
-  const bind = (slotId: string, channelId: string, replace = false) =>
-    instance.quickfireSessionBind({
-      slotId,
-      channelId,
-      agentEntityId: `do:workers/agent-worker:QuickfireAgentWorker:${channelId}`,
-      contextId: `ctx-${channelId}`,
-      ...(replace ? { replace: true } : {}),
-    });
-
-  beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
-  });
-
-  it("binds a slot once and reports the same mapping to a racing second binder", () => {
-    makeSlot("slot-q");
-    const first = bind("slot-q", "quickfire-a");
-    expect(first.created).toBe(true);
-    expect(first.session).toMatchObject({
-      slotId: "slot-q",
-      channelId: "quickfire-a",
-      clearedAt: null,
-      promotedAt: null,
-    });
-
-    const second = bind("slot-q", "quickfire-b");
-    expect(second.created).toBe(false);
-    expect(second.session.channelId).toBe("quickfire-a");
-    expect(instance.quickfireSessionGet("slot-q")?.channelId).toBe("quickfire-a");
-  });
-
-  it("clear detaches the mapping and records archival work without performing it", () => {
-    makeSlot("slot-q");
-    bind("slot-q", "quickfire-a");
-
-    const cleared = instance.quickfireSessionClear("slot-q");
-    expect(cleared?.channelId).toBe("quickfire-a");
-    expect(cleared?.clearedAt).toBeTypeOf("number");
-    expect(instance.quickfireSessionGet("slot-q")).toBeNull();
-    expect(instance.quickfireCleanupPage({ limit: 200 }).items).toEqual([
-      {
-        channelId: "quickfire-a",
-        slotId: "slot-q",
-        agentEntityId: "do:workers/agent-worker:QuickfireAgentWorker:quickfire-a",
-        contextId: "ctx-quickfire-a",
-      },
-    ]);
-
-    // The slot is free to start a fresh conversation before the archival of the
-    // previous one has been acknowledged.
-    expect(bind("slot-q", "quickfire-b").created).toBe(true);
-    expect(instance.quickfireSessionGet("slot-q")?.channelId).toBe("quickfire-b");
-
-    instance.quickfireCleanupAck(["quickfire-a"]);
-    expect(instance.quickfireCleanupPage({ limit: 200 }).items).toEqual([]);
-    expect(instance.quickfireSessionClear("slot-q")).not.toBeNull();
-  });
-
-  it("slotClose enqueues archival for every non-promoted conversation in the subtree", () => {
-    makeSlot("root-q");
-    makeSlot("child-q", "root-q");
-    makeSlot("grandchild-q", "child-q");
-    makeSlot("elsewhere-q");
-    bind("root-q", "quickfire-root");
-    bind("child-q", "quickfire-child");
-    bind("grandchild-q", "quickfire-grandchild");
-    bind("elsewhere-q", "quickfire-elsewhere");
-
-    // Promotion hands the conversation to a chat panel; closing the source slot
-    // must not destroy a transcript that is still open elsewhere (§1.4).
-    expect(instance.quickfireSessionPromote("child-q")?.promotedAt).toBeTypeOf("number");
-
-    instance.slotClose("root-q");
-
-    const queued = instance
-      .quickfireCleanupPage({ closeId: "root-q", limit: 200 })
-      .items.map(({ channelId }) => channelId)
-      .sort();
-    expect(queued).toEqual(["quickfire-grandchild", "quickfire-root"]);
-    expect(instance.quickfireSessionGet("child-q")).toBeNull();
-    expect(instance.quickfireSessionGet("elsewhere-q")?.channelId).toBe("quickfire-elsewhere");
-  });
-
-  it("retargets a live mapping to a new context without disturbing the conversation", () => {
-    makeSlot("slot-a");
-    bind("slot-a", "quickfire-a");
-    const before = instance.quickfireSessionGet("slot-a");
-
-    const retargeted = instance.quickfireSessionRetarget("slot-a", "ctx-after-navigation");
-    expect(retargeted?.contextId).toBe("ctx-after-navigation");
-    // The conversation itself is untouched: a slot that navigates keeps talking.
-    expect(retargeted?.channelId).toBe(before?.channelId);
-    expect(retargeted?.createdAt).toBe(before?.createdAt);
-
-    // Idempotent, and it never resurrects a mapping that is gone.
-    expect(instance.quickfireSessionRetarget("slot-a", "ctx-after-navigation")?.contextId).toBe(
-      "ctx-after-navigation"
-    );
-    expect(instance.quickfireSessionRetarget("missing-slot", "ctx-x")).toBeNull();
-    instance.quickfireSessionClear("slot-a");
-    expect(instance.quickfireSessionRetarget("slot-a", "ctx-y")).toBeNull();
-  });
-
-  it("promote is idempotent and list reports only live mappings", () => {
-    makeSlot("slot-a");
-    makeSlot("slot-b");
-    bind("slot-a", "quickfire-a");
-    bind("slot-b", "quickfire-b");
-
-    const promoted = instance.quickfireSessionPromote("slot-a");
-    expect(instance.quickfireSessionPromote("slot-a")?.promotedAt).toBe(promoted?.promotedAt);
-    expect(instance.quickfireSessionPromote("missing-slot")).toBeNull();
-
-    expect(
-      instance
-        .quickfireSessionList()
-        .map(({ slotId }) => slotId)
-        .sort()
-    ).toEqual(["slot-a", "slot-b"]);
-
-    instance.quickfireSessionClear("slot-b");
-    expect(instance.quickfireSessionList().map(({ slotId }) => slotId)).toEqual(["slot-a"]);
-  });
-
-  it("starting fresh over a promoted slot replaces the mapping without archiving it", () => {
-    makeSlot("slot-q");
-    bind("slot-q", "quickfire-a");
-    instance.quickfireSessionPromote("slot-q");
-
-    // Without `replace` the promoted mapping is preserved so the overlay can
-    // offer "continued in chat panel →" instead of silently starting over.
-    expect(bind("slot-q", "quickfire-b").created).toBe(false);
-
-    const replaced = bind("slot-q", "quickfire-b", true);
-    expect(replaced.created).toBe(true);
-    expect(instance.quickfireSessionGet("slot-q")?.promotedAt).toBeNull();
-    expect(instance.quickfireCleanupPage({ limit: 200 }).items).toEqual([]);
   });
 });
 
