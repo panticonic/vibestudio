@@ -21,6 +21,14 @@ export interface UserNotification {
   createdAt: number;
   /** Producer-scoped monotonic revision for stale retry/tombstone ordering. */
   revision: number;
+  /** When the account acknowledged it; present only in history listings. */
+  acknowledgedAt?: number;
+}
+
+export interface UserNotificationListInput {
+  /** Also return acknowledged entries (the durable history). */
+  includeAcknowledged?: boolean;
+  limit?: number;
 }
 
 export type PutUserNotificationInput = UserNotification;
@@ -55,6 +63,35 @@ export interface AgentMessageNotificationData {
   senderHandle?: string;
   /** The rung the sender chose: "inbox" or "interrupt". */
   rung: "inbox" | "interrupt";
+}
+
+/**
+ * FCM data payload for a pushed inbox entry (messaging plan §4.5 step 5,
+ * §4.10.9). Values are strings because FCM data maps are string-only. The
+ * device deep-links to `{channelId, messageId}` and, on open, acknowledges
+ * `notificationId` — the same acknowledgement any other surface would make.
+ */
+export type PushUserInboxDataPayload = {
+  kind: "user-inbox";
+  notificationId: string;
+  inboxKind: string;
+  title: string;
+  body?: string;
+  priority: "normal" | "high";
+  channelId?: string;
+  messageId?: string;
+  senderParticipantId?: string;
+  senderHandle?: string;
+};
+
+export function isPushUserInboxDataPayload(value: unknown): value is PushUserInboxDataPayload {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record["kind"] === "user-inbox" &&
+    typeof record["notificationId"] === "string" &&
+    typeof record["title"] === "string"
+  );
 }
 
 export function agentMessageNotificationId(messageId: string, userId: string): string {

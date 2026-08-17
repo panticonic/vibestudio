@@ -3134,23 +3134,29 @@ async function main() {
     );
   }
 
+  // ── Push service (created first: the notification service's inbox push
+  // seam and the approval bridge both deliver through it) ──
+  let pushForRevocation: import("./services/pushService.js").PushServiceInternal | null = null;
+  const { createPushService } = await import("./services/pushService.js");
+  const pushResult = createPushService();
+  pushForRevocation = pushResult.internal;
+  container.registerManaged({
+    name: "push",
+    start: async () => pushResult,
+    getServiceDefinition: () => pushResult.definition,
+  });
+
   // ── Notification service ──
   const { createNotificationService } = await import("./services/notificationService.js");
-  const notificationResult = createNotificationService({ eventService });
+  const notificationResult = createNotificationService({
+    eventService,
+    push: pushResult.internal,
+    // Include root's implicit membership, which intentionally has no row.
+    workspaceMemberUserIds: listWorkspaceMemberUserIds,
+  });
   container.registerRpc(notificationResult.definition);
 
-  // ── Push + shell presence services ──
-  let pushForRevocation: import("./services/pushService.js").PushServiceInternal | null = null;
-  {
-    const { createPushService } = await import("./services/pushService.js");
-    const pushResult = createPushService();
-    pushForRevocation = pushResult.internal;
-    container.registerManaged({
-      name: "push",
-      start: async () => pushResult,
-      getServiceDefinition: () => pushResult.definition,
-    });
-  }
+  // ── Shell presence service ──
   {
     const { createShellPresenceService } = await import("./services/shellPresenceService.js");
     const shellPresenceResult = createShellPresenceService();

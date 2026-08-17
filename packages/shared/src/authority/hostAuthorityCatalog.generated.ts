@@ -3937,6 +3937,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "notification.pushUserInbox": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale:
+        "Code-owned escalation reaches one host-verified account's registered devices; the durable inbox entry stays in userland",
+    },
+    capability: null,
+    presentation: null,
+  },
   "notification.reportAction": {
     tier: {
       tier: "open",
@@ -4625,106 +4637,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "quickfire.clear": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "identity",
-      family: "quickfire.lifecycle",
-      rationale:
-        "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage panel command agent conversations",
-      action: "manage the command agent conversation attached to a panel",
-      description:
-        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-      group: "panels",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "quickfire.drainCleanup": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "quickfire.cleanup",
-      rationale:
-        "Executes the durable archival work a closed slot already recorded, acknowledging only rows whose agent actually retired",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage panel command agent conversations",
-      action: "manage the command agent conversation attached to a panel",
-      description:
-        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-      group: "panels",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "quickfire.list": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "identity",
-      family: "quickfire.lifecycle",
-      rationale:
-        "Bounded durable enumeration of the workspace's own slot-to-conversation mappings; exposes no conversation content",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "quickfire.promote": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "identity",
-      family: "quickfire.lifecycle",
-      rationale:
-        "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage panel command agent conversations",
-      action: "manage the command agent conversation attached to a panel",
-      description:
-        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-      group: "panels",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "quickfire.sessionFor": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "identity",
-      family: "quickfire.lifecycle",
-      rationale:
-        "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage panel command agent conversations",
-      action: "manage the command agent conversation attached to a panel",
-      description:
-        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-      group: "panels",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
   "remoteCred.clear": {
     tier: {
       tier: "critical",
@@ -5140,6 +5052,18 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "manage",
       },
     },
+  },
+  "runtime.releaseResourceBindings": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "runtime.resource-binding",
+      rationale:
+        "The runtime owner may end an existing host-validated resource relationship without gaining authority",
+    },
+    capability: null,
+    presentation: null,
   },
   "runtime.reserveEntity": {
     tier: {
@@ -8890,11 +8814,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "workspace.runtime-state.manage": {
-    title: "Manage panel command agent conversations",
-    action: "manage the command agent conversation attached to a panel",
-    description:
-      "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-    group: "panels",
+    title: "Manage running apps and tasks",
+    action: "manage apps, panels, and scheduled tasks that are currently running",
+    description: "Start, stop, or check on apps and tasks running in your workspace",
+    group: "workspace",
     authorityCategory: {
       domain: "automation",
       verb: "manage",

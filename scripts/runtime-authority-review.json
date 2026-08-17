@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:01bf1ed97ff82a640780867268e5ce83c976896d499aecad733a675af58da39a",
+  "censusDigest": "sha256:d889cd90e4e22506d9cb480ef1b63edcec19a8eeb7d1201b50348fe9727060b3",
   "decisions": {
     "host:phoneNativeEndpoint.desktops": {
       "review": "exact-base-phone-provider-desktop-discovery",
@@ -73,6 +73,10 @@
     "host:remoteCred.getCurrent": {
       "review": "trusted-chrome-secret-free-connection-status",
       "change": "Opens the secret-free remote connection status projection to its existing authenticated principals. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
+    },
+    "host:notification.pushUserInbox": {
+      "review": "code-owned-inbox-escalation-device-push",
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",

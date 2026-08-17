@@ -22,6 +22,29 @@ const USER_INBOX_SIGNAL_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 
+/**
+ * The push half of a userland inbox escalation (messaging plan §4.5 step 5).
+ * Userland owns the durable entry; the host owns device registrations, so this
+ * is the one seam where enough of the entry crosses to render a phone
+ * notification and deep-link back into the conversation.
+ */
+export const UserInboxPushRequestSchema = z
+  .object({
+    notificationId: z.string().min(1),
+    kind: z.string().min(1).describe("Inbox entry kind, e.g. `agent.message`."),
+    title: z.string().min(1),
+    body: z.string().optional(),
+    /** `high` marks the sender's `interrupt` rung; `normal` is the `inbox` rung. */
+    priority: z.enum(["normal", "high"]).default("normal"),
+    /** Deep-link facts. `channelId` + `messageId` land the device on the envelope. */
+    channelId: z.string().min(1).optional(),
+    messageId: z.string().min(1).optional(),
+    senderParticipantId: z.string().optional(),
+    senderHandle: z.string().optional(),
+  })
+  .strict();
+export type UserInboxPushRequest = z.infer<typeof UserInboxPushRequestSchema>;
+
 export const NotificationActionSchema = z.object({
   id: z.string().describe("Stable action identifier reported back via reportAction."),
   label: z.string().describe("Button label shown to the user."),
@@ -209,5 +232,37 @@ export const notificationMethods = defineServiceMethods({
     authority: { principals: ["code", "host"] },
     access: USER_INBOX_SIGNAL_ACCESS,
     examples: [{ args: ["usr_alice"] }],
+  },
+  pushUserInbox: {
+    agentFacing: false,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale:
+        "Code-owned escalation reaches one host-verified account's registered devices; the durable inbox entry stays in userland",
+    },
+    description:
+      "Code/host-only: push one durable userland inbox entry to a host-verified account's registered devices with a deep link back to its conversation. Returns the number of devices reached.",
+    args: z.tuple([z.string().min(1), UserInboxPushRequestSchema]),
+    returns: z.number(),
+    authority: { principals: ["code", "host"] },
+    access: USER_INBOX_SIGNAL_ACCESS,
+    examples: [
+      {
+        args: [
+          "usr_alice",
+          {
+            notificationId: "agent.message:say:call-1:usr_alice",
+            kind: "agent.message",
+            title: "Briefing ready",
+            priority: "normal",
+            channelId: "channel-1",
+            messageId: "say:call-1",
+          },
+        ],
+      },
+    ],
   },
 });

@@ -686,6 +686,16 @@ const UserNotificationSchema = z
     data: PolymorphicJsonPayloadSchema.optional(),
     createdAt: z.number(),
     revision: z.number().int().nonnegative(),
+    /** Set once the account acknowledged the entry (present only when history is requested). */
+    acknowledgedAt: z.number().optional(),
+  })
+  .strict();
+
+const UserNotificationListInputSchema = z
+  .object({
+    /** Also return acknowledged entries — the inbox is the durable record (messaging plan §4.10.8). */
+    includeAcknowledged: z.boolean().optional(),
+    limit: z.number().int().positive().max(500).optional(),
   })
   .strict();
 
@@ -762,7 +772,14 @@ export type InspectChannelRosterInput = z.infer<typeof InspectChannelRosterInput
  * exact string `notify` accepts, so discovering an agent and addressing it are
  * the same act rather than two vocabularies a caller must translate between.
  */
-export const AgentDirectoryStatusSchema = z.enum(["running", "idle", "hibernated", "terminal"]);
+/**
+ * Directory status flips on lifecycle EVENTS only (turn opened/closed, roster
+ * leave). There is deliberately no `hibernated`: no hibernation event exists,
+ * and deriving one from elapsed time would be a clock-driven state (plan D5).
+ * `idle` covers a Durable Object that may have been evicted — either wakes on
+ * the next envelope.
+ */
+export const AgentDirectoryStatusSchema = z.enum(["running", "idle", "terminal"]);
 export type AgentDirectoryStatus = z.infer<typeof AgentDirectoryStatusSchema>;
 
 export const AgentDirectoryEntrySchema = z
@@ -885,8 +902,9 @@ export const gadMethods = defineServiceMethods({
     access: writeAccess,
   },
   listUserNotificationsForMe: {
-    description: "List durable notifications for the host-verified current account.",
-    args: z.tuple([]),
+    description:
+      "List durable notifications for the host-verified current account; unacknowledged only unless includeAcknowledged is set.",
+    args: z.tuple([UserNotificationListInputSchema.optional()]),
     returns: z.array(UserNotificationSchema),
     access: readAccess,
   },

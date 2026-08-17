@@ -5398,6 +5398,26 @@
         "capability": null,
         "presentation": null
       },
+      "pushUserInbox": {
+        "authority": {
+          "principals": [
+            "code",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "notification.control",
+          "rationale": "Code-owned escalation reaches one host-verified account's registered devices; the durable inbox entry stays in userland"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "reportAction": {
         "authority": {
           "inherits": true
@@ -7213,158 +7233,6 @@
       }
     }
   },
-  "quickfire": {
-    "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
-    },
-    "methods": {
-      "clear": {
-        "authority": {
-          "principals": [
-            "user",
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "destructive"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "identity",
-          "family": "quickfire.lifecycle",
-          "rationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage panel command agent conversations",
-          "action": "manage the command agent conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-          "group": "panels",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "drainCleanup": {
-        "authority": {
-          "principals": [
-            "user",
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "destructive"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "supervision",
-          "family": "quickfire.cleanup",
-          "rationale": "Executes the durable archival work a closed slot already recorded, acknowledging only rows whose agent actually retired"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage panel command agent conversations",
-          "action": "manage the command agent conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-          "group": "panels",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "list": {
-        "authority": {
-          "principals": [
-            "user",
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "identity",
-          "family": "quickfire.lifecycle",
-          "rationale": "Bounded durable enumeration of the workspace's own slot-to-conversation mappings; exposes no conversation content"
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "promote": {
-        "authority": {
-          "principals": [
-            "user",
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "identity",
-          "family": "quickfire.lifecycle",
-          "rationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage panel command agent conversations",
-          "action": "manage the command agent conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-          "group": "panels",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "sessionFor": {
-        "authority": {
-          "principals": [
-            "user",
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "identity",
-          "family": "quickfire.lifecycle",
-          "rationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage panel command agent conversations",
-          "action": "manage the command agent conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
-          "group": "panels",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      }
-    }
-  },
   "reviewedClosure": {
     "service": {
       "principals": [
@@ -8583,6 +8451,27 @@
             "verb": "manage"
           }
         }
+      },
+      "releaseResourceBindings": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "runtime.resource-binding",
+          "rationale": "The runtime owner may end an existing host-validated resource relationship without gaining authority"
+        },
+        "capability": null,
+        "presentation": null
       },
       "reserveEntity": {
         "authority": {

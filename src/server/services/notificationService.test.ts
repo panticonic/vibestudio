@@ -159,4 +159,81 @@ describe("server notification service", () => {
     });
     expect(eventService.emit).not.toHaveBeenCalled();
   });
+
+  it("pushes an inbox entry only to the addressed member's own devices", async () => {
+    const eventService = { emit: vi.fn(), emitToUser: vi.fn(() => true) };
+    const push = {
+      listRegistrations: vi.fn(() => [
+        { userId: "usr_alice", clientId: "phone-a", platform: "ios", token: "t1", registeredAt: 1 },
+        {
+          userId: "usr_alice",
+          clientId: "tablet-a",
+          platform: "android",
+          token: "t2",
+          registeredAt: 1,
+        },
+        { userId: "usr_bob", clientId: "phone-b", platform: "ios", token: "t3", registeredAt: 1 },
+      ]),
+      sendToTargets: vi.fn(async (targets: Array<{ userId: string; clientId: string }>) =>
+        targets.map((target) => ({
+          ...target,
+          platform: "ios" as const,
+          sent: true,
+          logOnly: false,
+        }))
+      ),
+    };
+    const service = createNotificationService({
+      eventService: eventService as never,
+      push: push as never,
+      workspaceMemberUserIds: () => ["usr_alice", "usr_bob"],
+    }).definition;
+    const worker = createVerifiedCaller("worker:news", "worker", null, null, null);
+
+    const request = {
+      notificationId: "agent.message:say:call-1:usr_alice",
+      kind: "agent.message",
+      title: "Briefing ready",
+      body: "3 stories",
+      priority: "high",
+      channelId: "ch-news",
+      messageId: "say:call-1",
+      senderParticipantId: "do:news",
+      senderHandle: "news",
+    };
+    const reached = await service.handler({ caller: worker }, "pushUserInbox", [
+      "usr_alice",
+      request,
+    ]);
+
+    expect(reached).toBe(2);
+    expect(push.sendToTargets).toHaveBeenCalledWith(
+      [
+        { userId: "usr_alice", clientId: "phone-a" },
+        { userId: "usr_alice", clientId: "tablet-a" },
+      ],
+      {
+        title: "Briefing ready",
+        body: "3 stories",
+        category: "vibestudio-user-inbox",
+        data: {
+          kind: "user-inbox",
+          notificationId: "agent.message:say:call-1:usr_alice",
+          inboxKind: "agent.message",
+          title: "Briefing ready",
+          body: "3 stories",
+          priority: "high",
+          channelId: "ch-news",
+          messageId: "say:call-1",
+          senderParticipantId: "do:news",
+          senderHandle: "news",
+        },
+      }
+    );
+    // A non-member reaches nobody, silently: the durable entry is the record.
+    await expect(
+      service.handler({ caller: worker }, "pushUserInbox", ["usr_carol", request])
+    ).resolves.toBe(0);
+    expect(push.sendToTargets).toHaveBeenCalledTimes(1);
+  });
 });

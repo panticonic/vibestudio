@@ -13,6 +13,9 @@ import type { NotificationPayload } from "@vibestudio/shared/events";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { UserInboxPushRequest } from "@vibestudio/service-schemas/notification";
+import type { PushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
+import type { PushServiceInternal } from "./pushService.js";
 
 /**
  * Internal interface for server-side code to push notifications
@@ -24,11 +27,65 @@ export interface NotificationServiceInternal {
   waitForAction(id: string, timeoutMs?: number): Promise<string>;
 }
 
-export function createNotificationService(deps: { eventService: EventService }): {
+export interface NotificationServiceDeps {
+  eventService: EventService;
+  /**
+   * The push half of a userland inbox escalation (messaging plan §4.5 step 5).
+   * Optional so callers without a device registry (tests, headless hosts) still
+   * get the in-app surfaces; `pushUserInbox` then reaches zero devices.
+   */
+  push?: Pick<PushServiceInternal, "listRegistrations" | "sendToTargets">;
+  /** This child's workspace member userIds — the only accounts a push may reach. */
+  workspaceMemberUserIds?: () => readonly string[];
+}
+
+/** Turn one inbox push request into the string-only FCM data map. */
+export function userInboxPushData(request: UserInboxPushRequest): PushUserInboxDataPayload {
+  return {
+    kind: "user-inbox",
+    notificationId: request.notificationId,
+    inboxKind: request.kind,
+    title: request.title,
+    ...(request.body ? { body: request.body } : {}),
+    priority: request.priority ?? "normal",
+    ...(request.channelId ? { channelId: request.channelId } : {}),
+    ...(request.messageId ? { messageId: request.messageId } : {}),
+    ...(request.senderParticipantId ? { senderParticipantId: request.senderParticipantId } : {}),
+    ...(request.senderHandle ? { senderHandle: request.senderHandle } : {}),
+  };
+}
+
+export function createNotificationService(deps: NotificationServiceDeps): {
   definition: ServiceDefinition;
   internal: NotificationServiceInternal;
 } {
   const { eventService } = deps;
+
+  /**
+   * Push one durable inbox entry to a member's registered devices. The host
+   * never stores the entry — userland does — it only forwards what a phone
+   * needs to render it and deep-link back. Non-members and unknown accounts
+   * reach nobody; that is a silent zero, not an error, because the durable
+   * entry is already the record and the caller has nothing to retry.
+   */
+  const pushUserInbox = async (userId: string, request: UserInboxPushRequest): Promise<number> => {
+    if (!deps.push) return 0;
+    if (deps.workspaceMemberUserIds && !deps.workspaceMemberUserIds().includes(userId)) {
+      return 0;
+    }
+    const targets = deps.push
+      .listRegistrations()
+      .filter((registration) => registration.userId === userId)
+      .map((registration) => ({ userId: registration.userId, clientId: registration.clientId }));
+    if (targets.length === 0) return 0;
+    const results = await deps.push.sendToTargets(targets, {
+      title: request.title,
+      ...(request.body ? { body: request.body } : {}),
+      category: "vibestudio-user-inbox",
+      data: userInboxPushData(request),
+    });
+    return results.filter((result) => result.sent).length;
+  };
   const emit = <E extends "notification:show" | "notification:dismiss" | "notification:action">(
     event: E,
     payload: Parameters<EventService["emit"]>[1],
@@ -170,6 +227,7 @@ export function createNotificationService(deps: { eventService: EventService }):
         eventService.emitToUser(userId, "user-notifications-changed", {
           changedAt: Date.now(),
         }),
+      pushUserInbox: (_ctx, [userId, request]) => pushUserInbox(userId, request),
     }),
   };
 

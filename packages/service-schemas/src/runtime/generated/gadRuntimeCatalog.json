@@ -70,15 +70,38 @@
     "returnsSchema": {}
   },
   "listUserNotificationsForMe": {
-    "description": "List durable notifications for the host-verified current account.",
+    "description": "List durable notifications for the host-verified current account; unacknowledged only unless includeAcknowledged is set.",
     "access": {
       "sensitivity": "read"
     },
     "argsSchema": {
       "type": "array",
-      "minItems": 0,
-      "maxItems": 0,
-      "items": []
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "includeAcknowledged": {
+                  "type": "boolean"
+                },
+                "limit": {
+                  "type": "integer",
+                  "exclusiveMinimum": true,
+                  "minimum": 0,
+                  "maximum": 500
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
     },
     "returnsSchema": {
       "type": "array",
@@ -137,6 +160,9 @@
           "revision": {
             "type": "integer",
             "minimum": 0
+          },
+          "acknowledgedAt": {
+            "type": "number"
           }
         },
         "required": [
@@ -235,6 +261,9 @@
             "revision": {
               "type": "integer",
               "minimum": 0
+            },
+            "acknowledgedAt": {
+              "type": "number"
             }
           },
           "required": [
@@ -304,6 +333,9 @@
         "revision": {
           "type": "integer",
           "minimum": 0
+        },
+        "acknowledgedAt": {
+          "type": "number"
         }
       },
       "required": [
@@ -6840,7 +6872,6 @@
               "enum": [
                 "running",
                 "idle",
-                "hibernated",
                 "terminal"
               ]
             },
@@ -6941,7 +6972,6 @@
                 "enum": [
                   "running",
                   "idle",
-                  "hibernated",
                   "terminal"
                 ]
               },
@@ -7104,7 +7134,6 @@
                 "enum": [
                   "running",
                   "idle",
-                  "hibernated",
                   "terminal"
                 ]
               },
@@ -7219,7 +7248,6 @@
                   "enum": [
                     "running",
                     "idle",
-                    "hibernated",
                     "terminal"
                   ],
                   "nullable": true

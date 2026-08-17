@@ -4000,53 +4000,11 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireCleanupAck",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
       "source": "vibestudio/internal",
-      "method": "quickfireCleanupAck",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "destructive",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireCleanupPage",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "quickfireCleanupPage",
+      "method": "runtimeResourceBindingEntities",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
@@ -4078,17 +4036,17 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "host-only-runtime-resource-binding-lookup",
+        "change": "Returns active entity ids bound to an exact resource kind and bounded id list so the runtime can apply resource-owned lifecycle events. It is a host-only read and exposes no user content or capability grant material."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionBind",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsRelease",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
       "source": "vibestudio/internal",
-      "method": "quickfireSessionBind",
+      "method": "runtimeResourceBindingsRelease",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
@@ -4120,143 +4078,17 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "host-only-runtime-resource-binding-release",
+        "change": "Deletes every durable resource relationship owned by one runtime entity. This removes authority and lifecycle coupling only; it cannot create a relationship or grant a capability."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionClear",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
       "source": "vibestudio/internal",
-      "method": "quickfireSessionClear",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "destructive",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionGet",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "quickfireSessionGet",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionList",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "quickfireSessionList",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionPromote",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "quickfireSessionPromote",
+      "method": "runtimeResourceBindingsReplace",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
@@ -4288,50 +4120,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionRetarget",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "quickfireSessionRetarget",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": "Records that a live quickfire slot mapping now names a different context, after the host re-minted that conversation's authority for the new context. It moves no conversation and creates no mapping; the internal write policy is the same as quickfireSessionPromote."
+        "review": "host-only-runtime-resource-binding-commit",
+        "change": "Commits the generic resource relationships already validated by runtime.createEntity into the workspace runtime registry. The method is host-only, requires runtime-state authority, accepts no executable policy, and records only entity, resource, capability, and agent-channel coordinates."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -18151,6 +17941,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:notification.pushUserInbox",
+      "rpcPlane": "host-service",
+      "owner": "notification",
+      "method": "pushUserInbox",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "notification.control",
+      "reviewRationale": "Code-owned escalation reaches one host-verified account's registered devices; the durable inbox entry stays in userland",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:notification.pushUserInbox"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:notification.pushUserInbox),allOf(capability(code,service:notification.pushUserInbox),workspace-member))",
+      "r3b": {
+        "review": "code-owned-inbox-escalation-device-push",
+        "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      },
+      "capability": "service:notification.pushUserInbox",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:notification.reportAction",
       "rpcPlane": "host-service",
       "owner": "notification",
@@ -20513,236 +20348,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:quickfire.clear",
-      "rpcPlane": "host-service",
-      "owner": "quickfire",
-      "method": "clear",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "identity",
-      "mechanismFamily": "quickfire.lifecycle",
-      "reviewRationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:quickfire.clear"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "destructive",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.clear),allOf(capability(user,service:quickfire.clear),workspace-member),allOf(capability(code,service:quickfire.clear),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:quickfire.clear",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:quickfire.drainCleanup",
-      "rpcPlane": "host-service",
-      "owner": "quickfire",
-      "method": "drainCleanup",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "quickfire.cleanup",
-      "reviewRationale": "Executes the durable archival work a closed slot already recorded, acknowledging only rows whose agent actually retired",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:quickfire.drainCleanup"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "destructive",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.drainCleanup),allOf(capability(user,service:quickfire.drainCleanup),workspace-member),allOf(capability(code,service:quickfire.drainCleanup),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:quickfire.drainCleanup",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:quickfire.list",
-      "rpcPlane": "host-service",
-      "owner": "quickfire",
-      "method": "list",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "identity",
-      "mechanismFamily": "quickfire.lifecycle",
-      "reviewRationale": "Bounded durable enumeration of the workspace's own slot-to-conversation mappings; exposes no conversation content",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:quickfire.list"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.list),allOf(capability(user,service:quickfire.list),workspace-member),allOf(capability(code,service:quickfire.list),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:quickfire.list",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:quickfire.promote",
-      "rpcPlane": "host-service",
-      "owner": "quickfire",
-      "method": "promote",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "identity",
-      "mechanismFamily": "quickfire.lifecycle",
-      "reviewRationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:quickfire.promote"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.promote),allOf(capability(user,service:quickfire.promote),workspace-member),allOf(capability(code,service:quickfire.promote),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:quickfire.promote",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:quickfire.sessionFor",
-      "rpcPlane": "host-service",
-      "owner": "quickfire",
-      "method": "sessionFor",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "identity",
-      "mechanismFamily": "quickfire.lifecycle",
-      "reviewRationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:quickfire.sessionFor"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.sessionFor),allOf(capability(user,service:quickfire.sessionFor),workspace-member),allOf(capability(code,service:quickfire.sessionFor),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:quickfire.sessionFor",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:remoteCred.clear",
       "rpcPlane": "host-service",
       "owner": "remoteCred",
@@ -22100,6 +21705,52 @@
         "change": "Adds gated recovery of one exact active Durable Object execution under the trusted runtime host. Expected execution digests fence stale requests, and the receiver either rematerializes the retained immutable build or performs the explicitly selected replacement strategy without changing durable ownership."
       },
       "capability": "service:runtime.recoverExecution",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.releaseResourceBindings",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "releaseResourceBindings",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "runtime.resource-binding",
+      "reviewRationale": "The runtime owner may end an existing host-validated resource relationship without gaining authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.releaseResourceBindings"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:runtime.releaseResourceBindings),allOf(capability(user,service:runtime.releaseResourceBindings),workspace-member),allOf(capability(code,service:runtime.releaseResourceBindings),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:runtime.releaseResourceBindings",
       "parityAssertion": "generated-census:host-authority"
     },
     {
