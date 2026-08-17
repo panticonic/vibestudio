@@ -15,6 +15,13 @@ export default defineConfig({
         { project: "host", root: __dirname },
       ],
     ],
+    // The host suite exercises real SQLite stores, workerd processes, and
+    // build graphs. Their isolated tests are bounded, but unbounded file
+    // parallelism can starve both the five-second default deadline and
+    // Vitest's worker heartbeat. Match the proven userland scheduling budget
+    // so machine core count is not a correctness dependency.
+    testTimeout: 30_000,
+    maxWorkers: 4,
     include: [
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
