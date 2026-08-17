@@ -61,6 +61,67 @@ evidence supports and more than the problem requires. Three things are struck:
   store goes behind it. See Phase C for why the remainder is not worth two
   hand-rolled HTTP implementations.
 
+*Prefetch, reopened (rev. 6).* Rev. 5 set a bar: prefetch returns only if
+first-open latency turns out to be the dominant complaint once the durable store
+has landed, and only with its own evidence. Both halves happened.
+
+The store landed and warm opens did become free; cold opens did not, and they
+are what the panel-loading complaint is about. Measured on device: **92
+sequential `gateway.fetch` calls for ~1.4 MB**, with the server spending ~7 ms
+per call against ~560 ms observed per call, and the RPC dispatcher accounting for
+~1 ms (0.2%). Nothing either end *computes* explains the gap. The round-trip
+count is the whole cost, so it is the only lever.
+
+What rev. 5 was right to strike is still struck. The prize turned out not to
+require the protocol stack: the build-pinned namespace
+`/__vibestudio/panel-build/<buildKey>/` is already panel-reachable and already
+content-addressed, so an inventory (`__manifest.json`) and a framed multi-blob
+stream (`__bundle?want=<indices>`) live *inside* it and add no service method, no
+authority surface, and no new identity concept. A build's initial artifacts cost
+two round trips instead of one per file.
+
+What that is worth END TO END, measured on device against the same flow without
+it: **66 pipe round trips and 934 KB become 50 round trips and 1.15 MB**. It is a
+clear win where a round trip costs ~560 ms and roughly a wash on a LAN link where
+one costs ~40 ms. The headline "92 calls" is the cost of a cold *panel build*
+fetch, not of everything a panel open touches — see the icon finding below for
+where the rest of it goes.
+
+Four measurements shaped the design, and each is recorded because any one alone
+would have produced a worse one:
+
+- The same real build is **35.9 MB across 366 artifacts**, of which **180 files /
+  28.1 MB are source maps** a WebView never requests, while the initial set is
+  **22 files / 1.77 MB**. Prefetching everything the device lacked would have
+  moved an order of magnitude more bytes than the trips it saved were worth.
+- Selecting by manifest **index** rather than path costs 340 B for 91 artifacts
+  where paths cost 1,715 B, and the framing overhead of the bundle itself is
+  0.07%.
+- **Identity bytes were a regression**: uncompressed, first paint went from 1.9 s
+  to 4.2 s, because saving ninety round trips does not pay for four times the
+  payload at 40 ms a trip. The bundle carries gzip derivatives, and the record's
+  second digest is what lets it do so without giving up verification.
+- **Committing inline stalled the transfer.** Writing each blob before reading
+  the next held the pipe idle across a ~1 MB artifact's base64 hop: 157 KB/s
+  against 950 KB/s for a build of smaller files over the same link in the same
+  run. Storage now runs alongside the transfer.
+
+*Where the remaining round trips are (rev. 6).* With the build prefetched, the
+largest single category left is **`/__vibestudio/unit-icon`: 20 of 57 GETs**, one
+per unit shown in the launcher, each a few hundred bytes. They are served
+`private, no-cache`, so the durable store keeps none of them and every launcher
+render re-fetches all of them. They are content-addressed in everything but their
+URL — the response already carries the icon's `contentHash` as an ETag. Making
+that URL name the content (so the entry is immutable, like every other artifact
+here) is the next lever, and it is worth more than anything left in the bundle
+path. Favicons have the same shape for a smaller prize: `public, max-age=86400`
+without `immutable`, which the façade correctly refuses to store.
+
+One earlier decision had to be undone for this to be possible at all: build
+subresources were keyed by a digest of the forwarded request headers, so their
+cache key could not be computed before the fetch it was meant to avoid. They are
+content-addressed by construction, so the key is now the path.
+
 *Not* struck: Phase E, the inbound base64 hop on a **cold** open. It was briefly
 cut with the rest and has been restored, because everything above only fixes the
 warm path — and because a phase whose status is "gated" quietly becomes a phase
@@ -1274,6 +1335,9 @@ cold-miss verify-then-serve latency bound.*
 | *(rev. 2)* Separate desktop dynamic-forwarding conformance tests | — | One suite, because there is one contract (F, R19) |
 | *(rev. 4)* The artifact-manifest surface, dual representation identities, `fetchArtifactRepresentation`, the build-store derivative service, and route canonicalization (B6) | — | **Struck in rev. 5** — all of it existed to serve background prefetch, which is punted. Digest-on-write needs no declared identity |
 | *(rev. 4)* Background prefetch, pinning, and the sync settings surface | — | **Struck in rev. 5.** A durable store makes warm opens free; prefetch only made *first* opens free |
+| *(rev. 5)* Prefetch as punted | §0 | **Reopened in rev. 6** on the pre-registered evidence: 92 round trips per cold build fetch, ~560 ms each, ~7 ms of server work each. Two surfaces inside the existing build-pinned namespace, no new protocol (§0) |
+| *(rev. 6)* "Identity bytes, the pipe is not the bottleneck" | `blobBundle.ts` | Gzip derivatives plus a per-record payload digest — identity measured as 1.9 s → 4.2 s to first paint (§0) |
+| *(rev. 5)* Header-digest cache keys for build subresources | `packages/shared/src/panel/assetPathPolicy.ts` | The path, which is already content-addressed — a header-derived key cannot be computed before the fetch it exists to avoid |
 | *(rev. 4)* The native loopback server (iOS `NWListener` / Android `ServerSocket`) | — | **Struck in rev. 5.** The JS server stays; the durable store goes behind it |
 | *(rev. 4)* Offline rendering (D2) and its non-authoritative runtime contract | — | **Struck in rev. 5** as a goal |
 | `StoredShellCredential` `schemaVersion: 3` (both-pairings-required) | `packages/mobile-webrtc/src/storedCredential.ts:28-44` | `StoredMobileConnection` phase union, `schemaVersion: 4` (R26) |
@@ -1296,9 +1360,11 @@ cold-miss verify-then-serve latency bound.*
   (P6). Native receives opaque keys and handles and makes no decisions.
 - **A protocol change for concurrent pipes.** Not required — §2.4 R4.
 - **Background prefetch, artifact manifests, and representation protocols.**
-  Struck in rev. 5. If Phase 0 later shows *first*-open latency is the dominant
-  complaint after the durable store lands, prefetch returns as its own plan with
-  its own evidence — not as a layer smuggled in under caching.
+  Struck in rev. 5, and **reopened in rev. 6 on the evidence rev. 5 asked for**
+  (below). What stayed struck is the part that made it expensive: there is still
+  no artifact-manifest RPC, no dual representation identity, no
+  representation-addressed retrieval method, and no build-store derivative
+  service.
 - **A native loopback server.** The remaining outbound base64 hop on a cache hit
   does not justify two hand-rolled HTTP implementations and a third URL
   canonicalizer. (The *inbound* hop on a cold open is a different question, and
