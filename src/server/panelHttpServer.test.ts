@@ -322,6 +322,9 @@ describe("PanelHttpServer build cache", () => {
       createHash("sha256").update(content).digest("hex");
     const lazy = "console.log('lazy')";
     const sharedCss = "body { color: rebeccapurple; }";
+    // Past the size where a gzip header pays for itself, and highly compressible
+    // — a real panel bundle is both.
+    const big = `export const table = ${JSON.stringify("ab".repeat(2048))};`;
     const prefetchBuild = {
       ...buildResult,
       artifacts: [
@@ -340,6 +343,15 @@ describe("PanelHttpServer build cache", () => {
           integrity: `sha256-${digestOf(lazy)}`,
         },
         {
+          path: "big.js",
+          role: "asset",
+          contentType: "application/javascript; charset=utf-8",
+          encoding: "utf8",
+          content: big,
+          byteLength: Buffer.byteLength(big),
+          integrity: `sha256-${digestOf(big)}`,
+        },
+        {
           path: `shared-style-${digestOf(sharedCss)}.css`,
           role: "shared-style",
           contentType: "text/css; charset=utf-8",
@@ -351,7 +363,7 @@ describe("PanelHttpServer build cache", () => {
       ],
       metadata: {
         ...buildResult.metadata,
-        bundleReport: { initialArtifacts: ["bundle.js", "bundle.css"] },
+        bundleReport: { initialArtifacts: ["bundle.js", "bundle.css", "big.js"] },
       },
     } as unknown as import("./buildV2/buildStore.js").BuildResult;
 
@@ -390,6 +402,7 @@ describe("PanelHttpServer build cache", () => {
         "bundle.js",
         "bundle.css",
         "chunk-lazy.js",
+        "big.js",
         `shared-style-${digestOf(sharedCss)}.css`,
       ]);
       const bundleJs = artifacts.find((artifact) => artifact.path === "bundle.js");
@@ -410,6 +423,7 @@ describe("PanelHttpServer build cache", () => {
       expect(initial).toEqual([
         "bundle.js",
         "bundle.css",
+        "big.js",
         `shared-style-${digestOf(sharedCss)}.css`,
       ]);
     });
@@ -464,6 +478,44 @@ describe("PanelHttpServer build cache", () => {
         digestOf("console.log('hi')"),
       ]);
       expect(Buffer.from(blobs[1]!.bytes).toString("utf8")).toBe("console.log('hi')");
+    });
+
+    it("frames gzip derivatives when asked, and says so per record", async () => {
+      // Identity bytes measured as a net loss on a low-latency link: saving
+      // ninety round trips does not pay for four times the payload. The record
+      // keeps naming the artifact by its RAW digest, so it lands under the same
+      // key either way.
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__bundle?want=4&enc=gzip`
+      );
+
+      expect(response.headersWritten?.["x-vibestudio-bundle-encoding"]).toBe("gzip");
+      const reader = createBlobBundleReader();
+      const [blob] = reader.push(Buffer.concat(response.chunks ?? []));
+      reader.end();
+      expect(blob!.digest).toBe(digestOf(big));
+      expect(blob!.payloadDigest).not.toBe(blob!.digest);
+      expect(blob!.bytes.byteLength).toBeLessThan(Buffer.byteLength(big) / 4);
+      expect(gunzipSync(Buffer.from(blob!.bytes)).toString("utf8")).toBe(big);
+      expect(createHash("sha256").update(Buffer.from(blob!.bytes)).digest("hex")).toBe(
+        blob!.payloadDigest
+      );
+    });
+
+    it("leaves artifacts that compression would not help as identity", async () => {
+      // bundle.js here is well under the size where a gzip header pays for
+      // itself, and a build's images are already compressed. An identity record
+      // announces itself by having equal digests, so one response can mix both.
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__bundle?want=2&enc=gzip`
+      );
+      const reader = createBlobBundleReader();
+      const [blob] = reader.push(Buffer.concat(response.chunks ?? []));
+      reader.end();
+      expect(blob!.payloadDigest).toBe(blob!.digest);
+      expect(Buffer.from(blob!.bytes).toString("utf8")).toBe("body{}");
     });
 
     it("ignores duplicate and out-of-range indices instead of failing the transfer", async () => {

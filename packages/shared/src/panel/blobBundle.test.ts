@@ -115,6 +115,33 @@ describe("blob bundle", () => {
     expect(encodeBlobRecord(A, bytes(1, 2, 3)).byteLength).toBe(BLOB_RECORD_HEADER_BYTES + 3);
   });
 
+  it("carries the payload's own digest beside the artifact's", () => {
+    // What makes a compressed transfer verifiable: the receiver stores the blob
+    // under `digest` but can only check the bytes it actually received.
+    const reader = createBlobBundleReader();
+    const [blob] = reader.push(encodeBlobRecord(A, bytes(1, 2, 3), B));
+    reader.end();
+    expect(blob).toMatchObject({ digest: A, payloadDigest: B });
+  });
+
+  it("reports an identity record by making both digests equal", () => {
+    // This equality IS the signal that a record was not compressed — a gzip
+    // payload cannot hash to the digest of the bytes it encodes — so a bundle
+    // can mix the two without any per-record encoding field.
+    const reader = createBlobBundleReader();
+    const [blob] = reader.push(encodeBlobRecord(A, bytes(1, 2, 3)));
+    reader.end();
+    expect(blob!.payloadDigest).toBe(blob!.digest);
+  });
+
+  it("refuses a record whose payload digest is malformed", () => {
+    expect(() => encodeBlobRecord(A, bytes(1), "nope")).toThrow(BlobBundleError);
+    const reader = createBlobBundleReader();
+    const record = encodeBlobRecord(A, bytes(1), B);
+    record[70] = "Z".charCodeAt(0);
+    expect(() => reader.push(record)).toThrow(/not a sha256 hex digest/);
+  });
+
   it("stays linear when the stream arrives in many small chunks", () => {
     // The pipe delivers 16 KiB messages, so a reader that re-concatenates its
     // residual per push is O(n^2) across a multi-MB transfer — on the phone's JS

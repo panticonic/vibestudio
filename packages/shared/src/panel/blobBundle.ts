@@ -12,8 +12,15 @@
  * Wire shape, repeated until the stream ends:
  *
  * ```
- * [digest: 64 bytes ASCII hex][byteLength: u32 BE][payload: byteLength bytes]
+ * [name: 64 bytes ASCII hex][payload digest: 64][byteLength: u32 BE][payload]
  * ```
+ *
+ * Two digests, because the payload is not always the artifact. `name` is the
+ * artifact's identity — the sha256 of its raw bytes, matching the build
+ * manifest's `integrity` — and is what the receiver stores it under. `payload
+ * digest` is the sha256 of the bytes actually framed here, which differ when the
+ * sender compressed them. For an identity record the two are equal, so the
+ * sender need not hash anything it does not already know.
  *
  * Deliberately minimal:
  *
@@ -36,12 +43,15 @@
  * mislabeled payload on its own. Hashing again in Hermes would cost more CPU
  * than the transfer saves (and starving that thread is what breaks keepalives),
  * so the receiver should instead compare the digest the native commit returns
- * against the digest this record claimed, and discard on mismatch.
+ * against this record's `payloadDigest`, and discard on mismatch. Carrying that
+ * separately from `name` is what lets a sender compress without giving the
+ * check up.
  */
 
-/** `[digest: 64][byteLength: u32]` */
-export const BLOB_RECORD_HEADER_BYTES = 68;
+/** `[name: 64][payload digest: 64][byteLength: u32]` */
+export const BLOB_RECORD_HEADER_BYTES = 132;
 const DIGEST_HEX_BYTES = 64;
+const LENGTH_OFFSET = DIGEST_HEX_BYTES * 2;
 
 /** A blob is refused rather than truncated: a payload we cannot frame is a bug. */
 export class BlobBundleError extends Error {
@@ -54,22 +64,36 @@ export class BlobBundleError extends Error {
 
 const HEX = /^[0-9a-f]{64}$/u;
 
-/** Encode one record. `digest` is lowercase SHA-256 hex, without any prefix. */
-export function encodeBlobRecord(digest: string, payload: Uint8Array): Uint8Array {
-  if (!HEX.test(digest)) {
-    throw new BlobBundleError(`blob digest must be 64 lowercase hex chars (got ${digest.length})`);
+/**
+ * Encode one record. Digests are lowercase SHA-256 hex, without any prefix.
+ * `payloadDigest` defaults to `digest` — correct exactly when the payload is the
+ * artifact's own bytes.
+ */
+export function encodeBlobRecord(
+  digest: string,
+  payload: Uint8Array,
+  payloadDigest: string = digest
+): Uint8Array {
+  for (const value of [digest, payloadDigest]) {
+    if (!HEX.test(value)) {
+      throw new BlobBundleError(`blob digest must be 64 lowercase hex chars (got ${value.length})`);
+    }
   }
   const record = new Uint8Array(BLOB_RECORD_HEADER_BYTES + payload.byteLength);
   for (let index = 0; index < DIGEST_HEX_BYTES; index++) {
     record[index] = digest.charCodeAt(index);
+    record[DIGEST_HEX_BYTES + index] = payloadDigest.charCodeAt(index);
   }
-  new DataView(record.buffer).setUint32(DIGEST_HEX_BYTES, payload.byteLength);
+  new DataView(record.buffer).setUint32(LENGTH_OFFSET, payload.byteLength);
   record.set(payload, BLOB_RECORD_HEADER_BYTES);
   return record;
 }
 
 export interface DecodedBlob {
+  /** The artifact's identity — what the receiver stores this under. */
   digest: string;
+  /** sha256 of `bytes` as framed; equals `digest` for an identity record. */
+  payloadDigest: string;
   bytes: Uint8Array;
 }
 
@@ -137,7 +161,7 @@ export function createBlobBundleReader(options?: {
       for (;;) {
         if (available() < BLOB_RECORD_HEADER_BYTES) break;
         const view = new DataView(store.buffer, store.byteOffset + readOffset, available());
-        const byteLength = view.getUint32(DIGEST_HEX_BYTES);
+        const byteLength = view.getUint32(LENGTH_OFFSET);
         if (byteLength > maxBlobBytes) {
           throw new BlobBundleError(
             `blob record claims ${byteLength} bytes, above the ${maxBlobBytes}-byte cap`
@@ -146,14 +170,17 @@ export function createBlobBundleReader(options?: {
         const total = BLOB_RECORD_HEADER_BYTES + byteLength;
         if (available() < total) break;
         let digest = "";
+        let payloadDigest = "";
         for (let index = 0; index < DIGEST_HEX_BYTES; index++) {
           digest += String.fromCharCode(store[readOffset + index]!);
+          payloadDigest += String.fromCharCode(store[readOffset + DIGEST_HEX_BYTES + index]!);
         }
-        if (!HEX.test(digest)) {
+        if (!HEX.test(digest) || !HEX.test(payloadDigest)) {
           throw new BlobBundleError(`blob record header is not a sha256 hex digest`);
         }
         blobs.push({
           digest,
+          payloadDigest,
           // Copy: the caller may retain these past the next push, and the buffer
           // is compacted and regrown as the stream advances.
           bytes: store.slice(readOffset + BLOB_RECORD_HEADER_BYTES, readOffset + total),
