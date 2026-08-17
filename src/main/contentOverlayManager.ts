@@ -47,11 +47,15 @@ export class ContentOverlayManager {
   }
 
   show(options: ContentOverlayShowOptions): void {
-    this.ensure(options.surface).show(options);
+    const instance = this.ensure(options.surface);
+    instance.show(options);
     // A newly shown surface must respect the fixed pair order rather than
     // simply landing on top: an approval card shown while quickfire is open
     // belongs underneath it.
     this.bringToFront();
+    // Re-adding native views can move focus back to another WebContents. Apply
+    // the request only after the final stacking pass has completed.
+    instance.applyRequestedFocus();
   }
 
   /**

@@ -490,6 +490,48 @@ describe("ViewManager", () => {
       expect(overlayView.webContents.focus).toHaveBeenCalledTimes(1);
     });
 
+    it("applies a reopened overlay focus request after its final stacking pass", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellContents = vm.getShellWebContents();
+      (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
+
+      const options = {
+        surface: "quickfire",
+        bounds: { x: 20, y: 40, width: 420, height: 300 },
+        props: { mode: "all" },
+        theme: { appearance: "light" as const },
+        focus: true,
+      };
+      vm.showContentOverlay(options);
+
+      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const readyHandler = (ipcMain.on as Mock).mock.calls.find(
+        ([channel]) => channel === "vibestudio:content-overlay:ready"
+      )?.[1] as ((event: { sender: { id: number } }, payload: unknown) => void) | undefined;
+      readyHandler?.(
+        { sender: { id: overlayView.webContents.id } },
+        { url: "file:///shell/index.html#overlaySurface=quickfire" }
+      );
+      vm.hideContentOverlay("quickfire");
+
+      overlayView.webContents.focus.mockClear();
+      const addChildView = mockWindow.contentView.addChildView as unknown as Mock;
+      addChildView.mockClear();
+      vm.showContentOverlay(options);
+
+      expect(overlayView.webContents.focus).toHaveBeenCalledTimes(1);
+      const lastRaise = addChildView.mock.invocationCallOrder.at(-1);
+      const focus = overlayView.webContents.focus.mock.invocationCallOrder.at(-1);
+      expect(lastRaise).toBeDefined();
+      expect(focus).toBeDefined();
+      expect(focus).toBeGreaterThan(lastRaise!);
+    });
+
     it("keeps content overlays top-left anchored while expanding to reported content size", () => {
       const vm = new ViewManager({
         window: mockWindow,

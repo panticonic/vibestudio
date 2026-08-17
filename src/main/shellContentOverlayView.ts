@@ -183,7 +183,6 @@ export class ShellContentOverlayView {
     this.applyBounds();
     this.bringToFront();
     this.pushRender();
-    this.applyPendingFocus();
   }
 
   update(options: ContentOverlayUpdateOptions): void {
@@ -228,6 +227,11 @@ export class ShellContentOverlayView {
 
   getVisibleView(): WebContentsView | null {
     return this.isVisible() ? this.view : null;
+  }
+
+  /** Apply a focus request after an owner has finished re-stacking overlays. */
+  applyRequestedFocus(): void {
+    this.applyPendingFocus();
   }
 
   /** Re-raise above the panels (called after every native layer reconcile). */
