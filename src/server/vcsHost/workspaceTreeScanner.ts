@@ -7,12 +7,20 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { createHash } from "node:crypto";
+
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { WorkspaceNode, WorkspaceTree } from "@vibestudio/shared/types";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
 import { readWorkspaceSkillEntry } from "./workspaceSkills.js";
+
+/**
+ * Icons past this are left unversioned rather than read on every scan. A unit
+ * icon is a small glyph; anything larger is a mistake this should not amplify.
+ */
+const MAX_VERSIONED_ICON_BYTES = 256 * 1024;
 
 interface InFlightScan {
   generation: number;
@@ -119,6 +127,7 @@ export class WorkspaceTreeScanner {
     if (graphNode) {
       node.packageInfo = { name: graphNode.name };
       this.applyManifestMetadata(node, unitRel, name, graphNode.manifest);
+      await this.attachIconVersion(node, abs);
     } else {
       try {
         const pkg = JSON.parse(await fs.readFile(path.join(abs, "package.json"), "utf8")) as {
@@ -136,6 +145,7 @@ export class WorkspaceTreeScanner {
           node.packageInfo = { name: pkg.name, ...(pkg.version ? { version: pkg.version } : {}) };
         }
         this.applyManifestMetadata(node, unitRel, name, pkg.vibestudio);
+        await this.attachIconVersion(node, abs);
       } catch {
         // no package.json — may still be a skill
       }
@@ -156,6 +166,35 @@ export class WorkspaceTreeScanner {
       }
     }
     return node;
+  }
+
+  /**
+   * Digest a unit's declared icon so its URL can name its content.
+   *
+   * Read here rather than at request time because the scan result is cached
+   * until an explicit invalidation, so this costs one small read per launchable
+   * unit per publication — against one pipe round trip per icon per launcher
+   * render for a remote client. A missing or oversized icon simply gets no
+   * version and keeps the revalidating URL it has always had.
+   */
+  private async attachIconVersion(node: WorkspaceNode, abs: string): Promise<void> {
+    if (!node.launchable?.icon) return;
+    const version = await this.iconVersion(abs, node.launchable.icon);
+    if (version) node.launchable = { ...node.launchable, iconVersion: version };
+  }
+
+  private async iconVersion(abs: string, icon: string | undefined): Promise<string | undefined> {
+    if (!icon?.startsWith("./")) return undefined;
+    const relative = icon.slice(2);
+    // The icon path is manifest-declared and must stay inside its own unit.
+    if (relative.startsWith("/") || relative.split("/").includes("..")) return undefined;
+    try {
+      const bytes = await fs.readFile(path.join(abs, relative));
+      if (bytes.byteLength > MAX_VERSIONED_ICON_BYTES) return undefined;
+      return createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+    } catch {
+      return undefined;
+    }
   }
 
   private applyManifestMetadata(

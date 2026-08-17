@@ -3,6 +3,7 @@ import {
   checkPanelGatewayPath,
   isPanelReachableGatewayPathname,
   panelAssetCacheKey,
+  unitIconTarget,
   panelAssetRepresentationPath,
 } from "./assetPathPolicy.js";
 
@@ -134,5 +135,52 @@ describe("panel asset representation keys", () => {
     const b = panelAssetCacheKey(path, { accept: "*/*" });
     expect(a).not.toBe(b);
     expect(a.startsWith(`${path}#h=`)).toBe(true);
+  });
+});
+
+describe("unit icon targets", () => {
+  const SOURCE = "about/help";
+
+  it("names the icon's content when a version is known", () => {
+    expect(unitIconTarget(SOURCE, "./assets/icon.svg", "0123456789abcdef")).toBe(
+      "__vibestudio/unit-icon?source=about%2Fhelp&path=assets%2Ficon.svg&v=0123456789abcdef"
+    );
+  });
+
+  it("omits the version when there is none, rather than sending an empty one", () => {
+    // An empty `v` would look versioned to the route and make a mutable icon
+    // immutable — the one way this can go wrong.
+    expect(unitIconTarget(SOURCE, "./assets/icon.svg")).toBe(
+      "__vibestudio/unit-icon?source=about%2Fhelp&path=assets%2Ficon.svg"
+    );
+    expect(unitIconTarget(SOURCE, "./assets/icon.svg", "")).not.toContain("v=");
+  });
+
+  it("has no target for an icon that is not unit-relative", () => {
+    expect(unitIconTarget(SOURCE, "data:image/svg+xml;base64,AAA")).toBeNull();
+    expect(unitIconTarget(SOURCE, "https://example.test/icon.svg")).toBeNull();
+  });
+
+  it("returns no leading slash, so each origin prefixes its own base", () => {
+    // Panels reach it as `../../…`, mobile as `<loopback>/…`.
+    expect(unitIconTarget(SOURCE, "./icon.svg", "aaaaaaaa")?.startsWith("/")).toBe(false);
+  });
+
+  it("keys a versioned icon independently of forwarded headers", () => {
+    // The whole point is that it can be stored. Keying by header digest would
+    // split one glyph across every `accept` a client happens to send, which is
+    // what already went wrong for build subresources.
+    const target = `/${unitIconTarget(SOURCE, "./assets/icon.svg", "0123456789abcdef")}`;
+    expect(panelAssetCacheKey(target, { accept: "image/svg+xml" })).toBe(
+      panelAssetCacheKey(target, { accept: "image/webp,*/*" })
+    );
+    expect(panelAssetCacheKey(target, {})).toBe(target);
+  });
+
+  it("still separates an unversioned icon by header, since it is not immutable", () => {
+    const target = `/${unitIconTarget(SOURCE, "./assets/icon.svg")}`;
+    expect(panelAssetCacheKey(target, { accept: "image/svg+xml" })).not.toBe(
+      panelAssetCacheKey(target, { accept: "image/webp" })
+    );
   });
 });

@@ -644,6 +644,23 @@ describe("PanelHttpServer build cache", () => {
     );
     expect(revalidated.statusCodeWritten).toBe(304);
     expect(revalidated.body).toBeUndefined();
+
+    // A `v` naming the content makes the URL immutable, so a remote client can
+    // store the glyph instead of re-fetching every unit's icon on every
+    // launcher render — measured at 20 of 57 round trips for one panel open.
+    const versioned = await handlePanelRequest(
+      server,
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${contentHash.slice(0, 16)}`
+    );
+    expect(versioned.statusCodeWritten).toBe(200);
+    expect(versioned.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
+
+    // A malformed version must not buy immutability for a mutable URL.
+    const bogus = await handlePanelRequest(
+      server,
+      "/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=nope"
+    );
+    expect(bogus.headersWritten?.["Cache-Control"]).toBe("private, no-cache");
   });
 
   it("does not synthesize build refs from panel context ids", async () => {

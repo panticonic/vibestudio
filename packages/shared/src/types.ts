@@ -557,6 +557,17 @@ export interface WorkspaceNode {
     title: string;
     description?: string;
     icon?: string;
+    /**
+     * Short digest of a `./`-relative `icon`'s bytes, so its URL can name its
+     * content.
+     *
+     * Without it the icon route has to answer `private, no-cache` — the source
+     * is mutable, so nothing may store the response — and a client re-fetches
+     * every unit's icon on every launcher render. Measured on a phone: 20 of 57
+     * round trips for one panel open, a few hundred bytes each. With it the
+     * route answers `immutable`, so the fetch happens once per icon, ever.
+     */
+    iconVersion?: string;
     hidden?: boolean;
   };
   /**

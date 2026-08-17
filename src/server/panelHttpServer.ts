@@ -452,8 +452,18 @@ export class PanelHttpServer {
           return;
         }
         const etag = `"${icon.contentHash}"`;
+        // A `v` naming the icon's content makes this URL immutable, which is the
+        // difference between a client storing the icon once and re-fetching
+        // every unit's icon on every launcher render. Measured on a phone, the
+        // revalidating form was 20 of 57 round trips for one panel open.
+        //
+        // The value is not checked against the bytes: it is a cache key, not a
+        // claim. A client sending a stale `v` gets today's icon stored under
+        // yesterday's key, and the next tree it reads carries the new `v` — so
+        // the wrong thing to do here is fail the request.
+        const versioned = /^[0-9a-f]{8,64}$/u.test(url.searchParams.get("v") ?? "");
         const headers = {
-          "Cache-Control": "private, no-cache",
+          "Cache-Control": versioned ? "public, max-age=31536000, immutable" : "private, no-cache",
           ETag: etag,
           "X-Content-Type-Options": "nosniff",
         };

@@ -94,6 +94,7 @@ export function isPanelReachableGatewayPathname(pathname: string): boolean {
 // `fetch()` will actually send to the gateway.
 const PARSE_BASE = "http://panel-gateway.invalid";
 
+const VERSIONED_UNIT_ICON_PATH = /^\/__vibestudio\/unit-icon\?(?:.*&)?v=[0-9a-f]{8,64}(?:&|$)/u;
 const PANEL_BUILD_KEY = /^[0-9a-f]{64}$/u;
 const PINNED_ENTRY_REPRESENTATION = /^\/.*\/\?buildKey=[0-9a-f]{64}$/u;
 
@@ -158,6 +159,10 @@ export function panelAssetCacheKey(
   // ahead of a request — which makes prefetching them impossible, because the
   // key is only knowable once the fetch it was meant to avoid has occurred.
   if (PANEL_BUILD_ASSET_PATH.test(representationPath)) return representationPath;
+  // A unit icon carrying a `v` that names its content is immutable for the same
+  // reason, and its whole point is to be storable — keying it by header digest
+  // would split one glyph across every `accept` a client happens to send.
+  if (VERSIONED_UNIT_ICON_PATH.test(representationPath)) return representationPath;
   const vary = Object.entries(forwardHeaders)
     // Authorization admits the request but does not select the immutable
     // representation. Workspace credentials are rotated when the server
@@ -172,6 +177,24 @@ export function panelAssetCacheKey(
   // separation without writing those values into the durable desktop index.
   const digest = sha256HexSyncText(JSON.stringify(vary)).slice(0, 24);
   return `${representationPath}#h=${digest}`;
+}
+
+/**
+ * The `__vibestudio/unit-icon` target for a unit's declared icon, WITHOUT a
+ * leading slash so each origin can prefix its own base (`../../` from a panel,
+ * the loopback origin on mobile).
+ *
+ * One function because three clients built this URL by hand and the `version`
+ * is the whole point: with it the route answers `immutable` and the icon is
+ * fetched once ever; without it the route must answer `private, no-cache` and
+ * every launcher render re-fetches every unit's icon. `icon` is the manifest's
+ * declared value, so a `./`-relative one is the only kind this applies to.
+ */
+export function unitIconTarget(source: string, icon: string, version?: string): string | null {
+  if (!icon.startsWith("./")) return null;
+  const query = new URLSearchParams({ source, path: icon.slice(2) });
+  if (version) query.set("v", version);
+  return `__vibestudio/unit-icon?${query.toString()}`;
 }
 
 export type PanelGatewayPathDecision =
