@@ -805,6 +805,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           holderLabel: lease?.holderLabel,
         };
       }
+      // Lease repair can discard a retained renderer when the durable runtime
+      // identity is no longer executable. The view existed before the async
+      // repair, but may not exist at this commit point; re-read it before
+      // issuing the visibility command so a stale focus operation cannot
+      // address a destroyed panel view.
+      if (!view.hasView(targetPanelId)) {
+        return {
+          panelId: targetPanelId,
+          status: "preparing",
+          focused: true,
+          loaded: false,
+          message: "Panel runtime is preparing",
+        };
+      }
       view.setViewVisible?.(targetPanelId, true);
       this.runtime.recordViewMutation();
       this.sendPanelEvent(targetPanelId, { type: "focus" });

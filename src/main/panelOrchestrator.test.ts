@@ -1078,6 +1078,24 @@ describe("PanelOrchestrator.focusPanel", () => {
     expect(result).toMatchObject({ status: "loaded", focused: true, loaded: true });
   });
 
+  it("does not show a retained view after lease repair discarded it", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/panel-repaired");
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValueOnce(true).mockReturnValue(false);
+
+    const result = await orchestrator.focusPanel(panel.id);
+
+    expect(panelView.setViewVisible).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "preparing",
+      focused: true,
+      loaded: false,
+    });
+  });
+
   it("keeps ordinary focus separate from creation placement", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/parent/child", [], {
