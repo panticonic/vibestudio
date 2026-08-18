@@ -128,6 +128,41 @@ describe("RuntimeDiagnosticsStore", () => {
     expect(resumed.entries[0]?.seq).toBe(4);
   });
 
+  it("filters searchable fields before stable reverse paging", () => {
+    const statePath = tempStatePath();
+    const store = new RuntimeDiagnosticsStore({ statePath });
+    for (const [message, source] of [
+      ["match first", "console"],
+      ["unrelated", "lifecycle"],
+      ["match second", "console"],
+      ["structured", "console"],
+    ] as const) {
+      store.record({
+        entityId: "panel:one",
+        kind: "panel",
+        level: "info",
+        message,
+        source,
+        ...(message === "structured" ? { fields: { detail: "MATCH third" } } : {}),
+      });
+    }
+
+    const newest = store.history("panel:one", {
+      contains: "match",
+      sources: ["console"],
+      limit: 2,
+    });
+    expect(newest.entries.map((entry) => entry.seq)).toEqual([3, 4]);
+
+    const older = store.history("panel:one", {
+      contains: "match",
+      sources: ["console"],
+      beforeSeq: newest.entries[0]!.seq,
+      limit: 2,
+    });
+    expect(older.entries.map((entry) => entry.seq)).toEqual([1]);
+  });
+
   it("uses a fixed-size storage key for arbitrarily long entity IDs", () => {
     const statePath = tempStatePath();
     const store = new RuntimeDiagnosticsStore({ statePath });
