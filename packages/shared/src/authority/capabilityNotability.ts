@@ -253,8 +253,9 @@ export function reviewedCapabilityNotability(capability: string): CapabilityNota
  * The notability a review renders with.
  *
  * - Critical is always headline, whatever any list says (§10).
- * - A receiver-declared (`workspace-service:`) capability supplies its own value;
- *   the platform may promote it to headline and never demote it.
+ * - A receiver-declared (`workspace-service:` or `userland:`) capability
+ *   supplies its own value; the platform may promote it to headline and never
+ *   demote it.
  * - An unreviewed capability is headline, so a foreign template cannot ship a
  *   capability that is both auto-granted and auto-hidden (§6.1).
  */
@@ -268,7 +269,10 @@ export function capabilityNotability(input: {
   const reviewed = reviewedCapabilityNotability(input.capability);
   if (reviewed === "headline") return "headline";
   if (reviewed === "everyday") return "everyday";
-  if (input.capability.startsWith("workspace-service:")) {
+  if (
+    input.capability.startsWith("workspace-service:") ||
+    input.capability.startsWith("userland:")
+  ) {
     return input.declared ?? "headline";
   }
   return reviewed ?? "headline";

@@ -11,6 +11,7 @@ import {
   installReviewRows,
   installRowKey,
   partNotableLine,
+  reviewedUserlandDefinitions,
   selectionStatusLine,
   summarizeParts,
   type InstallReviewPart,
@@ -381,6 +382,40 @@ describe("building rows from a declaration", () => {
         userlandDefinitions: new Map([["workspace-service:external-tool.execute", definition]]),
       }).notableRows[0]?.timing
     ).toBe("on-add");
+  });
+
+  it("classifies a direct receiver wildcard from the provider reviewed beside it", () => {
+    const definition = {
+      name: "browser-data.write",
+      title: "Change browser data",
+      action: "change persistent browser data",
+      tier: "gated",
+      sensitivity: "write",
+      resourceType: "browser-data",
+      presentation: { domain: "web", verb: "manage" },
+      notability: "everyday",
+      grantScopes: ["once", "version"],
+    } as const;
+    const capability = "userland:workers/browser-data/browser-data.write#*";
+    const definitions = reviewedUserlandDefinitions([
+      {
+        repoPath: "workers/browser-data",
+        authority: { provides: [definition] },
+      },
+    ]);
+
+    expect(definitions.get(capability)).toBe(definition);
+    expect(
+      installReviewRows({
+        requests: [request(capability)],
+        userlandDefinitions: definitions,
+      }).everydayRows[0]
+    ).toMatchObject({
+      timing: "on-add",
+      selectable: true,
+      selectedByDefault: true,
+      row: { provenance: { source: "receiver" } },
+    });
   });
 
   it("reduces an admin receiver capability to asking at use whatever its provider declared", () => {

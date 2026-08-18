@@ -1,5 +1,4 @@
-import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import type { UserlandDefinitions } from "@vibestudio/shared/authority/unitInstallReview";
+import { reviewedUserlandDefinitions } from "@vibestudio/shared/authority/unitInstallReview";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -211,25 +210,4 @@ export function acceptUnitInstallReview(
 ): void {
   const transaction = prepareUnitInstallReview(deps, input);
   transaction.committed();
-}
-
-/**
- * Receiver definitions the accepted set itself carries.
- *
- * A `workspace-service:` capability is classified when its provider is part of
- * the same decision; anything else is unreviewed, and therefore contextual and
- * headline (§6.1). Units reviewed together can see each other's declarations,
- * which is what keeps ordinary in-workspace service calls from turning into a
- * prompt on every first use.
- */
-export function reviewedUserlandDefinitions(
-  identities: readonly { authority: UnitAuthorityManifest }[]
-): UserlandDefinitions {
-  const definitions = new Map<string, UnitAuthorityManifest["provides"][number]>();
-  for (const identity of identities) {
-    for (const definition of identity.authority.provides) {
-      definitions.set(`workspace-service:${definition.name}`, definition);
-    }
-  }
-  return definitions;
 }

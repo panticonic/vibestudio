@@ -63,11 +63,12 @@ export function authorityRow(input: {
    */
   degradeUnknown?: boolean;
 }): AuthorityRow {
-  const staticCategory =
-    input.capability.startsWith("workspace-service:") && input.category
-      ? null
-      : capabilityDomain(input.capability);
-  // Host effects use the reviewed census; a workspace service uses its sealed provider vocabulary.
+  const receiverDeclared =
+    input.category &&
+    (input.capability.startsWith("workspace-service:") || input.capability.startsWith("userland:"));
+  const staticCategory = receiverDeclared ? null : capabilityDomain(input.capability);
+  // Host effects use the reviewed census; workspace receivers use their sealed
+  // provider vocabulary, whether reached through a service facade or directly.
   const category = staticCategory ?? input.category;
   const presentation =
     HOST_SEMANTIC_CAPABILITY_COPY.find(({ prefix }) =>

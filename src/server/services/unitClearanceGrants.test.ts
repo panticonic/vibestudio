@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import { installRowKey } from "@vibestudio/shared/authority/unitInstallReview";
+import {
+  installRowKey,
+  reviewedUserlandDefinitions,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -123,6 +126,43 @@ describe("install clearance", () => {
       userlandDefinitions: new Map([["workspace-service:read-feed", definition(["once", "task"])]]),
     });
     expect(issued).toEqual([]);
+  });
+
+  it("mints version clearance for a reviewed direct receiver wildcard", () => {
+    const capability = "userland:workers/browser-data/browser-data.write#*";
+    const manifest = authority([{ capability }]);
+    const receiver = {
+      ...definition(["once", "version"]),
+      name: "browser-data.write",
+    };
+    const issued = mintUnitClearanceGrants({
+      grantStore,
+      units: [
+        {
+          repoPath: "extensions/browser-data",
+          effectiveVersion: "ev-browser-extension",
+          authority: manifest,
+        },
+      ],
+      origin: "workspace-creation",
+      decidedBy: "user:alice",
+      issuedBy: "host:vibestudio",
+      userlandDefinitions: reviewedUserlandDefinitions([
+        {
+          repoPath: "workers/browser-data",
+          authority: { provides: [receiver] },
+        },
+      ]),
+    });
+
+    expect(issued).toEqual([
+      expect.objectContaining({
+        capability,
+        resource: everywhere,
+        subject: "code:extensions/browser-data@ev-browser-extension",
+        scope: "version",
+      }),
+    ]);
   });
 
   it("withholds a grant for a row the user deselected, and admits the unit anyway", () => {

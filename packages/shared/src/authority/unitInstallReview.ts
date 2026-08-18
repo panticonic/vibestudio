@@ -182,8 +182,10 @@ export function installRowKey(input: {
 }
 
 /**
- * The receiver definitions an operation carries, keyed by the fully-qualified
- * `workspace-service:<name>` capability.
+ * The receiver definitions an operation carries, keyed by the capability
+ * pattern a reviewed consumer can declare before the receiver's build-specific
+ * definition digest exists. Service facades use `workspace-service:<name>`;
+ * direct receiver calls use `userland:<provider>/<name>#*`.
  *
  * A receiver-declared capability is classified when its provider is part of the
  * same reviewed set — the user is accepting the receiver and its declaration in
@@ -191,6 +193,32 @@ export function installRowKey(input: {
  * headline (§6.1).
  */
 export type UserlandDefinitions = ReadonlyMap<string, UserlandCapabilityDefinition>;
+
+/**
+ * Receiver definitions contributed by one exact reviewed unit set.
+ *
+ * A direct receiver's concrete capability ends in a digest computed from its
+ * sealed RPC bindings. Install review deliberately happens before that build,
+ * so consumers declare the only stable form available at that boundary:
+ * `userland:<provider>/<name>#*`. Classifying that reviewed wildcard from the
+ * provider beside it lets the receiver's grant-scope ceiling govern clearance
+ * without pretending an unreviewed external definition is known.
+ */
+export function reviewedUserlandDefinitions(
+  units: readonly {
+    repoPath: string;
+    authority: { provides: readonly UserlandCapabilityDefinition[] };
+  }[]
+): Map<string, UserlandCapabilityDefinition> {
+  const definitions = new Map<string, UserlandCapabilityDefinition>();
+  for (const unit of units) {
+    for (const definition of unit.authority.provides) {
+      definitions.set(`workspace-service:${definition.name}`, definition);
+      definitions.set(`userland:${unit.repoPath}/${definition.name}#*`, definition);
+    }
+  }
+  return definitions;
+}
 
 export interface InstallReviewRowsInput {
   requests: readonly UnitAuthorityRequest[];

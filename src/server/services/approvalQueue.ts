@@ -22,6 +22,7 @@ import type {
 import type { InstallReviewSelectionStore } from "./installReviewSelections.js";
 import { reviewedUnitPart, unresolvedOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
 import {
+  reviewedUserlandDefinitions,
   summarizeParts,
   type InstallReviewOrigin,
   type InstallReviewPart,
@@ -214,12 +215,11 @@ function installReviewParts(
   }
   // Receiver definitions carried by the same operation, so a service declared by
   // one part is classified rather than unknown for the part that calls it.
-  const userlandDefinitions = new Map(
-    [...units.values()].flatMap((unit) =>
-      (unit.authority?.provides ?? []).map(
-        (definition) => [`workspace-service:${definition.name}`, definition] as const
-      )
-    )
+  const userlandDefinitions = reviewedUserlandDefinitions(
+    [...units.values()].map((unit) => ({
+      repoPath: unit.source.repo,
+      authority: unit.authority ?? { requests: [], provides: [] },
+    }))
   );
   return [...units.values()].map((unit) => {
     const repoPath = unit.source.repo;
