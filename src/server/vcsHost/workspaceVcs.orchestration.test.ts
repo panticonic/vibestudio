@@ -73,6 +73,42 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("includes workspace compiler config in partial build projections", async () => {
+    const { blobsDir, vcs, deps } = await harness();
+    const rootConfig = Buffer.from(
+      JSON.stringify({ compilerOptions: { strict: true, target: "ES2022" } })
+    );
+    const packageConfig = Buffer.from(JSON.stringify({ extends: "../../tsconfig.json" }));
+    const source = Buffer.from("export const value: string = 'ok';\n");
+    const [rootWrite, packageWrite, sourceWrite] = await Promise.all([
+      putBytes(blobsDir, rootConfig),
+      putBytes(blobsDir, packageConfig),
+      putBytes(blobsDir, source),
+    ]);
+    const state = await mirrorWorktreeTree(blobsDir, [
+      { path: "tsconfig.json", contentHash: rootWrite.digest, mode: 0o100644 },
+      {
+        path: "packages/lib/tsconfig.json",
+        contentHash: packageWrite.digest,
+        mode: 0o100644,
+      },
+      { path: "packages/lib/src/index.ts", contentHash: sourceWrite.digest, mode: 0o100644 },
+    ]);
+
+    const projection = await vcs.materializeForBuild(
+      [{ relativePath: "packages/lib" } as never],
+      state.stateHash,
+      deps.workspaceRoot
+    );
+
+    await expect(fsp.readFile(path.join(projection.sourceRoot, "tsconfig.json"))).resolves.toEqual(
+      rootConfig
+    );
+    await expect(
+      fsp.readFile(path.join(projection.sourceRoot, "packages/lib/tsconfig.json"))
+    ).resolves.toEqual(packageConfig);
+  });
+
   it("reads channel provenance through the GAD log API, outside semantic VCS dispatch", async () => {
     const { vcs } = await harness();
     const call = vi.fn(async () => ({ contentClass: "external" as const }));

@@ -2289,6 +2289,20 @@ export const vcsErrorSchema = z.discriminatedUnion("code", [
       candidateState: id("Exact candidate workspace state checked before publication."),
       affectedUnits: z.array(id("Build unit in the affected dependency closure.")).max(10_000),
       diagnostics: z.array(buildDiagnosticSchema).max(100_000),
+      failureClass: z.enum(["source", "infrastructure", "mixed"]),
+      failureKind: z.enum(["domain", "infrastructure"]),
+      retry: z
+        .object({
+          policy: z.enum(["none", "reobserve"]),
+          commandIdPolicy: z.enum(["not-applicable", "use-new-after-reobserve"]),
+        })
+        .strict(),
+      recovery: z
+        .object({
+          action: z.enum(["repair-source", "reobserve"]),
+          instruction: nonEmptyText,
+        })
+        .strict(),
     })
     .strict(),
   z

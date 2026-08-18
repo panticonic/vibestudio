@@ -418,7 +418,7 @@ export type AgentDiagnosticRepairWire = z.infer<typeof agentDiagnosticRepairSche
  */
 export const buildDiagnosticSchema = z
   .object({
-    source: z.enum(["esbuild", "tsc", "authority", "schema"]),
+    source: z.enum(["esbuild", "tsc", "authority", "schema", "infrastructure"]),
     severity: z.enum(["error", "warning"]),
     file: z.string(),
     line: z.number().int().nonnegative(),

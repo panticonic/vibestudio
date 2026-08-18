@@ -34,6 +34,7 @@ let typecheckDiagnostics: (unitRelativePath: string) => Array<{
   message: string;
 }> = () => [];
 let typecheckCalls = 0;
+let typecheckInputs: Array<{ unitRelativePath: string; authority?: unknown }> = [];
 // Records every non-cache-hit build the mock actually performs.
 let buildCalls: Array<{ name: string; key: string; stateRef: string }> = [];
 
@@ -124,8 +125,9 @@ async function loadWithMocks(): Promise<{
 
   vi.doMock("./typecheckWorkerClient.js", () => ({
     TypecheckWorkerClient: class {
-      async check(input: { unitRelativePath: string }) {
+      async check(input: { unitRelativePath: string; authority?: unknown }) {
         typecheckCalls += 1;
+        typecheckInputs.push(input);
         return typecheckDiagnostics(input.unitRelativePath);
       }
       async close() {}
@@ -219,6 +221,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     shouldFail = () => false;
     typecheckDiagnostics = () => [];
     typecheckCalls = 0;
+    typecheckInputs = [];
     buildCalls = [];
   });
 
@@ -245,6 +248,8 @@ describe("BuildSystemV2 — explicit build reports", () => {
       builds: [{ target: "library:panel", exportPath: ".", diagnosticIndexes: [] }],
     });
     expect(first.builds.every((build) => !("artifacts" in build))).toBe(true);
+    expect(typecheckInputs).not.toHaveLength(0);
+    expect(typecheckInputs.every((input) => input.authority === undefined)).toBe(true);
 
     const second = await buildSystem.getBuildReport("@workspace/lib", CANDIDATE_VIEW);
 
@@ -253,6 +258,19 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(buildCalls.length).toBe(buildsAfterFirst);
     expect(typecheckCalls).toBe(typechecksAfterFirst);
   }, 15_000);
+
+  it("checks authority at executable boundaries, not library package boundaries", async () => {
+    env = await loadWithMocks();
+
+    await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+
+    expect(typecheckInputs).toEqual([
+      expect.objectContaining({
+        unitRelativePath: "panels/app",
+        authority: expect.any(Object),
+      }),
+    ]);
+  });
 
   it("coalesces concurrent reports for the same immutable unit view", async () => {
     env = await loadWithMocks();

@@ -49,6 +49,7 @@ import {
   getBytes,
   materializeTree,
   readFileAtTree,
+  readTreeDirectory,
   resolveTreePath,
   sweepUnreachableBlobs,
   type TreeDiff,
@@ -1607,6 +1608,31 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const sourceRoot = path.join(this.deps.buildSourcesRoot, key);
     await this.locked(`build:${key}`, async () => {
       await this.contentProjection.ensureStateMirrored(stateHash);
+      // Partial unit projections retain workspace-root files because build
+      // configuration is allowed to inherit or consult them. Directories stay
+      // selective, so this preserves the small projection without guessing a
+      // special list of tsconfig/package-manager filenames.
+      const rootEntries = await readTreeDirectory(this.deps.blobsDir, stateHash);
+      if (!rootEntries) {
+        throw new Error(`build source root is missing at ${stateHash}`);
+      }
+      await fsp.mkdir(sourceRoot, { recursive: true });
+      for (const entry of rootEntries) {
+        if (entry.kind !== "file") continue;
+        const bytes = await getBytes(this.deps.blobsDir, entry.contentHash);
+        if (!bytes) {
+          throw new Error(`build support file ${entry.name} content is missing at ${stateHash}`);
+        }
+        const target = path.join(sourceRoot, entry.name);
+        const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+        try {
+          await fsp.writeFile(temporary, bytes, { mode: entry.mode & 0o777 });
+          await fsp.rename(temporary, target);
+        } catch (error) {
+          await fsp.rm(temporary, { force: true }).catch(() => undefined);
+          throw error;
+        }
+      }
       for (const unit of units) {
         const resolved = await resolveTreePath(this.deps.blobsDir, stateHash, unit.relativePath);
         if (!resolved) continue;

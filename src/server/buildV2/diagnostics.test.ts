@@ -69,6 +69,34 @@ describe("build diagnostics path normalization", () => {
       candidateState: "state:candidate",
       affectedUnits: ["@workspace/lib", "@workspace-panels/app"],
       diagnostics,
+      failureClass: "source",
+      failureKind: "domain",
+      retry: { policy: "none", commandIdPolicy: "not-applicable" },
+      recovery: { action: "repair-source" },
+    });
+  });
+
+  it("distinguishes infrastructure build failures and requires reobservation", () => {
+    const error = new BuildGateFailedError(
+      [
+        {
+          source: "infrastructure",
+          severity: "error",
+          file: "packages/lib",
+          line: 1,
+          column: 1,
+          message: "Typecheck worker unavailable",
+        },
+      ],
+      ["@workspace/lib"],
+      "state:candidate"
+    );
+
+    expect(error.errorData).toMatchObject({
+      failureClass: "infrastructure",
+      failureKind: "infrastructure",
+      retry: { policy: "reobserve", commandIdPolicy: "use-new-after-reobserve" },
+      recovery: { action: "reobserve" },
     });
   });
 });

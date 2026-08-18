@@ -1543,28 +1543,30 @@ export async function initBuildSystemV2(
       );
       try {
         let authorityEnvironment: ExactWorkspaceAuthorityEnvironment | undefined;
-        try {
-          authorityEnvironment = await authorityEnvironmentAt(
-            viewStateHash,
-            graphAtView,
-            (await viewAt(viewStateHash)).evMap
-          );
-        } catch (error) {
-          reusable = false;
-          if (error instanceof BuildDiagnosticsError) {
-            // A structured provider-catalog failure (e.g. an unknown
-            // application rpcSchema with its repair) must reach the report
-            // intact rather than being flattened into prose.
-            diagnostics.push(...error.diagnostics);
-          } else {
-            diagnostics.push({
-              source: "authority",
-              severity: "error",
-              file: `${node.relativePath}/package.json`,
-              line: 1,
-              column: 1,
-              message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
-            });
+        if (node.kind !== "package") {
+          try {
+            authorityEnvironment = await authorityEnvironmentAt(
+              viewStateHash,
+              graphAtView,
+              (await viewAt(viewStateHash)).evMap
+            );
+          } catch (error) {
+            reusable = false;
+            if (error instanceof BuildDiagnosticsError) {
+              // A structured provider-catalog failure (e.g. an unknown
+              // application rpcSchema with its repair) must reach the report
+              // intact rather than being flattened into prose.
+              diagnostics.push(...error.diagnostics);
+            } else {
+              diagnostics.push({
+                source: "authority",
+                severity: "error",
+                file: `${node.relativePath}/package.json`,
+                line: 1,
+                column: 1,
+                message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
+              });
+            }
           }
         }
         const tsc = await typecheckWorker.check({
@@ -1572,15 +1574,22 @@ export async function initBuildSystemV2(
           sourceRoot,
           internalDeps: internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
           nodeModulesPaths: dependencyEnvironment.nodePaths,
-          authority: {
-            manifest: {
-              ...node.manifest,
-              authority: node.manifest.authority ?? { requests: [], provides: [] },
-            },
-            ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
-            workspaceId: source.workspaceId,
-            executableModules: built?.metadata.executableModules,
-          },
+          // Packages are libraries, not authority principals. Their effects
+          // are folded into each executable consumer through executableModules
+          // and checked against that consumer's manifest.
+          ...(node.kind === "package"
+            ? {}
+            : {
+                authority: {
+                  manifest: {
+                    ...node.manifest,
+                    authority: node.manifest.authority ?? { requests: [], provides: [] },
+                  },
+                  ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
+                  workspaceId: source.workspaceId,
+                  executableModules: built?.metadata.executableModules,
+                },
+              }),
         });
         diagnostics = [...diagnostics, ...tsc];
       } finally {
@@ -1591,7 +1600,7 @@ export async function initBuildSystemV2(
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[BuildV2] typecheck materialize failed for ${node.name}:`, message);
       diagnostics.push({
-        source: "tsc",
+        source: "infrastructure",
         severity: "error",
         file: node.relativePath,
         line: 1,

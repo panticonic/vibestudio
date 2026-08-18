@@ -38,7 +38,7 @@ export class BuildRequestError extends RpcBoundaryError {
 export type AgentDiagnosticRepair = AgentDiagnosticRepairWire;
 
 export interface BuildDiagnostic {
-  source: "esbuild" | "tsc" | "authority" | "schema";
+  source: "esbuild" | "tsc" | "authority" | "schema" | "infrastructure";
   severity: "error" | "warning";
   file: string;
   line: number;
@@ -75,12 +75,44 @@ export class BuildDiagnosticsError extends Error {
 export class BuildGateFailedError extends RpcBoundaryError {
   constructor(diagnostics: BuildDiagnostic[], affectedUnits: string[], candidateState: string) {
     const message = `Protected main push rejected: build/typecheck gate failed for candidate ${candidateState}`;
+    const errorDiagnostics = diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+    const hasInfrastructureFailure = errorDiagnostics.some(
+      (diagnostic) => diagnostic.source === "infrastructure"
+    );
+    const hasSourceFailure = errorDiagnostics.some(
+      (diagnostic) => diagnostic.source !== "infrastructure"
+    );
+    const failureClass =
+      hasInfrastructureFailure && hasSourceFailure
+        ? "mixed"
+        : hasInfrastructureFailure
+          ? "infrastructure"
+          : "source";
+    const sourceRecovery =
+      "Repair the reported source or authority diagnostics, rebuild the candidate, then push the new candidate.";
+    const infrastructureRecovery =
+      "Re-run build verification after the infrastructure failure is resolved, then push with a new command identity.";
     super(message, "application", "BuildGateFailed", undefined, {
       code: "BuildGateFailed",
       message,
       candidateState,
       affectedUnits,
       diagnostics,
+      failureClass,
+      failureKind: failureClass === "infrastructure" ? "infrastructure" : "domain",
+      retry:
+        failureClass === "infrastructure"
+          ? { policy: "reobserve", commandIdPolicy: "use-new-after-reobserve" }
+          : { policy: "none", commandIdPolicy: "not-applicable" },
+      recovery: {
+        action: failureClass === "infrastructure" ? "reobserve" : "repair-source",
+        instruction:
+          failureClass === "mixed"
+            ? `${infrastructureRecovery} ${sourceRecovery}`
+            : failureClass === "infrastructure"
+              ? infrastructureRecovery
+              : sourceRecovery,
+      },
     });
     this.name = "BuildGateFailedError";
   }
