@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import { createBaseReleaseService } from "./baseReleaseService.js";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
@@ -24,6 +28,18 @@ const installed = {
 
 describe("baseRelease service", () => {
   const systemSubject = { userId: "usr_system", handle: "system" };
+
+  it("registers every method with a reviewed tier decision", () => {
+    const dispatcher = new ServiceDispatcher();
+    const service = createBaseReleaseService({ target, dispatcher, systemSubject });
+
+    expect(() => dispatcher.registerService(service)).not.toThrow();
+    expect(dispatcher.getMethodSchema("baseRelease", "check")?.tier).toMatchObject({
+      tier: "open",
+      residency: "supervision",
+      family: "workspace.base-release",
+    });
+  });
 
   it("compares the installed Base lineage with the verified host pin", async () => {
     const dispatch = vi.fn(async () => [installed]);

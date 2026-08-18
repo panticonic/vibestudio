@@ -6845,6 +6845,96 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:baseRelease.check",
+      "rpcPlane": "host-service",
+      "owner": "baseRelease",
+      "method": "check",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace.base-release",
+      "reviewRationale": "Read-only comparison of installed Base lineage with the host's verified immutable release pin.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:baseRelease.check"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:baseRelease.check),allOf(capability(user,service:baseRelease.check),workspace-member))",
+      "r3b": {
+        "review": "read-only-base-release-lineage-comparison",
+        "change": "Adds the missing reviewed open-tier decision for a read-only comparison between the installed Base lineage and the host's verified immutable release pin. The method performs no acquisition or publication and exposes only release compatibility metadata already owned by workspace supervision."
+      },
+      "capability": "service:baseRelease.check",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:baseRelease.pull",
+      "rpcPlane": "host-service",
+      "owner": "baseRelease",
+      "method": "pull",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace.base-release",
+      "reviewRationale": "The host supplies only its verified immutable Base pin; Composer retains ordinary semantic review, repair, and protected-main publication.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:baseRelease.pull"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:baseRelease.pull),allOf(capability(user,service:baseRelease.pull),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:baseRelease.pull",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:blobstore.delete",
       "rpcPlane": "host-service",
       "owner": "blobstore",
@@ -11342,6 +11432,234 @@
         "change": null
       },
       "capability": "service:build.recompute",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chromiumFetch.close",
+      "rpcPlane": "host-service",
+      "owner": "chromiumFetch",
+      "method": "close",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "chromiumFetch.transport",
+      "reviewRationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:chromiumFetch.close"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:chromiumFetch.close),allOf(capability(user,service:chromiumFetch.close),workspace-member),allOf(capability(code,service:chromiumFetch.close),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chromiumFetch.close",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chromiumFetch.openBrowser",
+      "rpcPlane": "host-service",
+      "owner": "chromiumFetch",
+      "method": "openBrowser",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "chromiumFetch.transport",
+      "reviewRationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "credential.use"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"credential.use\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"credential.use\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"credential.use\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"credential.use\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chromiumFetch.openBrowser",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chromiumFetch.openBrowser#capability:credential.use",
+      "rpcPlane": "host-service",
+      "owner": "chromiumFetch",
+      "method": "openBrowser",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "chromiumFetch.transport",
+      "reviewRationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+      "capability": "credential.use",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "chromiumFetch.openBrowser.origin"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"credential.use\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"credential.use\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chromiumFetch.openPublic",
+      "rpcPlane": "host-service",
+      "owner": "chromiumFetch",
+      "method": "openPublic",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "chromiumFetch.transport",
+      "reviewRationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:chromiumFetch.openPublic"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:chromiumFetch.openPublic),allOf(capability(user,service:chromiumFetch.openPublic),workspace-member),allOf(capability(code,service:chromiumFetch.openPublic),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chromiumFetch.openPublic",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:chromiumFetch.read",
+      "rpcPlane": "host-service",
+      "owner": "chromiumFetch",
+      "method": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "chromiumFetch.transport",
+      "reviewRationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:chromiumFetch.read"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:chromiumFetch.read),allOf(capability(user,service:chromiumFetch.read),workspace-member),allOf(capability(code,service:chromiumFetch.read),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:chromiumFetch.read",
       "parityAssertion": "generated-census:host-authority"
     },
     {

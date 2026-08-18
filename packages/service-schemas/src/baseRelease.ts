@@ -18,6 +18,14 @@ export const baseReleaseCheckSchema = z
 
 export const baseReleaseMethods = defineServiceMethods({
   check: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.base-release",
+      rationale:
+        "Read-only comparison of installed Base lineage with the host's verified immutable release pin.",
+    },
     description:
       "Compare the installed Base lineage with the host's verified immutable Base release pin.",
     args: z.tuple([]),

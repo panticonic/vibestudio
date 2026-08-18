@@ -721,6 +721,40 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "baseRelease.check": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.base-release",
+      rationale:
+        "Read-only comparison of installed Base lineage with the host's verified immutable release pin.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "baseRelease.pull": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.base-release",
+      rationale:
+        "The host supplies only its verified immutable Base pin; Composer retains ordinary semantic review, repair, and protected-main publication.",
+    },
+    capability: "workspace.update-base",
+    presentation: {
+      title: "Update Vibestudio Base",
+      action: "update Vibestudio Base",
+      description:
+        "Prepare the exact Base shipped by this Vibestudio version through the normal workspace review.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
   "blobstore.delete": {
     tier: {
       tier: "gated",
@@ -8118,6 +8152,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "files",
     verb: "act",
   },
+  "workspace.update-base": {
+    domain: "automation",
+    verb: "manage",
+  },
   "workspaces.create": {
     domain: "automation",
     verb: "act",
@@ -9007,6 +9045,17 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "files",
       verb: "act",
+    },
+  },
+  "workspace.update-base": {
+    title: "Update Vibestudio Base",
+    action: "update Vibestudio Base",
+    description:
+      "Prepare the exact Base shipped by this Vibestudio version through the normal workspace review.",
+    group: "workspace",
+    authorityCategory: {
+      domain: "automation",
+      verb: "manage",
     },
   },
   "workspaces.create": {

@@ -1,7 +1,11 @@
 {
   "version": 1,
-  "censusDigest": "sha256:d889cd90e4e22506d9cb480ef1b63edcec19a8eeb7d1201b50348fe9727060b3",
+  "censusDigest": "sha256:b0c49bc27a9fc30210ffe1bdfe44e1f8a8ae150d49836bfa13c8ac8ab9a92f0d",
   "decisions": {
+    "host:baseRelease.check": {
+      "review": "read-only-base-release-lineage-comparison",
+      "change": "Adds the missing reviewed open-tier decision for a read-only comparison between the installed Base lineage and the host's verified immutable release pin. The method performs no acquisition or publication and exposes only release compatibility metadata already owned by workspace supervision."
+    },
     "host:phoneNativeEndpoint.desktops": {
       "review": "exact-base-phone-provider-desktop-discovery",
       "change": "Replaces generic connected-client enumeration with a typed, account-bound desktop projection admitted only for the exact approved workers/phone-provisioning Durable Object. It carries no independent user gate and exposes no arbitrary client method transport."

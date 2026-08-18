@@ -68,6 +68,17 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 | `authority.awaitDecision` | Wait without a deadline for one acquisition owned by this session. |
 | `authority.preflight` | Dry-run a service method's complete authority contract without prompting or consuming authority. |
 
+## `baseRelease`
+
+Verified host-to-Base release update handshake
+
+Authority principals: `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `baseRelease.check` | Compare the installed Base lineage with the host's verified immutable Base release pin. |
+| `baseRelease.pull` | Ask Composer to pull the host's verified exact Base release through its server-only release handshake. |
+
 ## `blobstore`
 
 Per-workspace content-addressable blob storage
