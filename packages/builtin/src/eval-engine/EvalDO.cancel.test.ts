@@ -366,9 +366,15 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     sql.exec(
       `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
-       VALUES ('channel-retire', 'channel-target', 1)`
+       VALUES ('channel-retire', 'channel-target', 1),
+              ('channel-gone', 'retired-target', 1)`
     );
     const lifecycleCall = vi.fn((targetId: string, method: string) => {
+      if (targetId === "retired-target" && method === "relationshipState") {
+        return Promise.reject(
+          Object.assign(new Error("retired"), { code: "DURABLE_OBJECT_RETIRED" })
+        );
+      }
       if (targetId === "channel-target" && method === "relationshipState") {
         return Promise.resolve({ revision: 4, active: true });
       }

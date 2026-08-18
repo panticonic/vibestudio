@@ -3474,15 +3474,22 @@ export class EvalDO extends DurableObjectBase {
       }));
     for (const { channelId, targetId: recordedTargetId } of channels) {
       const targetId = recordedTargetId ?? (await this.residentChannelTarget(channelId, this.rpc));
-      const state = await this.rpc.call<{ revision: number; active: boolean }>(
-        targetId,
-        "relationshipState",
-        [this.rpc.selfId]
-      );
-      if (state.active) {
-        await this.rpc.call(targetId, "leave", [
-          { participantId: this.rpc.selfId, revision: state.revision + 1 },
-        ]);
+      try {
+        const state = await this.rpc.call<{ revision: number; active: boolean }>(
+          targetId,
+          "relationshipState",
+          [this.rpc.selfId]
+        );
+        if (state.active) {
+          await this.rpc.call(targetId, "leave", [
+            { participantId: this.rpc.selfId, revision: state.revision + 1 },
+          ]);
+        }
+      } catch (error) {
+        // Retirement of the relationship owner is already the strongest
+        // possible terminal: there is no channel left to retain membership.
+        // Only this typed lifecycle fact is equivalent to a successful leave.
+        if (errorCodeInChain(error) !== "DURABLE_OBJECT_RETIRED") throw error;
       }
       this.sql.exec(`DELETE FROM resident_channel_memberships WHERE channel_id = ?`, channelId);
     }
