@@ -5307,7 +5307,7 @@ async function main() {
           ensureDefaultHeadlessHost: async () => {
             const manager = getHeadlessHostManager();
             if (!manager) return false;
-            return Boolean(await manager.ensureDefaultHost());
+            return Boolean(await manager.ensureHeadlessHost());
           },
         });
         return panelRuntimeDefinition;
@@ -6048,7 +6048,7 @@ async function main() {
     ensureDefaultHeadlessHost: async () => {
       const manager = getHeadlessHostManager();
       if (!manager) return false;
-      return Boolean(await manager.ensureDefaultHost());
+      return Boolean(await manager.ensureHeadlessHost());
     },
     getGatewayPort: () => gatewayPortResolved,
     eventService,

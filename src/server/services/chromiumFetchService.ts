@@ -7,10 +7,16 @@ import {
   defineServiceMethods,
   fixedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
-import { describeCapability } from "@vibestudio/shared/authorityPresentation";
-
 const BROWSER_FETCH_CAPABILITY = "credential.use";
 const BROWSER_FETCH_RESOLVER = "chromiumFetch.openBrowser.origin";
+const BROWSER_FETCH_PRESENTATION = {
+  title: "Use your browser session",
+  action: "load a website using your signed-in browser session",
+  description:
+    "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+  group: "accounts",
+  authorityCategory: { domain: "accounts", verb: "act" },
+} as const;
 const responseMetadata = z.object({
   responseId: z.string().uuid(),
   url: z.string().url(),
@@ -40,13 +46,7 @@ const methods = defineServiceMethods({
   openBrowser: {
     capability: BROWSER_FETCH_CAPABILITY,
     tier: openTier,
-    presentation: {
-      title: "Use your browser session",
-      action: "access a site using your signed-in browser session",
-      description: "Send the request with cookies imported into Vibestudio for this site.",
-      group: "accounts",
-      authorityCategory: { domain: "accounts", verb: "act" },
-    },
+    presentation: BROWSER_FETCH_PRESENTATION,
     description: "Open a URL through Chromium with the user's canonical browser cookies.",
     args: z.tuple([z.string().url()]),
     returns: responseMetadata,
@@ -142,7 +142,6 @@ export function createChromiumFetchService(deps: {
         if (!ctx.caller.code && !ctx.caller.executionSession)
           return { selections: [], payload: null };
         const origin = new URL(String(rawUrl)).origin;
-        const copy = describeCapability(BROWSER_FETCH_CAPABILITY);
         const resource = { type: "website", label: "Website", value: origin };
         return {
           selections: [
@@ -150,14 +149,14 @@ export function createChromiumFetchService(deps: {
               capability: BROWSER_FETCH_CAPABILITY,
               resourceKey: origin,
               challenge: {
-                title: copy.title,
-                description: copy.description,
+                title: BROWSER_FETCH_PRESENTATION.title,
+                description: BROWSER_FETCH_PRESENTATION.description,
                 deniedReason: "Using the signed-in browser session was not allowed",
                 dedupKey: `chromium-fetch:${ctx.caller.runtime.id}:${origin}`,
                 resource,
                 operation: {
                   kind: "browser",
-                  verb: copy.action,
+                  verb: BROWSER_FETCH_PRESENTATION.action,
                   object: resource,
                   groupKey: `chromium-fetch:${ctx.caller.runtime.id}:${origin}`,
                 },

@@ -181,8 +181,9 @@ export class HeadlessHostManager {
       () => {
         this.respawnTimer = null;
         if (!this.keepAlive || this.stopped) return;
-        // ensureDefaultHost is single-flight, backoff-aware, and never throws.
-        void this.ensureDefaultHost().then((host) => {
+        // Explicit keep-alive requires a headless renderer even when another
+        // CDP-capable client is connected.
+        void this.ensureHeadlessHost().then((host) => {
           // If we still don't have a host (disabled, backing off, or timed out)
           // and keep-alive is on, retry on the next backoff window.
           if (!host && this.keepAlive && !this.stopped && !this.disabled) {
@@ -207,12 +208,27 @@ export class HeadlessHostManager {
     });
   }
 
+  /** A registered, bridge-connected headless host specifically. */
+  private availableHeadlessHost(): ClientSession | null {
+    return this.deps.coordinator.getDefaultCdpHostClient({
+      isHostAvailable: (id) => this.deps.isHostAvailable(id),
+      requiredPlatform: "headless",
+    });
+  }
+
   /**
    * Ensure a default CDP host exists, spawning the headless host if needed.
    * Single-flight; returns null when disabled, backing off, or timed out.
    */
   async ensureDefaultHost(timeoutMs?: number): Promise<ClientSession | null> {
     const existing = this.availableDefaultHost();
+    if (existing) return existing;
+    return this.ensureHeadlessHost(timeoutMs);
+  }
+
+  /** Ensure the standalone headless renderer exists even when desktop is connected. */
+  async ensureHeadlessHost(timeoutMs?: number): Promise<ClientSession | null> {
+    const existing = this.availableHeadlessHost();
     if (existing) return existing;
     if (!this.config.enabled || this.disabled) return null;
     if (Date.now() < this.nextAttemptAt) return null;
@@ -337,7 +353,7 @@ export class HeadlessHostManager {
 
     const registrationDeadline = Date.now() + registrationTimeout;
     while (child.exitCode === null) {
-      const host = this.availableDefaultHost();
+      const host = this.availableHeadlessHost();
       if (host) {
         this.consecutiveFailures = 0;
         this.spawnedClientSessionId = host.clientSessionId;

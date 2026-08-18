@@ -122,6 +122,16 @@ describe("HeadlessHostManager keep-alive", () => {
     });
   };
 
+  const registerDesktop = (sessionId: string) => {
+    coordinator.registerClient({
+      clientSessionId: sessionId,
+      hostConnectionId: sessionId,
+      label: "Desktop",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+  };
+
   beforeEach(() => {
     vi.useFakeTimers();
     coordinator = new PanelRuntimeCoordinator();
@@ -160,6 +170,18 @@ describe("HeadlessHostManager keep-alive", () => {
     const { manager, spawnFn } = makeManager({ connect: true });
     manager.startKeepAlive();
     await vi.advanceTimersByTimeAsync(0);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    await manager.stop();
+  });
+
+  it("spawns a headless host when a desktop CDP host is already connected", async () => {
+    registerDesktop("desktop-1");
+    const { manager, spawnFn } = makeManager({ connect: true });
+
+    await expect(manager.ensureHeadlessHost()).resolves.toMatchObject({
+      clientSessionId: "headless-1",
+      platform: "headless",
+    });
     expect(spawnFn).toHaveBeenCalledTimes(1);
     await manager.stop();
   });

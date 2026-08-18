@@ -59,6 +59,7 @@ type AttemptProbe = (slotId: PanelSlotId) => Promise<{
 type DefaultCdpHostOptions = {
   isHostAvailable?: (hostConnectionId: string) => boolean;
   replaceUnavailableLease?: boolean;
+  requiredPlatform?: PanelRuntimeLease["platform"];
   /** A host that deliberately relinquished this residency is not an
    *  immediate candidate for the replacement lease. */
   excludedHostConnectionId?: string;
@@ -690,6 +691,7 @@ export class PanelRuntimeCoordinator {
     });
     for (const client of candidates) {
       const hostConnectionId = client.hostConnectionId ?? client.clientSessionId;
+      if (options.requiredPlatform && client.platform !== options.requiredPlatform) continue;
       if (hostConnectionId === options.excludedHostConnectionId) continue;
       if (client.supportsCdp === false) continue;
       if (client.loadOnLeaseAssignment !== true) continue;
