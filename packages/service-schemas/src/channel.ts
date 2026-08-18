@@ -6,8 +6,8 @@
  * the host never imports workspace code. The methods here mirror the DO surfaces
  * the CLI drives, with the field shapes the CLI shapes on top of the raw relay:
  *
- *   list    → semantic control plane `listChannelLogs` (durable channel-log enumeration)
- *             + per-channel `getContextId` annotation
+ *   list    → read-only workspace service discovery + live runtime entity enumeration
+ *             (the entity record already owns channel identity and context)
  *   history → channel DO `getReplayAfter` (durable log read, paged client-side)
  *   send    → channel DO `sendAsCaller` (durable message as the verified caller)
  *   roster  → channel DO `getParticipants`

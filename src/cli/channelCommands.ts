@@ -21,6 +21,7 @@ import {
   type ChannelSendResult,
   type ChannelSummary,
 } from "@vibestudio/service-schemas/channel";
+import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -32,11 +33,55 @@ import { resolveSessionScope, SCOPE_FLAGS } from "./agent/sessionContext.js";
 import type { RpcClient } from "./rpcClient.js";
 
 const CHANNEL_PROTOCOL = "vibestudio.channel.v1";
-const VCS_PROTOCOL = "vibestudio.vcs.v1";
 
 interface ResolvedService {
   kind: string;
   targetId?: string;
+}
+
+interface WorkspaceServiceRow {
+  source: string;
+  kind: string;
+  className?: string | null;
+  protocols?: string[];
+}
+
+interface RuntimeEntityRow {
+  id: string;
+  kind: string;
+  source: string;
+  key: string;
+  contextId: string;
+  createdAt: number;
+}
+
+async function channelProvider(client: RpcClient): Promise<WorkspaceServiceRow> {
+  const services = await client.call<WorkspaceServiceRow[]>("workers.listServices", []);
+  const provider = services.find((service) => service.protocols?.includes(CHANNEL_PROTOCOL));
+  if (!provider || provider.kind !== "durable-object" || !provider.className) {
+    throw new CliError(`service ${CHANNEL_PROTOCOL} is not a durable-object service`);
+  }
+  return provider;
+}
+
+export async function channelEntities(client: RpcClient): Promise<RuntimeEntityRow[]> {
+  const provider = await channelProvider(client);
+  const entities = await client.call<RuntimeEntityRow[]>("runtime.listEntities", [{ kind: "do" }]);
+  return entities.filter(
+    (entity) =>
+      entity.kind === "do" &&
+      entity.source === provider.source &&
+      entity.id === `do:${provider.source}:${provider.className}:${entity.key}`
+  );
+}
+
+/** Resolve an already-existing channel without creating it or requiring the
+ * caller to have a creator runtime context. Read-only diagnostics use this
+ * route; `send` alone may create a new addressed channel through the service. */
+export async function existingChannelTarget(client: RpcClient, channelId: string): Promise<string> {
+  const entity = (await channelEntities(client)).find((candidate) => candidate.key === channelId);
+  if (!entity) throw new CliError(`channel ${channelId} does not exist in this workspace`);
+  return entity.id;
 }
 
 /** Resolve a userland DO service to its `do:...` relay target id. */
@@ -127,29 +172,12 @@ async function list(inv: ParsedInvocation): Promise<number> {
   try {
     const { client, contextId } = resolveSessionScope(inv);
     const showAll = inv.flags["all"] === true;
-    const vcsTarget = await resolveTargetId(client, VCS_PROTOCOL, null);
-    const logs = await client.callTarget<
-      Array<{ channelId: string; logId: string; createdAt: number | null }>
-    >(vcsTarget, "listChannelLogs", []);
-
-    // Annotate each channel with its bound context (best effort; a channel whose
-    // DO can't be resolved or read is left contextId: null).
-    const summaries: ChannelSummary[] = [];
-    for (const log of logs) {
-      let ctx: string | null = null;
-      try {
-        const target = await resolveTargetId(client, CHANNEL_PROTOCOL, log.channelId);
-        ctx = await client.callTarget<string | null>(target, "getContextId", []);
-      } catch {
-        ctx = null;
-      }
-      summaries.push({
-        channelId: log.channelId,
-        logId: log.logId,
-        createdAt: log.createdAt,
-        contextId: ctx,
-      });
-    }
+    const summaries: ChannelSummary[] = (await channelEntities(client)).map((entity) => ({
+      channelId: entity.key,
+      logId: logIdForChannel(entity.key),
+      createdAt: entity.createdAt,
+      contextId: entity.contextId,
+    }));
     const filtered = showAll ? summaries : summaries.filter((s) => s.contextId === contextId);
 
     printResult(filtered, {
@@ -184,7 +212,7 @@ async function history(inv: ParsedInvocation): Promise<number> {
     const limit = intFlag(inv, "limit") ?? 50;
     if (limit < 1) throw new UsageError("--limit must be a positive integer");
     const { client } = resolveSessionScope(inv);
-    const target = await resolveTargetId(client, CHANNEL_PROTOCOL, channelId);
+    const target = await existingChannelTarget(client, channelId);
     const events: ServerLogEvent[] = [];
     let cursor = after;
     let throughSeq: number | undefined;
@@ -263,7 +291,7 @@ async function roster(inv: ParsedInvocation): Promise<number> {
   try {
     const channelId = requireChannelId(inv);
     const { client } = resolveSessionScope(inv);
-    const target = await resolveTargetId(client, CHANNEL_PROTOCOL, channelId);
+    const target = await existingChannelTarget(client, channelId);
     const members = await client.callTarget<RosterMember[]>(target, "getParticipants", []);
     const entries: ChannelRosterEntry[] = members.map((m) => ({
       participantId: m.participantId,
@@ -294,7 +322,7 @@ async function tail(inv: ParsedInvocation): Promise<number> {
   try {
     const channelId = requireChannelId(inv);
     const { client, callerId } = resolveSessionScope(inv);
-    const target = await resolveTargetId(client, CHANNEL_PROTOCOL, channelId);
+    const target = await existingChannelTarget(client, channelId);
 
     let lastRenderedSeq = 0;
     const render = (event: ServerLogEvent): void => {
