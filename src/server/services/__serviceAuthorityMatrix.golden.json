@@ -1926,6 +1926,203 @@
       }
     }
   },
+  "chromiumFetch": {
+    "service": {
+      "principals": [
+        "code",
+        "host",
+        "user"
+      ]
+    },
+    "methods": {
+      "close": {
+        "authority": {
+          "principals": [
+            "code",
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "chromiumFetch.transport",
+          "rationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "openBrowser": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "credential.use"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "credential.use"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "credential.use"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "credential.use"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "credential.use"
+          },
+          "prepared": {
+            "resolver": "chromiumFetch.openBrowser.origin",
+            "leaves": [
+              {
+                "capability": "credential.use",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "credential.use"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "credential.use"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "chromiumFetch.transport",
+          "rationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport"
+        },
+        "capability": "credential.use",
+        "presentation": {
+          "title": "Use your browser session",
+          "action": "load a website using your signed-in browser session",
+          "description": "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "accounts",
+            "verb": "act"
+          }
+        }
+      },
+      "openPublic": {
+        "authority": {
+          "principals": [
+            "code",
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "chromiumFetch.transport",
+          "rationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "read": {
+        "authority": {
+          "principals": [
+            "code",
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "chromiumFetch.transport",
+          "rationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport"
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
   "contentTrust": {
     "service": {
       "principals": [
