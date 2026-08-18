@@ -992,8 +992,17 @@ export const HOST_AUTHORITY_METHODS = {
       family: "browserEnvironment.retire",
       rationale: "Records durable cancellation and stops the active host import reader.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.cancelSensitiveImport",
+    presentation: {
+      title: "Cancel protected browser import",
+      action: "cancel protected browser import",
+      description: "Stop an in-progress protected browser data import.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserEnvironment.getImportHost": {
     tier: {
@@ -1107,8 +1116,17 @@ export const HOST_AUTHORITY_METHODS = {
       family: "browserEnvironment.read",
       rationale: "Reads aggregate progress from the durable host import ledger.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.observeSensitiveImport",
+    presentation: {
+      title: "Check protected browser import progress",
+      action: "check protected browser import progress",
+      description: "Read aggregate progress for a protected browser import.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.openDownload": {
     tier: {
@@ -1182,8 +1200,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Returns aggregate review counts for protected browser categories without returning records or values.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.previewSensitiveImport",
+    presentation: {
+      title: "Review protected browser data for import",
+      action: "review protected browser data for import",
+      description: "Review aggregate counts without exposing protected browser records.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.resumeDownload": {
     tier: {
@@ -1257,8 +1284,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Runs credential-bearing browser import entirely in the trusted host and returns aggregate counts only; gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.startSensitiveImport",
+    presentation: {
+      title: "Import protected browser data",
+      action: "import protected browser data",
+      description: "Import selected protected browser data directly into your private vault.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserPermissions.request": {
     tier: {
@@ -7958,6 +7994,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "web",
     verb: "manage",
   },
+  "service:browserEnvironment.cancelSensitiveImport": {
+    domain: "web",
+    verb: "manage",
+  },
   "service:browserEnvironment.getImportHost": {
     domain: "web",
     verb: "see",
@@ -7978,6 +8018,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "web",
     verb: "see",
   },
+  "service:browserEnvironment.observeSensitiveImport": {
+    domain: "web",
+    verb: "see",
+  },
   "service:browserEnvironment.openDownload": {
     domain: "computer",
     verb: "act",
@@ -7987,6 +8031,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     verb: "manage",
   },
   "service:browserEnvironment.previewImportSource": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.previewSensitiveImport": {
     domain: "web",
     verb: "see",
   },
@@ -8001,6 +8049,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "service:browserEnvironment.startImportRead": {
     domain: "web",
     verb: "see",
+  },
+  "service:browserEnvironment.startSensitiveImport": {
+    domain: "web",
+    verb: "manage",
   },
   "subagents.create": {
     domain: "automation",
@@ -8647,6 +8699,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "manage",
     },
   },
+  "service:browserEnvironment.cancelSensitiveImport": {
+    title: "Cancel protected browser import",
+    action: "cancel protected browser import",
+    description: "Stop an in-progress protected browser data import.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+  },
   "service:browserEnvironment.getImportHost": {
     title: "Access browser import details",
     action: "access browser import details",
@@ -8697,6 +8759,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "see",
     },
   },
+  "service:browserEnvironment.observeSensitiveImport": {
+    title: "Check protected browser import progress",
+    action: "check protected browser import progress",
+    description: "Read aggregate progress for a protected browser import.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
   "service:browserEnvironment.openDownload": {
     title: "Open downloaded files",
     action: "open downloaded files",
@@ -8721,6 +8793,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     title: "Preview browser data for import",
     action: "preview browser data for import",
     description: "Preview what browser data is available before importing it.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.previewSensitiveImport": {
+    title: "Review protected browser data for import",
+    action: "review protected browser data for import",
+    description: "Review aggregate counts without exposing protected browser records.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8755,6 +8837,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "web",
       verb: "see",
+    },
+  },
+  "service:browserEnvironment.startSensitiveImport": {
+    title: "Import protected browser data",
+    action: "import protected browser data",
+    description: "Import selected protected browser data directly into your private vault.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
     },
   },
   "subagents.create": {

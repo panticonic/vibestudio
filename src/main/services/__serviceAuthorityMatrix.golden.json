@@ -867,8 +867,17 @@
           "family": "browserEnvironment.retire",
           "rationale": "Records durable cancellation and stops the active host import reader."
         },
-        "capability": null,
-        "presentation": null
+        "capability": "service:browserEnvironment.cancelSensitiveImport",
+        "presentation": {
+          "title": "Cancel protected browser import",
+          "action": "cancel protected browser import",
+          "description": "Stop an in-progress protected browser data import.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
+        }
       },
       "getImportHost": {
         "authority": {
@@ -1297,8 +1306,17 @@
           "family": "browserEnvironment.read",
           "rationale": "Reads aggregate progress from the durable host import ledger."
         },
-        "capability": null,
-        "presentation": null
+        "capability": "service:browserEnvironment.observeSensitiveImport",
+        "presentation": {
+          "title": "Check protected browser import progress",
+          "action": "check protected browser import progress",
+          "description": "Read aggregate progress for a protected browser import.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "see"
+          }
+        }
       },
       "openDownload": {
         "authority": {
@@ -1563,8 +1581,17 @@
           "family": "browserEnvironment.control",
           "rationale": "Returns aggregate review counts for protected browser categories without returning records or values."
         },
-        "capability": null,
-        "presentation": null
+        "capability": "service:browserEnvironment.previewSensitiveImport",
+        "presentation": {
+          "title": "Review protected browser data for import",
+          "action": "review protected browser data for import",
+          "description": "Review aggregate counts without exposing protected browser records.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "see"
+          }
+        }
       },
       "resumeDownload": {
         "authority": {
@@ -1829,8 +1856,17 @@
           "family": "browserEnvironment.create",
           "rationale": "Runs credential-bearing browser import entirely in the trusted host and returns aggregate counts only; gated by authority principals."
         },
-        "capability": null,
-        "presentation": null
+        "capability": "service:browserEnvironment.startSensitiveImport",
+        "presentation": {
+          "title": "Import protected browser data",
+          "action": "import protected browser data",
+          "description": "Import selected protected browser data directly into your private vault.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
+        }
       }
     }
   },

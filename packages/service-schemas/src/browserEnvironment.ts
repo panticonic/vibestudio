@@ -37,9 +37,14 @@ function brokerPolicy(method: string, presentation: CapabilityPresentation) {
   };
 }
 
-const reviewedProviderAuthority = {
-  authority: { principals: ["host", "code"] } satisfies ServiceAuthorityPolicy,
-};
+function reviewedProviderPolicy(method: string, presentation: CapabilityPresentation) {
+  const capability = `service:browserEnvironment.${method}`;
+  return {
+    capability,
+    presentation,
+    authority: { principals: ["host", "code"] } satisfies ServiceAuthorityPolicy,
+  };
+}
 
 const DownloadRecordSchema = z.object({
   id: z.string(),
@@ -222,7 +227,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
       localDataSetCount: z.number().int().nonnegative(),
     }),
     access: { sensitivity: "read" },
-    ...reviewedProviderAuthority,
+    ...reviewedProviderPolicy("previewSensitiveImport", {
+      title: "Review protected browser data for import",
+      action: "review protected browser data for import",
+      description: "Review aggregate counts without exposing protected browser records.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   startImportRead: {
     tier: {
@@ -259,7 +270,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1), SensitiveImportDataTypesSchema, z.string().min(1).max(200)]),
     returns: SensitiveImportStatusSchema,
     access: { sensitivity: "write" },
-    ...reviewedProviderAuthority,
+    ...reviewedProviderPolicy("startSensitiveImport", {
+      title: "Import protected browser data",
+      action: "import protected browser data",
+      description: "Import selected protected browser data directly into your private vault.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   observeSensitiveImport: {
     tier: {
@@ -273,7 +290,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1).max(200)]),
     returns: SensitiveImportStatusSchema,
     access: { sensitivity: "read" },
-    ...reviewedProviderAuthority,
+    ...reviewedProviderPolicy("observeSensitiveImport", {
+      title: "Check protected browser import progress",
+      action: "check protected browser import progress",
+      description: "Read aggregate progress for a protected browser import.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   cancelSensitiveImport: {
     tier: {
@@ -287,7 +310,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1).max(200)]),
     returns: SensitiveImportStatusSchema,
     access: { sensitivity: "write" },
-    ...reviewedProviderAuthority,
+    ...reviewedProviderPolicy("cancelSensitiveImport", {
+      title: "Cancel protected browser import",
+      action: "cancel protected browser import",
+      description: "Stop an in-progress protected browser data import.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   nextImportFrame: {
     tier: {
