@@ -2,6 +2,7 @@ import type {
   BrowserEnvironmentIdentity,
   BrowserImportDataType,
   BrowserImportProvider,
+  BrowserImportRead,
   BrowserImportSelection,
   BrowserImportSource,
   ImportBatch,
@@ -179,8 +180,21 @@ export class BrowserImportCoordinator {
       this.onJobChanged?.(identity, this.clone(snapshot));
       throw error;
     }
+    let read: BrowserImportRead;
+    try {
+      read = await host.provider.openImport(
+        snapshot.sourceId,
+        snapshot.requestedDataTypes,
+        abort.signal
+      );
+    } catch (error) {
+      this.failJob(snapshot, abort.signal, error);
+      await this.persist(identity, snapshot);
+      this.onJobChanged?.(identity, this.clone(snapshot));
+      throw error;
+    }
     const accepted = this.clone(snapshot);
-    state.running = this.runImport(state, host.provider, true);
+    state.running = this.runImport(state, read, true);
     return accepted;
   }
 
@@ -213,7 +227,19 @@ export class BrowserImportCoordinator {
     current.snapshot.error = undefined;
     current.snapshot.finishedAt = undefined;
     current.snapshot.updatedAt = Date.now();
-    current.running = this.runImport(current, host.provider);
+    let read: BrowserImportRead;
+    try {
+      read = await host.provider.openImport(
+        current.snapshot.sourceId,
+        current.snapshot.requestedDataTypes,
+        current.abort.signal
+      );
+    } catch (error) {
+      this.failJob(current.snapshot, current.abort.signal, error);
+      await this.persist(identity, current.snapshot);
+      throw error;
+    }
+    current.running = this.runImport(current, read);
     return this.clone(current.snapshot);
   }
 
@@ -259,7 +285,7 @@ export class BrowserImportCoordinator {
 
   private async runImport(
     state: JobState,
-    provider: BrowserImportProvider,
+    read: BrowserImportRead,
     discoveringPersisted = false
   ): Promise<void> {
     const { identity, snapshot, abort } = state;
@@ -272,33 +298,28 @@ export class BrowserImportCoordinator {
       snapshot.phase = "reading";
       snapshot.updatedAt = Date.now();
       await this.persist(identity, snapshot);
-      const summary = await provider.import(
-        snapshot.sourceId,
-        snapshot.requestedDataTypes,
-        {
-          store: async (providerBatch) => {
-            const batch: ImportBatch = {
-              ...providerBatch,
-              jobId: snapshot.jobId,
-              sourceId: snapshot.sourceId,
-              idempotencyKey: `${snapshot.jobId}:${providerBatch.dataType}:${providerBatch.batchIndex}`,
-            };
-            snapshot.phase = "storing";
-            snapshot.updatedAt = Date.now();
-            await this.store.storeBatch(identity, batch);
-            await this.persist(identity, snapshot);
-          },
-          progress: async (progress) => {
-            snapshot.progress = [
-              ...snapshot.progress.filter((item) => item.dataType !== progress.dataType),
-              progress,
-            ];
-            snapshot.updatedAt = Date.now();
-            await this.persist(identity, snapshot);
-          },
+      const summary = await read.consume({
+        store: async (providerBatch) => {
+          const batch: ImportBatch = {
+            ...providerBatch,
+            jobId: snapshot.jobId,
+            sourceId: snapshot.sourceId,
+            idempotencyKey: `${snapshot.jobId}:${providerBatch.dataType}:${providerBatch.batchIndex}`,
+          };
+          snapshot.phase = "storing";
+          snapshot.updatedAt = Date.now();
+          await this.store.storeBatch(identity, batch);
+          await this.persist(identity, snapshot);
         },
-        abort.signal
-      );
+        progress: async (progress) => {
+          snapshot.progress = [
+            ...snapshot.progress.filter((item) => item.dataType !== progress.dataType),
+            progress,
+          ];
+          snapshot.updatedAt = Date.now();
+          await this.persist(identity, snapshot);
+        },
+      });
       if (this.store.reconcileImport) {
         snapshot.phase = "reconciling";
         snapshot.progress = summary.dataTypes;

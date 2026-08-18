@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   BrowserEnvironmentIdentity,
   BrowserImportProvider,
+  ImportBatchSink,
   ImportJobSnapshot,
 } from "./environment.js";
 import { BrowserImportCoordinator, type BrowserImportStore } from "./importCoordinator.js";
@@ -22,27 +23,29 @@ function provider(): BrowserImportProvider {
       openTabCount: 0,
       localDataSetCount: 1,
     })),
-    import: vi.fn(async (_sourceId, _types, sink, signal) => {
-      if (signal.aborted) throw signal.reason;
-      await sink.store({
-        jobId: "provider-job",
-        sourceId: "source-a",
-        dataType: "bookmarks",
-        batchIndex: 0,
-        idempotencyKey: "provider-key",
-        items: [{ url: "https://example.test" }],
-      });
-      const progress = {
-        dataType: "bookmarks" as const,
-        itemsProcessed: 1,
-        totalItems: 1,
-        stored: 1,
-        skipped: 0,
-        errors: 0,
-      };
-      await sink.progress(progress);
-      return { dataTypes: [progress], warnings: [] };
-    }),
+    openImport: vi.fn(async (_sourceId, _types, signal) => ({
+      consume: async (sink: ImportBatchSink) => {
+        if (signal.aborted) throw signal.reason;
+        await sink.store({
+          jobId: "provider-job",
+          sourceId: "source-a",
+          dataType: "bookmarks",
+          batchIndex: 0,
+          idempotencyKey: "provider-key",
+          items: [{ url: "https://example.test" }],
+        });
+        const progress = {
+          dataType: "bookmarks" as const,
+          itemsProcessed: 1,
+          totalItems: 1,
+          stored: 1,
+          skipped: 0,
+          errors: 0,
+        };
+        await sink.progress(progress);
+        return { dataTypes: [progress], warnings: [] };
+      },
+    })),
     listOpenTabs: vi.fn(async () => []),
   };
 }
@@ -183,11 +186,56 @@ describe("BrowserImportCoordinator", () => {
       });
     await vi.waitFor(() => expect(backing.value.persistJob).toHaveBeenCalledOnce());
     expect(accepted).toBe(false);
-    expect(importProvider.import).not.toHaveBeenCalled();
+    expect(importProvider.openImport).not.toHaveBeenCalled();
 
     releasePersistence();
     const started = await starting;
     expect(started.phase).toBe("discovering");
+    await expect(coordinator.waitForJob(identity, started.jobId)).resolves.toMatchObject({
+      phase: "complete",
+    });
+  });
+
+  it("opens the provider read before accepting detached background work", async () => {
+    const backing = store();
+    let releaseOpen!: () => void;
+    const opening = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const importProvider = provider();
+    const originalOpen = importProvider.openImport;
+    importProvider.openImport = vi.fn(async (sourceId, dataTypes, signal) => {
+      await opening;
+      return originalOpen(sourceId, dataTypes, signal);
+    });
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: "user-a",
+      displayName: "Laptop",
+      platform: "linux",
+      location: "desktop",
+      connected: true,
+      provider: importProvider,
+    });
+
+    let accepted = false;
+    const starting = coordinator
+      .start(identity, {
+        hostId: "desktop-a",
+        sourceId: "source-a",
+        dataTypes: ["bookmarks"],
+      })
+      .then((job) => {
+        accepted = true;
+        return job;
+      });
+    await vi.waitFor(() => expect(importProvider.openImport).toHaveBeenCalledOnce());
+    expect(accepted).toBe(false);
+
+    releaseOpen();
+    const started = await starting;
+    expect(accepted).toBe(true);
     await expect(coordinator.waitForJob(identity, started.jobId)).resolves.toMatchObject({
       phase: "complete",
     });
@@ -262,7 +310,7 @@ describe("BrowserImportCoordinator", () => {
       error: "durable store unavailable",
       resumable: true,
     });
-    expect(importProvider.import).not.toHaveBeenCalled();
+    expect(importProvider.openImport).not.toHaveBeenCalled();
     expect(changed).toHaveBeenLastCalledWith(
       identity,
       expect.objectContaining({ phase: "failed", error: "durable store unavailable" })

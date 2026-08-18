@@ -131,7 +131,13 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
     };
   }
 
-  async import(
+  async openImport(sourceId: string, dataTypes: BrowserImportDataType[], signal: AbortSignal) {
+    return {
+      consume: (sink: ImportBatchSink) => this.consumeImport(sourceId, dataTypes, sink, signal),
+    };
+  }
+
+  private async consumeImport(
     sourceId: string,
     dataTypes: BrowserImportDataType[],
     sink: ImportBatchSink,

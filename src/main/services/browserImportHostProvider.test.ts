@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { BrowserImportProvider } from "@vibestudio/browser-data";
+import type { BrowserImportProvider, ImportBatchSink } from "@vibestudio/browser-data";
 import type { BrowserVaultNativeClient } from "./browserVaultNativeClient.js";
 import { SensitiveBrowserImportLedger } from "./sensitiveBrowserImportLedger.js";
 import {
@@ -21,20 +21,22 @@ function batchProvider(onStoreComplete: () => void): BrowserImportProvider {
       openTabCount: 0,
       localDataSetCount: 0,
     })),
-    import: vi.fn(async (sourceId, _types, sink) => {
-      await sink.store({
-        jobId: "job",
-        sourceId,
-        dataType: "bookmarks",
-        batchIndex: 0,
-        idempotencyKey: "batch",
-        items: Array.from({ length: (MAX_QUEUED_IMPORT_FRAMES + 2) * 50 }, (_, index) => ({
-          index,
-        })),
-      });
-      onStoreComplete();
-      return { dataTypes: [], warnings: [] };
-    }),
+    openImport: vi.fn(async (sourceId) => ({
+      consume: async (sink: ImportBatchSink) => {
+        await sink.store({
+          jobId: "job",
+          sourceId,
+          dataType: "bookmarks",
+          batchIndex: 0,
+          idempotencyKey: "batch",
+          items: Array.from({ length: (MAX_QUEUED_IMPORT_FRAMES + 2) * 50 }, (_, index) => ({
+            index,
+          })),
+        });
+        onStoreComplete();
+        return { dataTypes: [], warnings: [] };
+      },
+    })),
     listOpenTabs: vi.fn(async () => []),
   };
 }
@@ -225,9 +227,11 @@ describe("BrowserImportHostProvider", () => {
   it("keeps native public-import diagnostics out of workspace frames", async () => {
     const diagnostic = "Could not open /private/profile/History: record fragment secret-value";
     const importProvider = batchProvider(() => {});
-    importProvider.import = vi.fn(async () => {
-      throw new Error(diagnostic);
-    });
+    importProvider.openImport = vi.fn(async () => ({
+      consume: async () => {
+        throw new Error(diagnostic);
+      },
+    }));
     const nativeLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const provider = new BrowserImportHostProvider(
       { hostId: "desktop", displayName: "Desktop" },
@@ -257,78 +261,80 @@ describe("BrowserImportHostProvider", () => {
         openTabCount: 0,
         localDataSetCount: 0,
       })),
-      import: vi.fn(async (sourceId, _types, sink) => {
-        await sink.store({
-          jobId: "provider-generated-id",
-          sourceId,
-          dataType: "cookies",
-          batchIndex: 0,
-          idempotencyKey: "provider-cookie-key",
-          items: [
-            {
-              name: "session",
-              value: "cookie-secret",
-              domain: "example.com",
-              path: "/",
-              hostOnly: true,
-              secure: true,
-              httpOnly: true,
-              sameSite: "lax",
-            },
-          ],
-        });
-        await sink.store({
-          jobId: "provider-generated-id",
-          sourceId,
-          dataType: "passwords",
-          batchIndex: 0,
-          idempotencyKey: "provider-password-key",
-          items: [
-            {
-              url: "https://example.com",
-              username: "secret-user",
-              password: "password-secret",
-            },
-          ],
-        });
-        await sink.store({
-          jobId: "provider-generated-id",
-          sourceId,
-          dataType: "formFill",
-          batchIndex: 0,
-          idempotencyKey: "provider-form-key",
-          items: [{ fieldName: "email", value: "form-secret" }],
-        });
-        return {
-          dataTypes: [
-            {
-              dataType: "cookies" as const,
-              itemsProcessed: 1,
-              totalItems: 1,
-              stored: 1,
-              skipped: 2,
-              errors: 0,
-            },
-            {
-              dataType: "passwords" as const,
-              itemsProcessed: 1,
-              totalItems: 1,
-              stored: 1,
-              skipped: 0,
-              errors: 0,
-            },
-            {
-              dataType: "formFill" as const,
-              itemsProcessed: 1,
-              totalItems: 1,
-              stored: 1,
-              skipped: 0,
-              errors: 0,
-            },
-          ],
-          warnings: ["warning that must remain host-local"],
-        };
-      }),
+      openImport: vi.fn(async (sourceId) => ({
+        consume: async (sink: ImportBatchSink) => {
+          await sink.store({
+            jobId: "provider-generated-id",
+            sourceId,
+            dataType: "cookies",
+            batchIndex: 0,
+            idempotencyKey: "provider-cookie-key",
+            items: [
+              {
+                name: "session",
+                value: "cookie-secret",
+                domain: "example.com",
+                path: "/",
+                hostOnly: true,
+                secure: true,
+                httpOnly: true,
+                sameSite: "lax",
+              },
+            ],
+          });
+          await sink.store({
+            jobId: "provider-generated-id",
+            sourceId,
+            dataType: "passwords",
+            batchIndex: 0,
+            idempotencyKey: "provider-password-key",
+            items: [
+              {
+                url: "https://example.com",
+                username: "secret-user",
+                password: "password-secret",
+              },
+            ],
+          });
+          await sink.store({
+            jobId: "provider-generated-id",
+            sourceId,
+            dataType: "formFill",
+            batchIndex: 0,
+            idempotencyKey: "provider-form-key",
+            items: [{ fieldName: "email", value: "form-secret" }],
+          });
+          return {
+            dataTypes: [
+              {
+                dataType: "cookies" as const,
+                itemsProcessed: 1,
+                totalItems: 1,
+                stored: 1,
+                skipped: 2,
+                errors: 0,
+              },
+              {
+                dataType: "passwords" as const,
+                itemsProcessed: 1,
+                totalItems: 1,
+                stored: 1,
+                skipped: 0,
+                errors: 0,
+              },
+              {
+                dataType: "formFill" as const,
+                itemsProcessed: 1,
+                totalItems: 1,
+                stored: 1,
+                skipped: 0,
+                errors: 0,
+              },
+            ],
+            warnings: ["warning that must remain host-local"],
+          };
+        },
+      })),
       listOpenTabs: vi.fn(async () => []),
     };
     const browserVault = {
@@ -391,30 +397,32 @@ describe("BrowserImportHostProvider", () => {
       release = resolve;
     });
     const importProvider = batchProvider(() => {});
-    importProvider.import = vi.fn(async (sourceId, _types, sink) => {
-      await blocked;
-      await sink.store({
-        jobId: "provider-id",
-        sourceId,
-        dataType: "passwords",
-        batchIndex: 0,
-        idempotencyKey: "provider-key",
-        items: [{ url: "https://example.com", username: "same-user", password: "same-secret" }],
-      });
-      return {
-        dataTypes: [
-          {
-            dataType: "passwords" as const,
-            itemsProcessed: 1,
-            totalItems: 1,
-            stored: 1,
-            skipped: 0,
-            errors: 0,
-          },
-        ],
-        warnings: [],
-      };
-    });
+    importProvider.openImport = vi.fn(async (sourceId) => ({
+      consume: async (sink: ImportBatchSink) => {
+        await blocked;
+        await sink.store({
+          jobId: "provider-id",
+          sourceId,
+          dataType: "passwords",
+          batchIndex: 0,
+          idempotencyKey: "provider-key",
+          items: [{ url: "https://example.com", username: "same-user", password: "same-secret" }],
+        });
+        return {
+          dataTypes: [
+            {
+              dataType: "passwords" as const,
+              itemsProcessed: 1,
+              totalItems: 1,
+              stored: 1,
+              skipped: 0,
+              errors: 0,
+            },
+          ],
+          warnings: [],
+        };
+      },
+    }));
     const browserVault = {
       addCookiesBatch: vi.fn(),
       addPasswordsBatch: vi.fn(async () => 1),
@@ -441,7 +449,7 @@ describe("BrowserImportHostProvider", () => {
       state: "complete",
       counts: [{ dataType: "passwords", read: 1, stored: 1, skipped: 0, errors: 0 }],
     });
-    expect(importProvider.import).toHaveBeenCalledOnce();
+    expect(importProvider.openImport).toHaveBeenCalledOnce();
     expect(browserVault.addPasswordsBatch).toHaveBeenCalledOnce();
   });
 
@@ -449,9 +457,11 @@ describe("BrowserImportHostProvider", () => {
     const diagnostic =
       "Could not parse /private/profile/Login Data: record contained password-secret";
     const importProvider = batchProvider(() => {});
-    importProvider.import = vi.fn(async () => {
-      throw new Error(diagnostic);
-    });
+    importProvider.openImport = vi.fn(async () => ({
+      consume: async () => {
+        throw new Error(diagnostic);
+      },
+    }));
     const nativeLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const provider = new BrowserImportHostProvider(
       { hostId: "desktop", displayName: "Desktop" },
@@ -487,7 +497,9 @@ describe("BrowserImportHostProvider", () => {
   it("bounds completed sensitive-import receipt replay", async () => {
     const nativeLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const importProvider = batchProvider(() => {});
-    importProvider.import = vi.fn(async () => ({ dataTypes: [], warnings: [] }));
+    importProvider.openImport = vi.fn(async () => ({
+      consume: async () => ({ dataTypes: [], warnings: [] }),
+    }));
     const provider = new BrowserImportHostProvider(
       { hostId: "desktop", displayName: "Desktop" },
       {

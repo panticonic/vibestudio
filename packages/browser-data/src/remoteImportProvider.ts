@@ -1,6 +1,7 @@
 import type {
   BrowserImportDataType,
   BrowserImportProvider,
+  BrowserImportRead,
   BrowserImportSource,
   ImportBatchSink,
   ImportedBrowserOpenTab,
@@ -44,45 +45,48 @@ export class RemoteBrowserImportProvider implements BrowserImportProvider {
     return summary;
   }
 
-  async import(
+  async openImport(
     sourceId: string,
     dataTypes: BrowserImportDataType[],
-    sink: ImportBatchSink,
     signal: AbortSignal
-  ): Promise<ImportSummary> {
+  ): Promise<BrowserImportRead> {
     const operationId = await this.call<string>("startImportRead", sourceId, dataTypes);
     const cancel = () => void this.call("cancelImportRead", operationId).catch(() => {});
     signal.addEventListener("abort", cancel, { once: true });
-    try {
-      for (;;) {
-        if (signal.aborted) throw signal.reason;
-        const frame = await this.call<ProviderFrame>("nextImportFrame", operationId);
-        switch (frame.type) {
-          case "heartbeat":
-            break;
-          case "batch":
-            await sink.store({
-              jobId: operationId,
-              sourceId,
-              dataType: frame.dataType,
-              batchIndex: frame.batchIndex,
-              idempotencyKey: `${operationId}:${frame.dataType}:${frame.batchIndex}`,
-              items: frame.items,
-            });
-            break;
-          case "progress":
-            await sink.progress(frame.progress);
-            break;
-          case "complete":
-            return frame.summary;
-          case "error":
-            throw new Error(frame.message);
+    return {
+      consume: async (sink: ImportBatchSink): Promise<ImportSummary> => {
+        try {
+          for (;;) {
+            if (signal.aborted) throw signal.reason;
+            const frame = await this.call<ProviderFrame>("nextImportFrame", operationId);
+            switch (frame.type) {
+              case "heartbeat":
+                break;
+              case "batch":
+                await sink.store({
+                  jobId: operationId,
+                  sourceId,
+                  dataType: frame.dataType,
+                  batchIndex: frame.batchIndex,
+                  idempotencyKey: `${operationId}:${frame.dataType}:${frame.batchIndex}`,
+                  items: frame.items,
+                });
+                break;
+              case "progress":
+                await sink.progress(frame.progress);
+                break;
+              case "complete":
+                return frame.summary;
+              case "error":
+                throw new Error(frame.message);
+            }
+          }
+        } finally {
+          signal.removeEventListener("abort", cancel);
+          if (signal.aborted) cancel();
         }
-      }
-    } finally {
-      signal.removeEventListener("abort", cancel);
-      if (signal.aborted) cancel();
-    }
+      },
+    };
   }
 
   listOpenTabs(sourceId: string, _signal: AbortSignal): Promise<ImportedBrowserOpenTab[]> {

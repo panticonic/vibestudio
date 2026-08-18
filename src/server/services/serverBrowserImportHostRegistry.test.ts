@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ImportBatchSink } from "@vibestudio/browser-data";
 import { ServerBrowserImportHostRegistry } from "./serverBrowserImportHostRegistry.js";
 
 const roots: string[] = [];
@@ -23,38 +24,40 @@ describe("ServerBrowserImportHostRegistry", () => {
         listSources: vi.fn(async () => []),
         preview: vi.fn(),
         listOpenTabs: vi.fn(async () => []),
-        import: vi.fn(async (sourceId, dataTypes, sink) => {
-          expect(sourceId).toBe("firefox-source");
-          expect(dataTypes).toEqual(["cookies"]);
-          await sink.store({
-            jobId: "reader-job",
-            sourceId,
-            dataType: "cookies",
-            batchIndex: 0,
-            idempotencyKey: "reader-job:cookies:0",
-            items: [
-              {
-                name: "sid",
-                value: "protected-value",
-                domain: "example.com",
-                hostOnly: true,
-                path: "/",
-                secure: true,
-                httpOnly: true,
-                sameSite: "lax",
-              },
-            ],
-          });
-          const progress = {
-            dataType: "cookies" as const,
-            itemsProcessed: 1,
-            stored: 1,
-            skipped: 0,
-            errors: 0,
-          };
-          await sink.progress(progress);
-          return { dataTypes: [progress], warnings: [] };
-        }),
+        openImport: vi.fn(async (sourceId, dataTypes) => ({
+          consume: async (sink: ImportBatchSink) => {
+            expect(sourceId).toBe("firefox-source");
+            expect(dataTypes).toEqual(["cookies"]);
+            await sink.store({
+              jobId: "reader-job",
+              sourceId,
+              dataType: "cookies",
+              batchIndex: 0,
+              idempotencyKey: "reader-job:cookies:0",
+              items: [
+                {
+                  name: "sid",
+                  value: "protected-value",
+                  domain: "example.com",
+                  hostOnly: true,
+                  path: "/",
+                  secure: true,
+                  httpOnly: true,
+                  sameSite: "lax",
+                },
+              ],
+            });
+            const progress = {
+              dataType: "cookies" as const,
+              itemsProcessed: 1,
+              stored: 1,
+              skipped: 0,
+              errors: 0,
+            };
+            await sink.progress(progress);
+            return { dataTypes: [progress], warnings: [] };
+          },
+        })),
       }),
     });
     const provider = registry.forContext({

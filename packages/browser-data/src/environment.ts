@@ -224,6 +224,11 @@ export interface ImportBatchSink {
   progress(progress: ImportCategoryProgress): void | Promise<void>;
 }
 
+/** A provider read acquired while the initiating RPC invocation is still live. */
+export interface BrowserImportRead {
+  consume(sink: ImportBatchSink): Promise<ImportSummary>;
+}
+
 export interface BrowserImportProvider {
   listSources(signal: AbortSignal): Promise<BrowserImportSource[]>;
   preview(
@@ -232,12 +237,16 @@ export interface BrowserImportProvider {
     sink: ImportPreviewSink,
     signal: AbortSignal
   ): Promise<ImportPreviewSummary>;
-  import(
+  /**
+   * Acquire the import read before the coordinator detaches its background job.
+   * Privileged providers seal their host-side operation here; `consume` needs
+   * only that operation, never a retained ambient user invocation.
+   */
+  openImport(
     sourceId: string,
     dataTypes: BrowserImportDataType[],
-    sink: ImportBatchSink,
     signal: AbortSignal
-  ): Promise<ImportSummary>;
+  ): Promise<BrowserImportRead>;
   listOpenTabs(sourceId: string, signal: AbortSignal): Promise<ImportedBrowserOpenTab[]>;
 }
 

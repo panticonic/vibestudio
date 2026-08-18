@@ -310,29 +310,25 @@ export class BrowserImportHostProvider {
     dataTypes: BrowserPublicImportDataType[]
   ): Promise<void> {
     try {
-      const summary = await (
+      const read = await (
         await this.provider()
-      ).import(
-        sourceId,
-        dataTypes,
-        {
-          store: async (batch) => {
-            if (!isPublicImportDataType(batch.dataType)) {
-              throw new Error("Sensitive browser data cannot be emitted as an import frame");
-            }
-            for (const items of frameChunks(batch.items)) {
-              await this.push(operation, {
-                type: "batch",
-                dataType: batch.dataType,
-                batchIndex: operation.nextBatchIndex++,
-                items,
-              });
-            }
-          },
-          progress: (progress) => this.push(operation, { type: "progress", progress }),
+      ).openImport(sourceId, dataTypes, operation.abort.signal);
+      const summary = await read.consume({
+        store: async (batch) => {
+          if (!isPublicImportDataType(batch.dataType)) {
+            throw new Error("Sensitive browser data cannot be emitted as an import frame");
+          }
+          for (const items of frameChunks(batch.items)) {
+            await this.push(operation, {
+              type: "batch",
+              dataType: batch.dataType,
+              batchIndex: operation.nextBatchIndex++,
+              items,
+            });
+          }
         },
-        operation.abort.signal
-      );
+        progress: (progress) => this.push(operation, { type: "progress", progress }),
+      });
       if (!summary.dataTypes.every((progress) => isPublicImportDataType(progress.dataType))) {
         throw new Error("Sensitive browser data cannot be emitted in an import summary");
       }
@@ -361,69 +357,63 @@ export class BrowserImportHostProvider {
     if (!vault) throw new Error("The host browser vault is unavailable");
     const stored = new Map<BrowserSensitiveImportDataType, number>();
     const storedBatches = new Set<string>();
-    const summary = await (
-      await this.provider()
-    ).import(
-      sourceId,
-      dataTypes,
-      {
-        store: async (batch) => {
-          if (!isSensitiveImportDataType(batch.dataType)) {
-            throw new Error(`Unexpected non-sensitive import batch: ${batch.dataType}`);
-          }
-          if (!dataTypes.includes(batch.dataType)) {
-            throw new Error(`Unexpected sensitive import batch: ${batch.dataType}`);
-          }
-          if (batch.sourceId !== sourceId) {
-            throw new Error("Sensitive import batch source does not match the requested source");
-          }
-          const batchKey = `${batch.dataType}:${batch.batchIndex}`;
-          if (storedBatches.has(batchKey)) {
-            throw new Error(`Duplicate sensitive import batch: ${batchKey}`);
-          }
-          storedBatches.add(batchKey);
-          let count: number;
-          switch (batch.dataType) {
-            case "cookies":
-              await vault.addCookiesBatch({
-                jobId: operationId,
-                batchIndex: batch.batchIndex,
-                cookies: batch.items as BrowserCookieInput[],
-              });
-              count = batch.items.length;
-              break;
-            case "passwords":
-              count = await vault.addPasswordsBatch(batch.items as ImportedPassword[], {
-                sourceId,
-              });
-              break;
-            case "formFill":
-              count = await vault.addFormFillBatch(batch.items as FormFillValueInput[], {
-                sourceId,
-              });
-              break;
-          }
-          stored.set(batch.dataType, (stored.get(batch.dataType) ?? 0) + count);
-        },
-        progress: (progress) => {
-          if (!isSensitiveImportDataType(progress.dataType)) {
-            throw new Error(`Unexpected non-sensitive import progress: ${progress.dataType}`);
-          }
-          this.sensitiveImportLedger.progress(
-            operationId,
-            { sourceId, dataTypes },
-            {
-              dataType: progress.dataType,
-              read: progress.itemsProcessed,
-              stored: stored.get(progress.dataType) ?? 0,
-              skipped: progress.skipped,
-              errors: progress.errors,
-            }
-          );
-        },
+    const read = await (await this.provider()).openImport(sourceId, dataTypes, signal);
+    const summary = await read.consume({
+      store: async (batch) => {
+        if (!isSensitiveImportDataType(batch.dataType)) {
+          throw new Error(`Unexpected non-sensitive import batch: ${batch.dataType}`);
+        }
+        if (!dataTypes.includes(batch.dataType)) {
+          throw new Error(`Unexpected sensitive import batch: ${batch.dataType}`);
+        }
+        if (batch.sourceId !== sourceId) {
+          throw new Error("Sensitive import batch source does not match the requested source");
+        }
+        const batchKey = `${batch.dataType}:${batch.batchIndex}`;
+        if (storedBatches.has(batchKey)) {
+          throw new Error(`Duplicate sensitive import batch: ${batchKey}`);
+        }
+        storedBatches.add(batchKey);
+        let count: number;
+        switch (batch.dataType) {
+          case "cookies":
+            await vault.addCookiesBatch({
+              jobId: operationId,
+              batchIndex: batch.batchIndex,
+              cookies: batch.items as BrowserCookieInput[],
+            });
+            count = batch.items.length;
+            break;
+          case "passwords":
+            count = await vault.addPasswordsBatch(batch.items as ImportedPassword[], {
+              sourceId,
+            });
+            break;
+          case "formFill":
+            count = await vault.addFormFillBatch(batch.items as FormFillValueInput[], {
+              sourceId,
+            });
+            break;
+        }
+        stored.set(batch.dataType, (stored.get(batch.dataType) ?? 0) + count);
       },
-      signal
-    );
+      progress: (progress) => {
+        if (!isSensitiveImportDataType(progress.dataType)) {
+          throw new Error(`Unexpected non-sensitive import progress: ${progress.dataType}`);
+        }
+        this.sensitiveImportLedger.progress(
+          operationId,
+          { sourceId, dataTypes },
+          {
+            dataType: progress.dataType,
+            read: progress.itemsProcessed,
+            stored: stored.get(progress.dataType) ?? 0,
+            skipped: progress.skipped,
+            errors: progress.errors,
+          }
+        );
+      },
+    });
     const counts = summary.dataTypes.map((progress) => {
       if (!isSensitiveImportDataType(progress.dataType)) {
         throw new Error(`Unexpected non-sensitive import summary: ${progress.dataType}`);
