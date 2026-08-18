@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadCliCredentials } from "../cli/credentialStore.js";
+import { loadCliCredentials, saveCliCredentials } from "../cli/credentialStore.js";
 import { ConnectionError } from "../cli/output.js";
 import { bootstrapInstanceCliFromDevice } from "./bootstrapInstanceCli.js";
 
@@ -14,6 +14,92 @@ afterEach(() => {
 });
 
 describe("bootstrapInstanceCliFromDevice", () => {
+  it("reconciles an existing CLI device onto the current ephemeral workspace route", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-reconcile-"));
+    roots.push(root);
+    const credentialFile = path.join(root, "credentials.json");
+    const serverId = `srv_${"S".repeat(24)}`;
+    const existingDeviceId = `dev_${"C".repeat(24)}`;
+    saveCliCredentials(
+      {
+        schemaVersion: 4,
+        kind: "device",
+        url: "webrtc://workspace-old/_workspace/dev",
+        workspaceId: "ws_dev_retired",
+        workspaceName: "dev",
+        serverId,
+        deviceId: existingDeviceId,
+        refreshToken: "R".repeat(43),
+        controlPairing: {
+          room: "development-cli",
+          fp: "AA".repeat(32),
+          sig: "wss://signal.example/",
+          v: 2,
+          ice: "all",
+        },
+        workspacePairing: {
+          room: "workspace-old",
+          fp: "BB".repeat(32),
+          sig: "wss://signal.example/",
+          v: 2,
+          ice: "all",
+        },
+        pairedAt: 123,
+      },
+      credentialFile
+    );
+    const rpcClient = vi.fn((credential: { deviceId: string }) => ({
+      call: vi.fn(async (method: string, args: unknown[]) => {
+        expect(credential.deviceId).toBe(existingDeviceId);
+        expect({ method, args }).toEqual({
+          method: "hubControl.routeWorkspace",
+          args: [{ workspaceId: "ws_dev_current" }],
+        });
+        return {
+          workspace: "dev",
+          workspaceId: "ws_dev_current",
+          running: true,
+          serverUrl: "http://127.0.0.1:5000/_r/ws/dev",
+          workspaceReach: {
+            room: "workspace-current",
+            fp: "CC".repeat(32),
+            sig: "wss://signal.example/",
+            v: 2,
+            ice: "all",
+          },
+          serverId,
+          serverBootId: `boot_${"B".repeat(24)}`,
+        };
+      }),
+      close: vi.fn(async () => undefined),
+    }));
+    const fetchMock = vi.fn();
+
+    await expect(
+      bootstrapInstanceCliFromDevice(
+        {
+          gatewayUrl: "http://127.0.0.1:5000",
+          serverId,
+          workspaceId: "ws_dev_current",
+          workspaceName: "dev",
+          deviceId: `dev_${"A".repeat(24)}`,
+          refreshToken: "Q".repeat(43),
+        },
+        { credentialFile, fetch: fetchMock as typeof fetch, rpcClient }
+      )
+    ).resolves.toEqual({ status: "existing", workspaceName: "dev" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(rpcClient).toHaveBeenCalledOnce();
+    expect(loadCliCredentials(credentialFile)).toMatchObject({
+      workspaceId: "ws_dev_current",
+      workspaceName: "dev",
+      deviceId: existingDeviceId,
+      pairedAt: 123,
+      workspacePairing: { room: "workspace-current" },
+    });
+  });
+
   it("uses an authenticated device invite when the root invite has already been consumed", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-bootstrap-"));
     roots.push(root);
@@ -80,6 +166,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
+          workspaceId: "ws_dev",
           workspaceName: "dev",
           deviceId: `dev_${"A".repeat(24)}`,
           refreshToken: "Q".repeat(43),
@@ -174,6 +261,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
+          workspaceId: "ws_dev",
           workspaceName: "dev",
           deviceId: `dev_${"A".repeat(24)}`,
           refreshToken: "Q".repeat(43),

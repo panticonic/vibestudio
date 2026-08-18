@@ -853,7 +853,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
             loaded: true,
           };
         }
-        const preparing = !this.runtime.hasExecutablePanel(targetPanelId);
+        const preparing =
+          this.runtime.isPresentationInProgress(targetPanelId) ||
+          !this.runtime.hasExecutablePanel(targetPanelId);
         if (preparing) {
           return {
             panelId: targetPanelId,
@@ -944,7 +946,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           loaded: true,
         };
       }
-      if (!this.runtime.hasExecutablePanel(panelId)) {
+      if (
+        this.runtime.isPresentationInProgress(panelId) ||
+        !this.runtime.hasExecutablePanel(panelId)
+      ) {
         return {
           panelId,
           status: "preparing",
@@ -977,7 +982,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       await this.runtime.loadPanelIntoView(panelId);
       const nextView = this.getPanelView();
       const loaded = Boolean(nextView?.hasView(panelId));
-      if (!loaded && !this.runtime.hasExecutablePanel(panelId)) {
+      if (
+        !loaded &&
+        (this.runtime.isPresentationInProgress(panelId) ||
+          !this.runtime.hasExecutablePanel(panelId))
+      ) {
         return {
           panelId,
           status: "preparing",

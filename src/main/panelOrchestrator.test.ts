@@ -1142,6 +1142,63 @@ describe("PanelOrchestrator.focusPanel", () => {
     expect(result).toMatchObject({ status: "loaded", focused: true, loaded: true });
   });
 
+  it("keeps a focused panel preparing while native presentation is still in progress", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/panel-preparing", [], {
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(false);
+
+    await expect(orchestrator.focusPanel(panel.id, { loadIfNeeded: true })).resolves.toMatchObject({
+      status: "preparing",
+      focused: true,
+      loaded: false,
+      message: "Panel runtime is preparing",
+    });
+    expect(registry.getPanel(panel.id)?.artifacts.viewFailure).toBeUndefined();
+  });
+
+  it("creates from the sealed panel record installed during lease acquisition", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/panel-activating", [], {
+      runtimeEntityId: asPanelEntityId("panel:nav-panel-activating"),
+      buildKey: null,
+      executionDigest: null,
+      authorityRequests: undefined,
+      artifacts: { buildState: "building", buildProgress: "Preparing panel runtime..." },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
+    const loadedPanels = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loadedPanels.add(panelId);
+    });
+    shellCore.refreshPanel.mockImplementation(async () => {
+      registry.removePanel(panel.id);
+      registry.addPanel(
+        makePanel(panel.id, [], {
+          runtimeEntityId: panel.runtimeEntityId,
+          artifacts: { buildState: "building", buildProgress: "Runtime image ready" },
+        }),
+        null,
+        { addAsRoot: true }
+      );
+      return registry.getPanel(panel.id) ?? null;
+    });
+
+    await expect(orchestrator.focusPanel(panel.id, { loadIfNeeded: true })).resolves.toMatchObject({
+      status: "loaded",
+      focused: true,
+      loaded: true,
+    });
+    expect(panelView.createViewForPanel).toHaveBeenCalledOnce();
+  });
+
   it("acquires and releases runtime leases for browser panels", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/browser-1", [], {

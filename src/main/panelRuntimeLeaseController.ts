@@ -1013,7 +1013,7 @@ export class PanelPresentationController {
   ): Promise<void> {
     const view = this.deps.getPanelView();
     if (!view) return;
-    const panel = this.deps.registry.getPanel(panelId);
+    let panel = this.deps.registry.getPanel(panelId);
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
     const browserPartition = snapshot.source.startsWith("browser:")
       ? await this.deps.waitForBrowserSessionPartition()
@@ -1037,6 +1037,12 @@ export class PanelPresentationController {
       return;
     }
     if (attempt) this.setAttemptStage(attempt, "creating-view");
+    // Lease acquisition refreshes the durable slot and may replace the
+    // registry object (not merely mutate it). Continue from that authoritative
+    // record so a preparing→active handoff cannot be judged using the stale
+    // object captured before the refresh.
+    panel = this.deps.registry.getPanel(panelId);
+    if (!panel) throw new Error(`Panel disappeared while preparing ${panelId}`);
     const connection = this.connectionBySlot.get(panelId);
     // A native view retained across a server/workspace restart is not evidence
     // that its panel principal is still executable. `refreshPanel` above is the
@@ -1353,6 +1359,10 @@ export class PanelPresentationController {
     return Boolean(
       panel?.snapshot.source.startsWith("browser:") || this.hasCompleteExecutionIdentity(panel)
     );
+  }
+
+  isPresentationInProgress(panelId: string): boolean {
+    return this.getPresentation(panelId).presentation.state === "loading";
   }
 
   private buildPanelUrl(panelId: string, snapshot: PanelSnapshot): string {

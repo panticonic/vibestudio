@@ -29,6 +29,7 @@ export type DevCliBootstrapResult =
 export interface DevCliPairingSponsor {
   gatewayUrl: string;
   serverId: string;
+  workspaceId: string;
   workspaceName: string;
   deviceId: string;
   refreshToken: string;
@@ -105,7 +106,7 @@ async function postPairing(
 function existingCredential(
   serverId: string,
   credentialFile: string | undefined
-): DevCliBootstrapResult | null {
+): CliCredentials | null {
   const existing = loadCliCredentials(credentialFile);
   if (!existing) return null;
   if (existing.serverId !== serverId) {
@@ -114,7 +115,72 @@ function existingCredential(
         `but the live hub is ${serverId}`
     );
   }
-  return { status: "existing", workspaceName: existing.workspaceName };
+  return existing;
+}
+
+async function routeWorkspace(
+  input: {
+    gatewayUrl: string;
+    deviceId: string;
+    refreshToken: string;
+    workspaceId: string;
+  },
+  deps: BootstrapDeps
+): Promise<ReturnType<typeof HubWorkspaceRouteSchema.parse>> {
+  const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const rpc = createRpc({
+      url: input.gatewayUrl,
+      deviceId: input.deviceId,
+      refreshToken: input.refreshToken,
+    });
+    try {
+      return HubWorkspaceRouteSchema.parse(
+        await rpc.call("hubControl.routeWorkspace", [{ workspaceId: input.workspaceId }])
+      );
+    } catch (error) {
+      if (!(error instanceof ConnectionError) || attempt > 0) throw error;
+    } finally {
+      await rpc.close();
+    }
+  }
+  throw new Error("Development CLI could not route its workspace");
+}
+
+async function reconcileExistingCredential(
+  input: { gatewayUrl: string; serverId: string; workspaceId: string },
+  existing: CliCredentials,
+  credentialFile: string | undefined,
+  deps: BootstrapDeps
+): Promise<DevCliBootstrapResult> {
+  if (existing.kind !== "device") {
+    throw new Error("The instance CLI profile is not a paired device credential");
+  }
+  const route = await routeWorkspace(
+    {
+      gatewayUrl: input.gatewayUrl,
+      deviceId: existing.deviceId,
+      refreshToken: existing.refreshToken,
+      workspaceId: input.workspaceId,
+    },
+    deps
+  );
+  if (route.serverId !== input.serverId || route.workspaceId !== input.workspaceId) {
+    throw new Error("Development hub routed a different workspace than the instance selected");
+  }
+  const workspacePairing = stableReach(route.workspaceReach);
+  saveCliCredentials(
+    {
+      ...existing,
+      url: `webrtc://${workspacePairing.room}${selectedWorkspacePath(route.workspace)}`,
+      workspaceId: route.workspaceId,
+      workspaceName: route.workspace,
+      serverId: route.serverId,
+      workspacePairing,
+    },
+    credentialFile
+  );
+  return { status: "existing", workspaceName: route.workspace };
 }
 
 async function pairWithInvite(
@@ -136,26 +202,15 @@ async function pairWithInvite(
       `Development pairing selected unknown workspace ${JSON.stringify(device.workspaceId)}`
     );
   }
-  const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
-  let route: ReturnType<typeof HubWorkspaceRouteSchema.parse> | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const rpc = createRpc({
-      url: input.gatewayUrl,
+  const route = await routeWorkspace(
+    {
+      gatewayUrl: input.gatewayUrl,
       deviceId: device.deviceId,
       refreshToken: device.refreshToken,
-    });
-    try {
-      route = HubWorkspaceRouteSchema.parse(
-        await rpc.call("hubControl.routeWorkspace", [{ workspaceId: device.workspaceId }])
-      );
-      break;
-    } catch (error) {
-      if (!(error instanceof ConnectionError) || attempt > 0) throw error;
-    } finally {
-      await rpc.close();
-    }
-  }
-  if (!route) throw new Error("Development CLI could not route its paired workspace");
+      workspaceId: device.workspaceId,
+    },
+    deps
+  );
 
   const controlPairing = stableReach(input.invite);
   const workspacePairing = stableReach(route.workspaceReach);
@@ -190,7 +245,24 @@ export async function bootstrapInstanceCli(
 ): Promise<DevCliBootstrapResult> {
   const ready = HubReadyPayloadSchema.parse(rawReady);
   const existing = existingCredential(ready.serverId, options.credentialFile);
-  if (existing) return existing;
+  if (existing) {
+    const workspace = ready.workspaces.find((entry) => entry.name === existing.workspaceName);
+    if (!workspace) {
+      throw new Error(
+        `Instance CLI workspace ${JSON.stringify(existing.workspaceName)} is not available`
+      );
+    }
+    return reconcileExistingCredential(
+      {
+        gatewayUrl: ready.gatewayUrl,
+        serverId: ready.serverId,
+        workspaceId: workspace.workspaceId,
+      },
+      existing,
+      options.credentialFile,
+      options
+    );
+  }
   if (!ready.rootInvite) return { status: "invite-required" };
   if (ready.workspaces.length === 0) {
     throw new Error("The development hub has no workspace for its CLI");
@@ -217,7 +289,9 @@ export async function bootstrapInstanceCliFromDevice(
   options: { credentialFile?: string } & BootstrapDeps = {}
 ): Promise<DevCliBootstrapResult> {
   const existing = existingCredential(sponsor.serverId, options.credentialFile);
-  if (existing) return existing;
+  if (existing) {
+    return reconcileExistingCredential(sponsor, existing, options.credentialFile, options);
+  }
 
   const rpc = (options.rpcClient ?? ((credential) => new RpcClient(credential)))({
     url: sponsor.gatewayUrl,

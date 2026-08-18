@@ -551,6 +551,7 @@ export class HubProcessManager {
       await bootstrapInstanceCliFromDevice({
         gatewayUrl: baseUrl,
         serverId: target.record.serverId,
+        workspaceId: routed.workspaceId,
         workspaceName: routed.workspace,
         deviceId: credential.deviceId,
         refreshToken: credential.refreshToken,
