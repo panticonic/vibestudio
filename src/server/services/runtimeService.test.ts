@@ -2569,7 +2569,7 @@ describe("runtimeService session entities", () => {
     expect(instance.contextEdgeListByOwner({ ownerContextId: "ctx-upstream" })).toContainEqual({
       contextId: child.contextId,
       kind: "lifecycle",
-      ownerEntityId: extension.runtime.id,
+      ownerEntityId: upstream.id,
     });
   });
 
@@ -2612,7 +2612,7 @@ describe("runtimeService session entities", () => {
       {
         contextId: "ctx-extension-repeat",
         kind: "lifecycle",
-        ownerEntityId: extension.runtime.id,
+        ownerEntityId: upstream.id,
       },
     ]);
   });

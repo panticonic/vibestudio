@@ -1097,10 +1097,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const context = await setUpContext(contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
     // An extension call is delegated work: the upstream verified code context
-    // owns any lifecycle context created for that request, while the extension
-    // runtime remains the exact creating entity. Without this edge an
-    // extension that has no context of its own creates an orphan context that
-    // neither side can subsequently read or mutate.
+    // and entity own any lifecycle context created for that request. The
+    // extension is the executing deputy, not the authority principal that may
+    // later review or mutate the retained child. Without this exact upstream
+    // ownership, the context is visible beneath the initiator while VCS
+    // correctly refuses the initiator's writes because the lifecycle edge
+    // names an unrelated owner entity.
     const ownerContextId =
       delegatedOwnerContextId === undefined
         ? await store.resolveContext(caller.runtime.id)
@@ -1110,7 +1112,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         contextId,
         ownerContextId,
         kind: "lifecycle",
-        ownerEntityId: caller.runtime.id,
+        ownerEntityId:
+          delegatedOwnerContextId === undefined
+            ? caller.runtime.id
+            : ctx.chainCaller!.callerId,
       });
     }
     await deps.onContextCreated?.({
