@@ -175,6 +175,13 @@ export class BrowserImportCoordinator {
     if (!current || !this.sameEnvironment(current.identity, identity)) {
       const persisted = await this.store.getJob(identity, jobId);
       if (!persisted) throw new Error(`Browser import job was not found: ${jobId}`);
+      if (!this.isTerminal(persisted.phase)) {
+        this.failJob(
+          persisted,
+          new AbortController().signal,
+          new Error("The previous browser import process stopped before the job completed")
+        );
+      }
       current = {
         identity,
         snapshot: persisted,

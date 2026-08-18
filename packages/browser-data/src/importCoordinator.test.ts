@@ -249,4 +249,34 @@ describe("BrowserImportCoordinator", () => {
     await coordinator.resume(identity, "job-a");
     expect((await coordinator.waitForJob(identity, "job-a")).phase).toBe("complete");
   });
+
+  it("resumes a persisted nonterminal job orphaned by a coordinator restart", async () => {
+    const backing = store();
+    backing.jobs.set("job-a", {
+      jobId: "job-a",
+      hostId: "desktop-a",
+      sourceId: "source-a",
+      phase: "discovering",
+      requestedDataTypes: ["bookmarks"],
+      startedAt: 1,
+      updatedAt: 2,
+      progress: [],
+      warnings: [],
+      resumable: true,
+    });
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: "user-a",
+      displayName: "Laptop",
+      platform: "linux",
+      location: "desktop",
+      connected: true,
+      provider: provider(),
+    });
+
+    await coordinator.resume(identity, "job-a");
+
+    expect((await coordinator.waitForJob(identity, "job-a")).phase).toBe("complete");
+  });
 });
