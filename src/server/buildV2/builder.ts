@@ -24,12 +24,6 @@ import { execFile } from "child_process";
 import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
-import {
-  transformSync as transformBabel,
-  types as babelTypes,
-  type PluginItem,
-  type PluginObj,
-} from "@babel/core";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
@@ -93,6 +87,7 @@ import { unknownWorkspaceRpcSchemaError, workspaceRpcSchema } from "./workspaceR
 import { createPanelBundleReport } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
+import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
 export { generatePanelEntry } from "./panelEntryProtocol.js";
 
 /**
@@ -101,20 +96,6 @@ export { generatePanelEntry } from "./panelEntryProtocol.js";
  * callback. This is a per-build transform, so newly authored workspace
  * packages do not depend on a host-generated source census.
  */
-const controlledDynamicImportPlugin: PluginObj = {
-  name: "vibestudio-controlled-dynamic-import",
-  visitor: {
-    CallExpression(callPath) {
-      if (callPath.node.callee.type !== "Import") return;
-      callPath.replaceWith(
-        babelTypes.callExpression(babelTypes.identifier("__vibestudioImport"), [
-          ...callPath.node.arguments,
-        ])
-      );
-    },
-  },
-};
-
 // ---------------------------------------------------------------------------
 // Module Initialization
 // ---------------------------------------------------------------------------
@@ -127,7 +108,7 @@ const controlledDynamicImportPlugin: PluginObj = {
  */
 let _appNodeModules: string[] = [];
 let _appRoot = "";
-let _transformModulesCommonJs: PluginItem | null = null;
+let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
   return createRequire(path.join(nodeModulesRoot, "__vibestudio_host_resolver.cjs"));
@@ -148,20 +129,6 @@ function resolveHostDependency(specifier: string): string {
   );
 }
 
-function requireHostDependency(specifier: string): unknown {
-  const resolved = resolveHostDependency(specifier);
-  return createRequire(resolved)(resolved);
-}
-
-function getTransformModulesCommonJs(): PluginItem {
-  if (!_transformModulesCommonJs) {
-    _transformModulesCommonJs = requireHostDependency(
-      "@babel/plugin-transform-modules-commonjs"
-    ) as PluginItem;
-  }
-  return _transformModulesCommonJs;
-}
-
 /**
  * Initialize the builder with the app's node_modules paths.
  * Must be called once before any buildUnit() calls.
@@ -169,7 +136,14 @@ function getTransformModulesCommonJs(): PluginItem {
 export function initBuilder(appNodeModules: string | string[], appRoot: string): void {
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   _appRoot = path.resolve(appRoot);
-  _transformModulesCommonJs = null;
+  void _libraryLoweringWorker?.close();
+  _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
+}
+
+export async function closeBuilder(): Promise<void> {
+  const worker = _libraryLoweringWorker;
+  _libraryLoweringWorker = null;
+  await worker?.close();
 }
 
 // ---------------------------------------------------------------------------
@@ -4166,22 +4140,9 @@ async function buildLibraryBundle(
     });
 
     const esmBundle = fs.readFileSync(outfile, "utf-8");
-    const bundleContent = transformBabel(esmBundle, {
-      babelrc: false,
-      configFile: false,
-      sourceType: "module",
-      plugins: [
-        controlledDynamicImportPlugin,
-        [getTransformModulesCommonJs(), { strictMode: true }],
-      ],
-      compact: false,
-      comments: true,
-      ast: false,
-      code: true,
-    })?.code;
-    if (!bundleContent) {
-      throw new Error(`library module lowering produced no output for ${node.name}`);
-    }
+    const loweringWorker = _libraryLoweringWorker;
+    if (!loweringWorker) throw new Error("builder is not initialized");
+    const bundleContent = await loweringWorker.lower(esmBundle);
     return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash, authority, {
       details: { kind: "library", format: "async-cjs" },
     });

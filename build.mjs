@@ -299,6 +299,24 @@ const authorityAnalysisWorkerElectronConfig = {
   outfile: "dist/authority-analysis-worker.cjs",
 };
 
+const libraryLoweringWorkerConfig = {
+  entryPoints: ["src/server/buildV2/libraryLoweringWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/library-lowering-worker.mjs",
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
+const libraryLoweringWorkerElectronConfig = {
+  ...libraryLoweringWorkerConfig,
+  format: "cjs",
+  outfile: "dist/library-lowering-worker.cjs",
+};
+
 const clientConfig = {
   entryPoints: ["src/cli/client.ts"],
   bundle: true,
@@ -639,6 +657,9 @@ async function build() {
         "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
           "authority-analysis-worker.cjs"
         ),
+        "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
+          "library-lowering-worker.cjs"
+        ),
       },
     };
     const serverWithBundle = {
@@ -649,6 +670,9 @@ async function build() {
         "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
           "authority-analysis-worker.mjs"
         ),
+        "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
+          "library-lowering-worker.mjs"
+        ),
       },
     };
     // Both server bundles consume the internal-DO output captured above.
@@ -657,6 +681,8 @@ async function build() {
       buildHostArtifact(serverWithBundle),
       buildHostArtifact(authorityAnalysisWorkerElectronConfig),
       buildHostArtifact(authorityAnalysisWorkerConfig),
+      buildHostArtifact(libraryLoweringWorkerElectronConfig),
+      buildHostArtifact(libraryLoweringWorkerConfig),
     ]);
     assertHostBuildMetafiles(serverBuilds);
 

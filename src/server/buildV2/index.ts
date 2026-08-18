@@ -36,6 +36,7 @@ import {
   computeBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
+  closeBuilder,
   initBuilder,
   type BuildUnitOptions,
 } from "./builder.js";
@@ -2870,7 +2871,7 @@ export async function initBuildSystemV2(
 
     async shutdown(): Promise<void> {
       trigger.stop();
-      await authorityAnalysisWorker.close();
+      await Promise.all([authorityAnalysisWorker.close(), closeBuilder()]);
       authorityPublicationUnsubscribe();
       setBuildSourceProvider(null);
       console.log("[BuildV2] Shut down");
