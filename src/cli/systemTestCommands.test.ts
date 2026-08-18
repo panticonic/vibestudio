@@ -412,11 +412,13 @@ describe("system-test durable driver lifecycle", () => {
     );
     expect(code).not.toContain('kind: "do",\n        source: "workers/system-test-runner"');
     expect(code).toContain("let cancellationCleanup = null");
+    expect(code).toContain("const describeCleanupFailure = (error) =>");
     expect(code).toContain("let cancellationRequested = false");
     expect(code).toContain("cancellationCleanup = cleanup");
     expect(code).toContain('status: "cancelled"');
     expect(code).toContain("if (cancellationCleanup)");
     expect(code).toContain("await releaseDriverResources()");
+    expect(code).toContain('failures.map(describeCleanupFailure).join("; ")');
     expect(code).toContain('"releaseSystemTestRunResult"');
     expect(code).toContain("let driverResultReleased = false");
     expect(code).toContain("let driverContextDestroyed = false");

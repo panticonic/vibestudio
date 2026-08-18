@@ -296,6 +296,13 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
     let driverResourcesReleased = false;
     let cancellationCleanup = null;
     let cancellationRequested = false;
+    const describeCleanupFailure = (error) => {
+      if (error instanceof AggregateError) {
+        const nested = [...error.errors].map(describeCleanupFailure).join("; ");
+        return nested ? error.message + ": " + nested : error.message;
+      }
+      return error instanceof Error ? error.name + ": " + error.message : String(error);
+    };
     const retireDriver = async () => {
       if (!driver || driverRetired) return;
       await services.runtime.retireEntity({ id: driver.id });
@@ -446,7 +453,11 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       }
       if (cancellationFailure || releaseFailure) {
         const failures = [cancellationFailure, releaseFailure].filter(Boolean);
-        throw new AggregateError(failures, "System-test terminal cleanup failed");
+        throw new AggregateError(
+          failures,
+          "System-test terminal cleanup failed: " +
+            failures.map(describeCleanupFailure).join("; "),
+        );
       }
     }
   `;
