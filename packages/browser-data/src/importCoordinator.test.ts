@@ -184,6 +184,42 @@ describe("BrowserImportCoordinator", () => {
     await expect(waiting).resolves.toMatchObject({ phase: "complete" });
   });
 
+  it("terminates in memory when durable job persistence fails", async () => {
+    const backing = store();
+    backing.value.persistJob = vi.fn(async () => {
+      throw new Error("durable store unavailable");
+    });
+    const changed = vi.fn();
+    const importProvider = provider();
+    const coordinator = new BrowserImportCoordinator(backing.value, changed);
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: "user-a",
+      displayName: "Laptop",
+      platform: "linux",
+      location: "desktop",
+      connected: true,
+      provider: importProvider,
+    });
+
+    const started = coordinator.start(identity, {
+      hostId: "desktop-a",
+      sourceId: "source-a",
+      dataTypes: ["bookmarks"],
+    });
+
+    await expect(coordinator.waitForJob(identity, started.jobId)).resolves.toMatchObject({
+      phase: "failed",
+      error: "durable store unavailable",
+      resumable: true,
+    });
+    expect(importProvider.import).not.toHaveBeenCalled();
+    expect(changed).toHaveBeenLastCalledWith(
+      identity,
+      expect.objectContaining({ phase: "failed", error: "durable store unavailable" })
+    );
+  });
+
   it("hydrates and resumes a persisted resumable job", async () => {
     const backing = store();
     backing.jobs.set("job-a", {

@@ -238,10 +238,10 @@ export class BrowserImportCoordinator {
 
   private async runImport(state: JobState, provider: BrowserImportProvider): Promise<void> {
     const { identity, snapshot, abort } = state;
-    snapshot.phase = "discovering";
-    snapshot.updatedAt = Date.now();
-    await this.persist(identity, snapshot);
     try {
+      snapshot.phase = "discovering";
+      snapshot.updatedAt = Date.now();
+      await this.persist(identity, snapshot);
       snapshot.phase = "reading";
       snapshot.updatedAt = Date.now();
       await this.persist(identity, snapshot);
@@ -289,7 +289,15 @@ export class BrowserImportCoordinator {
       await this.persist(identity, snapshot);
     } catch (error) {
       this.failJob(snapshot, abort.signal, error);
-      await this.persist(identity, snapshot);
+      try {
+        await this.persist(identity, snapshot);
+      } catch {
+        // Persistence is itself part of the import boundary. If it is the
+        // failing operation, retain a terminal in-memory snapshot so polling,
+        // cancellation, and health reporting remain available instead of
+        // turning the detached job into an unhandled process rejection.
+        this.onJobChanged?.(identity, this.clone(snapshot));
+      }
     }
   }
 
