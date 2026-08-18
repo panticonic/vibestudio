@@ -1916,6 +1916,64 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "chromiumFetch.close": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "chromiumFetch.transport",
+      rationale:
+        "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "chromiumFetch.openBrowser": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "chromiumFetch.transport",
+      rationale:
+        "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+    },
+    capability: "credential.use",
+    presentation: {
+      title: "Use your browser session",
+      action: "load a website using your signed-in browser session",
+      description:
+        "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
+  },
+  "chromiumFetch.openPublic": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "chromiumFetch.transport",
+      rationale:
+        "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "chromiumFetch.read": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "chromiumFetch.transport",
+      rationale:
+        "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+    },
+    capability: null,
+    presentation: null,
+  },
   "contentTrust.addPolicy": {
     tier: {
       tier: "critical",
@@ -7635,6 +7693,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.resumeDownload": ["service:browserEnvironment.resumeDownload"],
   "browserEnvironment.revealDownload": ["service:browserEnvironment.revealDownload"],
   "browserEnvironment.startImportRead": ["service:browserEnvironment.startImportRead"],
+  "chromiumFetch.openBrowser": ["credential.use"],
   "corsApproval.authorize": ["network.response.read"],
   "credentials.deleteClientConfig": ["account-providers.delete"],
   "credentials.proxyFetch": ["credential.use"],
@@ -7761,6 +7820,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   },
   "context.semantic.fork": {
     domain: "files",
+    verb: "act",
+  },
+  "credential.use": {
+    domain: "accounts",
     verb: "act",
   },
   "credentials.audit.read": {
@@ -8240,6 +8303,17 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "runtime",
     authorityCategory: {
       domain: "files",
+      verb: "act",
+    },
+  },
+  "credential.use": {
+    title: "Use your browser session",
+    action: "load a website using your signed-in browser session",
+    description:
+      "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+    group: "accounts",
+    authorityCategory: {
+      domain: "accounts",
       verb: "act",
     },
   },
