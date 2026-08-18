@@ -122,11 +122,14 @@ async function loadWithMocks(): Promise<{
     return { ...actual, persistEvState };
   });
 
-  vi.doMock("./typecheckFold.js", () => ({
-    typecheckUnit: vi.fn(async (unitRelativePath: string) => {
-      typecheckCalls += 1;
-      return typecheckDiagnostics(unitRelativePath);
-    }),
+  vi.doMock("./typecheckWorkerClient.js", () => ({
+    TypecheckWorkerClient: class {
+      async check(input: { unitRelativePath: string }) {
+        typecheckCalls += 1;
+        return typecheckDiagnostics(input.unitRelativePath);
+      }
+      async close() {}
+    },
   }));
 
   vi.doMock("./builder.js", async () => {

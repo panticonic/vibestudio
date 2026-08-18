@@ -317,6 +317,25 @@ const libraryLoweringWorkerElectronConfig = {
   outfile: "dist/library-lowering-worker.cjs",
 };
 
+const typecheckWorkerConfig = {
+  entryPoints: ["src/server/buildV2/typecheckWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/typecheck-worker.mjs",
+  external: ["@vibestudio/typecheck", "typescript"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
+const typecheckWorkerElectronConfig = {
+  ...typecheckWorkerConfig,
+  format: "cjs",
+  outfile: "dist/typecheck-worker.cjs",
+};
+
 const clientConfig = {
   entryPoints: ["src/cli/client.ts"],
   bundle: true,
@@ -660,6 +679,7 @@ async function build() {
         "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
           "library-lowering-worker.cjs"
         ),
+        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify("typecheck-worker.cjs"),
       },
     };
     const serverWithBundle = {
@@ -673,6 +693,7 @@ async function build() {
         "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
           "library-lowering-worker.mjs"
         ),
+        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify("typecheck-worker.mjs"),
       },
     };
     // Both server bundles consume the internal-DO output captured above.
@@ -683,6 +704,8 @@ async function build() {
       buildHostArtifact(authorityAnalysisWorkerConfig),
       buildHostArtifact(libraryLoweringWorkerElectronConfig),
       buildHostArtifact(libraryLoweringWorkerConfig),
+      buildHostArtifact(typecheckWorkerElectronConfig),
+      buildHostArtifact(typecheckWorkerConfig),
     ]);
     assertHostBuildMetafiles(serverBuilds);
 

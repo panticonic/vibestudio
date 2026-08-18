@@ -47,6 +47,7 @@ import {
   type BuildSourceProvider,
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
+import { TypecheckWorkerClient } from "./typecheckWorkerClient.js";
 import {
   BuildDiagnosticsError,
   BuildRequestError,
@@ -1139,6 +1140,7 @@ export async function initBuildSystemV2(
 
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots, rootOptions.appRoot);
+  const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
     workspaceId: source.workspaceId,
@@ -1531,7 +1533,6 @@ export async function initBuildSystemV2(
       // both, the bare source root resolves nothing → false "Cannot find module".
       // TypeScript and its virtual standard-library payload are build-report
       // dependencies, not server-bootstrap dependencies.
-      const { typecheckUnit } = await import("./typecheckFold.js");
       const dependencyEnvironment = await prepareExternalDependencyEnvironment(
         node,
         graphAtView,
@@ -1566,12 +1567,12 @@ export async function initBuildSystemV2(
             });
           }
         }
-        const tsc = await typecheckUnit(
-          node.relativePath,
+        const tsc = await typecheckWorker.check({
+          unitRelativePath: node.relativePath,
           sourceRoot,
-          internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
-          dependencyEnvironment.nodePaths,
-          {
+          internalDeps: internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
+          nodeModulesPaths: dependencyEnvironment.nodePaths,
+          authority: {
             manifest: {
               ...node.manifest,
               authority: node.manifest.authority ?? { requests: [], provides: [] },
@@ -1579,8 +1580,8 @@ export async function initBuildSystemV2(
             ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
             workspaceId: source.workspaceId,
             executableModules: built?.metadata.executableModules,
-          }
-        );
+          },
+        });
         diagnostics = [...diagnostics, ...tsc];
       } finally {
         dependencyEnvironment.release();
@@ -2871,7 +2872,7 @@ export async function initBuildSystemV2(
 
     async shutdown(): Promise<void> {
       trigger.stop();
-      await Promise.all([authorityAnalysisWorker.close(), closeBuilder()]);
+      await Promise.all([authorityAnalysisWorker.close(), typecheckWorker.close(), closeBuilder()]);
       authorityPublicationUnsubscribe();
       setBuildSourceProvider(null);
       console.log("[BuildV2] Shut down");

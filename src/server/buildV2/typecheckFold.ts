@@ -85,26 +85,28 @@ function belongsToExactSource(file: string, sourceRoot: string): boolean {
  * @param internalDeps the unit + its transitive internal deps (from the graph).
  * @param nodeModulesPaths the app node_modules roots (external dep types).
  */
+export interface TypecheckAuthorityInput {
+  manifest: PackageManifest;
+  environment?: ExactWorkspaceAuthorityEnvironment;
+  workspaceId?: string;
+  executableModules?: readonly {
+    moduleId: string;
+    contentDigest: string;
+    package:
+      | { kind: "first-party" }
+      | { kind: "workspace"; name: string; effectiveVersion: string }
+      | { kind: "external"; name: string; version: string; packageDigest: string };
+    format: "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs";
+    source: string;
+  }[];
+}
+
 export async function typecheckUnit(
   unitRelativePath: string,
   sourceRoot: string,
   internalDeps: TypecheckUnitDep[],
   nodeModulesPaths: string[],
-  authority?: {
-    manifest: PackageManifest;
-    environment?: ExactWorkspaceAuthorityEnvironment;
-    workspaceId?: string;
-    executableModules?: readonly {
-      moduleId: string;
-      contentDigest: string;
-      package:
-        | { kind: "first-party" }
-        | { kind: "workspace"; name: string; effectiveVersion: string }
-        | { kind: "external"; name: string; version: string; packageDigest: string };
-      format: "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs";
-      source: string;
-    }[];
-  }
+  authority?: TypecheckAuthorityInput
 ): Promise<BuildDiagnostic[]> {
   const unitDir = path.join(sourceRoot, unitRelativePath);
   let service: import("@vibestudio/typecheck").TypeCheckService | undefined;
