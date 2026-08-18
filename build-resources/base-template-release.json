@@ -2,8 +2,8 @@
   "format": "vibestudio-base-release/1",
   "baseTemplate": {
     "url": "git+https://github.com/panticonic/vibestudio-workspace-base.git",
-    "ref": "refs/tags/v0.3.8",
-    "commit": "edf9506eff02fbbf18b42c8ce05cf9f28b5f5a4a",
-    "snapshot": "v1-sha256:a49db6d6ff6203e18855c153fc21ca415614731019f7333228b9020bdf07e8b6"
+    "ref": "refs/tags/v0.3.10",
+    "commit": "25d575787f1f621f339c4b3aa1177c483ae5811d",
+    "snapshot": "v1-sha256:c933fad55f88c87f9b64bcbda7c9d4e6edcb914190d8ac5a0f58f8b76243bdbe"
   }
 }
