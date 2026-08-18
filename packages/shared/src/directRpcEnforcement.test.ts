@@ -141,6 +141,65 @@ describe("directRpcDenial", () => {
     ).toBeNull();
   });
 
+  it("admits installed code that requested a canonical userland receiver capability", () => {
+    const audience = "do:workers/browser-data:BrowserDataDO:key";
+    const resourceKey = `browser-data:${audience}`;
+    const capability = `userland:workers/browser-data/browser-data.write#${"d".repeat(64)}`;
+    const effect = {
+      kind: "userland-capability" as const,
+      capability: "browser-data.write",
+      resource: { kind: "receiver-object" as const },
+    };
+    const authorization = attestation({
+      audience,
+      method: "upsertImportJob",
+      effect,
+      capability,
+      resourceKey,
+      resourceType: "browser-data",
+      capabilityDefinitionDigest: "d".repeat(64),
+      provider: "workers/browser-data",
+      providerExecutionDigest: "e".repeat(64),
+      context: {
+        ...context,
+        executingCode: {
+          ...context.executingCode!,
+          requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
+        },
+      },
+      grants: [
+        {
+          subject: code,
+          effect: "allow",
+          capability,
+          resource: { kind: "exact", key: resourceKey },
+          issuedBy: "user:test",
+          provenance: "acquisition",
+          createdAt: 1,
+        },
+      ],
+    });
+
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "upsertImportJob",
+        caller: null,
+        attestation: authorization,
+        declaration: {
+          tier: "gated",
+          principals: ["code"],
+          sensitivity: "write",
+          effect,
+        },
+        audience,
+        resourceKey,
+        capability,
+        now: 100,
+      })
+    ).toBeNull();
+  });
+
   it("does not use attestation timestamps as an authority decision", () => {
     expect(
       directRpcDenial({
