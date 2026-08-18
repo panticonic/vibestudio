@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { AuthorizationContext } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import {
+  allOf,
+  anyOf,
+  capability as requiredCapability,
+  relationship,
+} from "./authorityRequirements.js";
+import {
   DirectRpcNonceWindow,
   assertEventIntakeRules,
   directRpcDenial,
@@ -188,7 +194,14 @@ describe("directRpcDenial", () => {
         attestation: authorization,
         declaration: {
           tier: "gated",
-          principals: ["code"],
+          requires: anyOf(
+            requiredCapability("host", "browser-data.write"),
+            requiredCapability("user", "browser-data.write"),
+            allOf(
+              requiredCapability("code", "browser-data.write"),
+              relationship("code-source", "workers/test")
+            )
+          ),
           sensitivity: "write",
           effect,
         },

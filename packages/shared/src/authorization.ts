@@ -171,6 +171,36 @@ export function bindMethodCapability(
 }
 
 /**
+ * Seal a receiver-authored requirement into the canonical capability selected
+ * by the host. Userland receiver schemas are necessarily written in their
+ * provider-local vocabulary, while grants and installed-code manifests use the
+ * build-bound `userland:...#digest` identity. Both the generic method
+ * placeholder and the exact local receiver name therefore denote the same
+ * canonical capability at the receiver boundary.
+ */
+export function bindReceiverCapability(
+  requirement: AuthorityRequirement,
+  localCapability: string,
+  canonicalCapability: string
+): AuthorityRequirement {
+  if (requirement.kind === "capability") {
+    return requirement.capability === METHOD_CAPABILITY ||
+      requirement.capability === localCapability
+      ? { ...requirement, capability: canonicalCapability }
+      : requirement;
+  }
+  if (requirement.kind === "all" || requirement.kind === "any") {
+    return {
+      ...requirement,
+      requirements: requirement.requirements.map((child) =>
+        bindReceiverCapability(child, localCapability, canonicalCapability)
+      ),
+    };
+  }
+  return requirement;
+}
+
+/**
  * Evaluates a complete compound requirement against exactly one authority set.
  * Session origins may expose two exact subject facets (session and authenticated
  * mission), but grants from users, harness code, entities, and other sessions are

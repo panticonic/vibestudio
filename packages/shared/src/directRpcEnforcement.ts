@@ -10,6 +10,7 @@ import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import {
   authorityFailureForDecision,
   bindMethodCapability,
+  bindReceiverCapability,
   evaluateAuthority,
   requirementForPrincipals,
 } from "./authorization.js";
@@ -252,7 +253,13 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     };
   }
   const methodRequirement = declaration.requires
-    ? bindMethodCapability(declaration.requires, declaredCapability)
+    ? declaration.effect.kind === "userland-capability"
+      ? bindReceiverCapability(
+          declaration.requires,
+          declaration.effect.capability,
+          declaredCapability
+        )
+      : bindMethodCapability(declaration.requires, declaredCapability)
     : requirementForPrincipals(declaration.principals ?? [], declaredCapability, {
         codeOnly: declaration.codeOnly,
       });
