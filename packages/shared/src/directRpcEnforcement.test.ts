@@ -5,6 +5,7 @@ import {
   DirectRpcNonceWindow,
   assertEventIntakeRules,
   directRpcDenial,
+  directRpcInvocationResourceKey,
   eventIntakeAuthority,
 } from "./directRpcEnforcement.js";
 
@@ -51,6 +52,50 @@ function attestation(
     providerExecutionDigest: overrides.providerExecutionDigest ?? "-",
   };
 }
+
+describe("directRpcInvocationResourceKey", () => {
+  it("binds receiver-owned userland authority to its declared resource namespace", () => {
+    const authorization = attestation({
+      effect: {
+        kind: "userland-capability",
+        capability: "browser-data.write",
+        resource: { kind: "receiver-object" },
+      },
+      capability: "userland:workers/browser-data/browser-data.write#digest",
+      resourceType: "browser-data",
+      resourceKey: "browser-data:do:workers/browser-data:BrowserDataDO:key",
+    });
+    expect(
+      directRpcInvocationResourceKey({
+        audience: "do:workers/browser-data:BrowserDataDO:key",
+        declaration: {
+          tier: "gated",
+          sensitivity: "write",
+          principals: ["code"],
+          effect: authorization.effect,
+        },
+        attestation: authorization,
+        args: [],
+      })
+    ).toBe("browser-data:do:workers/browser-data:BrowserDataDO:key");
+  });
+
+  it("keeps host and open receiver resources bound to the raw audience", () => {
+    expect(
+      directRpcInvocationResourceKey({
+        audience: "do:workers/example:ExampleDO:key",
+        declaration: {
+          tier: "open",
+          sensitivity: "read",
+          principals: ["code"],
+          effect: { kind: "open" },
+        },
+        attestation: attestation(),
+        args: [],
+      })
+    ).toBe("do:workers/example:ExampleDO:key");
+  });
+});
 
 describe("directRpcDenial", () => {
   it("identifies an undeclared receiver as a provider defect, not an acquirable grant", () => {

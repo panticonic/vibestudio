@@ -121,6 +121,34 @@ export interface HostControlDenial {
   failure: AuthorityFailureInfo;
 }
 
+/**
+ * Derive the resource identity a direct receiver must enforce for this call.
+ *
+ * Receiver-owned userland capabilities live in their declared resource
+ * namespace (`browser-data:do:...`), while open and host capabilities remain
+ * bound to the raw receiver audience (`do:...`). Opaque handles are already
+ * resolved and sealed by the host, but only when the wire argument carries the
+ * attested selector.
+ */
+export function directRpcInvocationResourceKey(input: {
+  audience: string;
+  declaration: ResolvedDirectRpcAuthority | null;
+  attestation: DirectAuthorityAttestation | null;
+  args: readonly unknown[];
+}): string {
+  const { declaration, attestation } = input;
+  if (declaration?.effect.kind !== "userland-capability") return input.audience;
+  if (declaration.effect.resource.kind === "opaque-handle") {
+    return attestation?.resourceSelector !== undefined &&
+      input.args[declaration.effect.resource.argument] === attestation.resourceSelector
+      ? attestation.resourceKey
+      : input.audience;
+  }
+  return attestation?.resourceType
+    ? `${attestation.resourceType}:${input.audience}`
+    : input.audience;
+}
+
 /** Pure declaration + fresh-attestation check shared by both DO bases. */
 export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | null {
   const { method, declaration, attestation } = input;

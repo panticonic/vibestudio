@@ -24,6 +24,7 @@ import {
   DurableDirectRpcNonceLedger,
   directRpcInvalidAttestationFailure,
   directRpcDenial,
+  directRpcInvocationResourceKey,
   eventIntakeAuthority,
   hostControlDenial,
   type EventIntakeRule,
@@ -991,13 +992,12 @@ export abstract class DurableObjectBase {
     const audience = this.rpcSelfId;
     const declaration = method ? this.rpcAuthorityDeclaration(method, wireMethod) : null;
     const attestation = caller?.authorization ?? null;
-    const resourceKey =
-      declaration?.effect.kind === "userland-capability" &&
-      declaration.effect.resource.kind === "opaque-handle" &&
-      attestation?.resourceSelector !== undefined &&
-      message?.args?.[declaration.effect.resource.argument] === attestation.resourceSelector
-        ? attestation.resourceKey
-        : audience;
+    const resourceKey = directRpcInvocationResourceKey({
+      audience,
+      declaration,
+      attestation,
+      args: message?.args ?? [],
+    });
     const denial = directRpcDenial({
       kind: "call",
       method: method ?? "",
