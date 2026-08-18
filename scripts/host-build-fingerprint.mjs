@@ -4,6 +4,7 @@ import * as path from "node:path";
 import ignore from "ignore";
 
 export const HOST_BUILD_FINGERPRINT_PATH = "dist/host-build-fingerprint.json";
+export const DESKTOP_HOST_BUILD_FINGERPRINT_PATH = "dist/desktop-host-build-fingerprint.json";
 
 const INPUT_ROOTS = ["apps", "build-resources", "packages", "skills/vibestudio-agent", "src"];
 
@@ -103,9 +104,12 @@ export function computeHostBuildFingerprint({
   };
 }
 
-export function readHostBuildFingerprint(cwd = process.cwd()) {
+export function readHostBuildFingerprint(
+  cwd = process.cwd(),
+  fingerprintPath = HOST_BUILD_FINGERPRINT_PATH
+) {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(cwd, HOST_BUILD_FINGERPRINT_PATH), "utf8"));
+    return JSON.parse(fs.readFileSync(path.resolve(cwd, fingerprintPath), "utf8"));
   } catch {
     return null;
   }
@@ -121,8 +125,12 @@ export function sameHostBuildFingerprint(left, right) {
   );
 }
 
-export function writeHostBuildFingerprint(fingerprint, cwd = process.cwd()) {
-  const destination = path.resolve(cwd, HOST_BUILD_FINGERPRINT_PATH);
+export function writeHostBuildFingerprint(
+  fingerprint,
+  cwd = process.cwd(),
+  fingerprintPath = HOST_BUILD_FINGERPRINT_PATH
+) {
+  const destination = path.resolve(cwd, fingerprintPath);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   const temporary = `${destination}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(fingerprint, null, 2)}\n`, {

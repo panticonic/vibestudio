@@ -12,6 +12,7 @@ import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import {
   computeHostBuildFingerprint,
+  DESKTOP_HOST_BUILD_FINGERPRINT_PATH,
   HOST_BUILD_FINGERPRINT_PATH,
   readHostBuildFingerprint,
   sameHostBuildFingerprint,
@@ -734,6 +735,11 @@ async function build() {
       );
     }
     writeHostBuildFingerprint(completedSnapshot);
+    writeHostBuildFingerprint(
+      completedSnapshot,
+      process.cwd(),
+      DESKTOP_HOST_BUILD_FINGERPRINT_PATH
+    );
 
     console.log("Build successful!");
   } catch (error) {

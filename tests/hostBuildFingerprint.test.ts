@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   computeHostBuildFingerprint,
+  DESKTOP_HOST_BUILD_FINGERPRINT_PATH,
   readHostBuildFingerprint,
   writeHostBuildFingerprint,
 } from "../scripts/host-build-fingerprint.mjs";
@@ -87,5 +88,16 @@ describe("host build fingerprint", () => {
     const fingerprint = computeHostBuildFingerprint({ cwd, mode: "development" });
     writeHostBuildFingerprint(fingerprint, cwd);
     expect(readHostBuildFingerprint(cwd)).toEqual(fingerprint);
+  });
+
+  it("does not treat source-server identity as desktop artifact freshness", () => {
+    const cwd = fixture();
+    const fingerprint = computeHostBuildFingerprint({ cwd, mode: "development" });
+
+    writeHostBuildFingerprint(fingerprint, cwd);
+    expect(readHostBuildFingerprint(cwd, DESKTOP_HOST_BUILD_FINGERPRINT_PATH)).toBeNull();
+
+    writeHostBuildFingerprint(fingerprint, cwd, DESKTOP_HOST_BUILD_FINGERPRINT_PATH);
+    expect(readHostBuildFingerprint(cwd, DESKTOP_HOST_BUILD_FINGERPRINT_PATH)).toEqual(fingerprint);
   });
 });

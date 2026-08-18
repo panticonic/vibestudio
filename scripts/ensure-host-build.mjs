@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   computeHostBuildFingerprint,
+  DESKTOP_HOST_BUILD_FINGERPRINT_PATH,
   readHostBuildFingerprint,
   sameHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
@@ -87,7 +88,9 @@ try {
   // Recompute after waiting: source files may have changed while another
   // process was producing the artifacts we just acquired.
   const expected = computeHostBuildFingerprint();
-  const current = readHostBuildFingerprint();
+  // A source-server prerequisite build does not produce the Electron bundle.
+  // Its host identity marker must not make a desktop launch reuse stale output.
+  const current = readHostBuildFingerprint(process.cwd(), DESKTOP_HOST_BUILD_FINGERPRINT_PATH);
 
   if (sameHostBuildFingerprint(current, expected)) {
     console.log(`[host-build] Reusing current ${expected.mode} artifacts.`);
