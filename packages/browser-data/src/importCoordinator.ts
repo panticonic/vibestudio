@@ -151,10 +151,10 @@ export class BrowserImportCoordinator {
     }
   }
 
-  start(
+  async start(
     identity: BrowserEnvironmentIdentity,
     selection: BrowserImportSelection
-  ): ImportJobSnapshot {
+  ): Promise<ImportJobSnapshot> {
     const host = this.host(identity, selection.hostId);
     const startedAt = Date.now();
     const snapshot = this.newJob(selection, startedAt, host.displayName);
@@ -166,8 +166,22 @@ export class BrowserImportCoordinator {
       running: Promise.resolve(),
     };
     this.jobs.set(snapshot.jobId, state);
-    state.running = this.runImport(state, host.provider);
-    return this.clone(snapshot);
+    // A job is not accepted until its durable row exists. In particular, this
+    // keeps the initiating invocation alive while receiver authority is
+    // acquired; detaching first would leave a background write waiting on an
+    // approval route that disappeared with the caller.
+    snapshot.phase = "discovering";
+    snapshot.updatedAt = Date.now();
+    try {
+      await this.persist(identity, snapshot);
+    } catch (error) {
+      this.failJob(snapshot, abort.signal, error);
+      this.onJobChanged?.(identity, this.clone(snapshot));
+      throw error;
+    }
+    const accepted = this.clone(snapshot);
+    state.running = this.runImport(state, host.provider, true);
+    return accepted;
   }
 
   async resume(identity: BrowserEnvironmentIdentity, jobId: string): Promise<ImportJobSnapshot> {
@@ -243,12 +257,18 @@ export class BrowserImportCoordinator {
     );
   }
 
-  private async runImport(state: JobState, provider: BrowserImportProvider): Promise<void> {
+  private async runImport(
+    state: JobState,
+    provider: BrowserImportProvider,
+    discoveringPersisted = false
+  ): Promise<void> {
     const { identity, snapshot, abort } = state;
     try {
-      snapshot.phase = "discovering";
-      snapshot.updatedAt = Date.now();
-      await this.persist(identity, snapshot);
+      if (!discoveringPersisted) {
+        snapshot.phase = "discovering";
+        snapshot.updatedAt = Date.now();
+        await this.persist(identity, snapshot);
+      }
       snapshot.phase = "reading";
       snapshot.updatedAt = Date.now();
       await this.persist(identity, snapshot);

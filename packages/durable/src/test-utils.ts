@@ -177,6 +177,8 @@ export function createTestDirectAuthority(input: {
     ? ("host:test" as const)
     : (`code:tests/durable@${"a".repeat(64)}` as `code:${string}`);
   const capability = input.capability ?? `rpc:${input.method}`;
+  const resourceKey =
+    input.effect?.kind === "userland-capability" ? `${capability}:${audience}` : audience;
   const context: AuthorizationContext = {
     authorizingOrigin: isHost
       ? { kind: "host", principal: principal as `host:${string}` }
@@ -189,7 +191,7 @@ export function createTestDirectAuthority(input: {
       ? null
       : {
           principal: principal as `code:${string}`,
-          requested: [{ capability, resource: { kind: "exact", key: audience } }],
+          requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
           sourceLineage: { class: "internal", externalKeys: [] },
         },
     initiatorChain: [principal],
@@ -215,7 +217,7 @@ export function createTestDirectAuthority(input: {
     provider: "-",
     providerExecutionDigest: "-",
     ...(invocationDigest ? { invocationDigest } : {}),
-    resourceKey: audience,
+    resourceKey,
     issuedAt: now,
     expiresAt: now + 60_000,
     nonce: crypto.randomUUID(),
@@ -226,7 +228,7 @@ export function createTestDirectAuthority(input: {
         subject: principal,
         effect: "allow",
         capability,
-        resource: { kind: "exact", key: audience },
+        resource: { kind: "exact", key: resourceKey },
         issuedBy: "test-fixture",
         createdAt: now,
         constraints: {

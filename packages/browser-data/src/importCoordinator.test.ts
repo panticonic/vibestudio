@@ -128,7 +128,7 @@ describe("BrowserImportCoordinator", () => {
       connected: true,
       provider: provider(),
     });
-    const started = coordinator.start(identity, {
+    const started = await coordinator.start(identity, {
       hostId: "desktop-a",
       sourceId: "source-a",
       dataTypes: ["bookmarks", "bookmarks"],
@@ -144,6 +144,53 @@ describe("BrowserImportCoordinator", () => {
       })
     );
     expect(backing.jobs.get(started.jobId)?.phase).toBe("complete");
+  });
+
+  it("keeps start attached until the discovering job is durably accepted", async () => {
+    const backing = store();
+    let releasePersistence!: () => void;
+    const firstPersistence = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    let persistCount = 0;
+    backing.value.persistJob = vi.fn(async (_identity, job) => {
+      persistCount += 1;
+      if (persistCount === 1) await firstPersistence;
+      backing.jobs.set(job.jobId, structuredClone(job));
+    });
+    const importProvider = provider();
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: "user-a",
+      displayName: "Laptop",
+      platform: "linux",
+      location: "desktop",
+      connected: true,
+      provider: importProvider,
+    });
+
+    let accepted = false;
+    const starting = coordinator
+      .start(identity, {
+        hostId: "desktop-a",
+        sourceId: "source-a",
+        dataTypes: ["bookmarks"],
+      })
+      .then((job) => {
+        accepted = true;
+        return job;
+      });
+    await vi.waitFor(() => expect(backing.value.persistJob).toHaveBeenCalledOnce());
+    expect(accepted).toBe(false);
+    expect(importProvider.import).not.toHaveBeenCalled();
+
+    releasePersistence();
+    const started = await starting;
+    expect(started.phase).toBe("discovering");
+    await expect(coordinator.waitForJob(identity, started.jobId)).resolves.toMatchObject({
+      phase: "complete",
+    });
   });
 
   it("does not report completion until stored data is reconciled", async () => {
@@ -164,7 +211,7 @@ describe("BrowserImportCoordinator", () => {
       provider: provider(),
     });
 
-    const started = coordinator.start(identity, {
+    const started = await coordinator.start(identity, {
       hostId: "desktop-a",
       sourceId: "source-a",
       dataTypes: ["bookmarks"],
@@ -202,13 +249,15 @@ describe("BrowserImportCoordinator", () => {
       provider: importProvider,
     });
 
-    const started = coordinator.start(identity, {
-      hostId: "desktop-a",
-      sourceId: "source-a",
-      dataTypes: ["bookmarks"],
-    });
+    await expect(
+      coordinator.start(identity, {
+        hostId: "desktop-a",
+        sourceId: "source-a",
+        dataTypes: ["bookmarks"],
+      })
+    ).rejects.toThrow("durable store unavailable");
 
-    await expect(coordinator.waitForJob(identity, started.jobId)).resolves.toMatchObject({
+    expect(coordinator.listJobs(identity)[0]).toMatchObject({
       phase: "failed",
       error: "durable store unavailable",
       resumable: true,
