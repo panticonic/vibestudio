@@ -33,7 +33,12 @@ import {
   parseSignalingEndpoint,
 } from "./cli/lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
-import { createRemoteServeArgs, waitForRootInvite } from "./cli/lib/smoke-remote-server.mjs";
+import {
+  assertBaseCheckoutBootable,
+  createRemoteServeArgs,
+  resolveDevelopmentBase,
+  waitForRootInvite,
+} from "./cli/lib/smoke-remote-server.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
@@ -54,12 +59,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function evaluateElectron(app, pageFunction, arg, label) {
+function evaluateElectron(app, pageFunction, arg, label, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_MS) {
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(
       () => reject(new Error(`Electron evaluation timed out while ${label}`)),
-      ELECTRON_EVALUATE_TIMEOUT_MS
+      timeoutMs
     );
   });
   return Promise.race([app.evaluate(pageFunction, arg), timeout]).finally(() => {
@@ -74,6 +79,8 @@ function parseArgs(argv) {
     readyFile: defaultReadyFile,
     localSignaling: false,
     signalUrl: null,
+    productionBase: false,
+    baseCheckout: null,
     help: false,
   };
 
@@ -91,6 +98,10 @@ function parseArgs(argv) {
       options.localSignaling = true;
     } else if (arg === "--signal-url") {
       options.signalUrl = argv[++i] ?? "";
+    } else if (arg === "--base-checkout") {
+      options.baseCheckout = path.resolve(argv[++i] ?? "");
+    } else if (arg === "--production-base") {
+      options.productionBase = true;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -132,6 +143,9 @@ Runner options:
   --signal-url <url>        Use a specific existing signaling service.
   --local-signaling         Start a local Wrangler signaling service instead of
                             the hosted production service.
+  --base-checkout <dir>     Use this Base checkout for this run only.
+  --production-base        Use the canonical pinned production Base instead of
+                            the selected development checkout.
   --help                    Show this help message.
 
 By default the smoke starts the normal remote-serve hub without a signaling
@@ -314,6 +328,7 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
     ...process.env,
     NODE_ENV: "development",
     VIBESTUDIO_TEST_MODE: "1",
+    VIBESTUDIO_APP_ROOT: repoRoot,
     ELECTRON_DISABLE_GPU: "1",
     ELECTRON_DISABLE_SANDBOX: "1",
     HOME: path.join(tempRoot, "home"),
@@ -348,7 +363,7 @@ async function waitForDesktopShell(app, timeoutMs) {
   let lastSnapshots = [];
   let clickedApprovals = 0;
   while (Date.now() < deadlineMs) {
-    const snapshots = await collectShellSnapshots(app);
+    const snapshots = await collectShellSnapshots(app, Math.max(1_000, deadlineMs - Date.now()));
     lastSnapshots = snapshots;
     const errorText = snapshots
       .map((snapshot) => snapshot.text)
@@ -431,7 +446,7 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
   );
 }
 
-async function collectShellSnapshots(app) {
+async function collectShellSnapshots(app, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_MS) {
   return evaluateElectron(
     app,
     async ({ webContents }) => {
@@ -440,8 +455,9 @@ async function collectShellSnapshots(app) {
         if (contents.isDestroyed()) continue;
         const url = contents.getURL();
         try {
-          const dom = await contents.executeJavaScript(
-            `(() => {
+          const dom = await Promise.race([
+            contents.executeJavaScript(
+              `(() => {
             const text = document.body?.innerText ?? "";
             const buttons = Array.from(document.querySelectorAll("button"))
               .map((button) => button.textContent?.trim() ?? "")
@@ -463,8 +479,12 @@ async function collectShellSnapshots(app) {
               hasHostedShellChrome,
             };
           })()`,
-            true
-          );
+              true
+            ),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("webContents DOM probe timed out")), 2_000)
+            ),
+          ]);
           snapshots.push({
             id: contents.id,
             url,
@@ -478,7 +498,8 @@ async function collectShellSnapshots(app) {
       return snapshots;
     },
     undefined,
-    "collecting shell snapshots"
+    "collecting shell snapshots",
+    timeoutMs
   );
 }
 
@@ -846,9 +867,30 @@ async function main() {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "development",
       VIBESTUDIO_TEST_MODE: "1",
+      VIBESTUDIO_SERVER_ENTRY: "live",
       HOME: serverHome,
       XDG_CONFIG_HOME: serverConfig,
     };
+    const developmentBase = await resolveDevelopmentBase({
+      repoRoot,
+      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+      productionBase: options.productionBase,
+      explicitCheckout: options.baseCheckout,
+    });
+    if (developmentBase) {
+      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
+      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+      await assertBaseCheckoutBootable({ repoRoot, checkout: developmentBase.checkout });
+      console.log(
+        `[desktop-smoke] Base: ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+      );
+    } else {
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+      console.log("[desktop-smoke] Base: canonical pinned production release");
+    }
     if (options.localSignaling || options.signalUrl) {
       serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
     } else {
