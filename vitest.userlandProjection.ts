@@ -3,6 +3,8 @@ import * as path from "node:path";
 import type { Alias } from "vite";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 
+const RUNNER_OWNED_DEPENDENCIES = new Set(["vitest"]);
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -24,6 +26,10 @@ export async function userlandDependencyAliases(
   if (!projection.nodeModulesDir) return [];
 
   return Object.keys(projection.dependencies)
+    // Test-framework imports belong to the active host runner. Projecting a
+    // checkout's Vitest package into browser code splits @vitest/browser from
+    // its companion runtime and breaks package-export resolution.
+    .filter((packageName) => !RUNNER_OWNED_DEPENDENCIES.has(packageName))
     .flatMap((packageName): Alias[] => {
       const packageDir = path.join(projection.nodeModulesDir, ...packageName.split("/"));
       const manifest = JSON.parse(

@@ -1,7 +1,11 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
-import { workspaceSourceAliases } from "./vitest.sourceAliases";
+import {
+  discoveredUserlandSourceAliases,
+  workspaceSourceAliases,
+} from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
+import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig";
 
 // Browser-mode test project. Opened Radix overlays (Dialog/DropdownMenu/Popover/
@@ -11,13 +15,26 @@ import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig"
 
 export default defineConfig(async () => {
   const workspaceRoot = requireDevelopmentBaseCheckout(__dirname);
+  const dependencyProjection = await prepareUserlandDependencyProjection({
+    appRoot: __dirname,
+    workspaceRoot,
+    includeDevelopmentDependencies: true,
+  });
   return {
     resolve: {
       alias: [
-        ...workspaceSourceAliases(__dirname, workspaceRoot),
         ...(await userlandDependencyAliases(__dirname, workspaceRoot)),
+        ...discoveredUserlandSourceAliases(dependencyProjection.units),
+        ...workspaceSourceAliases(__dirname, workspaceRoot),
       ],
       dedupe: ["react", "react-dom"],
+    },
+    server: {
+      fs: {
+        // Browser-mode tests and their snapshots live in the exact external
+        // Base checkout, outside the host Vite root.
+        allow: [__dirname, workspaceRoot],
+      },
     },
     test: {
       globals: true,
