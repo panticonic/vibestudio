@@ -3666,6 +3666,23 @@ async function main() {
         browserEnvironmentDefinition = createBrowserEnvironmentService({
           getDownloads: () => null,
           getImportProvider: (ctx) => assertPresent(browserImportHosts).forContext(ctx),
+          startImportRead: (ctx, sourceId, dataTypes) =>
+            assertPresent(browserImportHosts).startImportRead(ctx, sourceId, dataTypes),
+          nextImportFrame: (ctx, operationId) =>
+            assertPresent(browserImportHosts).nextImportFrame(ctx, operationId),
+          cancelImportRead: (ctx, operationId) =>
+            assertPresent(browserImportHosts).cancelImportRead(ctx, operationId),
+          startSensitiveImport: (ctx, sourceId, dataTypes, operationId) =>
+            assertPresent(browserImportHosts).startSensitiveImport(
+              ctx,
+              sourceId,
+              dataTypes,
+              operationId
+            ),
+          observeSensitiveImport: (ctx, operationId) =>
+            assertPresent(browserImportHosts).observeSensitiveImport(ctx, operationId),
+          cancelSensitiveImport: (ctx, operationId) =>
+            assertPresent(browserImportHosts).cancelSensitiveImport(ctx, operationId),
           browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
             workspaceConfig,
             "browserData"

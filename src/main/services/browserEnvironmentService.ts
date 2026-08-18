@@ -15,6 +15,30 @@ import type { BrowserImportHostProvider } from "./browserImportHostProvider.js";
 export function createBrowserEnvironmentService(deps: {
   getDownloads(): BrowserDownloadManager | null;
   getImportProvider(ctx: ServiceContext): BrowserImportHostProvider | null;
+  startImportRead?(
+    ctx: ServiceContext,
+    sourceId: string,
+    dataTypes: Parameters<BrowserImportHostProvider["startImport"]>[1]
+  ): string;
+  nextImportFrame?(
+    ctx: ServiceContext,
+    operationId: string
+  ): ReturnType<BrowserImportHostProvider["nextFrame"]>;
+  cancelImportRead?(ctx: ServiceContext, operationId: string): void;
+  startSensitiveImport?(
+    ctx: ServiceContext,
+    sourceId: string,
+    dataTypes: Parameters<BrowserImportHostProvider["startSensitiveImport"]>[1],
+    operationId: string
+  ): ReturnType<BrowserImportHostProvider["startSensitiveImport"]>;
+  observeSensitiveImport?(
+    ctx: ServiceContext,
+    operationId: string
+  ): ReturnType<BrowserImportHostProvider["observeSensitiveImport"]>;
+  cancelSensitiveImport?(
+    ctx: ServiceContext,
+    operationId: string
+  ): ReturnType<BrowserImportHostProvider["cancelSensitiveImport"]>;
   browserDataBrokerRepoPath: string | null;
 }): ServiceDefinition {
   const nonPromptingProviderMethods = new Set([
@@ -67,27 +91,37 @@ export function createBrowserEnvironmentService(deps: {
         return requireImportProvider(deps, _ctx).preview(sourceId, dataTypes, _ctx.signal);
       },
       startImportRead: (_ctx, [sourceId, dataTypes]) =>
+        deps.startImportRead?.(_ctx, sourceId, dataTypes) ??
         requireImportProvider(deps, _ctx).startImport(sourceId, dataTypes),
       startSensitiveImport: (_ctx, [sourceId, dataTypes, operationId]) => {
         requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps, _ctx).startSensitiveImport(
-          sourceId,
-          dataTypes,
-          operationId
-        );
+        return deps.startSensitiveImport
+          ? deps.startSensitiveImport(_ctx, sourceId, dataTypes, operationId)
+          : requireImportProvider(deps, _ctx).startSensitiveImport(
+              sourceId,
+              dataTypes,
+              operationId
+            );
       },
       observeSensitiveImport: (_ctx, [operationId]) => {
         requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps, _ctx).observeSensitiveImport(operationId);
+        return deps.observeSensitiveImport
+          ? deps.observeSensitiveImport(_ctx, operationId)
+          : requireImportProvider(deps, _ctx).observeSensitiveImport(operationId);
       },
       cancelSensitiveImport: (_ctx, [operationId]) => {
         requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps, _ctx).cancelSensitiveImport(operationId);
+        return deps.cancelSensitiveImport
+          ? deps.cancelSensitiveImport(_ctx, operationId)
+          : requireImportProvider(deps, _ctx).cancelSensitiveImport(operationId);
       },
       nextImportFrame: (_ctx, [operationId]) =>
+        deps.nextImportFrame?.(_ctx, operationId) ??
         requireImportProvider(deps, _ctx).nextFrame(operationId),
-      cancelImportRead: (_ctx, [operationId]) =>
-        requireImportProvider(deps, _ctx).cancel(operationId),
+      cancelImportRead: (_ctx, [operationId]) => {
+        if (deps.cancelImportRead) return deps.cancelImportRead(_ctx, operationId);
+        return requireImportProvider(deps, _ctx).cancel(operationId);
+      },
       listImportOpenTabs: (_ctx, [sourceId]) =>
         requireImportProvider(deps, _ctx).listOpenTabs(sourceId, _ctx.signal),
       listDownloads: () => deps.getDownloads()?.list() ?? [],
