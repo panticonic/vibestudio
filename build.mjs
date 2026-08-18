@@ -497,6 +497,11 @@ const bootstrapConfig = {
 function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
   fs.copyFileSync("src/main/browserPrivacy.html", "dist/browserPrivacy.html");
+  // sql.js resolves its default WASM payload beside the executing bundle.
+  // Both server artifacts bundle the JavaScript loader into dist/, so retain
+  // that package-relative contract by placing the matching runtime there too.
+  const require = createRequire(import.meta.url);
+  fs.copyFileSync(require.resolve("sql.js/dist/sql-wasm.wasm"), "dist/sql-wasm.wasm");
   copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
   fs.mkdirSync("dist/baked-app", { recursive: true });
   // Bundled agent skill consumed by `vibestudio agent skill install|print`

@@ -73,6 +73,11 @@ const contracts = [
     ],
   },
   {
+    path: "dist/sql-wasm.wasm",
+    runtime: "bundled sql.js runtime",
+    mustStartWithBytes: [0x00, 0x61, 0x73, 0x6d],
+  },
+  {
     path: "src/server/buildV2/builder.ts",
     runtime: "runtime workspace builder",
     forbidden: [
@@ -237,11 +242,18 @@ function readArtifact(relativePath) {
   if (!fs.existsSync(absolutePath)) {
     throw new Error(`${relativePath} does not exist. Run pnpm build first.`);
   }
-  return fs.readFileSync(absolutePath, "utf8");
+  return fs.readFileSync(absolutePath);
 }
 
 function checkContract(contract) {
-  const source = readArtifact(contract.path);
+  const bytes = readArtifact(contract.path);
+  const source = bytes.toString("utf8");
+  if (
+    contract.mustStartWithBytes &&
+    !contract.mustStartWithBytes.every((value, index) => bytes[index] === value)
+  ) {
+    throw new Error(`${contract.path} (${contract.runtime}) has an invalid binary signature`);
+  }
   for (const expected of contract.mustContain ?? []) {
     if (!source.includes(expected)) {
       throw new Error(

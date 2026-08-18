@@ -29,6 +29,7 @@ const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 export const SERVER_RUNTIME_ARTIFACTS = [
   "dist/server.mjs",
   "dist/internal-do.bundle.mjs",
+  "dist/sql-wasm.wasm",
   "dist/host-build-fingerprint.json",
 ];
 
