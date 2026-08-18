@@ -2422,7 +2422,7 @@ describe("runtimeService session entities", () => {
 
     expect(context).toEqual({ contextId: "ctx-branch" });
     expect(ensureContext).toHaveBeenCalledWith("ctx-branch");
-    expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith("ctx-branch");
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("does not create a runtime context when semantic context creation fails", async () => {
@@ -2438,7 +2438,7 @@ describe("runtimeService session entities", () => {
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
-  it("createContext mints a context id when omitted", async () => {
+  it("createContext mints a semantic context without materializing a projection", async () => {
     const { service, contextFolders } = await buildDeps();
 
     const context = (await service.handler({ caller: serverCaller }, "createContext", [{}])) as {
@@ -2447,7 +2447,7 @@ describe("runtimeService session entities", () => {
 
     expect(context.contextId).toEqual(expect.any(String));
     expect(context.contextId.length).toBeGreaterThan(0);
-    expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith(context.contextId);
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("derives an in-process agent's immutable self binding from its canonical entity", async () => {

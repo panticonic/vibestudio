@@ -1095,7 +1095,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         : undefined;
     const contextId = args.contextId ?? randomUUID();
     const context = await setUpContext(contextId);
-    await deps.contextFolders.ensureContextFolder(contextId);
     // An extension call is delegated work: the upstream verified code context
     // and entity own any lifecycle context created for that request. The
     // extension is the executing deputy, not the authority principal that may
