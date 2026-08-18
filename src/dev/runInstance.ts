@@ -241,7 +241,11 @@ async function runServer(
 
 async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
-  await run(process.execPath, ["build.mjs"], { env });
+  // Desktop launches share the repository host artifacts with parallel
+  // developer instances. The coordinator waits for an in-flight build and
+  // reuses its verified output; invoking build.mjs directly would clean the
+  // shared dist/ while another instance is starting its workspace runtime.
+  await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
   // Preserve the existing non-blocking developer typecheck, but make it an
   // owned child of this instance instead of a leaked shell background job.
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
