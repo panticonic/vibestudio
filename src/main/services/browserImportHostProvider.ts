@@ -105,8 +105,9 @@ const IMPORT_PREVIEW_WARNING =
   "Some browser data could not be read. Review the available counts before importing.";
 
 /**
- * Trusted desktop endpoint for the shared import engine. Raw source paths stay
- * inside this process; callers receive only opaque sources and bounded frames.
+ * Trusted machine-local endpoint for the shared import engine. Raw source paths
+ * stay inside this process; callers receive only opaque sources and bounded
+ * public frames, while protected records go directly to the host vault.
  */
 export class BrowserImportHostProvider {
   private providerPromise: Promise<BrowserImportProvider> | null = null;
@@ -118,10 +119,14 @@ export class BrowserImportHostProvider {
     private readonly host: {
       hostId: string;
       displayName: string;
+      location?: "server" | "desktop";
     },
     options: {
       createProvider?: () => Promise<BrowserImportProvider>;
-      browserVault?: BrowserVaultNativeClient;
+      browserVault?: Pick<
+        BrowserVaultNativeClient,
+        "addCookiesBatch" | "addPasswordsBatch" | "addFormFillBatch"
+      >;
       sensitiveImportLedger: SensitiveBrowserImportLedger;
     }
   ) {
@@ -137,7 +142,9 @@ export class BrowserImportHostProvider {
   }
 
   private readonly createProvider: () => Promise<BrowserImportProvider>;
-  private readonly browserVault: BrowserVaultNativeClient | undefined;
+  private readonly browserVault:
+    | Pick<BrowserVaultNativeClient, "addCookiesBatch" | "addPasswordsBatch" | "addFormFillBatch">
+    | undefined;
   private readonly sensitiveImportLedger: SensitiveBrowserImportLedger;
 
   summary() {
@@ -145,7 +152,7 @@ export class BrowserImportHostProvider {
       hostId: this.host.hostId,
       displayName: this.host.displayName,
       platform: normalizedPlatform(),
-      location: "desktop" as const,
+      location: this.host.location ?? ("desktop" as const),
       connected: true,
     };
   }

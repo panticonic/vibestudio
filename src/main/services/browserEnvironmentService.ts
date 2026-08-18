@@ -2,6 +2,7 @@ import {
   selectedPreparedAuthoritySelection,
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX,
@@ -13,7 +14,7 @@ import type { BrowserImportHostProvider } from "./browserImportHostProvider.js";
 
 export function createBrowserEnvironmentService(deps: {
   getDownloads(): BrowserDownloadManager | null;
-  getImportProvider(): BrowserImportHostProvider | null;
+  getImportProvider(ctx: ServiceContext): BrowserImportHostProvider | null;
   browserDataBrokerRepoPath: string | null;
 }): ServiceDefinition {
   const nonPromptingProviderMethods = new Set([
@@ -57,32 +58,38 @@ export function createBrowserEnvironmentService(deps: {
     methods: browserEnvironmentMethods,
     authorityPreparation,
     handler: defineServiceHandler("browserEnvironment", browserEnvironmentMethods, {
-      getImportHost: () => requireImportProvider(deps).summary(),
-      listImportSources: (_ctx) => requireImportProvider(deps).listSources(_ctx.signal),
+      getImportHost: (_ctx) => requireImportProvider(deps, _ctx).summary(),
+      listImportSources: (_ctx) => requireImportProvider(deps, _ctx).listSources(_ctx.signal),
       previewImportSource: (_ctx, [sourceId, dataTypes]) =>
-        requireImportProvider(deps).preview(sourceId, dataTypes, _ctx.signal),
+        requireImportProvider(deps, _ctx).preview(sourceId, dataTypes, _ctx.signal),
       previewSensitiveImport: (_ctx, [sourceId, dataTypes]) => {
         requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps).preview(sourceId, dataTypes, _ctx.signal);
+        return requireImportProvider(deps, _ctx).preview(sourceId, dataTypes, _ctx.signal);
       },
       startImportRead: (_ctx, [sourceId, dataTypes]) =>
-        requireImportProvider(deps).startImport(sourceId, dataTypes),
+        requireImportProvider(deps, _ctx).startImport(sourceId, dataTypes),
       startSensitiveImport: (_ctx, [sourceId, dataTypes, operationId]) => {
         requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps).startSensitiveImport(sourceId, dataTypes, operationId);
+        return requireImportProvider(deps, _ctx).startSensitiveImport(
+          sourceId,
+          dataTypes,
+          operationId
+        );
       },
       observeSensitiveImport: (_ctx, [operationId]) => {
         requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps).observeSensitiveImport(operationId);
+        return requireImportProvider(deps, _ctx).observeSensitiveImport(operationId);
       },
       cancelSensitiveImport: (_ctx, [operationId]) => {
         requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
-        return requireImportProvider(deps).cancelSensitiveImport(operationId);
+        return requireImportProvider(deps, _ctx).cancelSensitiveImport(operationId);
       },
-      nextImportFrame: (_ctx, [operationId]) => requireImportProvider(deps).nextFrame(operationId),
-      cancelImportRead: (_ctx, [operationId]) => requireImportProvider(deps).cancel(operationId),
+      nextImportFrame: (_ctx, [operationId]) =>
+        requireImportProvider(deps, _ctx).nextFrame(operationId),
+      cancelImportRead: (_ctx, [operationId]) =>
+        requireImportProvider(deps, _ctx).cancel(operationId),
       listImportOpenTabs: (_ctx, [sourceId]) =>
-        requireImportProvider(deps).listOpenTabs(sourceId, _ctx.signal),
+        requireImportProvider(deps, _ctx).listOpenTabs(sourceId, _ctx.signal),
       listDownloads: () => deps.getDownloads()?.list() ?? [],
       pauseDownload: (_ctx, [id]) => deps.getDownloads()?.pause(id),
       resumeDownload: (_ctx, [id]) => deps.getDownloads()?.resume(id),
@@ -129,10 +136,13 @@ function requireReviewedBrowserDataProvider(
   }
 }
 
-function requireImportProvider(deps: {
-  getImportProvider(): BrowserImportHostProvider | null;
-}): BrowserImportHostProvider {
-  const provider = deps.getImportProvider();
-  if (!provider) throw new Error("Desktop browser import provider is unavailable");
+function requireImportProvider(
+  deps: {
+    getImportProvider(ctx: ServiceContext): BrowserImportHostProvider | null;
+  },
+  ctx: ServiceContext
+): BrowserImportHostProvider {
+  const provider = deps.getImportProvider(ctx);
+  if (!provider) throw new Error("Browser import host is unavailable");
   return provider;
 }

@@ -3630,6 +3630,50 @@ async function main() {
   }
 
   {
+    const { createBrowserEnvironmentService } =
+      await import("../main/services/browserEnvironmentService.js");
+    const { ServerBrowserImportHostRegistry } =
+      await import("./services/serverBrowserImportHostRegistry.js");
+    const { workspaceProviderExtensionRepoPath } =
+      await import("@vibestudio/workspace/configParser");
+    let browserImportHosts: InstanceType<typeof ServerBrowserImportHostRegistry> | null = null;
+    let browserEnvironmentDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    container.registerManaged({
+      name: "browser-import-host",
+      dependencies: ["workerdWorkspace", "doDispatch"],
+      async start(resolve) {
+        browserImportHosts = new ServerBrowserImportHostRegistry({
+          workspaceId,
+          statePath,
+          doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+        });
+        browserEnvironmentDefinition = createBrowserEnvironmentService({
+          getDownloads: () => null,
+          getImportProvider: (ctx) => assertPresent(browserImportHosts).forContext(ctx),
+          browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
+            workspaceConfig,
+            "browserData"
+          ),
+        });
+        return browserImportHosts;
+      },
+      async stop() {
+        browserImportHosts?.stop();
+        browserImportHosts = null;
+        browserEnvironmentDefinition = null;
+      },
+      getServiceDefinition() {
+        if (!browserEnvironmentDefinition) {
+          throw new Error("browser import host service not initialized");
+        }
+        return browserEnvironmentDefinition;
+      },
+    });
+  }
+
+  {
     const { createShellBrowserPrivacyService } =
       await import("./services/shellBrowserPrivacyService.js");
     let shellBrowserPrivacyDefinition:
