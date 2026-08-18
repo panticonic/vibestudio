@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   templateAuthoringInspectionSchema,
+  templateOperationSchema,
   templatePublicationSchema,
   type TemplateAuthoringInspection,
   type TemplateCatalogSnapshot,
@@ -12,6 +13,11 @@ import {
   type TemplateStatusRow,
   type TemplatesClient,
 } from "@vibestudio/service-schemas/templates";
+import {
+  baseReleaseCheckSchema,
+  baseReleaseMethods,
+  type BaseReleaseCheck,
+} from "@vibestudio/service-schemas/baseRelease";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -145,6 +151,30 @@ async function withTemplates<T>(run: (templates: TemplatesClient) => Promise<T>)
   } finally {
     await rpc.close().catch(() => undefined);
   }
+}
+
+async function withBaseRelease<T>(
+  run: (client: ReturnType<typeof baseReleaseClient>) => Promise<T>
+): Promise<T> {
+  const { rpc } = requireClient();
+  try {
+    return await run(baseReleaseClient(rpc));
+  } finally {
+    await rpc.close().catch(() => undefined);
+  }
+}
+
+function baseReleaseClient(rpc: RpcClient) {
+  return {
+    check: async () =>
+      baseReleaseCheckSchema.parse(
+        await rpc.call("baseRelease.check", baseReleaseMethods["check"]!.args.parse([]))
+      ),
+    pull: async (input: { commandId: string }) =>
+      templateOperationSchema.parse(
+        await rpc.call("baseRelease.pull", baseReleaseMethods["pull"]!.args.parse([input]))
+      ),
+  };
 }
 
 function commandId(inv: ParsedInvocation): string {
@@ -443,7 +473,47 @@ function run<T>(
     .catch((error) => printError(error, { json }));
 }
 
+function runBaseRelease<T>(
+  inv: ParsedInvocation,
+  operation: (client: ReturnType<typeof baseReleaseClient>) => Promise<T>,
+  render: (value: T) => void
+): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  return withBaseRelease(operation)
+    .then((value) => {
+      printResult(value, { json, human: () => render(value) });
+      return 0;
+    })
+    .catch((error) => printError(error, { json }));
+}
+
 export const templatesCommands: CliCommand[] = [
+  {
+    group: "templates",
+    name: "check-base",
+    summary: "Compare this workspace with the Base shipped by the current host",
+    flags: [JSON_FLAG],
+    run: (inv) =>
+      runBaseRelease(
+        inv,
+        (client) => client.check(),
+        (check: BaseReleaseCheck) => {
+          console.log(
+            check.updateAvailable
+              ? `  ${check.alias} template  ${version(check.installed.ref)} → ${version(check.target.ref)}`
+              : `  ${check.alias} template  ${version(check.installed.ref)}  up to date`
+          );
+        }
+      ),
+  },
+  {
+    group: "templates",
+    name: "pull-base",
+    summary: "Update this workspace to the exact Base shipped by the current host",
+    flags: [COMMAND_ID, JSON_FLAG],
+    run: (inv) =>
+      runBaseRelease(inv, (client) => client.pull({ commandId: commandId(inv) }), renderPending),
+  },
   {
     group: "templates",
     name: "author-parts",

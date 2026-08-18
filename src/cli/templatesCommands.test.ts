@@ -5,6 +5,8 @@ import { templatesCommands } from "./templatesCommands.js";
 describe("templates CLI commands", () => {
   it("exposes the full current templates service family", () => {
     expect(templatesCommands.map((command) => command.name)).toEqual([
+      "check-base",
+      "pull-base",
       "author-parts",
       "author-inspect",
       "author-publish",
@@ -23,6 +25,16 @@ describe("templates CLI commands", () => {
       "cancel",
       "decide-suggestion",
     ]);
+  });
+
+  it("exposes the host/Base handshake without adding an alternate review command", () => {
+    const check = templatesCommands.find((command) => command.name === "check-base")!;
+    const pull = templatesCommands.find((command) => command.name === "pull-base")!;
+    expect(parseInvocation(check, []).positionals).toEqual([]);
+    expect(parseInvocation(pull, ["--command-id", "base-release-1"]).flags["command-id"]).toBe(
+      "base-release-1"
+    );
+    expect(templatesCommands.some((command) => command.name === "review-base")).toBe(false);
   });
 
   it("keeps authoring selection and publication receipts explicit", () => {

@@ -3416,6 +3416,20 @@ async function main() {
     );
   }
 
+  // ── exact host/Base release handshake ──
+  {
+    const { createBaseReleaseService } = await import("./services/baseReleaseService.js");
+    const { readBaseTemplateRelease } = await import("./baseTemplateRelease.js");
+    const target = readBaseTemplateRelease(appRoot).baseTemplate;
+    container.registerRpc(
+      createBaseReleaseService({
+        target,
+        dispatcher,
+        systemSubject: SYSTEM_SUBJECT,
+      })
+    );
+  }
+
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
   let closeEvalKernelLeases: (() => Promise<void>) | null = null;
   let closeActiveEvalRuns: ((deadlineMs?: number) => Promise<void>) | null = null;
