@@ -63,13 +63,13 @@ export function createBrowserEnvironmentService(deps: {
       previewImportSource: (_ctx, [sourceId, dataTypes]) =>
         requireImportProvider(deps, _ctx).preview(sourceId, dataTypes, _ctx.signal),
       previewSensitiveImport: (_ctx, [sourceId, dataTypes]) => {
-        requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
+        requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
         return requireImportProvider(deps, _ctx).preview(sourceId, dataTypes, _ctx.signal);
       },
       startImportRead: (_ctx, [sourceId, dataTypes]) =>
         requireImportProvider(deps, _ctx).startImport(sourceId, dataTypes),
       startSensitiveImport: (_ctx, [sourceId, dataTypes, operationId]) => {
-        requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
+        requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
         return requireImportProvider(deps, _ctx).startSensitiveImport(
           sourceId,
           dataTypes,
@@ -77,11 +77,11 @@ export function createBrowserEnvironmentService(deps: {
         );
       },
       observeSensitiveImport: (_ctx, [operationId]) => {
-        requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
+        requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
         return requireImportProvider(deps, _ctx).observeSensitiveImport(operationId);
       },
       cancelSensitiveImport: (_ctx, [operationId]) => {
-        requireReviewedBrowserDataProvider(_ctx, deps.browserDataBrokerRepoPath);
+        requireBrowserDataProviderSource(_ctx, deps.browserDataBrokerRepoPath);
         return requireImportProvider(deps, _ctx).cancelSensitiveImport(operationId);
       },
       nextImportFrame: (_ctx, [operationId]) =>
@@ -108,12 +108,11 @@ export function createBrowserEnvironmentService(deps: {
   };
 }
 
-function requireReviewedBrowserDataProvider(
+function requireBrowserDataProviderSource(
   ctx: {
     caller: {
       runtime: { id: string; kind: string };
       hostOriginated?: true;
-      codeApproved?: true;
       code?: { callerId: string; repoPath?: string };
     };
   },
@@ -122,13 +121,12 @@ function requireReviewedBrowserDataProvider(
   if (ctx.caller.hostOriginated === true) return;
   if (
     ctx.caller.runtime.kind !== "extension" ||
-    ctx.caller.codeApproved !== true ||
     ctx.caller.code?.callerId !== ctx.caller.runtime.id ||
     !repoPath ||
     ctx.caller.code.repoPath !== repoPath
   ) {
     throw Object.assign(
-      new Error("Sensitive browser import requires the reviewed browser-data provider"),
+      new Error("Sensitive browser import requires the declared browser-data provider"),
       {
         code: "EACCES",
       }

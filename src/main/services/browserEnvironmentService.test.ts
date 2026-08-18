@@ -151,13 +151,13 @@ describe("browserEnvironment authority", () => {
     ).toBeUndefined();
   });
 
-  it("rejects unapproved and wrong-source code from non-prompting sensitive endpoints", async () => {
+  it("relies on exact method capability admission and rejects a wrong broker source", async () => {
     const definition = createBrowserEnvironmentService({
       getDownloads: () => null,
       getImportProvider: () => ({ startSensitiveImport: vi.fn() }) as never,
       browserDataBrokerRepoPath: "extensions/browser-data",
     });
-    const unapproved = createVerifiedCaller("extension-1", "extension", {
+    const admitted = createVerifiedCaller("extension-1", "extension", {
       callerId: "extension-1",
       callerKind: "extension",
       repoPath: "extensions/browser-data",
@@ -166,16 +166,15 @@ describe("browserEnvironment authority", () => {
       requested: [],
     });
     await expect(
-      definition.handler({ caller: unapproved } as never, "startSensitiveImport", [
+      definition.handler({ caller: admitted } as never, "startSensitiveImport", [
         "source",
         ["cookies"],
         "operation-id",
       ])
-    ).rejects.toMatchObject({ code: "EACCES" });
+    ).resolves.toBeUndefined();
     const wrong = {
-      ...unapproved,
-      codeApproved: true as const,
-      code: { ...unapproved.code!, repoPath: "extensions/other" },
+      ...admitted,
+      code: { ...admitted.code!, repoPath: "extensions/other" },
     };
     await expect(
       definition.handler({ caller: wrong } as never, "startSensitiveImport", [
