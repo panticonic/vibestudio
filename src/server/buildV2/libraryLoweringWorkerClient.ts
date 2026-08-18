@@ -74,7 +74,9 @@ export class LibraryLoweringWorkerClient {
       this.pending.clear();
     };
     worker.on("error", fail);
-    worker.on("exit", (code) => fail(new Error(`Library lowering worker exited with code ${code}`)));
+    worker.on("exit", (code) =>
+      fail(new Error(`Library lowering worker exited with code ${code}`))
+    );
     this.worker = worker;
     return worker;
   }

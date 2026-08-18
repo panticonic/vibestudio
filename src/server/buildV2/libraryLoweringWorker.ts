@@ -26,10 +26,7 @@ export function lowerLibraryModule(source: string): string {
     babelrc: false,
     configFile: false,
     sourceType: "module",
-    plugins: [
-      controlledDynamicImportPlugin,
-      [transformModulesCommonJs, { strictMode: true }],
-    ],
+    plugins: [controlledDynamicImportPlugin, [transformModulesCommonJs, { strictMode: true }]],
     compact: false,
     comments: true,
     ast: false,

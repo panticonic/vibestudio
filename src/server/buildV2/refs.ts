@@ -4,12 +4,7 @@ const VALID_REF_DESCRIPTION = `"main", "state:<stateHash>", or "ctx:<contextId>"
 const CONTEXT_REF_PATTERN = /^ctx:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 
 export function validateBuildRef(ref: string | undefined): string | undefined {
-  if (
-    !ref ||
-    ref === "main" ||
-    ref.startsWith("state:") ||
-    CONTEXT_REF_PATTERN.test(ref)
-  ) {
+  if (!ref || ref === "main" || ref.startsWith("state:") || CONTEXT_REF_PATTERN.test(ref)) {
     return ref;
   }
   throw new BuildRequestError(

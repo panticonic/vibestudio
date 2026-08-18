@@ -1112,9 +1112,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ownerContextId,
         kind: "lifecycle",
         ownerEntityId:
-          delegatedOwnerContextId === undefined
-            ? caller.runtime.id
-            : ctx.chainCaller!.callerId,
+          delegatedOwnerContextId === undefined ? caller.runtime.id : ctx.chainCaller!.callerId,
       });
     }
     await deps.onContextCreated?.({
