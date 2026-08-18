@@ -31,13 +31,27 @@ const WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION = {
   authorityCategory: { domain: "automation", verb: "see" },
 } as const;
 
+const PersistedPanelOptionsSchema = z
+  .object({
+    ref: z.string().nullable().optional(),
+    placement: z
+      .object({
+        disposition: z.enum(["side", "side-if-room", "replace", "split-below"]).optional(),
+        preferredWidth: z.number().positive().finite().optional(),
+        minWidth: z.number().positive().finite().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .passthrough();
+
 export const SlotHistoryEntryInputSchema = z.object({
   entryKey: z.string(),
   entityId: z.string(),
   source: z.string(),
   contextId: z.string(),
   stateArgs: z.unknown().optional(),
-  options: z.unknown().optional(),
+  options: PersistedPanelOptionsSchema.optional(),
 });
 
 export const SlotCommitPreparedNavigationInputSchema = z.object({
