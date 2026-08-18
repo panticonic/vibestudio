@@ -2672,7 +2672,7 @@ export class EvalDO extends DurableObjectBase {
           if (dot > 0) {
             const bindingName = serviceName.slice(0, dot);
             const methodName = serviceName.slice(dot + 1);
-            const binding = rt[bindingName];
+            const binding = bindings[bindingName];
             if (binding && typeof binding === "object") {
               const described = await this.describeInjectedSurface(
                 bindingName,
@@ -2696,7 +2696,7 @@ export class EvalDO extends DurableObjectBase {
           // Prefer the INJECTED binding's surface (what eval actually calls) over the raw RPC
           // service — they can diverge (fs's low-level handle* wire methods are hidden behind
           // open()→FileHandle).
-          const injected = rt[serviceName];
+          const injected = bindings[serviceName];
           if (injected !== undefined) {
             if (injected && typeof injected === "object") {
               const described = await this.describeInjectedSurface(

@@ -451,6 +451,7 @@ describe("WorkerdManager", () => {
       expect(code?.env["PARENT_ID"]).toBe("panel-parent");
       expect(code?.env["PARENT_ENTITY_ID"]).toBe("panel:parent-entity");
       expect(code?.env["PARENT_KIND"]).toBe("panel");
+      expect(code?.env["WORKER_EFFECTIVE_VERSION"]).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it("serves create-time user env to the dynamically loaded worker", async () => {
@@ -901,6 +902,7 @@ describe("WorkerdManager", () => {
       });
 
       const code = await mgr.getDoCode("workers/new-do", "NewDO", "subagent-object");
+      expect(code?.env["WORKER_EFFECTIVE_VERSION"]).toBe(prepared.effectiveVersion);
       expect(code?.env["STATE_ARGS"]).toEqual({
         subagent: {
           runId: "run-1",

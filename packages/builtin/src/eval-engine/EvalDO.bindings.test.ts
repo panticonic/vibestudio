@@ -55,7 +55,7 @@ describe("buildOwnerBindings", () => {
     ]);
 
     await b.agent.describe();
-    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", ["chan-1", "describeSelf", []]);
+    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "describeEvalOwner", ["chan-1"]);
 
     await b.chat.send("hi");
     expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", ["chan-1", "send", ["hi"]]);

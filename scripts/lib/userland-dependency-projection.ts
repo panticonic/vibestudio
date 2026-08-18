@@ -80,7 +80,7 @@ export async function prepareUserlandDependencyProjection(
       }
       dependencyOverrides[selector] = version;
     }
-    for (const patch of collectTransitiveDependencyPatches(unit, graph, workspaceRoot)) {
+    for (const patch of await collectTransitiveDependencyPatches(unit, graph, workspaceRoot)) {
       const existing = dependencyPatches.get(patch.selector);
       if (existing && existing.owner !== patch.owner) {
         throw new Error(
