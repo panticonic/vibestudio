@@ -416,7 +416,7 @@ function authorityGrantOrigin(
   lookup?: UnitAdmissionProvenanceLookup
 ): string | undefined {
   if (grant.effect === "deny") return "You chose not to allow this";
-  // The command agent's grants are not answers to a prompt — for an ordinary panel
+  // The Quickfire agent's grants are not answers to a prompt — for an ordinary panel
   // nothing was ever asked. Naming the surface is the only honest origin: the
   // person opened the overlay over a panel, and that gesture is what this row
   // records. Revoking it here shuts the debug tools off immediately.

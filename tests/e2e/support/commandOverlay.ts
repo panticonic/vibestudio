@@ -23,7 +23,7 @@ import { clickWindowPointThroughNativeInput } from "../../setup/nativeInput";
 export interface CommandOverlaySnapshot {
   /** The palette card is mounted in the overlay document. */
   open: boolean;
-  /** Scope chip currently active: "All" | "Commands" | "Go to" | "Command agent". */
+  /** Scope chip currently active: "All" | "Commands" | "Go to" | "Quickfire agent". */
   activeMode: string | null;
   /** Row titles in display order — the Enter target is the first one. */
   rows: string[];

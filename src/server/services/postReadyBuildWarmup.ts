@@ -2,7 +2,7 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 
 const NEW_PANEL_SOURCE = "about/new";
 /**
- * The command agent's harness unit.
+ * The Quickfire agent's harness unit.
  *
  * Worth warming because the cost is shared: `ensureDOClass` keys its runtime
  * binding by SOURCE AND CLASS, not by object key, so the build the first

@@ -322,7 +322,7 @@ export function getPanelCommandDefinitions(
       id: "command-agent",
       label: "Command…",
       description:
-        "Open the command palette over this panel, resuming its command agent conversation if it has one",
+        "Open the command palette over this panel, resuming its Quickfire agent conversation if it has one",
       shortcut: "Cmd/Ctrl+K",
       visible: true,
       enabled: Boolean(chrome),

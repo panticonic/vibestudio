@@ -34,7 +34,7 @@ describe("post-ready build warmup", () => {
 
     expect(calls).toEqual([
       "about/new",
-      // A failed launcher build must not skip the command agent behind it.
+      // A failed launcher build must not skip the Quickfire agent behind it.
       "workers/agent-worker",
       "packages/eval",
       "packages/runtime/hosted",
@@ -113,7 +113,7 @@ describe("post-ready build warmup", () => {
     await warmup.start();
 
     // The two units a user can reach from anywhere without opening anything:
-    // the launcher, and the command agent one keystroke behind the overlay.
+    // the launcher, and the Quickfire agent one keystroke behind the overlay.
     expect(bindRuntimeImage.mock.calls.map(([source]) => source)).toEqual([
       "about/new",
       "workers/agent-worker",

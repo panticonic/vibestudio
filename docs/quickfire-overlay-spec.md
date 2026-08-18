@@ -656,30 +656,119 @@ never closes on error.
 
 ```
             ╭──────────────────────────────────────────────────╮
-            │ ✦ Quickfire · Sales Dashboard         ⟲ clear  ⧉ │  ← header
+            │ ✦ Sales Dashboard              Clear   Move to → │  ← header
             ├──────────────────────────────────────────────────┤
+            │ ✦ and on mobile widths?_                    ■ Stop│ ← compose
+            │   ⏎ send · ⇧⏎ newline · ⌘⏎ open as chat panel    │
             │  Resumed · 3 messages · 2h ago        show all → │  ← resume chip
-            │  ┌ you ────────────────────────────────────────┐ │
-            │  │ why is the chart cut off on narrow widths?  │ │
-            │  └─────────────────────────────────────────────┘ │
-            │  ┌ agent ──────────────────────────────────────┐ │
-            │  │ The container clamps at 720px — .chart-wrap │ │
-            │  │ sets overflow:hidden and the flex basis…    │ │
-            │  │ ✓ panel_screenshot  ✕ panel_eval            │ │  ← tool records
-            │  └─────────────────────────────────────────────┘ │
-            │                                                  │
-            │ ⌕ and on mobile widths?_                         │  ← compose
-            │    ⏎ send · ⇧⏎ newline · ⌘⏎ open as chat panel   │
+            │  ✦ AGENT              Opus 5 · just now          │
+            │  The container clamps at 720px — `.chart-wrap`   │  ← plain prose,
+            │  sets overflow:hidden and the flex basis…        │    no bubble
+            │  │ Panel     │ State  │                         │  ← real tables
+            │  │ Chat      │ open   │                         │
+            │  ▸ ✓ panel_screenshot   1.2s                    │  ← work records
+            │  ▸ ✕ panel_eval         failed                  │
+            │  ┃ ▸ Thinking                                    │  ← rail = note
+            │  ╭ you ───────────────────────────────────────╮  │
+            │  │ why is the chart cut off on narrow widths? │  │
+            │  ╰────────────────────────────────────────────╯  │
+            ├──────────────────────────────────────────────────┤
+            │ ▤ Sales Dashboard         ⌘K palette · esc close │
             ╰──────────────────────────────────────────────────╯
 ```
 
-- Header: ✦ + panel title; `⟲` clears immediately into a fresh conversation;
-  `⧉` promotes to a chat panel.
-- Transcript: last 20 entries, internal scroll, streaming delta renders live,
-  and every conversational entry uses the shared compact Markdown projection.
-  Thinking is a distinct expandable record. Each invocation is a
-  running/done/failed record that expands to its bounded input, progress,
-  output, and failure details. "show all →" promotes.
+- **One renderer, two skins.** The heading, transcript, work records and
+  Markdown are `@workspace/quickfire-core/ui`, a component tree drawn against a
+  small semantic primitive contract. Desktop supplies DOM
+  (`apps/shell/overlay/domSkin.tsx`), mobile supplies React Native
+  (`apps/mobile/src/components/overlay/nativeSkin.tsx`). Product meaning —
+  what an entry's heading says, its tone, its glyph, which parts are worth a
+  disclosure — is decided once in `quickfire-core/cards.ts`.
+- Header: ✦ + panel title; **Clear** replaces the conversation with a fresh one;
+  **Move to chat panel** promotes. A conversation opened from a notification
+  shows a bell and offers only **Open chat panel**.
+- Transcript: a tail of 20 entries, internal scroll, streaming renders live.
+  The user's words get an accent block; the agent's get plain typography on the
+  card, because a long answer should read like a document. Non-conversational
+  entries (notices, approvals, reasoning, cards this venue will not run) are
+  annotations: a tone rail, a wash, an icon and a word — never colour alone.
+- **Nothing is elided.** A failed turn carries its failure text behind a named
+  disclosure; attachments are named, not counted; a message carries its model
+  and time; inline-UI/custom cards are announced with a way to open them where
+  they run. Trimmed entries offer "show them", which widens the rendered window
+  over the replay the client already holds (the join asks for `REPLAY_LIMIT`,
+  deliberately wider than the tail) — "show all →" still promotes.
+- Markdown parses with micromark/mdast (`mdast-util-from-markdown` + the GFM
+  extension) — the same engine `react-markdown` runs in the chat panel, so the
+  two venues cannot disagree about what a reply says.
+  `quickfire-core/markdown.ts` owns only the projection from mdast into the
+  small platform-neutral tree both renderers walk, and that projection is
+  compiler-exhaustive over `PhrasingContent`: a Markdown construct we stop
+  handling becomes a type error rather than content that vanishes. Raw
+  HTML/JSX/MDX is shown verbatim with a label rather than executed or dropped.
+  Every code block carries a copy control.
+  The mobile cost is ~57 KB gzip in the bundle; it is paid because a
+  hand-rolled parser in this position silently mangles the answers it cannot
+  parse, which is the failure this venue exists to avoid.
+- **Reasoning says what was thought.** A thinking record's heading is the
+  thought itself, abbreviated on a word boundary — its opening line once
+  settled, its newest line while it streams — with the full reasoning behind the
+  disclosure. A column of identical "Thought for a moment" rows is a collapsed
+  record carrying no information, which is the one thing a collapsed record must
+  never be. Each invocation is a running/done/failed record showing its duration
+  (or "waiting for approval"), expanding to bounded input, progress, output and
+  failure.
+- **Links open panels.** A destination in agent prose is resolved by
+  `classifyQuickfireLink` (`quickfire-core/links.ts`), which is `parseAddressInput`
+  — the address bar's own grammar — so `panels/editor`, a full panel link, and a
+  URL all mean here what they mean when typed. The surface never opens anything
+  itself: it emits `open-link`, and the chrome opens the destination *beside*
+  the bound panel (a child, or a root), never by navigating the panel the
+  conversation is about. Only `mailto:`/`tel:` reach the OS. Destinations the
+  workspace would not open (`javascript:`, relative document paths) keep their
+  words and lose their href, rather than becoming an underline that does
+  nothing. This also closes a hole: the overlay's `WebContentsView` has no
+  window-open handler, so an `<a target="_blank">` there produced a bare
+  Electron window.
+- **Tool results that are pictures render as pictures.** `extractResultImages`
+  (`@workspace/agentic-core/result-images`) lifts images out of an invocation
+  result and fills `ToolExecutionState.resultImages`, which the chat panel's
+  `ActionMessage` already rendered and which nothing had ever populated — so
+  `panel_screenshot`, the tool whose entire job is showing someone their panel,
+  used to arrive as `"data": "[402931 characters omitted]"`. Desktop carries the
+  bytes **on demand**: the transcript is serialized IPC on every reduce flush, so
+  the projection describes each image ("1280×800 · 393 KB") and the user's click
+  emits `reveal-image`. Mobile has no boundary and embeds them inline.
+- **Every control shows focus, the card can be moved, and live text has a
+  cursor.** The overlay is keyboard-first and had exactly one `:focus-visible`
+  rule; the card floated over the panel it discussed with no drag handle,
+  although `OverlaySurfaceHost` has supported one since the approval card; and
+  streaming prose carried no caret. All three were regressions against surfaces
+  that already did it right.
+- **The palette highlights why a row is there**, using the address bar's own
+  `findMatchRanges` (now exported from `@workspace/omnibox-core`) — ranking by a
+  match and then hiding it makes the ordering look arbitrary.
+- **↑ on an empty compose recalls what you sent**, walking your own messages
+  back the way a shell does. Transcript records are ordinary focusable
+  disclosures, so Tab/Enter walks and opens them without a bespoke roving-focus
+  system.
+- **An empty conversation offers three panel-aware openers** (`suggestedOpeners`)
+  rather than one line of prose: the venue's capabilities, phrased as the
+  questions people arrive with, and different for a page than for a panel.
+- **The context strip retargets** (§4.1 at last): clicking it re-aims the overlay
+  at another open panel, binding the conversation to the panel you chose rather
+  than navigating to it.
+- **A reply that lands while you are reading something older says so** instead of
+  scrolling out from under you, and mobile marks send and turn-end with a haptic.
+- **Code is highlighted and diagrams render, on the platform that can.** The
+  desktop skin runs highlight.js against a named language only — never
+  `highlightAuto`, which colours a shell transcript as Ruby — with tokens keyed
+  to the same Radix scales the chat panel uses. A ```mermaid fence renders
+  through `@workspace/ui/diagram`, the chat panel's own diagram component moved
+  into the shared kit rather than reimplemented, lazily so mermaid stays out of
+  the startup path. Mobile shows the same fence as labelled source: React Native
+  has no DOM to give mermaid, and the chat panel is where a diagram becomes a
+  picture.
 - Activity is never inferred independently by the two renderers. The shared
   quickfire projection emits one live row from the accepted send onward:
   `starting` before the durable turn arrives, then `thinking`, `using tools`,
@@ -884,10 +973,20 @@ long-press active tab → sheet pre-scoped to `@`.
 ### 7.2 Quickfire sheet
 
 `QuickfireSheet.tsx`: full-height bottom sheet over the active panel
-(`activePanelIdAtom` provides the binding), same header/transcript/compose
-structure as §4.3 rendered natively (reuses the `ApprovalSheet` sheet shell
-and the same `useChannelMessages` reduction the mobile chat surface uses —
-mobile talks RPC directly, so no props-bridge constraint exists here).
+(`activePanelIdAtom` provides the binding). Mobile talks RPC directly, so it
+drives `useQuickfireSessionCore` itself — no props bridge — and it owns only the
+*sheet*: the modal, the swipe, keyboard avoidance, and the bottom-anchored
+compose row.
+
+Everything inside is §4.3 itself, not a native re-statement of it: the sheet
+renders `<ConversationHeader/>` and `<ConversationBody/>` from
+`@workspace/quickfire-core/ui` through the native skin, so the two clients
+differ in exactly the places they should — reading order (oldest-first here,
+newest-first under the desktop card's top input), where the compose control
+sits, and which primitives the tree is made of. The skin provides no `Image`,
+because React Native text cannot host one; the shared renderer falls back to alt
+text, which is why an image in a reply is still *stated* on a phone.
+
 Promote opens the chat panel in the detail pane. Swipe-down = dismiss
 (conversation persists); clear immediately replaces it with a fresh conversation.
 

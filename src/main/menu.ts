@@ -234,7 +234,7 @@ export function buildHamburgerMenuTemplate(
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   // One key, one door. The overlay decides what the input meant: prose talks to
-  // the command agent, a panel name switches panels, `>` and `@` narrow to
+  // the Quickfire agent, a panel name switches panels, `>` and `@` narrow to
   // commands and destinations. A second press cycles those scopes. There is
   // deliberately no shift chord for the agent — it would only pre-expand the
   // transcript, which typing already does.
@@ -431,7 +431,7 @@ export function setupMenu(
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   const closePanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.closePanel;
   // One key, one door. The overlay decides what the input meant: prose talks to
-  // the command agent, a panel name switches panels, `>` and `@` narrow to
+  // the Quickfire agent, a panel name switches panels, `>` and `@` narrow to
   // commands and destinations. A second press cycles those scopes. There is
   // deliberately no shift chord for the agent — it would only pre-expand the
   // transcript, which typing already does.
