@@ -818,6 +818,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         };
       }
       view.setViewVisible?.(targetPanelId, true);
+      view.focusView?.(targetPanelId);
       this.runtime.recordViewMutation();
       this.sendPanelEvent(targetPanelId, { type: "focus" });
       return {
@@ -844,6 +845,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         const nextView = this.getPanelView();
         if (nextView?.hasView(targetPanelId)) {
           nextView.setViewVisible?.(targetPanelId, true);
+          nextView.focusView?.(targetPanelId);
           this.runtime.recordViewMutation();
           this.sendPanelEvent(targetPanelId, { type: "focus" });
           return {

@@ -134,6 +134,8 @@ export interface PanelViewLike {
    *  partition is unchanged instead of destroying the renderer. */
   getViewPartition(panelId: string): string | undefined | null;
   setViewVisible?(panelId: string, visible: boolean): void;
+  /** Apply keyboard focus after an explicit user/navigation focus intent. */
+  focusView?(panelId: string): boolean;
   destroyView(panelId: string): void;
   reloadView(panelId: string): Promise<boolean>;
   navigateView(panelId: string, url: string): Promise<void>;

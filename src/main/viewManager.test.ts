@@ -806,7 +806,7 @@ describe("ViewManager", () => {
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
       });
-      vm.createView({ id: "panel-1", type: "panel" });
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
         sealedLaunchIdentity: "@workspace-apps/shell",
         supportedProtocolVersions: [1],
@@ -841,6 +841,7 @@ describe("ViewManager", () => {
           surfaces: [{ surfaceId: "slot-1" }],
         },
       });
+      expect(panelView.webContents.focus).not.toHaveBeenCalled();
       await expect(
         vm.applyNativePanelSurfaces("@workspace-apps/shell", desired)
       ).resolves.toMatchObject({ accepted: true });
@@ -1854,10 +1855,28 @@ describe("ViewManager", () => {
       vm.setViewVisible("test-view", true);
       expect(view.setVisible).toHaveBeenCalledWith(true);
       expect(vm.isViewVisible("test-view")).toBe(true);
+      expect(view.webContents.focus).not.toHaveBeenCalled();
+
+      expect(vm.focusView("test-view")).toBe(true);
+      expect(view.webContents.focus).toHaveBeenCalledTimes(1);
 
       vm.setViewVisible("test-view", false);
       expect(view.setVisible).toHaveBeenCalledWith(false);
       expect(vm.isViewVisible("test-view")).toBe(false);
+    });
+
+    it("does not steal OS focus when focus arrives after the window deactivates", () => {
+      const view = vm.createView({
+        id: "delayed-panel",
+        type: "panel",
+      });
+      vm.setViewVisible("delayed-panel", true);
+      (mockWindow.isFocused as Mock).mockReturnValueOnce(false);
+
+      expect(vm.focusView("delayed-panel")).toBe(true);
+
+      expect(view.setVisible).toHaveBeenCalledWith(true);
+      expect(view.webContents.focus).not.toHaveBeenCalled();
     });
 
     it("keeps host chrome app views full-window and out of panel layout", () => {

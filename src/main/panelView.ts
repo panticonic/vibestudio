@@ -410,6 +410,10 @@ export class PanelView implements PanelViewLike {
     this.viewManager.setViewVisible(panelId, visible);
   }
 
+  focusView(panelId: string): boolean {
+    return this.viewManager.focusView(panelId);
+  }
+
   hasView(panelId: string): boolean {
     return this.viewManager.hasView(panelId);
   }

@@ -1534,7 +1534,13 @@ export class ViewManager {
   }
 
   /**
-   * Set visibility of a view.
+   * Set visibility of a view without changing keyboard focus.
+   *
+   * Native surface reconciliation calls this for every visible pane in a
+   * snapshot. Visibility therefore cannot imply focus: doing so emits native
+   * focus feedback for each pane, which causes the shell to publish another
+   * snapshot and can ping-pong indefinitely. Focus is an explicit operation
+   * through `focusView` or `setFocusedNativePanelSlot`.
    */
   setViewVisible(id: string, visible: boolean): void {
     const managed = this.views.get(id);
@@ -1554,7 +1560,6 @@ export class ViewManager {
       managed.view.setBounds(bounds);
       managed.view.setVisible(true);
       this.reconcileNativeLayerOrder();
-      this.focusVisibleView(managed);
     } else if (visible && managed.type !== "shell") {
       // An active native slot is the authoritative geometry for its panel.
       // Visibility transitions can race immediately after a bind; falling
@@ -1571,9 +1576,7 @@ export class ViewManager {
 
       // Keep tracking the selected panel, but do not let startup panels paint
       // or reserve hit-test space above/below the launch gate.
-      if (this.applyNativePanelVisibility(managed, bounds)) {
-        this.focusVisibleView(managed);
-      }
+      this.applyNativePanelVisibility(managed, bounds);
       this.reconcileNativeLayerOrder();
     } else {
       managed.view.setVisible(visible);
@@ -1585,6 +1588,14 @@ export class ViewManager {
         }
       }
     }
+  }
+
+  /** Focus an already-presented view as the result of an explicit focus intent. */
+  focusView(id: string): boolean {
+    const managed = this.views.get(id);
+    if (!managed || !managed.visible) return false;
+    this.focusVisibleView(managed);
+    return true;
   }
 
   /**
@@ -1623,6 +1634,13 @@ export class ViewManager {
 
   private focusVisibleView(managed: ManagedView): void {
     if (this.nativeShellOverlay.isVisible()) return;
+    // Visibility and keyboard focus are separate concerns. A panel can finish
+    // materializing long after the creation gesture that selected it. If the
+    // user has moved to another application in the meantime, focusing its
+    // WebContents raises Vibestudio and steals OS focus. Explicit window
+    // activation belongs to ApplicationWindowController; delayed panel
+    // presentation must only route focus while this window is already active.
+    if (!this.window.isFocused()) return;
     const wc = managed.view.webContents;
     if (wc.isDestroyed()) return;
     wc.focus();
