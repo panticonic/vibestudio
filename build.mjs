@@ -337,6 +337,43 @@ const typecheckWorkerElectronConfig = {
   outfile: "dist/typecheck-worker.cjs",
 };
 
+const workspaceRpcCatalogWorkerConfig = {
+  entryPoints: ["src/server/buildV2/workspaceRpcCatalogWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/workspace-rpc-catalog-worker.mjs",
+  external: ["@vibestudio/typecheck", "typescript"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
+const workspaceRpcCatalogWorkerElectronConfig = {
+  ...workspaceRpcCatalogWorkerConfig,
+  format: "cjs",
+  outfile: "dist/workspace-rpc-catalog-worker.cjs",
+};
+
+const sqliteIntegrityWorkerConfig = {
+  entryPoints: ["src/server/storage/sqliteIntegrityWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/sqlite-integrity-worker.mjs",
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
+const sqliteIntegrityWorkerElectronConfig = {
+  ...sqliteIntegrityWorkerConfig,
+  format: "cjs",
+  outfile: "dist/sqlite-integrity-worker.cjs",
+};
+
 const clientConfig = {
   entryPoints: ["src/cli/client.ts"],
   bundle: true,
@@ -686,6 +723,12 @@ async function build() {
           "library-lowering-worker.cjs"
         ),
         "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify("typecheck-worker.cjs"),
+        "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
+          "workspace-rpc-catalog-worker.cjs"
+        ),
+        "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
+          "sqlite-integrity-worker.cjs"
+        ),
       },
     };
     const serverWithBundle = {
@@ -700,6 +743,12 @@ async function build() {
           "library-lowering-worker.mjs"
         ),
         "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify("typecheck-worker.mjs"),
+        "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
+          "workspace-rpc-catalog-worker.mjs"
+        ),
+        "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
+          "sqlite-integrity-worker.mjs"
+        ),
       },
     };
     // Both server bundles consume the internal-DO output captured above.
@@ -712,6 +761,10 @@ async function build() {
       buildHostArtifact(libraryLoweringWorkerConfig),
       buildHostArtifact(typecheckWorkerElectronConfig),
       buildHostArtifact(typecheckWorkerConfig),
+      buildHostArtifact(workspaceRpcCatalogWorkerElectronConfig),
+      buildHostArtifact(workspaceRpcCatalogWorkerConfig),
+      buildHostArtifact(sqliteIntegrityWorkerElectronConfig),
+      buildHostArtifact(sqliteIntegrityWorkerConfig),
     ]);
     assertHostBuildMetafiles(serverBuilds);
 

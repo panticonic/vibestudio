@@ -48,6 +48,7 @@ import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
 import { resolveRequiredAppRoot } from "./appRoot.js";
+import { SqliteIntegrityWorkerClient } from "./storage/sqliteIntegrityWorkerClient.js";
 import {
   destroyWorkerdConnections,
   getWorkerdConnectionDispatcher,
@@ -590,6 +591,7 @@ export class WorkerdManager {
   private workspaceProvider: WorkerdWorkspaceProvider | null = null;
   private readonly doMaintenanceDb: DatabaseSync;
   private readonly doSchemaDescriptorDb: DatabaseSync;
+  private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly doMaintenanceRecovery: Promise<void>;
@@ -601,6 +603,7 @@ export class WorkerdManager {
     this.deps = deps;
     this.egressSecret = deps.egressSecret;
     this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
+    this.sqliteIntegrityWorker = new SqliteIntegrityWorkerClient(resolveRequiredAppRoot());
     this.configDir = path.join(os.tmpdir(), `vibestudio-workerd-${process.pid}`);
     fs.mkdirSync(this.configDir, { recursive: true });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
@@ -3699,26 +3702,16 @@ export class WorkerdManager {
     const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
       (file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite")
     );
-    for (const file of files) {
-      let db: InstanceType<typeof DatabaseSync>;
-      try {
-        db = new DatabaseSync(path.join(storageDir, file));
-      } catch (cause) {
-        throw new Error(
-          `workerd has not released Durable Object storage file ${file}: ${errorMessage(cause)}`,
-          { cause }
-        );
-      }
-      try {
-        const result = db.prepare(`PRAGMA integrity_check`).get() as Record<string, unknown>;
-        if (!Object.values(result).includes("ok")) {
-          throw new Error(
-            `Durable Object storage file ${file} failed SQLite integrity_check after facet retirement`
-          );
-        }
-      } finally {
-        db.close();
-      }
+    try {
+      await this.sqliteIntegrityWorker.verify(
+        files.map((file) => path.join(storageDir, file)),
+        { readOnly: false }
+      );
+    } catch (cause) {
+      throw new Error(
+        `workerd has not released or coherently stored Durable Object data: ${errorMessage(cause)}`,
+        { cause }
+      );
     }
   }
 
@@ -3762,18 +3755,11 @@ export class WorkerdManager {
     ) as { files?: unknown };
     if (!Array.isArray(manifest.files))
       throw new Error(`Backup ${operationId} has no file manifest`);
-    for (const file of manifest.files) {
-      if (typeof file !== "string" || !file.endsWith(".sqlite")) continue;
-      const db = new DatabaseSync(path.join(backupDir, file), { readOnly: true });
-      try {
-        const result = db.prepare(`PRAGMA integrity_check`).get() as Record<string, unknown>;
-        if (!Object.values(result).includes("ok")) {
-          throw new Error(`Backup ${operationId}/${file} failed SQLite integrity_check`);
-        }
-      } finally {
-        db.close();
-      }
-    }
+    await this.sqliteIntegrityWorker.verify(
+      manifest.files
+        .filter((file): file is string => typeof file === "string" && file.endsWith(".sqlite"))
+        .map((file) => path.join(backupDir, file))
+    );
   }
 
   private async restoreDurableObjectFiles(ref: DORef, backupOperationId: string): Promise<void> {
@@ -4196,7 +4182,6 @@ export class WorkerdManager {
     }
     if (this.activeTransition) await attempt(() => this.activeTransition!.promise);
     await attempt(() => this.stopWorkerd("shutdown"));
-
     // Internal-object destruction is a tombstone while the shared process is
     // live. Once shutdown owns a stopped process, collect every tombstone and
     // retain all failures rather than abandoning the rest of the sweep.
@@ -4224,11 +4209,8 @@ export class WorkerdManager {
     this.doObjectBuilds.clear();
 
     // Clean up config dir
-    try {
-      fs.rmSync(this.configDir, { recursive: true, force: true });
-    } catch (error) {
-      failures.push(error);
-    }
+    await attempt(() => fs.promises.rm(this.configDir, { recursive: true, force: true }));
+    await attempt(() => this.sqliteIntegrityWorker.close());
 
     this.doMaintenanceDb.close();
     this.doSchemaDescriptorDb.close();

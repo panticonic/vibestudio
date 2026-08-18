@@ -35,10 +35,10 @@ describe("buildUnit app builds", () => {
   let root: string;
   let workspaceRoot: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-build-"));
     workspaceRoot = path.join(root, "workspace");
-    setBuildRootConfig({
+    await setBuildRootConfig({
       appRoot: path.resolve(__dirname, "../../.."),
       workspaceRoot,
     });
@@ -50,8 +50,8 @@ describe("buildUnit app builds", () => {
     clearBuildProvidersForTests();
   });
 
-  afterEach(() => {
-    setBuildRootConfig(null);
+  afterEach(async () => {
+    await setBuildRootConfig(null);
     clearBuildProvidersForTests();
     fs.rmSync(root, { recursive: true, force: true });
   });

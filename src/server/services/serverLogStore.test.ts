@@ -2,6 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import { createServerLogStore } from "./serverLogStore.js";
 
 describe("serverLogStore", () => {
+  it("persists queued JSONL writes before flush resolves", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-server-log-"));
+    try {
+      const store = createServerLogStore();
+      store.attachJsonlSink(root);
+      store.append("info", ["[Server] ready"]);
+
+      await store.flush();
+
+      const record = JSON.parse(
+        await fs.promises.readFile(path.join(root, "server-log.jsonl"), "utf8")
+      ) as { tag: string; message: string };
+      expect(record).toMatchObject({ tag: "Server", message: "ready" });
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("captures records with parsed tags, levels, and monotonic seq", () => {
     const store = createServerLogStore({ now: () => 1000 });
     store.append("info", ["[Server] ready on port 1234"]);
@@ -117,3 +135,6 @@ describe("serverLogStore", () => {
     }
   });
 });
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";

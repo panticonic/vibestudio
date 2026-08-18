@@ -302,16 +302,16 @@ export interface ExternalDependencyPatch {
  * projection that will be compiled. Patches are build inputs, not ambient host
  * package-manager state.
  */
-export function collectTransitiveDependencyPatches(
+export async function collectTransitiveDependencyPatches(
   unit: GraphNode,
   graph: PackageGraph,
   sourceRoot: string
-): ExternalDependencyPatch[] {
+): Promise<ExternalDependencyPatch[]> {
   const patches = new Map<string, ExternalDependencyPatch>();
   const visited = new Set<string>();
   const closure: GraphNode[] = [];
 
-  function walkNode(node: GraphNode): void {
+  async function walkNode(node: GraphNode): Promise<void> {
     if (visited.has(node.name)) return;
     visited.add(node.name);
     closure.push(node);
@@ -328,17 +328,20 @@ export function collectTransitiveDependencyPatches(
           `Dependency patch ${JSON.stringify(relativePatchPath)} escapes owner ${node.name}`
         );
       }
-      if (!fs.existsSync(patchPath) || !fs.statSync(patchPath).isFile()) {
+      const patchStat = await fs.promises.stat(patchPath).catch(() => null);
+      if (!patchStat?.isFile()) {
         throw new Error(`Dependency patch for ${selector} does not exist: ${relativePatchPath}`);
       }
-      const realOwnerRoot = fs.realpathSync(ownerRoot);
-      const realPatchPath = fs.realpathSync(patchPath);
+      const [realOwnerRoot, realPatchPath] = await Promise.all([
+        fs.promises.realpath(ownerRoot),
+        fs.promises.realpath(patchPath),
+      ]);
       if (!realPatchPath.startsWith(`${realOwnerRoot}${path.sep}`)) {
         throw new Error(
           `Dependency patch ${JSON.stringify(relativePatchPath)} escapes owner ${node.name}`
         );
       }
-      const content = fs.readFileSync(realPatchPath, "utf8");
+      const content = await fs.promises.readFile(realPatchPath, "utf8");
       const patch: ExternalDependencyPatch = {
         selector,
         packageName,
@@ -359,11 +362,11 @@ export function collectTransitiveDependencyPatches(
 
     for (const dependency of node.internalDeps) {
       const child = graph.tryGet(dependency);
-      if (child) walkNode(child);
+      if (child) await walkNode(child);
     }
   }
 
-  walkNode(unit);
+  await walkNode(unit);
   for (const patch of patches.values()) {
     for (const consumer of closure) {
       if (consumer.name === patch.owner) continue;
@@ -872,13 +875,13 @@ function assertInstalledPeersSatisfied(installed: Map<string, InstalledPackage>)
  * package must retain its integrity identity and matching package metadata,
  * and every peer range between installed packages must hold.
  */
-function createExternalDepsReceipt(
+async function createExternalDepsReceipt(
   cacheDir: string,
   patchedFiles: PatchedFileReceipt[]
-): ExternalDepsReceipt {
+): Promise<ExternalDepsReceipt> {
   const nodeModulesDir = path.join(cacheDir, "node_modules");
   const lockPath = path.join(nodeModulesDir, ".package-lock.json");
-  const lockBytes = fs.readFileSync(lockPath);
+  const lockBytes = await fs.promises.readFile(lockPath);
   const lock = JSON.parse(lockBytes.toString("utf8")) as {
     packages?: Record<
       string,
@@ -906,7 +909,7 @@ function createExternalDepsReceipt(
       throw new Error(`installed dependency ${location} escapes its cache`);
     }
     const packageJsonPath = path.join(packageDir, "package.json");
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    const packageJson = JSON.parse(await fs.promises.readFile(packageJsonPath, "utf8")) as {
       version?: unknown;
       peerDependencies?: Record<string, string>;
       peerDependenciesMeta?: Record<string, { optional?: boolean }>;
@@ -934,22 +937,25 @@ function createExternalDepsReceipt(
   };
 }
 
-function writeExternalDepsReceipt(cacheDir: string, receipt: ExternalDepsReceipt): void {
+async function writeExternalDepsReceipt(
+  cacheDir: string,
+  receipt: ExternalDepsReceipt
+): Promise<void> {
   const sentinelPath = path.join(cacheDir, ".ready");
   const temporaryPath = `${sentinelPath}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
   try {
-    fs.writeFileSync(temporaryPath, JSON.stringify(receipt));
-    fs.renameSync(temporaryPath, sentinelPath);
+    await fs.promises.writeFile(temporaryPath, JSON.stringify(receipt));
+    await fs.promises.rename(temporaryPath, sentinelPath);
   } finally {
-    fs.rmSync(temporaryPath, { force: true });
+    await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
   }
 }
 
-function isReusableExternalDepsCache(cacheDir: string): boolean {
+async function isReusableExternalDepsCache(cacheDir: string): Promise<boolean> {
   const sentinelPath = path.join(cacheDir, ".ready");
   let sentinelStat: fs.Stats;
   try {
-    sentinelStat = fs.statSync(sentinelPath);
+    sentinelStat = await fs.promises.stat(sentinelPath);
   } catch {
     return false;
   }
@@ -958,7 +964,7 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
     return true;
 
   try {
-    const raw = fs.readFileSync(sentinelPath, "utf8");
+    const raw = await fs.promises.readFile(sentinelPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<ExternalDepsReceipt>;
     if (
       parsed.version !== EXTERNAL_DEPS_RECEIPT_VERSION ||
@@ -971,7 +977,9 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
     }
     const receipt = parsed as ExternalDepsReceipt;
 
-    const lockBytes = fs.readFileSync(path.join(cacheDir, "node_modules", ".package-lock.json"));
+    const lockBytes = await fs.promises.readFile(
+      path.join(cacheDir, "node_modules", ".package-lock.json")
+    );
     if (sha256(lockBytes) !== receipt.lockDigest) return false;
     for (const patchedFile of receipt.patchedFiles) {
       if (
@@ -984,9 +992,15 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
       const target = path.resolve(cacheDir, ...patchedFile.path.split("/"));
       if (!target.startsWith(`${path.resolve(cacheDir)}${path.sep}`)) return false;
       if (patchedFile.digest === null) {
-        if (fs.existsSync(target)) return false;
-      } else if (!fs.existsSync(target) || sha256(fs.readFileSync(target)) !== patchedFile.digest) {
-        return false;
+        try {
+          await fs.promises.access(target);
+          return false;
+        } catch {
+          // Expected absence.
+        }
+      } else {
+        const contents = await fs.promises.readFile(target).catch(() => null);
+        if (!contents || sha256(contents) !== patchedFile.digest) return false;
       }
     }
     validatedCacheReceipts.set(cacheDir, {
@@ -1111,7 +1125,7 @@ export async function prepareExternalDependencyEnvironment(
     workspaceRoot,
     appNodeModules
   );
-  const dependencyPatches = collectTransitiveDependencyPatches(unit, graph, sourceRoot);
+  const dependencyPatches = await collectTransitiveDependencyPatches(unit, graph, sourceRoot);
   const borrowed = await acquireExternalDeps(externalDeps, dependencyOverrides, {
     appRoot,
     patches: dependencyPatches,
@@ -1206,14 +1220,17 @@ async function ensureDepsInstalledOnce(
 
   // A marker is evidence only when its current validated receipt still matches
   // the immutable installed tree. Invalid or partial trees are rebuilt.
-  if (fs.existsSync(sentinelPath)) {
-    if (isReusableExternalDepsCache(cacheDir)) return nodeModulesDir;
+  try {
+    await fs.promises.access(sentinelPath);
+    if (await isReusableExternalDepsCache(cacheDir)) return nodeModulesDir;
     try {
-      fs.rmSync(cacheDir, { recursive: true, force: true });
+      await fs.promises.rm(cacheDir, { recursive: true, force: true });
       validatedCacheReceipts.delete(cacheDir);
     } catch (cleanupError) {
       warnCleanupFailure(cacheDir, cleanupError);
     }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
   // Install to temp dir, then atomically rename. Use crypto.randomBytes for
@@ -1221,7 +1238,7 @@ async function ensureDepsInstalledOnce(
   // where another process pre-creates `${cacheDir}.tmp.<guessed-ms>.<pid>`
   // as a symlink to a writable target.
   const tmpDir = `${cacheDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
-  fs.mkdirSync(tmpDir, { recursive: true });
+  await fs.promises.mkdir(tmpDir, { recursive: true });
 
   // Write a minimal package.json for installation
   const pkgJson = {
@@ -1231,7 +1248,7 @@ async function ensureDepsInstalledOnce(
     dependencies: installPlan.dependencies,
     ...(Object.keys(installPlan.overrides).length > 0 ? { overrides: installPlan.overrides } : {}),
   };
-  fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
+  await fs.promises.writeFile(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
 
   try {
     await runNpmInstall(tmpDir, {
@@ -1239,21 +1256,21 @@ async function ensureDepsInstalledOnce(
       ignoreScripts: options.ignoreScripts,
     });
 
-    const patchedFiles = applyExternalDependencyPatches(tmpDir, options.patches ?? []);
+    const patchedFiles = await applyExternalDependencyPatches(tmpDir, options.patches ?? []);
 
     // Validate npm's installed package identities before making the cache
     // visible, then publish the receipt atomically with the directory rename.
-    writeExternalDepsReceipt(tmpDir, createExternalDepsReceipt(tmpDir, patchedFiles));
+    await writeExternalDepsReceipt(tmpDir, await createExternalDepsReceipt(tmpDir, patchedFiles));
 
     // Race-safe promotion: try rename, handle concurrent winner
     try {
-      fs.renameSync(tmpDir, cacheDir);
+      await fs.promises.rename(tmpDir, cacheDir);
     } catch (err: unknown) {
       if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
         // Another process won — verify its receipt before use.
-        if (isReusableExternalDepsCache(cacheDir)) {
+        if (await isReusableExternalDepsCache(cacheDir)) {
           try {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            await fs.promises.rm(tmpDir, { recursive: true, force: true });
           } catch (cleanupError) {
             warnCleanupFailure(tmpDir, cleanupError);
           }
@@ -1261,17 +1278,17 @@ async function ensureDepsInstalledOnce(
         }
         // Winner incomplete — remove stale dir, retry rename
         try {
-          fs.rmSync(cacheDir, { recursive: true, force: true });
-          fs.renameSync(tmpDir, cacheDir);
+          await fs.promises.rm(cacheDir, { recursive: true, force: true });
+          await fs.promises.rename(tmpDir, cacheDir);
         } catch {
           // Clean up both dirs to avoid stale state, let build fail transiently
           try {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            await fs.promises.rm(tmpDir, { recursive: true, force: true });
           } catch (cleanupError) {
             warnCleanupFailure(tmpDir, cleanupError);
           }
           try {
-            fs.rmSync(cacheDir, { recursive: true, force: true });
+            await fs.promises.rm(cacheDir, { recursive: true, force: true });
           } catch (cleanupError) {
             warnCleanupFailure(cacheDir, cleanupError);
           }
@@ -1286,7 +1303,7 @@ async function ensureDepsInstalledOnce(
   } catch (error) {
     // Clean up temp dir on failure
     try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
     } catch (cleanupError) {
       warnCleanupFailure(tmpDir, cleanupError);
     }
@@ -1312,13 +1329,13 @@ async function ensureDepsInstalledOnce(
   }
 }
 
-function applyExternalDependencyPatches(
+async function applyExternalDependencyPatches(
   installRoot: string,
   patches: readonly ExternalDependencyPatch[]
-): PatchedFileReceipt[] {
+): Promise<PatchedFileReceipt[]> {
   const receipts = new Map<string, PatchedFileReceipt>();
   for (const patch of patches) {
-    const packageRoots = matchingInstalledPackageRoots(installRoot, patch);
+    const packageRoots = await matchingInstalledPackageRoots(installRoot, patch);
     if (packageRoots.length === 0) {
       throw new Error(
         `Dependency patch ${patch.selector} from ${patch.owner} matched no installed package`
@@ -1336,10 +1353,10 @@ function applyExternalDependencyPatches(
         if (!oldName && !newName) {
           throw new Error(`Dependency patch ${patch.selector} has no target path`);
         }
-        const oldTarget = oldName ? resolveSafePatchTarget(packageRoot, oldName) : null;
-        const newTarget = newName ? resolveSafePatchTarget(packageRoot, newName) : null;
+        const oldTarget = oldName ? await resolveSafePatchTarget(packageRoot, oldName) : null;
+        const newTarget = newName ? await resolveSafePatchTarget(packageRoot, newName) : null;
 
-        const original = oldTarget ? fs.readFileSync(oldTarget, "utf8") : "";
+        const original = oldTarget ? await fs.promises.readFile(oldTarget, "utf8") : "";
         const updated = applyPatch(original, filePatch);
         if (updated === false) {
           throw new Error(
@@ -1347,12 +1364,12 @@ function applyExternalDependencyPatches(
           );
         }
         if (oldTarget && oldTarget !== newTarget) {
-          fs.rmSync(oldTarget);
+          await fs.promises.rm(oldTarget);
           recordPatchedFile(receipts, installRoot, oldTarget, null);
         }
         if (newTarget) {
-          fs.mkdirSync(path.dirname(newTarget), { recursive: true });
-          fs.writeFileSync(newTarget, updated, "utf8");
+          await fs.promises.mkdir(path.dirname(newTarget), { recursive: true });
+          await fs.promises.writeFile(newTarget, updated, "utf8");
           recordPatchedFile(receipts, installRoot, newTarget, sha256(updated));
         }
       }
@@ -1371,7 +1388,7 @@ function recordPatchedFile(
   receipts.set(receiptPath, { path: receiptPath, digest });
 }
 
-function resolveSafePatchTarget(packageRoot: string, relativePath: string): string {
+async function resolveSafePatchTarget(packageRoot: string, relativePath: string): Promise<string> {
   const target = path.resolve(packageRoot, ...relativePath.split("/"));
   if (!target.startsWith(`${packageRoot}${path.sep}`)) {
     throw new Error(`Dependency patch target escapes its package: ${relativePath}`);
@@ -1380,20 +1397,21 @@ function resolveSafePatchTarget(packageRoot: string, relativePath: string): stri
   let cursor = packageRoot;
   for (const segment of relativePath.split("/")) {
     cursor = path.join(cursor, segment);
-    if (!fs.existsSync(cursor)) continue;
-    if (fs.lstatSync(cursor).isSymbolicLink()) {
+    const stat = await fs.promises.lstat(cursor).catch(() => null);
+    if (!stat) continue;
+    if (stat.isSymbolicLink()) {
       throw new Error(`Dependency patch target traverses a symbolic link: ${relativePath}`);
     }
   }
   return target;
 }
 
-function matchingInstalledPackageRoots(
+async function matchingInstalledPackageRoots(
   installRoot: string,
   patch: ExternalDependencyPatch
-): string[] {
+): Promise<string[]> {
   const lockPath = path.join(installRoot, "node_modules", ".package-lock.json");
-  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+  const lock = JSON.parse(await fs.promises.readFile(lockPath, "utf8")) as {
     packages?: Record<string, { version?: unknown; link?: unknown }>;
   };
   const matches: string[] = [];
@@ -1405,8 +1423,9 @@ function matchingInstalledPackageRoots(
       throw new Error(`Installed dependency path escapes its cache: ${location}`);
     }
     const manifestPath = path.join(packageRoot, "package.json");
-    if (!fs.existsSync(manifestPath)) continue;
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    const manifestText = await fs.promises.readFile(manifestPath, "utf8").catch(() => null);
+    if (!manifestText) continue;
+    const manifest = JSON.parse(manifestText) as {
       name?: unknown;
       version?: unknown;
     };

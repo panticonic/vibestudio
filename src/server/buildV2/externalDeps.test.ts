@@ -470,7 +470,7 @@ describe("collectExternalDependencyClosure", () => {
     expect(() => collectTransitiveDependencyOverrides(panel, graph)).toThrow(/conflicts between/u);
   });
 
-  it("collects owner-local patches from the exact materialized dependency closure", () => {
+  it("collects owner-local patches from the exact materialized dependency closure", async () => {
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-patch-closure-"));
     try {
       const owner = makeNode("@workspace/patch-owner", { "parent-with-transitive": "1.0.0" });
@@ -505,7 +505,7 @@ describe("collectExternalDependencyClosure", () => {
       fs.mkdirSync(path.join(sourceRoot, consumer.relativePath), { recursive: true });
       fs.writeFileSync(path.join(sourceRoot, consumer.relativePath, "package.json"), "{}\n");
 
-      expect(collectTransitiveDependencyPatches(consumer, graph, sourceRoot)).toMatchObject([
+      expect(await collectTransitiveDependencyPatches(consumer, graph, sourceRoot)).toMatchObject([
         {
           selector: "transitive-target@2.0.0",
           packageName: "transitive-target",
@@ -517,12 +517,12 @@ describe("collectExternalDependencyClosure", () => {
       ]);
 
       consumer.dependencies["transitive-target"] = "2.0.0";
-      expect(() => collectTransitiveDependencyPatches(consumer, graph, sourceRoot)).toThrow(
+      await expect(collectTransitiveDependencyPatches(consumer, graph, sourceRoot)).rejects.toThrow(
         /depend on its patch owner/u
       );
       delete consumer.dependencies["transitive-target"];
       consumer.dependencyOverrides["transitive-target"] = "2.0.0";
-      expect(() => collectTransitiveDependencyPatches(consumer, graph, sourceRoot)).toThrow(
+      await expect(collectTransitiveDependencyPatches(consumer, graph, sourceRoot)).rejects.toThrow(
         /policy belongs to/u
       );
     } finally {

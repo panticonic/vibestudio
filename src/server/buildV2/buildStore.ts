@@ -364,25 +364,6 @@ async function linkBuildTree(sourceDir: string, targetDir: string): Promise<void
   }
 }
 
-function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
-  fs.mkdirSync(targetDir, { recursive: true });
-  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
-    const sourcePath = path.join(sourceDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-    if (entry.isDirectory()) {
-      linkBuildTreeSync(sourcePath, targetPath);
-      continue;
-    }
-    if (!entry.isFile()) throw new Error(`Unsupported build cache entry: ${sourcePath}`);
-    try {
-      fs.linkSync(sourcePath, targetPath);
-    } catch (error) {
-      if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
-      fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
-    }
-  }
-}
-
 async function publishSharedBuild(key: string, sourceDir: string): Promise<void> {
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return;
@@ -427,6 +408,21 @@ function readArtifactContent(dir: string, entry: BuildArtifactManifestEntry): st
   return entry.encoding === "base64"
     ? fs.readFileSync(filePath, "base64")
     : fs.readFileSync(filePath, "utf-8");
+}
+
+/** Read and verify one artifact without blocking the workspace-server thread. */
+export async function readArtifactBytesAsync(
+  build: Pick<BuildResult, "dir">,
+  entry: BuildArtifactManifestEntry
+): Promise<Buffer> {
+  const bytes = await fs.promises.readFile(artifactFilePath(build, entry));
+  const digest = Buffer.from(await crypto.webcrypto.subtle.digest("SHA-256", bytes)).toString(
+    "hex"
+  );
+  if (entry.integrity !== `sha256-${digest}`) {
+    throw new Error(`Build artifact integrity mismatch: ${entry.path}`);
+  }
+  return bytes;
 }
 
 function artifactByteLength(entry: Pick<BuildArtifactInput, "content" | "encoding">): number {
@@ -768,6 +764,14 @@ export function get(key: string): BuildResult | null {
     void publishSharedBuild(key, localDir);
     return local;
   }
+  return null;
+}
+
+/** Hydrate a shared immutable build without blocking the server event loop. */
+export async function getOrHydrate(key: string): Promise<BuildResult | null> {
+  const localDir = getBuildDir(key);
+  const local = get(key);
+  if (local) return local;
 
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return null;
@@ -804,35 +808,34 @@ export function get(key: string): BuildResult | null {
       // complete census and a different workspace's collector cannot break it.
       const tmpDir = `${localDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
       try {
-        fs.mkdirSync(path.dirname(localDir), { recursive: true });
-        linkBuildTreeSync(sharedDir, tmpDir);
+        await fs.promises.mkdir(path.dirname(localDir), { recursive: true });
+        await linkBuildTree(sharedDir, tmpDir);
         if (sharedMetadata !== shared.metadata) {
-          fs.writeFileSync(
+          await fs.promises.writeFile(
             path.join(tmpDir, "metadata.json"),
             `${JSON.stringify(sharedMetadata, null, 2)}\n`
           );
         }
         // Execution metadata is workspace-owned provenance. Shared caches supply
         // reusable bytes, never another workspace's semantic execution variants.
-        fs.rmSync(path.join(tmpDir, "executions"), { recursive: true, force: true });
-        // get() cannot await; preserve synchronous cache hydration metadata.
+        await fs.promises.rm(path.join(tmpDir, "executions"), { recursive: true, force: true });
         const executionDigest = sharedMetadata.execution?.executionDigest;
         if (executionDigest) {
           const target = executionMetadataPath(tmpDir, executionDigest);
           const variant = executionVariant(sharedMetadata);
           if (!variant) throw new Error(`Build ${key} has incomplete execution metadata`);
-          fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.writeFileSync(target, `${JSON.stringify(variant, null, 2)}\n`);
+          await fs.promises.mkdir(path.dirname(target), { recursive: true });
+          await fs.promises.writeFile(target, `${JSON.stringify(variant, null, 2)}\n`);
         }
         try {
-          fs.renameSync(tmpDir, localDir);
+          await fs.promises.rename(tmpDir, localDir);
         } catch (error) {
           if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
-          fs.rmSync(tmpDir, { recursive: true, force: true });
+          await fs.promises.rm(tmpDir, { recursive: true, force: true });
         }
       } catch (error) {
         try {
-          fs.rmSync(tmpDir, { recursive: true, force: true });
+          await fs.promises.rm(tmpDir, { recursive: true, force: true });
         } catch (cleanupError) {
           warnCleanupFailure(tmpDir, cleanupError);
         }
@@ -978,26 +981,38 @@ export async function rebindSourceState(
  * Remove only exact matching, non-active cache records; shared artifact bytes
  * remain available for normal workspace-local reconstruction.
  */
-export function discardBootstrapBuilds(
+export async function discardBootstrapBuilds(
   sourceStateHash: string,
   protectedBuildKeys: ReadonlySet<string>
-): number {
+): Promise<number> {
   const buildsDir = getBuildsDir();
-  if (!fs.existsSync(buildsDir)) return 0;
   const trashDir = stateLayout(getUserDataPath()).executionRetention.buildTrashDir;
   let discarded = 0;
-  for (const entry of fs.readdirSync(buildsDir, { withFileTypes: true })) {
+  const entries = await fs.promises
+    .readdir(buildsDir, { withFileTypes: true })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+  for (const entry of entries) {
     if (!entry.isDirectory() || protectedBuildKeys.has(entry.name)) continue;
     const buildDir = path.join(buildsDir, entry.name);
-    const build = readBuildDir(buildDir, entry.name, { verifyExecution: false });
-    if (!build || build.sourceStateHash !== sourceStateHash) continue;
+    let metadata: BuildMetadata;
+    try {
+      metadata = JSON.parse(
+        await fs.promises.readFile(path.join(buildDir, "metadata.json"), "utf8")
+      ) as BuildMetadata;
+    } catch {
+      continue;
+    }
+    if (metadata.buildKey !== entry.name || metadata.sourceStateHash !== sourceStateHash) continue;
     const trashPath = path.join(
       trashDir,
       `${entry.name}.bootstrap.${crypto.randomBytes(8).toString("hex")}`
     );
-    fs.mkdirSync(trashDir, { recursive: true, mode: 0o700 });
-    fs.renameSync(buildDir, trashPath);
-    fs.rmSync(trashPath, { recursive: true, force: true });
+    await fs.promises.mkdir(trashDir, { recursive: true, mode: 0o700 });
+    await fs.promises.rename(buildDir, trashPath);
+    await fs.promises.rm(trashPath, { recursive: true, force: true });
     discarded += 1;
   }
   return discarded;

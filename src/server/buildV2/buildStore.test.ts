@@ -10,6 +10,7 @@ import {
   collectRetention,
   get,
   getByExecution,
+  getOrHydrate,
   has,
   primaryArtifact,
   primaryArtifactFilePath,
@@ -903,8 +904,9 @@ describe("build artifact helpers", () => {
             ? { kind: "event", eventId: "event:workspace-b" }
             : null,
       });
+      expect(has(buildKey)).toBe(false);
+      const reused = await getOrHydrate(buildKey);
       expect(has(buildKey)).toBe(true);
-      const reused = get(buildKey);
 
       expect(reused).toMatchObject({
         dir: path.join(stateB, "builds", buildKey),

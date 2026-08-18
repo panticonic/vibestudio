@@ -120,6 +120,8 @@ export interface ServerLogStore {
   installConsoleCapture(): void;
   /** Start appending JSONL to `<dir>/server-log.jsonl` (size-rotated). */
   attachJsonlSink(dir: string): void;
+  /** Wait until every queued persistence write has settled. */
+  flush(): Promise<void>;
   latestSeq(): number;
 }
 
@@ -137,6 +139,7 @@ export function createServerLogStore(
   let consoleInstalled = false;
   let jsonlPath: string | null = null;
   let jsonlBytes = 0;
+  let jsonlWrites: Promise<void> = Promise.resolve();
 
   const redact = (text: string): string => {
     let out = text;
@@ -158,17 +161,24 @@ export function createServerLogStore(
 
   const writeJsonl = (record: ServerLogRecord): void => {
     if (!jsonlPath) return;
-    try {
-      const line = `${JSON.stringify(record)}\n`;
-      jsonlBytes += line.length;
-      if (jsonlBytes > JSONL_ROTATE_BYTES) {
-        fs.renameSync(jsonlPath, `${jsonlPath}.1`);
-        jsonlBytes = line.length;
-      }
-      fs.appendFileSync(jsonlPath, line);
-    } catch {
-      // Persistence is best-effort; never let the sink break logging.
-    }
+    const sinkPath = jsonlPath;
+    const line = `${JSON.stringify(record)}\n`;
+    jsonlBytes += Buffer.byteLength(line);
+    const rotate = jsonlBytes > JSONL_ROTATE_BYTES;
+    if (rotate) jsonlBytes = Buffer.byteLength(line);
+    // Console capture is a hot path. Preserve write order without performing
+    // filesystem work on the workspace-server event loop; libuv owns the I/O
+    // and a failed best-effort write must not poison later records.
+    jsonlWrites = jsonlWrites
+      .then(async () => {
+        if (rotate) {
+          await fs.promises.rename(sinkPath, `${sinkPath}.1`).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          });
+        }
+        await fs.promises.appendFile(sinkPath, line);
+      })
+      .catch(() => undefined);
   };
 
   const store: ServerLogStore = {
@@ -319,6 +329,10 @@ export function createServerLogStore(
       } catch {
         jsonlPath = null;
       }
+    },
+
+    flush(): Promise<void> {
+      return jsonlWrites;
     },
 
     latestSeq(): number {

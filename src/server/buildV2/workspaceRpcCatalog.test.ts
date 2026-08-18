@@ -22,12 +22,12 @@ describe("workspace RPC build catalog", () => {
       `
     );
 
-    await expect(
+    expect(
       collectWorkspaceRpcCatalog(root, {
         provider: "workers/notes",
         authority: { requests: [], provides: [] },
       })
-    ).resolves.toEqual([expect.objectContaining({ name: "getNote" })]);
+    ).toEqual([expect.objectContaining({ name: "getNote" })]);
   });
 
   it("derives documented receiver methods from the exact worker source", async () => {

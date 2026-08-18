@@ -27,10 +27,10 @@ describe("buildUnit extension builds", () => {
   let root: string;
   let workspaceRoot: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
-    setBuildRootConfig({
+    await setBuildRootConfig({
       appRoot: path.resolve(__dirname, "../../.."),
       workspaceRoot,
     });
@@ -41,8 +41,8 @@ describe("buildUnit extension builds", () => {
     });
   });
 
-  afterEach(() => {
-    setBuildRootConfig(null);
+  afterEach(async () => {
+    await setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

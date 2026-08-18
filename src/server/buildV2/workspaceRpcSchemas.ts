@@ -7,6 +7,7 @@ import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { BuildDiagnosticsError } from "./diagnostics.js";
+import type { WorkspaceRpcSchemaMetadata } from "./workspaceRpcCatalog.js";
 
 /**
  * Host-reviewed typed receiver contracts available to workspace worker builds.
@@ -42,6 +43,24 @@ function schemaIdentity(value: unknown, seen = new Set<object>()): unknown {
 
 export function workspaceRpcSchema(protocol: string): ServiceMethodSchemas | undefined {
   return (WORKSPACE_RPC_SCHEMAS as Record<string, ServiceMethodSchemas>)[protocol];
+}
+
+/** Strip executable validators before a reviewed receiver contract crosses a worker boundary. */
+export function workspaceRpcSchemaMetadata(
+  schema: ServiceMethodSchemas
+): Record<string, WorkspaceRpcSchemaMetadata> {
+  return Object.fromEntries(
+    Object.entries(schema).map(([name, method]) => [
+      name,
+      {
+        ...(method.authority ? { authority: method.authority } : {}),
+        ...(method.tier ? { tier: method.tier } : {}),
+        ...(method.access ? { access: method.access } : {}),
+        ...(method.directEffect ? { directEffect: method.directEffect } : {}),
+        ...(method.execution ? { execution: method.execution } : {}),
+      },
+    ])
+  );
 }
 
 export function unknownWorkspaceRpcSchemaMessage(input: {

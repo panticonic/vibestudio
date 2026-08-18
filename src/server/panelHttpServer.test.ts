@@ -88,6 +88,17 @@ vi.mock("fs", () => ({
   existsSync: vi.fn().mockReturnValue(false),
 }));
 
+vi.mock("./buildV2/buildStore.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./buildV2/buildStore.js")>();
+  return {
+    ...actual,
+    readArtifactBytesAsync: vi.fn(
+      async (_build: unknown, entry: { content: string; encoding: "utf8" | "base64" }) =>
+        Buffer.from(entry.content, entry.encoding)
+    ),
+  };
+});
+
 vi.mock("ws", () => ({
   WebSocketServer: vi.fn().mockImplementation((options) => ({
     options,

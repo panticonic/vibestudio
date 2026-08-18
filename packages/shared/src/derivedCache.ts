@@ -57,18 +57,18 @@ function entryPath(root: string, key: string): string {
   return path.join(canonicalRoot(root), key);
 }
 
-function allocatedBytes(storedPath: string): number {
+async function allocatedBytes(storedPath: string): Promise<number> {
   let stat: fs.Stats;
   try {
-    stat = fs.lstatSync(storedPath);
+    stat = await fs.promises.lstat(storedPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw error;
   }
   if (!stat.isDirectory()) return (stat.blocks ?? 0) * 512 || stat.size;
   let bytes = (stat.blocks ?? 0) * 512;
-  for (const child of fs.readdirSync(storedPath)) {
-    bytes += allocatedBytes(path.join(storedPath, child));
+  for (const child of await fs.promises.readdir(storedPath)) {
+    bytes += await allocatedBytes(path.join(storedPath, child));
   }
   return bytes;
 }
@@ -95,10 +95,9 @@ export function derivedCacheUnderPressure(
   return availableBytes(root) < freeFloorBytes;
 }
 
-function cacheDirectories(root: string): string[] {
+async function cacheDirectories(root: string): Promise<string[]> {
   try {
-    return fs
-      .readdirSync(root, { withFileTypes: true })
+    return (await fs.promises.readdir(root, { withFileTypes: true }))
       .filter(
         (entry) =>
           entry.isDirectory() &&
@@ -205,9 +204,9 @@ export class DerivedCacheCoordinator {
     };
   }
 
-  status(rootInput: string): DerivedCacheStatus {
+  async status(rootInput: string): Promise<DerivedCacheStatus> {
     const root = canonicalRoot(rootInput);
-    const entries = this.scan(root);
+    const entries = await this.scan(root);
     return this.summarize(root, entries);
   }
 
@@ -222,7 +221,7 @@ export class DerivedCacheCoordinator {
   ): Promise<DerivedCachePruneResult> {
     const root = canonicalRoot(rootInput);
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    let entries = this.scan(root);
+    let entries = await this.scan(root);
     const before = this.summarize(root, entries);
     const maxBytes = options.maxBytes ?? DEFAULT_DERIVED_CACHE_MAX_BYTES;
     const freeFloor = options.freeFloorBytes ?? DEFAULT_DERIVED_CACHE_FREE_FLOOR_BYTES;
@@ -282,7 +281,7 @@ export class DerivedCacheCoordinator {
       bytesToRemove -= entry.bytes;
     }
 
-    entries = options.dryRun ? entries : this.scan(root);
+    entries = options.dryRun ? entries : await this.scan(root);
     const after = options.dryRun
       ? {
           ...before,
@@ -343,7 +342,7 @@ export class DerivedCacheCoordinator {
     this.db.close();
   }
 
-  private scan(root: string): DerivedCacheEntry[] {
+  private async scan(root: string): Promise<DerivedCacheEntry[]> {
     const now = Date.now();
     this.transaction(() => this.deleteExpiredLeases(now));
     const stored = new Map(
@@ -360,12 +359,12 @@ export class DerivedCacheCoordinator {
           .all(root, now) as Array<{ key: string }>
       ).map((entry) => entry.key)
     );
-    const entries = cacheDirectories(root).map((key) => {
+    const entries = await Promise.all((await cacheDirectories(root)).map(async (key) => {
       const storedPath = entryPath(root, key);
-      const bytes = allocatedBytes(storedPath);
+      const bytes = await allocatedBytes(storedPath);
       let modified = 0;
       try {
-        modified = Math.floor(fs.statSync(storedPath).mtimeMs);
+        modified = Math.floor((await fs.promises.stat(storedPath)).mtimeMs);
       } catch {
         // A concurrent owner can remove a failed unpublished entry.
       }
@@ -375,7 +374,7 @@ export class DerivedCacheCoordinator {
         lastAccess: stored.get(key) ?? modified,
         leased: leased.has(key),
       };
-    });
+    }));
     this.transaction(() => {
       const present = new Set(entries.map((entry) => entry.key));
       for (const entry of entries) {

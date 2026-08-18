@@ -47,6 +47,25 @@ afterEach(() => {
 });
 
 describe("DerivedCacheCoordinator", () => {
+  it("yields the event loop while measuring a cache tree", async () => {
+    const root = cacheRoot();
+    for (let index = 0; index < 300; index += 1) put(root, `entry-${index}`, 128);
+    const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    try {
+      let timerAdvanced = false;
+      setTimeout(() => {
+        timerAdvanced = true;
+      }, 0);
+
+      const status = await coordinator.status(root);
+
+      expect(timerAdvanced).toBe(true);
+      expect(status.entries).toBe(300);
+    } finally {
+      coordinator.close();
+    }
+  });
+
   it("does not prune an entry borrowed by another coordinator", async () => {
     const root = cacheRoot();
     put(root, "active", 64 * 1024);
@@ -145,7 +164,7 @@ describe("DerivedCacheCoordinator", () => {
     for (const key of ["aged", "middle", "recent"]) put(root, key, 256 * 1024);
     const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
     try {
-      const before = coordinator.status(root);
+      const before = await coordinator.status(root);
       setLastAccess(root, { aged: 1_000, middle: 2_000, recent: 3_000 });
 
       // Ask for barely more than nothing: one entry already overshoots it, so a
@@ -170,7 +189,7 @@ describe("DerivedCacheCoordinator", () => {
     put(root, "borrowed", 256 * 1024);
     const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
     try {
-      const before = coordinator.status(root);
+      const before = await coordinator.status(root);
       setLastAccess(root, { idle: 1_000, borrowed: 1_000 });
       coordinator.acquire(root, "borrowed").release();
 
@@ -266,7 +285,7 @@ describe("DerivedCacheCoordinator", () => {
     }
     const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
     try {
-      expect(coordinator.status(root).entries).toBe(1);
+      expect((await coordinator.status(root)).entries).toBe(1);
 
       await coordinator.prune(root, { targetBytes: 0, freeFloorBytes: 0 });
 
@@ -279,15 +298,15 @@ describe("DerivedCacheCoordinator", () => {
     }
   });
 
-  it("forgets an entry that disappeared outside the coordinator", () => {
+  it("forgets an entry that disappeared outside the coordinator", async () => {
     const root = cacheRoot();
     put(root, "vanishing", 64 * 1024);
     const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
     try {
-      expect(coordinator.status(root).entries).toBe(1);
+      expect((await coordinator.status(root)).entries).toBe(1);
       fs.rmSync(path.join(root, "vanishing"), { recursive: true, force: true });
 
-      const after = coordinator.status(root);
+      const after = await coordinator.status(root);
 
       expect(after.entries).toBe(0);
       expect(after.bytes).toBe(0);

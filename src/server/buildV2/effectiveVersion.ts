@@ -190,20 +190,18 @@ function getEvStatePath(): string {
   return path.join(getUserDataPath(), "ev-state.json");
 }
 
-export function loadPersistedEvState(): PersistedEvState | null {
+export async function loadPersistedEvState(): Promise<PersistedEvState | null> {
   const p = getEvStatePath();
   try {
-    if (fs.existsSync(p)) {
-      const parsed = JSON.parse(fs.readFileSync(p, "utf-8")) as PersistedEvState;
-      if (
-        parsed?.version === 2 &&
-        typeof parsed.stateHash === "string" &&
-        parsed.evMap &&
-        Object.values(parsed.evMap).every((ev) => /^[0-9a-f]{64}$/.test(ev)) &&
-        parsed.contentHashes
-      ) {
-        return parsed;
-      }
+    const parsed = JSON.parse(await fs.promises.readFile(p, "utf-8")) as PersistedEvState;
+    if (
+      parsed?.version === 2 &&
+      typeof parsed.stateHash === "string" &&
+      parsed.evMap &&
+      Object.values(parsed.evMap).every((ev) => /^[0-9a-f]{64}$/.test(ev)) &&
+      parsed.contentHashes
+    ) {
+      return parsed;
     }
   } catch {
     // Corrupted — treat as absent (cache amnesia)
@@ -211,13 +209,20 @@ export function loadPersistedEvState(): PersistedEvState | null {
   return null;
 }
 
-export function persistEvState(state: Omit<PersistedEvState, "version">): void {
+export async function persistEvState(state: Omit<PersistedEvState, "version">): Promise<void> {
   const p = getEvStatePath();
   const dir = path.dirname(p);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  const temporary = `${p}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
+  await fs.promises.mkdir(dir, { recursive: true });
+  try {
+    await fs.promises.writeFile(
+      temporary,
+      JSON.stringify({ version: 2, ...state } satisfies PersistedEvState)
+    );
+    await fs.promises.rename(temporary, p);
+  } finally {
+    await fs.promises.rm(temporary, { force: true }).catch(() => undefined);
   }
-  fs.writeFileSync(p, JSON.stringify({ version: 2, ...state } satisfies PersistedEvState));
 }
 
 // ---------------------------------------------------------------------------
@@ -281,10 +286,9 @@ export interface RootDependencyFingerprintInfo {
  * is deliberately no environment or cwd fallback.
  */
 let injectedAppRoot: string | null = null;
-let injectedWorkspaceRoot: string | null = null;
 let rootFingerprintLogged = false;
-let localPackageFingerprintCache: { root: string; files: RootDependencyFingerprintFile[] } | null =
-  null;
+let preparedRootFingerprint: RootDependencyFingerprintInfo | null = null;
+let rootConfigGeneration = 0;
 
 /**
  * Inject the host app root and optional workspace root used to locate the
@@ -293,12 +297,17 @@ let localPackageFingerprintCache: { root: string; files: RootDependencyFingerpri
  * the build-cache identity. Passing `null` clears the injected values (used by
  * tests).
  */
-export function setBuildRootConfig(
+export async function setBuildRootConfig(
   config: { appRoot: string; workspaceRoot?: string } | null
-): void {
+): Promise<void> {
+  const generation = ++rootConfigGeneration;
   injectedAppRoot = config?.appRoot ?? null;
-  injectedWorkspaceRoot = config?.workspaceRoot ?? null;
-  localPackageFingerprintCache = null;
+  preparedRootFingerprint = null;
+  if (!config) return;
+  const info = await computeRootDependencyFingerprint(config.appRoot, config.workspaceRoot);
+  if (generation !== rootConfigGeneration) return;
+  preparedRootFingerprint = info;
+  logRootDependencyFingerprint(info);
 }
 
 function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo["rootSource"] } {
@@ -306,8 +315,8 @@ function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo
   throw new Error("Build dependency roots were not configured");
 }
 
-function fullHash(data: crypto.BinaryLike): string {
-  return crypto.createHash("sha256").update(data).digest("hex");
+async function fullHash(data: crypto.webcrypto.BufferSource): Promise<string> {
+  return Buffer.from(await crypto.webcrypto.subtle.digest("SHA-256", data)).toString("hex");
 }
 
 const IGNORED_LOCAL_PACKAGE_ENTRIES = new Set([
@@ -319,12 +328,12 @@ const IGNORED_LOCAL_PACKAGE_ENTRIES = new Set([
   "node_modules",
 ]);
 
-function localPackageTreeHash(packageDir: string): string {
-  const hash = crypto.createHash("sha256");
-  const visit = (dir: string, relativeDir: string): void => {
-    const entries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .sort((a, b) => a.name.localeCompare(b.name));
+async function localPackageTreeHash(packageDir: string): Promise<string> {
+  const records: string[] = [];
+  const visit = async (dir: string, relativeDir: string): Promise<void> => {
+    const entries = (await fs.promises.readdir(dir, { withFileTypes: true })).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
     for (const entry of entries) {
       if (IGNORED_LOCAL_PACKAGE_ENTRIES.has(entry.name) || entry.name.endsWith(".tsbuildinfo")) {
         continue;
@@ -332,18 +341,17 @@ function localPackageTreeHash(packageDir: string): string {
       const absolute = path.join(dir, entry.name);
       const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        visit(absolute, relative);
+        await visit(absolute, relative);
       } else if (entry.isSymbolicLink()) {
-        hash.update(`link\0${relative}\0${fs.readlinkSync(absolute)}\0`);
+        records.push(`link\0${relative}\0${await fs.promises.readlink(absolute)}\0`);
       } else if (entry.isFile()) {
-        hash.update(`file\0${relative}\0`);
-        hash.update(fs.readFileSync(absolute));
-        hash.update("\0");
+        const contents = await fs.promises.readFile(absolute);
+        records.push(`file\0${relative}\0${await fullHash(contents)}\0`);
       }
     }
   };
-  visit(packageDir, "");
-  return hash.digest("hex");
+  await visit(packageDir, "");
+  return fullHash(Buffer.from(records.join("")));
 }
 
 /**
@@ -352,44 +360,52 @@ function localPackageTreeHash(packageDir: string): string {
  * identity is unsound: a source/dist edit must invalidate every consuming
  * workspace build even when no manifest changed.
  */
-function localPackageFingerprintInputs(root: string): RootDependencyFingerprintFile[] {
-  if (localPackageFingerprintCache?.root === root) {
-    return localPackageFingerprintCache.files;
-  }
+async function localPackageFingerprintInputs(
+  root: string
+): Promise<RootDependencyFingerprintFile[]> {
   const packagesDir = path.join(root, "packages");
   let directories: fs.Dirent[] = [];
   try {
-    directories = fs
-      .readdirSync(packagesDir, { withFileTypes: true })
+    directories = (await fs.promises.readdir(packagesDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     // A packaged deployment may have no host-local package workspace.
   }
-  const files = directories.flatMap((entry): RootDependencyFingerprintFile[] => {
-    const packageDir = path.join(packagesDir, entry.name);
-    if (!fs.existsSync(path.join(packageDir, "package.json"))) return [];
-    return [
-      {
+  const files = await Promise.all(
+    directories.map(async (entry) => {
+      const packageDir = path.join(packagesDir, entry.name);
+      try {
+        await fs.promises.access(path.join(packageDir, "package.json"));
+      } catch {
+        return null;
+      }
+      return {
         file: `packages/${entry.name}/**`,
         path: packageDir,
         present: true,
-        contentHash: localPackageTreeHash(packageDir),
-      },
-    ];
-  });
-  localPackageFingerprintCache = { root, files };
-  return files;
+        contentHash: await localPackageTreeHash(packageDir),
+      } satisfies RootDependencyFingerprintFile;
+    })
+  );
+  const presentFiles: RootDependencyFingerprintFile[] = [];
+  for (const file of files) {
+    if (file) presentFiles.push(file);
+  }
+  return presentFiles;
 }
 
-function dependencyFingerprintInputs(root: string): Array<{ file: string; path: string }> {
+function dependencyFingerprintInputs(
+  root: string,
+  workspaceRoot?: string
+): Array<{ file: string; path: string }> {
   const inputs = ROOT_DEPENDENCY_FINGERPRINT_FILES.map((file) => ({
     file,
     path: path.join(root, file),
   }));
-  if (injectedWorkspaceRoot) {
+  if (workspaceRoot) {
     for (const file of WORKSPACE_DEPENDENCY_FINGERPRINT_FILES) {
-      const filePath = path.join(injectedWorkspaceRoot, file);
+      const filePath = path.join(workspaceRoot, file);
       const relative = path.relative(root, filePath);
       inputs.push({
         file:
@@ -403,15 +419,18 @@ function dependencyFingerprintInputs(root: string): Array<{ file: string; path: 
   return inputs;
 }
 
-function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
-  const { root, source } = resolveAppRoot();
+async function computeRootDependencyFingerprint(
+  root: string,
+  workspaceRoot?: string
+): Promise<RootDependencyFingerprintInfo> {
+  const source = "injected" as const;
 
   const hash = crypto.createHash("sha256");
   // Domain tag; bumped when the input set/encoding changes.
-  hash.update("root-deps-v4\0");
+  hash.update("root-deps-v5\0");
 
   const files: RootDependencyFingerprintFile[] = [];
-  for (const input of dependencyFingerprintInputs(root)) {
+  for (const input of dependencyFingerprintInputs(root, workspaceRoot)) {
     const file = input.file;
     const filePath = input.path;
     hash.update(file);
@@ -419,20 +438,20 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
     let present = false;
     let contentHash: string | null = null;
     try {
-      const contents = fs.readFileSync(filePath);
+      const contents = await fs.promises.readFile(filePath);
       present = true;
-      contentHash = fullHash(contents);
+      contentHash = await fullHash(contents);
       // Explicit presence marker so an absent file and a present-empty file
       // never collide, and so the file set stays positionally unambiguous.
       hash.update("present\0");
-      hash.update(contents);
+      hash.update(contentHash);
       hash.update("\0");
     } catch {
       hash.update("absent\0");
     }
     files.push({ file, path: filePath, present, contentHash });
   }
-  for (const input of localPackageFingerprintInputs(root)) {
+  for (const input of await localPackageFingerprintInputs(root)) {
     hash.update(input.file);
     hash.update("\0tree\0");
     hash.update(input.contentHash ?? "absent");
@@ -447,20 +466,21 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
     files,
   };
 
-  if (!rootFingerprintLogged) {
-    rootFingerprintLogged = true;
-    const ordinaryFiles = info.files.filter((file) => !file.file.endsWith("/**"));
-    const localPackages = info.files.filter((file) => file.file.endsWith("/**"));
-    const summary = ordinaryFiles
-      .map((f) => `${f.file}=${f.present ? (f.contentHash ?? "?") : "absent"}`)
-      .join(" ");
-    console.log(
-      `[BuildV2] root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ` +
-        `${summary}; ${localPackages.length} local package implementation tree(s)`
-    );
-  }
-
   return info;
+}
+
+function logRootDependencyFingerprint(info: RootDependencyFingerprintInfo): void {
+  if (rootFingerprintLogged) return;
+  rootFingerprintLogged = true;
+  const ordinaryFiles = info.files.filter((file) => !file.file.endsWith("/**"));
+  const localPackages = info.files.filter((file) => file.file.endsWith("/**"));
+  const summary = ordinaryFiles
+    .map((f) => `${f.file}=${f.present ? (f.contentHash ?? "?") : "absent"}`)
+    .join(" ");
+  console.log(
+    `[BuildV2] root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ` +
+      `${summary}; ${localPackages.length} local package implementation tree(s)`
+  );
 }
 
 /**
@@ -470,11 +490,15 @@ function computeRootDependencyFingerprint(): RootDependencyFingerprintInfo {
  * inspectable rather than invisible.
  */
 export function getRootDependencyFingerprintInfo(): RootDependencyFingerprintInfo {
-  return computeRootDependencyFingerprint();
+  if (!preparedRootFingerprint) {
+    resolveAppRoot();
+    throw new Error("Build dependency fingerprint has not finished preparing");
+  }
+  return preparedRootFingerprint;
 }
 
 function rootDependencyFingerprint(): string {
-  return computeRootDependencyFingerprint().value;
+  return getRootDependencyFingerprintInfo().value;
 }
 
 /**

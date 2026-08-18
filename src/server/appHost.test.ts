@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
@@ -22,7 +23,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { AppHost } from "./appHost.js";
 import { UnitInstallReviewCoordinator } from "./unitInstallReviewCoordinator.js";
-import type { BuildMetadata } from "./buildV2/buildStore.js";
+import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
 
 const roots: string[] = [];
 const originalAppDevStatus = process.env["VIBESTUDIO_APP_DEV_STATUS"];
@@ -93,6 +94,25 @@ function tempRoot(): string {
   return root;
 }
 
+function storedArtifact(
+  dir: string,
+  artifactPath: string,
+  body: Buffer | string,
+  fields: Pick<BuildArtifactManifestEntry, "role" | "contentType" | "encoding"> &
+    Partial<Pick<BuildArtifactManifestEntry, "platform">>
+): BuildArtifactManifestEntry & { content: string } {
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  fs.mkdirSync(path.dirname(path.join(dir, artifactPath)), { recursive: true });
+  fs.writeFileSync(path.join(dir, artifactPath), bytes);
+  return {
+    path: artifactPath,
+    ...fields,
+    byteLength: bytes.byteLength,
+    integrity: `sha256-${createHash("sha256").update(bytes).digest("hex")}`,
+    content: Buffer.isBuffer(body) ? body.toString("base64") : body,
+  };
+}
+
 function makeHarness(
   opts: {
     seeded?: boolean;
@@ -137,13 +157,12 @@ function makeHarness(
       sourceRepo: "apps/shell",
     });
   }
-  const artifact = {
-    path: "index.html",
+  const defaultBuildDir = path.join(root, "state", "builds", "app-key");
+  const artifact = storedArtifact(defaultBuildDir, "index.html", "<!doctype html><div>app</div>", {
     role: "html",
     contentType: "text/html; charset=utf-8",
     encoding: "utf8",
-    content: "<!doctype html><div>app</div>",
-  } as const;
+  });
   const graphNode = {
     name: "@workspace-apps/shell",
     kind: "app",
@@ -170,7 +189,7 @@ function makeHarness(
   > = [];
   const buildSystem = {
     getBuild: vi.fn(async () => ({
-      dir: path.join(root, "state", "builds", "app-key"),
+      dir: defaultBuildDir,
       metadata: {
         ...TEST_SEALED_APP_BUILD_METADATA,
         ev: "ev-app",
@@ -184,7 +203,7 @@ function makeHarness(
     getBuildByKey: vi.fn((key: string) =>
       key === "app-key"
         ? {
-            dir: path.join(root, "state", "builds", "app-key"),
+            dir: defaultBuildDir,
             buildKey: undefined as string | undefined,
             metadata: {
               ...TEST_SEALED_APP_BUILD_METADATA,
@@ -485,32 +504,30 @@ function createMockResponse() {
 }
 
 describe("AppHost", () => {
-  it("serves deterministic gzip byte ranges for resumable native app transfer", () => {
-    const { host, buildSystem, graphNode } = makeHarness();
+  it("serves deterministic gzip byte ranges for resumable native app transfer", async () => {
+    const { host, buildSystem, graphNode, root } = makeHarness();
     installApp(host, graphNode);
     const source = Buffer.from("mobile workspace bundle ".repeat(2048));
+    const buildDir = path.join(root, "state", "builds", "app-key");
     buildSystem.getBuildByKey.mockReturnValue({
-      dir: "/builds/app-key",
+      dir: buildDir,
       buildKey: "app-key",
       metadata: {
         ...TEST_SEALED_APP_BUILD_METADATA,
         details: { kind: "app", target: "react-native", integrity: "sha256-app" },
       },
       artifacts: [
-        {
-          path: "index.android.bundle",
+        storedArtifact(buildDir, "index.android.bundle", source, {
           role: "primary",
           platform: "android",
           contentType: "application/javascript",
           encoding: "base64",
-          content: source.toString("base64"),
-          integrity: "sha256-source",
-        },
+        }),
       ],
     } as never);
 
     const full = createMockResponse();
-    host.handleAppArtifactRequest(
+    await host.handleAppArtifactRequest(
       { method: "GET", headers: { [RESUMABLE_GZIP_HEADER]: "1" } } as never,
       full as never,
       "app-key",
@@ -522,7 +539,7 @@ describe("AppHost", () => {
 
     const offset = Math.floor(full.body.length / 2);
     const resumed = createMockResponse();
-    host.handleAppArtifactRequest(
+    await host.handleAppArtifactRequest(
       {
         method: "GET",
         headers: { [RESUMABLE_GZIP_HEADER]: "1", range: `bytes=${offset}-` },
@@ -538,7 +555,7 @@ describe("AppHost", () => {
     expect(Buffer.concat([full.body.subarray(0, offset), resumed.body])).toEqual(full.body);
 
     const bounded = createMockResponse();
-    host.handleAppArtifactRequest(
+    await host.handleAppArtifactRequest(
       {
         method: "GET",
         headers: { [RESUMABLE_GZIP_HEADER]: "1", range: "bytes=7-38" },
@@ -759,13 +776,15 @@ describe("AppHost", () => {
   });
 
   it("records app version history and can roll back to the previous build", async () => {
-    const { host, buildSystem, eventService, notificationService, graphNode } = makeHarness();
+    const { host, buildSystem, eventService, notificationService, graphNode, root } = makeHarness();
     installApp(host, graphNode);
+    const oldBuildDir = path.join(root, "state", "builds", "app-key");
+    const newBuildDir = path.join(root, "state", "builds", "app-key-2");
     const buildByKey = new Map([
       [
         "app-key",
         {
-          dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key"),
+          dir: oldBuildDir,
           metadata: {
             ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-app",
@@ -773,20 +792,18 @@ describe("AppHost", () => {
             details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app" },
           },
           artifacts: [
-            {
-              path: "index.html",
+            storedArtifact(oldBuildDir, "index.html", "<!doctype html><div>old</div>", {
               role: "html",
               contentType: "text/html; charset=utf-8",
               encoding: "utf8",
-              content: "<!doctype html><div>old</div>",
-            },
+            }),
           ],
         },
       ],
       [
         "app-key-2",
         {
-          dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
+          dir: newBuildDir,
           metadata: {
             ...TEST_SEALED_APP_BUILD_METADATA,
             ev: "ev-app-2",
@@ -798,13 +815,11 @@ describe("AppHost", () => {
             },
           },
           artifacts: [
-            {
-              path: "index.html",
+            storedArtifact(newBuildDir, "index.html", "<!doctype html><div>new</div>", {
               role: "html",
               contentType: "text/html; charset=utf-8",
               encoding: "utf8",
-              content: "<!doctype html><div>new</div>",
-            },
+            }),
           ],
         },
       ],
@@ -849,7 +864,7 @@ describe("AppHost", () => {
       })
     );
     const res = createMockResponse();
-    host.handleAppArtifactRequest(
+    await host.handleAppArtifactRequest(
       { method: "GET" } as never,
       res as never,
       "app-key",

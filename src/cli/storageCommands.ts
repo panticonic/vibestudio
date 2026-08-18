@@ -143,15 +143,17 @@ function offlineStatus(root: StorageRoot) {
 async function status(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const roots = cacheRoots().map((root) => {
-      if (root.kind === "offline-only") return offlineStatus(root);
-      const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root.path));
-      try {
-        return { ...root, ...coordinator.status(root.path) };
-      } finally {
-        coordinator.close();
-      }
-    });
+    const roots = await Promise.all(
+      cacheRoots().map(async (root) => {
+        if (root.kind === "offline-only") return offlineStatus(root);
+        const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root.path));
+        try {
+          return { ...root, ...(await coordinator.status(root.path)) };
+        } finally {
+          coordinator.close();
+        }
+      })
+    );
     printResult(
       { roots },
       {

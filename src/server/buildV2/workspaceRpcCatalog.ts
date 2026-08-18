@@ -19,6 +19,11 @@ import type {
 } from "@vibestudio/shared/authorityManifest";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 
+export type WorkspaceRpcSchemaMetadata = Pick<
+  ServiceMethodSchemas[string],
+  "authority" | "tier" | "access" | "directEffect" | "execution"
+>;
+
 function authorityPrincipals(
   authority: NonNullable<ServiceMethodSchemas[string]["authority"]>
 ): string[] {
@@ -298,14 +303,14 @@ function signatureOf(method: ts.MethodDeclaration, source: ts.SourceFile): strin
 }
 
 /** Extract `@rpc` public method docs from one exact materialized worker package. */
-export async function collectWorkspaceRpcCatalog(
+export function collectWorkspaceRpcCatalog(
   workerSourcePath: string,
   input: {
     provider: string;
     authority: UnitAuthorityManifest;
-    rpcSchemas?: Readonly<Record<string, ServiceMethodSchemas>>;
+    rpcSchemas?: Readonly<Record<string, Readonly<Record<string, WorkspaceRpcSchemaMetadata>>>>;
   }
-): Promise<WorkspaceRpcMethodDoc[]> {
+): WorkspaceRpcMethodDoc[] {
   const absoluteWorkerSourcePath = path.resolve(workerSourcePath);
   const methods: WorkspaceRpcMethodDoc[] = [];
   const files = sourceFiles(absoluteWorkerSourcePath);

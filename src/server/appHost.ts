@@ -3,7 +3,8 @@ import * as path from "node:path";
 import { isProductSeedTrusted } from "@vibestudio/shared/productSeedTrust";
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { gzipSync } from "node:zlib";
+import { gzip } from "node:zlib";
+import { promisify } from "node:util";
 import {
   UnitHost,
   UnitRegistry,
@@ -61,7 +62,13 @@ import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
-import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
+import {
+  readArtifactBytesAsync,
+  type BuildArtifactManifestEntry,
+  type BuildMetadata,
+} from "./buildV2/buildStore.js";
+
+const gzipAsync = promisify(gzip);
 import {
   createCapabilityAuthorizer,
   type CapabilityAuthorizer,
@@ -232,9 +239,9 @@ interface BuildSystemLike {
 
 interface AppBuildArtifactLike {
   path: string;
-  role: string;
+  role: BuildArtifactManifestEntry["role"];
   contentType: string;
-  encoding: string;
+  encoding: BuildArtifactManifestEntry["encoding"];
   platform?: string;
   integrity?: string;
   content: string;
@@ -1157,12 +1164,12 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     });
   }
 
-  handleAppArtifactRequest(
+  async handleAppArtifactRequest(
     req: IncomingMessage,
     res: ServerResponse,
     buildKey: string,
     remainderPath: string
-  ): void {
+  ): Promise<void> {
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { "Content-Type": "text/plain" });
       res.end("Method Not Allowed");
@@ -1184,7 +1191,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const build = this.deps.buildSystem.getBuildByKey?.(buildKey);
     const artifactPath = normalizeArtifactPath(remainderPath || "index.html");
     const artifact = build?.artifacts?.find((entry) => entry.path === artifactPath);
-    if (!artifact) {
+    if (!build || !artifact) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("App artifact not found");
       return;
@@ -1197,13 +1204,10 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
     }
-    const identityBody =
-      artifact.encoding === "base64"
-        ? Buffer.from(artifact.content, "base64")
-        : Buffer.from(artifact.content);
+    const identityBody = await readArtifactBytesAsync(build, artifact);
     const requestHeaders = req.headers ?? {};
     const resumableGzip = requestHeaders[RESUMABLE_GZIP_HEADER] === "1";
-    const body = resumableGzip ? gzipSync(identityBody, { level: 6 }) : identityBody;
+    const body = resumableGzip ? await gzipAsync(identityBody, { level: 6 }) : identityBody;
     if (resumableGzip) {
       headers["Content-Encoding"] = "gzip";
       headers["Accept-Ranges"] = "bytes";

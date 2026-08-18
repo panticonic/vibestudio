@@ -17,7 +17,7 @@ import type {
   BuildResult,
   BuildMetadata,
 } from "./buildV2/buildStore.js";
-import { artifactFilePath } from "./buildV2/buildStore.js";
+import { artifactFilePath, readArtifactBytesAsync } from "./buildV2/buildStore.js";
 import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { CdpBridge } from "./cdpBridge.js";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
@@ -96,6 +96,7 @@ interface CachedBuild {
   metadata: BuildMetadata;
   revision: number;
   compressedArtifacts: Map<string, Promise<Buffer>>;
+  artifactBytes: Map<string, Promise<Buffer>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +315,7 @@ export class PanelHttpServer {
       metadata: buildResult.metadata,
       revision,
       compressedArtifacts: new Map<string, Promise<Buffer>>(),
+      artifactBytes: new Map<string, Promise<Buffer>>(),
     };
     this.servingCache.set(this.buildCacheKey(source, ref), cachedBuild);
     this.activatedBuildCache.set(buildResult.buildKey, cachedBuild);
@@ -772,6 +774,7 @@ export class PanelHttpServer {
         metadata: result.metadata,
         revision: ++this.buildRevisionCounter,
         compressedArtifacts: new Map<string, Promise<Buffer>>(),
+        artifactBytes: new Map<string, Promise<Buffer>>(),
       };
       this.activatedBuildCache.set(buildKey, build);
       this.registerSharedStyles(build);
@@ -797,12 +800,12 @@ export class PanelHttpServer {
           .filter((artifact) => artifact.role !== "html")
           .map((artifact) => artifact.path)
       );
-      const content = build.htmlArtifact.content.replace(
+      const content = (await this.readArtifactText(build, build.htmlArtifact)).replace(
         /\b(src|href|data-bundle-src)=(["'])(?:\.\/)?([^"'?#]+)([^"']*)\2/giu,
         (match, attribute: string, quote: string, path: string, suffix: string) =>
           artifactPaths.has(path) ? `${attribute}=${quote}${prefix}${path}${suffix}${quote}` : match
       );
-      await this.writeArtifact(req, res, build, { ...build.htmlArtifact, content }, true);
+      await this.writeArtifact(req, res, build, build.htmlArtifact, true, content);
       return;
     }
     const artifactPath = resource.replace(/^\/+/, "");
@@ -923,7 +926,7 @@ export class PanelHttpServer {
       "Cache-Control": "no-store",
       "X-Vibestudio-Build-Revision": String(build.revision),
     });
-    res.end(build.htmlArtifact.content);
+    res.end(await this.readArtifactBytes(build, build.htmlArtifact));
   }
 
   /**
@@ -1017,10 +1020,7 @@ export class PanelHttpServer {
       // `.content` re-verifies integrity on first read (buildStore), so a
       // corrupt build fails here rather than shipping bad bytes to a device
       // that will cache them under a digest they do not match.
-      const raw =
-        artifact.encoding === "base64"
-          ? Buffer.from(artifact.content, "base64")
-          : Buffer.from(artifact.content, "utf8");
+      const raw = await this.readArtifactBytes(build, artifact);
       // Compression is decided PER RECORD, on the same terms writeArtifact uses
       // (text only, and only once it is worth the header): a build's PNGs are
       // already compressed and gzipping them again just costs both ends.
@@ -1106,10 +1106,6 @@ export class PanelHttpServer {
       if (!artifact) {
         throw new Error(`Build ${build.metadata.buildKey} is missing shared style ${style.digest}`);
       }
-      const existing = this.sharedStyleAssets.get(style.digest);
-      if (existing && existing.artifact.content !== artifact.content) {
-        throw new Error(`Shared style digest collision for ${style.digest}`);
-      }
       this.sharedStyleAssets.set(style.digest, { build, artifact });
     }
   }
@@ -1138,7 +1134,8 @@ export class PanelHttpServer {
     res: import("http").ServerResponse,
     build: CachedBuild,
     artifact: BuildArtifactManifestEntry & { content: string },
-    immutableDocument = false
+    immutableDocument = false,
+    contentOverride?: string | Buffer
   ): Promise<void> {
     // A build-pinned entry document is as immutable as its subresources. The
     // unpinned developer entry remains a mutable pointer and must not be cached.
@@ -1146,19 +1143,12 @@ export class PanelHttpServer {
       artifact.role === "html" && !immutableDocument
         ? "no-store"
         : "public, max-age=31536000, immutable";
-    if (artifact.encoding === "base64") {
-      const body = Buffer.from(artifact.content, "base64");
-      res.writeHead(200, {
-        "Content-Type": artifact.contentType,
-        "Content-Length": body.length,
-        "Cache-Control": cacheControl,
-        "X-Vibestudio-Build-Revision": String(build.revision),
-      });
-      res.end(body);
-      return;
-    }
-
-    const body = Buffer.from(artifact.content);
+    const body =
+      contentOverride === undefined
+        ? await this.readArtifactBytes(build, artifact)
+        : Buffer.isBuffer(contentOverride)
+          ? contentOverride
+          : Buffer.from(contentOverride);
     const encoding =
       body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
     const compressedBody = encoding
@@ -1173,7 +1163,30 @@ export class PanelHttpServer {
         : {}),
       "X-Vibestudio-Build-Revision": String(build.revision),
     });
-    res.end(compressedBody ?? artifact.content);
+    res.end(compressedBody ?? (artifact.encoding === "utf8" ? body.toString("utf8") : body));
+  }
+
+  private readArtifactBytes(
+    build: CachedBuild,
+    artifact: BuildArtifactManifestEntry
+  ): Promise<Buffer> {
+    let pending = build.artifactBytes.get(artifact.path);
+    if (!pending) {
+      pending = readArtifactBytesAsync(build, artifact);
+      build.artifactBytes.set(artifact.path, pending);
+      void pending.catch(() => build.artifactBytes.delete(artifact.path));
+    }
+    return pending;
+  }
+
+  private async readArtifactText(
+    build: CachedBuild,
+    artifact: BuildArtifactManifestEntry
+  ): Promise<string> {
+    if (artifact.encoding !== "utf8") {
+      throw new Error(`Artifact ${artifact.path} is not UTF-8 text`);
+    }
+    return (await this.readArtifactBytes(build, artifact)).toString("utf8");
   }
 
   // =========================================================================

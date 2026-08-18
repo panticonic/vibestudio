@@ -6856,7 +6856,7 @@ async function main() {
       .map((record) => record.activeBuildKey)
       .filter((key): key is string => typeof key === "string")
   );
-  const discardedBootstrapBuilds = buildStoreForPublication.discardBootstrapBuilds(
+  const discardedBootstrapBuilds = await buildStoreForPublication.discardBootstrapBuilds(
     bootstrapSnapshot.stateHash,
     protectedBuildKeys
   );
@@ -7334,6 +7334,7 @@ async function main() {
     }
     clearTimeout(forceExit);
     console.log("[Server] Shutdown complete");
+    await serverLogStore.flush();
     process.exit(0);
   }
 

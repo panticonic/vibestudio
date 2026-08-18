@@ -38,7 +38,7 @@ describe("extension dependency diagnostics", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("bundles plain JavaScript dependencies in auto mode", () => {
+  it("bundles plain JavaScript dependencies in auto mode", async () => {
     writePackage(
       nodeModules,
       "plain-cjs",
@@ -52,7 +52,7 @@ describe("extension dependency diagnostics", () => {
       { "index.js": "export default {};" }
     );
 
-    const diagnostics = analyzeExtensionDependencies(
+    const diagnostics = await analyzeExtensionDependencies(
       { "plain-cjs": "1.0.0", "plain-esm": "1.0.0" },
       [nodeModules],
       "auto"
@@ -66,11 +66,11 @@ describe("extension dependency diagnostics", () => {
     ]);
   });
 
-  it("externalizes native and WASM dependencies in auto mode", () => {
+  it("externalizes native and WASM dependencies in auto mode", async () => {
     writePackage(nodeModules, "native-dep", { main: "index.js" }, { "build/addon.node": "" });
     writePackage(nodeModules, "wasm-dep", { main: "index.js" }, { "pkg/module.wasm": "" });
 
-    const diagnostics = analyzeExtensionDependencies(
+    const diagnostics = await analyzeExtensionDependencies(
       { "native-dep": "1.0.0", "wasm-dep": "1.0.0" },
       [nodeModules],
       "auto"
@@ -88,7 +88,7 @@ describe("extension dependency diagnostics", () => {
     );
   });
 
-  it("honors explicit bundle and external modes", () => {
+  it("honors explicit bundle and external modes", async () => {
     writePackage(nodeModules, "native-dep", { main: "index.js" }, { "build/addon.node": "" });
     writePackage(
       nodeModules,
@@ -98,11 +98,11 @@ describe("extension dependency diagnostics", () => {
     );
     const deps = { "native-dep": "1.0.0", "plain-esm": "1.0.0" };
 
-    expect(analyzeExtensionDependencies(deps, [nodeModules], "bundle").runtimeExternalDeps).toEqual(
-      {}
-    );
     expect(
-      analyzeExtensionDependencies(deps, [nodeModules], "external").runtimeExternalDeps
+      (await analyzeExtensionDependencies(deps, [nodeModules], "bundle")).runtimeExternalDeps
+    ).toEqual({});
+    expect(
+      (await analyzeExtensionDependencies(deps, [nodeModules], "external")).runtimeExternalDeps
     ).toEqual(deps);
   });
 });

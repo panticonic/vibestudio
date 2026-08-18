@@ -19,10 +19,10 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   let workspaceRoot: string;
   let trigger: StateTransitionTrigger | null = null;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-grouppush-"));
     workspaceRoot = path.join(root, "workspace");
-    setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot });
+    await setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot });
     for (const name of ["a", "b"]) {
       const dir = path.join(workspaceRoot, "packages", name);
       fs.mkdirSync(dir, { recursive: true });
@@ -34,11 +34,11 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     }
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     trigger?.stop();
     trigger = null;
     setBuildSourceProvider(null);
-    setBuildRootConfig(null);
+    await setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

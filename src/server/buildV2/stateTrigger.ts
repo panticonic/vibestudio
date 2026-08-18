@@ -228,7 +228,7 @@ export class StateTransitionTrigger extends EventEmitter {
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = stateHash;
-    persistEvState({
+    await persistEvState({
       stateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
@@ -301,7 +301,7 @@ export class StateTransitionTrigger extends EventEmitter {
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = event.workspaceStateHash;
-    persistEvState({
+    await persistEvState({
       stateHash: event.workspaceStateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,
@@ -343,7 +343,7 @@ export class StateTransitionTrigger extends EventEmitter {
     this.evMap = result.evMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = event.workspaceStateHash;
-    persistEvState({
+    await persistEvState({
       stateHash: event.workspaceStateHash,
       evMap: result.evMap,
       contentHashes: result.contentHashes,

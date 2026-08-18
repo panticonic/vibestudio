@@ -82,8 +82,12 @@ import type {
   BuildProviderArtifact,
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
-import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
-import { unknownWorkspaceRpcSchemaError, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
+import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
+import {
+  unknownWorkspaceRpcSchemaError,
+  workspaceRpcSchema,
+  workspaceRpcSchemaMetadata,
+} from "./workspaceRpcSchemas.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
@@ -109,6 +113,7 @@ export { generatePanelEntry } from "./panelEntryProtocol.js";
 let _appNodeModules: string[] = [];
 let _appRoot = "";
 let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
+let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
   return createRequire(path.join(nodeModulesRoot, "__vibestudio_host_resolver.cjs"));
@@ -138,12 +143,16 @@ export function initBuilder(appNodeModules: string | string[], appRoot: string):
   _appRoot = path.resolve(appRoot);
   void _libraryLoweringWorker?.close();
   _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
+  void _workspaceRpcCatalogWorker?.close();
+  _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(_appRoot);
 }
 
 export async function closeBuilder(): Promise<void> {
   const worker = _libraryLoweringWorker;
+  const catalogWorker = _workspaceRpcCatalogWorker;
   _libraryLoweringWorker = null;
-  await worker?.close();
+  _workspaceRpcCatalogWorker = null;
+  await Promise.all([worker?.close(), catalogWorker?.close()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -612,14 +621,14 @@ function packageJsonPathForSpecifier(specifier: string, nodePaths: string[]): st
   return null;
 }
 
-function hasFileWithExtension(dir: string, extensions: Set<string>): boolean {
+async function hasFileWithExtension(dir: string, extensions: Set<string>): Promise<boolean> {
   if (!fs.existsSync(dir)) return false;
   const stack = [dir];
   while (stack.length > 0) {
     const current = assertPresent(stack.pop());
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
+      entries = await fs.promises.readdir(current, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -657,57 +666,63 @@ function explainExtensionDep(
   return `${name} is bundled because it looks like plain ${format === "esm" ? "ESM" : format === "cjs" ? "CommonJS" : "JavaScript"}.`;
 }
 
-export function classifyExtensionDeps(
+export async function classifyExtensionDeps(
   deps: Record<string, string>,
   nodePaths: string[],
   mode: ExtensionDependencyMode
-): ClassifiedExtensionDep[] {
-  return Object.entries(deps)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, version]) => {
-      const pkgJsonPath = packageJsonPathForSpecifier(name, nodePaths);
-      const reasons: string[] = [];
-      let format: ClassifiedExtensionDep["format"] = "unknown";
-      if (pkgJsonPath) {
-        try {
-          const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
-            type?: string;
-            main?: string;
-            module?: string;
-            binary?: unknown;
-            gypfile?: unknown;
-          };
-          format = pkg.type === "module" ? "esm" : "cjs";
-          const packageDir = path.dirname(pkgJsonPath);
-          if (pkg.binary || pkg.gypfile || hasFileWithExtension(packageDir, new Set([".node"]))) {
-            reasons.push("native");
+): Promise<ClassifiedExtensionDep[]> {
+  return Promise.all(
+    Object.entries(deps)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(async ([name, version]) => {
+        const pkgJsonPath = packageJsonPathForSpecifier(name, nodePaths);
+        const reasons: string[] = [];
+        let format: ClassifiedExtensionDep["format"] = "unknown";
+        if (pkgJsonPath) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+              type?: string;
+              main?: string;
+              module?: string;
+              binary?: unknown;
+              gypfile?: unknown;
+            };
+            format = pkg.type === "module" ? "esm" : "cjs";
+            const packageDir = path.dirname(pkgJsonPath);
+            if (
+              pkg.binary ||
+              pkg.gypfile ||
+              (await hasFileWithExtension(packageDir, new Set([".node"])))
+            ) {
+              reasons.push("native");
+            }
+            if (await hasFileWithExtension(packageDir, new Set([".wasm"]))) {
+              reasons.push("wasm-asset");
+            }
+          } catch {
+            reasons.push("unreadable-package-json");
           }
-          if (hasFileWithExtension(packageDir, new Set([".wasm"]))) {
-            reasons.push("wasm-asset");
-          }
-        } catch {
-          reasons.push("unreadable-package-json");
+        } else {
+          reasons.push("missing-package-json");
         }
-      } else {
-        reasons.push("missing-package-json");
-      }
 
-      const external =
-        mode === "external"
-          ? true
-          : mode === "bundle"
-            ? false
-            : reasons.includes("native") || reasons.includes("wasm-asset");
+        const external =
+          mode === "external"
+            ? true
+            : mode === "bundle"
+              ? false
+              : reasons.includes("native") || reasons.includes("wasm-asset");
 
-      return {
-        name,
-        version,
-        external,
-        format,
-        reasons,
-        explanation: explainExtensionDep(name, mode, format, reasons),
-      };
-    });
+        return {
+          name,
+          version,
+          external,
+          format,
+          reasons,
+          explanation: explainExtensionDep(name, mode, format, reasons),
+        };
+      })
+  );
 }
 
 export function depsRecord(
@@ -721,12 +736,12 @@ export function depsRecord(
   return selected;
 }
 
-export function analyzeExtensionDependencies(
+export async function analyzeExtensionDependencies(
   deps: Record<string, string>,
   nodePaths: string[],
   dependencyMode: ExtensionDependencyMode
-): ExtensionDependencyDiagnostics {
-  const classifiedDeps = classifyExtensionDeps(deps, nodePaths, dependencyMode);
+): Promise<ExtensionDependencyDiagnostics> {
+  const classifiedDeps = await classifyExtensionDeps(deps, nodePaths, dependencyMode);
   const runtimeExternalDeps = depsRecord(classifiedDeps, true);
   const bundledDeps = depsRecord(classifiedDeps, false);
   const notes: string[] = [];
@@ -1731,7 +1746,7 @@ export async function buildUnit(
   const buildKey = computeBuildUnitKey(node, ev, options);
 
   // Check store first
-  let cached = buildStore.get(buildKey);
+  let cached = await buildStore.getOrHydrate(buildKey);
   if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
     cached = await buildStore.rebindSourceState(cached, stateRef);
   }
@@ -1928,7 +1943,7 @@ interface BuildEnv {
   dependencyOverrides: Record<string, string>;
   dependencyPatches: ExternalDependencyPatch[];
   resolveDir: string;
-  cleanup: () => void;
+  cleanup: () => Promise<void>;
 }
 
 /**
@@ -1989,7 +2004,7 @@ async function prepareBuildEnv(
     (composition === "runtime-root" ? unownedPeerRefusal(node.name, dependencyEnvironment) : null);
   if (refusal) {
     dependencyEnvironment.release();
-    fs.rmSync(outdir, { recursive: true, force: true });
+    await fs.promises.rm(outdir, { recursive: true, force: true });
     throw new Error(refusal);
   }
 
@@ -2008,10 +2023,10 @@ async function prepareBuildEnv(
       dependencyOverrides,
       dependencyPatches,
       resolveDir,
-      cleanup: () => {
+      cleanup: async () => {
         dependencyEnvironment.release();
         try {
-          fs.rmSync(outdir, { recursive: true, force: true });
+          await fs.promises.rm(outdir, { recursive: true, force: true });
         } catch {
           // Ignore
         }
@@ -2019,7 +2034,7 @@ async function prepareBuildEnv(
     };
   } catch (error) {
     dependencyEnvironment.release();
-    fs.rmSync(outdir, { recursive: true, force: true });
+    await fs.promises.rm(outdir, { recursive: true, force: true });
     throw error;
   }
 }
@@ -2603,7 +2618,7 @@ async function buildPanel(
 
     return buildStore.put(buildKey, { entries: artifactEntries }, metadata);
   } finally {
-    env.cleanup();
+    await env.cleanup();
   }
 }
 
@@ -3020,10 +3035,12 @@ async function buildWorker(
             rpcSchema: entry.rpcSchema,
           });
         }
-        return [entry.className, schema];
+        return [entry.className, workspaceRpcSchemaMetadata(schema)];
       })
   );
-  const workspaceRpcCatalog = await collectWorkspaceRpcCatalog(workerSourcePath, {
+  const catalogWorker = _workspaceRpcCatalogWorker;
+  if (!catalogWorker) throw new Error("builder is not initialized");
+  const workspaceRpcCatalog = await catalogWorker.collect(workerSourcePath, {
     provider: node.relativePath,
     authority,
     rpcSchemas,
@@ -3174,7 +3191,7 @@ async function buildWorker(
       workerArtifacts
     );
   } finally {
-    env.cleanup();
+    await env.cleanup();
   }
 }
 
@@ -3281,7 +3298,7 @@ async function buildApp(
       };
       return buildStore.put(providerBuildKey, { entries }, metadata);
     } finally {
-      env.cleanup();
+      await env.cleanup();
     }
   }
 
@@ -3458,7 +3475,7 @@ async function buildTerminalApp(
       }
     );
   } finally {
-    env.cleanup();
+    await env.cleanup();
   }
 }
 
@@ -3643,7 +3660,7 @@ async function buildExtension(
     authority
   );
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
-  const dependencyDiagnostics = analyzeExtensionDependencies(
+  const dependencyDiagnostics = await analyzeExtensionDependencies(
     env.externalDeps,
     nodePaths,
     dependencyMode
@@ -3708,7 +3725,7 @@ async function buildExtension(
     );
     try {
       if (runtimeDeps.nodeModulesDir) {
-        materializeExtensionRuntimeDeps(outdir, runtimeDeps.nodeModulesDir, node.name);
+        await materializeExtensionRuntimeDeps(outdir, runtimeDeps.nodeModulesDir, node.name);
       }
 
       const bundlePath = path.join(outdir, "bundle.js");
@@ -3782,7 +3799,7 @@ async function buildExtension(
         extensionArtifacts
       );
       if (runtimeDeps.nodeModulesDir) {
-        materializeExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);
+        await materializeExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);
       }
 
       return result;
@@ -3790,7 +3807,7 @@ async function buildExtension(
       runtimeDeps.release();
     }
   } finally {
-    env.cleanup();
+    await env.cleanup();
   }
 }
 
@@ -3850,7 +3867,7 @@ async function smokeTestExtensionBuild(
     }
     throw smokeError;
   } finally {
-    fs.rmSync(smokeDir, { recursive: true, force: true });
+    await fs.promises.rm(smokeDir, { recursive: true, force: true });
   }
 }
 
@@ -3979,11 +3996,15 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
   );
   try {
     if (runtimeDeps.nodeModulesDir) {
-      materializeExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, result.metadata.name);
+      await materializeExtensionRuntimeDeps(
+        result.dir,
+        runtimeDeps.nodeModulesDir,
+        result.metadata.name
+      );
     }
     if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
       extensionDetails.runtimeDepsKey = runtimeDeps.key;
-      fs.writeFileSync(
+      await fs.promises.writeFile(
         path.join(result.dir, "metadata.json"),
         JSON.stringify(result.metadata, null, 2)
       );
@@ -4006,11 +4027,11 @@ function extensionRuntimeDepsResolvable(bundlePath: string, deps: string[]): boo
   }
 }
 
-function materializeExtensionRuntimeDeps(
+async function materializeExtensionRuntimeDeps(
   buildDir: string,
   nodeModulesDir: string,
   extensionName: string
-): void {
+): Promise<void> {
   if (!fs.existsSync(nodeModulesDir)) {
     throw new Error(
       `Extension runtime dependencies for ${extensionName} are missing: ${nodeModulesDir}`
@@ -4018,8 +4039,8 @@ function materializeExtensionRuntimeDeps(
   }
   const link = path.join(buildDir, "node_modules");
   try {
-    fs.rmSync(link, { recursive: true, force: true });
-    materializeImmutableTree(nodeModulesDir, link);
+    await fs.promises.rm(link, { recursive: true, force: true });
+    await materializeImmutableTree(nodeModulesDir, link);
   } catch (err) {
     throw new Error(
       `Failed to materialize extension runtime dependencies for ${extensionName}: ${
@@ -4029,30 +4050,30 @@ function materializeExtensionRuntimeDeps(
   }
 }
 
-function materializeImmutableTree(source: string, target: string): void {
-  const stat = fs.lstatSync(source);
+async function materializeImmutableTree(source: string, target: string): Promise<void> {
+  const stat = await fs.promises.lstat(source);
   if (stat.isSymbolicLink()) {
-    fs.symlinkSync(fs.readlinkSync(source), target);
+    await fs.promises.symlink(await fs.promises.readlink(source), target);
     return;
   }
   if (stat.isDirectory()) {
-    fs.mkdirSync(target, { recursive: true, mode: stat.mode });
-    for (const child of fs.readdirSync(source)) {
-      materializeImmutableTree(path.join(source, child), path.join(target, child));
+    await fs.promises.mkdir(target, { recursive: true, mode: stat.mode });
+    for (const child of await fs.promises.readdir(source)) {
+      await materializeImmutableTree(path.join(source, child), path.join(target, child));
     }
     return;
   }
   if (!stat.isFile()) throw new Error(`Unsupported runtime dependency entry: ${source}`);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
   try {
-    fs.linkSync(source, target);
+    await fs.promises.link(source, target);
   } catch (error) {
     if (
       !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes((error as NodeJS.ErrnoException).code ?? "")
     ) {
       throw error;
     }
-    fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
+    await fs.promises.copyFile(source, target, fs.constants.COPYFILE_FICLONE);
   }
 }
 
@@ -4147,7 +4168,7 @@ async function buildLibraryBundle(
       details: { kind: "library", format: "async-cjs" },
     });
   } finally {
-    env.cleanup();
+    await env.cleanup();
   }
 }
 
@@ -4262,7 +4283,7 @@ export async function buildNpmLibrary(
   const buildKey = npmBuildKey(specifier, version, externals);
 
   // Check store cache
-  const cached = buildStore.get(buildKey);
+  const cached = await buildStore.getOrHydrate(buildKey);
   if (cached) return primaryTextArtifactContent(cached);
 
   // Check in-flight builds (coalescing)
@@ -4348,7 +4369,7 @@ async function doNpmBuild(
     } finally {
       borrowedDeps.release();
       try {
-        fs.rmSync(outdir, { recursive: true, force: true });
+        await fs.promises.rm(outdir, { recursive: true, force: true });
       } catch {
         // Ignore
       }
@@ -4378,7 +4399,7 @@ export async function buildPlatformLibrary(
   const buildKey = `platform:${specifier}:${externals.sort().join(",")}`;
 
   // Check cache
-  const cached = buildStore.get(buildKey);
+  const cached = await buildStore.getOrHydrate(buildKey);
   if (cached) return primaryTextArtifactContent(cached);
 
   // Check in-flight
@@ -4447,7 +4468,7 @@ async function doPlatformBuild(
       return buildStore.put(buildKey, bundleArtifacts(bundleContent), metadata);
     } finally {
       try {
-        fs.rmSync(outdir, { recursive: true, force: true });
+        await fs.promises.rm(outdir, { recursive: true, force: true });
       } catch {
         /* ignore */
       }

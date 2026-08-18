@@ -73,10 +73,10 @@ describe("buildUnit framework-agnostic panel builds", () => {
   let root: string;
   let workspaceRoot: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-frameworks-build-"));
     workspaceRoot = path.join(root, "workspace");
-    setBuildRootConfig({ appRoot: REPO_ROOT, workspaceRoot });
+    await setBuildRootConfig({ appRoot: REPO_ROOT, workspaceRoot });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
@@ -87,8 +87,8 @@ describe("buildUnit framework-agnostic panel builds", () => {
     initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT);
   });
 
-  afterEach(() => {
-    setBuildRootConfig(null);
+  afterEach(async () => {
+    await setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

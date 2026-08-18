@@ -1133,7 +1133,7 @@ export async function initBuildSystemV2(
   // Build cache identity depends on dependency manifests, not on where the
   // active managed workspace copy happens to live. Server startup passes these
   // roots explicitly.
-  setBuildRootConfig({
+  await setBuildRootConfig({
     appRoot: rootOptions.appRoot,
     workspaceRoot: rootOptions.dependencyWorkspaceRoot,
   });
@@ -1163,7 +1163,7 @@ export async function initBuildSystemV2(
   // Step 2: Compute effective versions. Cold-start fast path: if the
   // persisted EV state was computed at this exact workspace state, reuse it
   // wholesale (zero DO hashing calls).
-  const persisted = loadPersistedEvState();
+  const persisted = await loadPersistedEvState();
   let evMap: EffectiveVersionMap;
   let contentHashes: ContentHashMap;
   if (persisted && persisted.stateHash === stateHash) {
@@ -1187,7 +1187,7 @@ export async function initBuildSystemV2(
       `[BuildV2] EV diff: ${changeset.changed.length} changed, ` +
         `${changeset.added.length} added, ${changeset.removed.length} removed (${Date.now() - tEv}ms)`
     );
-    persistEvState({ stateHash, evMap, contentHashes });
+    await persistEvState({ stateHash, evMap, contentHashes });
   }
 
   // Step 3: Start the state trigger (subscribes to vcs state advances).
