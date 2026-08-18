@@ -50,6 +50,7 @@ export interface CdpHostProviderTarget {
 export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
 
 export interface PanelConsoleHistoryEntry {
+  seq?: number;
   timestamp: number;
   level: PanelConsoleHistoryLevel;
   message: string;
@@ -63,6 +64,7 @@ export interface PanelConsoleHistoryEntry {
 export interface PanelConsoleHistoryResult {
   entries: PanelConsoleHistoryEntry[];
   errors: PanelConsoleHistoryEntry[];
+  page: { nextBeforeSeq: number | null; hasOlder: boolean };
   dropped: {
     entries: number;
     errors: number;
@@ -77,6 +79,11 @@ export interface PanelConsoleHistoryOptions {
   limit?: number;
   errorLimit?: number;
   levels?: PanelConsoleHistoryLevel[];
+  sources?: Array<"console" | "lifecycle">;
+  contains?: string;
+  since?: number;
+  until?: number;
+  beforeSeq?: number;
 }
 
 export interface CdpHostProviderOptions {
@@ -142,6 +149,7 @@ export class CdpHostProvider {
       errors: PanelConsoleHistoryEntry[];
       droppedEntries: number;
       droppedErrors: number;
+      nextSeq: number;
     }
   >();
   private readonly consoleListeners = new Map<
@@ -357,21 +365,32 @@ export class CdpHostProvider {
     this.requireTargetContents(targetId);
     const history = this.historyFor(targetId);
     const stored = this.options.diagnosticsStore?.history(targetId, {
-      limit: options.limit,
-      errorLimit: options.errorLimit,
+      levels: options.levels?.map(panelLevelToRuntimeLevel),
+      sources: options.sources,
+      contains: options.contains,
+      since: options.since,
+      until: options.until,
+      beforeSeq: options.beforeSeq,
     });
     const rawEntries =
       stored?.entries.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.entries;
     const rawErrors =
       stored?.errors.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.errors;
-    const levels = new Set(options.levels ?? []);
-    const entries =
-      levels.size > 0 ? rawEntries.filter((entry) => levels.has(entry.level)) : rawEntries;
+    const entries = stored ? rawEntries : filterConsoleEntries(rawEntries, options);
+    const errors = stored
+      ? rawErrors
+      : filterConsoleEntries(rawErrors, { ...options, levels: undefined });
     const limit = normalizeLimit(options.limit, entries.length);
-    const errorLimit = normalizeLimit(options.errorLimit, rawErrors.length);
+    const errorLimit = normalizeLimit(options.errorLimit, errors.length);
+    const pageEntries = limit > 0 ? entries.slice(-limit) : [];
+    const hasOlder = entries.length > pageEntries.length;
     return {
-      entries: limit > 0 ? entries.slice(-limit) : [],
-      errors: errorLimit > 0 ? rawErrors.slice(-errorLimit) : [],
+      entries: pageEntries,
+      errors: errorLimit > 0 ? errors.slice(-errorLimit) : [],
+      page: {
+        nextBeforeSeq: hasOlder ? (pageEntries[0]?.seq ?? null) : null,
+        hasOlder,
+      },
       dropped: {
         entries: stored?.dropped.entries ?? history.droppedEntries,
         errors: stored?.dropped.errors ?? history.droppedErrors,
@@ -643,6 +662,7 @@ export class CdpHostProvider {
   ): void {
     const history = this.historyFor(targetId);
     const entry: PanelConsoleHistoryEntry = {
+      seq: history.nextSeq++,
       timestamp: Date.now(),
       level: normalizeConsoleLevel(level),
       message: typeof message === "string" ? message : String(message ?? ""),
@@ -675,6 +695,7 @@ export class CdpHostProvider {
   ): void {
     const history = this.historyFor(targetId);
     const entry: PanelConsoleHistoryEntry = {
+      seq: history.nextSeq++,
       timestamp: Date.now(),
       level,
       message,
@@ -730,10 +751,11 @@ export class CdpHostProvider {
     errors: PanelConsoleHistoryEntry[];
     droppedEntries: number;
     droppedErrors: number;
+    nextSeq: number;
   } {
     const existing = this.consoleHistories.get(targetId);
     if (existing) return existing;
-    const created = { entries: [], errors: [], droppedEntries: 0, droppedErrors: 0 };
+    const created = { entries: [], errors: [], droppedEntries: 0, droppedErrors: 0, nextSeq: 1 };
     this.consoleHistories.set(targetId, created);
     return created;
   }
@@ -955,13 +977,22 @@ export class CdpHostProvider {
 
 function normalizeConsoleHistoryOptions(value: unknown): PanelConsoleHistoryOptions {
   if (!value || typeof value !== "object") return {};
-  const record = value as { limit?: unknown; errorLimit?: unknown; levels?: unknown };
+  const record = value as Record<string, unknown>;
   const options: PanelConsoleHistoryOptions = {};
-  if (typeof record.limit === "number") options.limit = record.limit;
-  if (typeof record.errorLimit === "number") options.errorLimit = record.errorLimit;
-  if (Array.isArray(record.levels)) {
-    options.levels = record.levels.map(normalizeConsoleLevel);
+  if (typeof record["limit"] === "number") options.limit = record["limit"];
+  if (typeof record["errorLimit"] === "number") options.errorLimit = record["errorLimit"];
+  if (Array.isArray(record["levels"])) {
+    options.levels = record["levels"].map(normalizeConsoleLevel);
   }
+  if (Array.isArray(record["sources"])) {
+    options.sources = record["sources"].filter(
+      (source): source is "console" | "lifecycle" => source === "console" || source === "lifecycle"
+    );
+  }
+  if (typeof record["contains"] === "string") options.contains = record["contains"];
+  if (typeof record["since"] === "number") options.since = record["since"];
+  if (typeof record["until"] === "number") options.until = record["until"];
+  if (typeof record["beforeSeq"] === "number") options.beforeSeq = record["beforeSeq"];
   return options;
 }
 
@@ -1012,6 +1043,7 @@ function runtimeDiagnosticToPanelConsoleHistoryEntry(
   record: RuntimeDiagnosticRecord
 ): PanelConsoleHistoryEntry {
   return {
+    seq: record.seq,
     timestamp: record.timestamp,
     level: runtimeLevelToPanelLevel(record.level),
     message: record.message,
@@ -1021,6 +1053,36 @@ function runtimeDiagnosticToPanelConsoleHistoryEntry(
     source: record.source === "lifecycle" ? "lifecycle" : "console",
     fields: record.fields,
   };
+}
+
+function filterConsoleEntries(
+  entries: PanelConsoleHistoryEntry[],
+  options: PanelConsoleHistoryOptions
+): PanelConsoleHistoryEntry[] {
+  const levels = options.levels ? new Set(options.levels) : null;
+  const sources = options.sources ? new Set(options.sources) : null;
+  const contains = options.contains?.trim().toLocaleLowerCase();
+  return entries.filter((entry) => {
+    if (levels && !levels.has(entry.level)) return false;
+    if (sources && !sources.has(entry.source ?? "console")) return false;
+    if (options.since !== undefined && entry.timestamp < options.since) return false;
+    if (options.until !== undefined && entry.timestamp > options.until) return false;
+    if (options.beforeSeq !== undefined && (entry.seq ?? 0) >= options.beforeSeq) return false;
+    if (!contains) return true;
+    return [entry.message, entry.url, entry.sourceId, safeJson(entry.fields)]
+      .join("\n")
+      .toLocaleLowerCase()
+      .includes(contains);
+  });
+}
+
+function safeJson(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function runtimeLevelToPanelLevel(
