@@ -29,15 +29,9 @@ export interface PanelConsoleHistoryOptions {
   limit?: number;
   errorLimit?: number;
   levels?: PanelConsoleHistoryLevel[];
-  sources?: Array<"console" | "lifecycle">;
-  contains?: string;
-  since?: number;
-  until?: number;
-  beforeSeq?: number;
 }
 
 export interface PanelConsoleHistoryEntry {
-  seq?: number;
   timestamp: number;
   level: PanelConsoleHistoryLevel;
   message: string;
@@ -49,7 +43,6 @@ export interface PanelConsoleHistoryEntry {
 export interface PanelConsoleHistoryResult {
   entries: PanelConsoleHistoryEntry[];
   errors: PanelConsoleHistoryEntry[];
-  page: { nextBeforeSeq: number | null; hasOlder: boolean };
   dropped: {
     entries: number;
     errors: number;
@@ -139,14 +132,9 @@ export interface PanelCdpAccessEvent {
 
 const consoleHistoryOptionsSchema = z
   .object({
-    limit: z.number().int().min(1).max(1000).optional(),
-    errorLimit: z.number().int().min(0).max(500).optional(),
+    limit: z.number().optional(),
+    errorLimit: z.number().optional(),
     levels: z.array(z.enum(["debug", "info", "warning", "error", "unknown"])).optional(),
-    sources: z.array(z.enum(["console", "lifecycle"])).optional(),
-    contains: z.string().max(512).optional(),
-    since: z.number().optional(),
-    until: z.number().optional(),
-    beforeSeq: z.number().int().positive().optional(),
   })
   .optional();
 

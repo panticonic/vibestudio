@@ -46,15 +46,9 @@ export interface RuntimeDiagnosticOptions {
   limit?: number;
   errorLimit?: number;
   level?: RuntimeDiagnosticLevel;
-  levels?: RuntimeDiagnosticLevel[];
-  sources?: RuntimeDiagnosticSource[];
-  contains?: string;
   since?: number;
-  until?: number;
   /** Return only records with seq > sinceSeq (exact resume, unlike `since`). */
   sinceSeq?: number;
-  /** Return only records with seq < beforeSeq (stable reverse paging). */
-  beforeSeq?: number;
 }
 
 interface PersistedRuntimeDiagnostics {
@@ -114,25 +108,13 @@ export class RuntimeDiagnosticsStore {
   history(entityId: string, options: RuntimeDiagnosticOptions = {}): RuntimeDiagnosticHistory {
     const history = this.historyFor(entityId);
     const minRank = options.level ? LEVEL_RANK[options.level] : null;
-    const levels = options.levels ? new Set(options.levels) : null;
-    const sources = options.sources ? new Set(options.sources) : null;
-    const contains = options.contains?.trim().toLocaleLowerCase();
-    const matchesBase = (record: RuntimeDiagnosticRecord): boolean =>
+    const afterCursor = (record: RuntimeDiagnosticRecord): boolean =>
       (options.since === undefined || record.timestamp >= options.since) &&
-      (options.until === undefined || record.timestamp <= options.until) &&
-      (options.sinceSeq === undefined || (record.seq ?? 0) > options.sinceSeq) &&
-      (options.beforeSeq === undefined || (record.seq ?? 0) < options.beforeSeq) &&
-      (sources === null || sources.has(record.source)) &&
-      (!contains || diagnosticSearchText(record).includes(contains));
+      (options.sinceSeq === undefined || (record.seq ?? 0) > options.sinceSeq);
     const entries = history.entries.filter(
-      (record) =>
-        matchesBase(record) &&
-        (minRank === null || LEVEL_RANK[record.level] >= minRank) &&
-        (levels === null || levels.has(record.level))
+      (record) => afterCursor(record) && (minRank === null || LEVEL_RANK[record.level] >= minRank)
     );
-    // `errors` is a separately retained safety buffer. Level selection shapes
-    // the main stream without hiding retained failures from that buffer.
-    const errors = history.errors.filter(matchesBase);
+    const errors = history.errors.filter(afterCursor);
     const limit = normalizeLimit(options.limit, entries.length, this.entryCapacity);
     const errorLimit = normalizeLimit(options.errorLimit, errors.length, this.errorCapacity);
     return {
@@ -193,21 +175,6 @@ export class RuntimeDiagnosticsStore {
   private filePath(entityId: string): string {
     const digest = createHash("sha256").update(entityId).digest("hex");
     return path.join(this.rootDir, `sha256-${digest}.json`);
-  }
-}
-
-function diagnosticSearchText(record: RuntimeDiagnosticRecord): string {
-  const fields = record.fields === undefined ? "" : safeJson(record.fields);
-  return [record.message, record.url ?? "", record.sourceId ?? "", fields]
-    .join("\n")
-    .toLocaleLowerCase();
-}
-
-function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
   }
 }
 

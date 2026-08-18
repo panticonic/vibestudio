@@ -417,7 +417,6 @@ describe("panelCdpService", () => {
         },
       ],
       errors: [],
-      page: { nextBeforeSeq: null, hasOlder: false },
       dropped: { entries: 0, errors: 0 },
       capacity: { entries: 1000, errors: 500 },
     }));

@@ -302,8 +302,6 @@ export interface PanelSnapshotObservation {
 export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
 
 export interface PanelConsoleHistoryEntry {
-  /** Monotonic per-panel sequence used as a stable paging cursor. */
-  seq?: number;
   timestamp: number;
   level: PanelConsoleHistoryLevel;
   message: string;
@@ -317,11 +315,6 @@ export interface PanelConsoleHistoryEntry {
 export interface PanelConsoleHistoryResult {
   entries: PanelConsoleHistoryEntry[];
   errors: PanelConsoleHistoryEntry[];
-  page: {
-    /** Pass this as `beforeSeq` to read the next older page. */
-    nextBeforeSeq: number | null;
-    hasOlder: boolean;
-  };
   dropped: { entries: number; errors: number };
   capacity: { entries: number; errors: number };
 }

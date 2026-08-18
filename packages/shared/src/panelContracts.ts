@@ -295,7 +295,6 @@ export const PanelSnapshotObservationSchema: z.ZodType<PanelSnapshotObservation>
 });
 
 const PanelConsoleHistoryEntrySchema = z.object({
-  seq: z.number().int().positive().optional(),
   timestamp: z.number(),
   level: z.enum(["debug", "info", "warning", "error", "unknown"]),
   message: z.string(),
@@ -312,10 +311,6 @@ export const PanelConsoleHistoryObservationSchema: z.ZodType<PanelConsoleHistory
       available: z.literal(true),
       entries: z.array(PanelConsoleHistoryEntrySchema),
       errors: z.array(PanelConsoleHistoryEntrySchema),
-      page: z.object({
-        nextBeforeSeq: z.number().int().positive().nullable(),
-        hasOlder: z.boolean(),
-      }),
       dropped: z.object({ entries: z.number(), errors: z.number() }),
       capacity: z.object({ entries: z.number(), errors: z.number() }),
     }),

@@ -684,37 +684,10 @@ describe("CdpHostProvider", () => {
             message: "render failed",
           }),
         ],
-        page: { nextBeforeSeq: null, hasOlder: false },
         dropped: { entries: 0, errors: 0 },
         capacity: { entries: 1000, errors: 500 },
       },
     });
-  });
-
-  it("searches before slicing and pages older matches with a stable sequence cursor", () => {
-    const { provider, contents } = createHarness();
-    provider.registerTarget("panel-1", 42);
-
-    for (const message of ["match one", "noise", "match two", "match three"]) {
-      contents.emit("console-message", {
-        level: "info",
-        message,
-        lineNumber: 1,
-        sourceId: "app.ts",
-      });
-    }
-
-    const newest = provider.getConsoleHistory("panel-1", { contains: "MATCH", limit: 2 });
-    expect(newest.entries.map((entry) => entry.message)).toEqual(["match two", "match three"]);
-    expect(newest.page).toEqual({ nextBeforeSeq: 3, hasOlder: true });
-
-    const older = provider.getConsoleHistory("panel-1", {
-      contains: "match",
-      beforeSeq: newest.page.nextBeforeSeq!,
-      limit: 2,
-    });
-    expect(older.entries.map((entry) => entry.message)).toEqual(["match one"]);
-    expect(older.page).toEqual({ nextBeforeSeq: null, hasOlder: false });
   });
 
   it("supports filtering historical console entries without removing the error buffer", () => {
