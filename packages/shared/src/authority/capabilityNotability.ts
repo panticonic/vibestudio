@@ -96,6 +96,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "service:browserEnvironment.openDownload", notability: "headline" },
   { key: "service:browserEnvironment.pauseDownload", notability: "everyday" },
   { key: "service:browserEnvironment.previewImportSource", notability: "headline" },
+  { key: "service:browserEnvironment.previewSensitiveImport", notability: "headline" },
   { key: "service:browserEnvironment.resumeDownload", notability: "everyday" },
   { key: "service:browserEnvironment.revealDownload", notability: "headline" },
   { key: "service:browserEnvironment.startImportRead", notability: "headline" },
@@ -103,6 +104,8 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // fill. The Base provider owns the one user-facing import intent, but the
   // underlying capability remains explicitly headline-worthy in host reviews.
   { key: "service:browserEnvironment.startSensitiveImport", notability: "headline" },
+  { key: "service:browserEnvironment.observeSensitiveImport", notability: "everyday" },
+  { key: "service:browserEnvironment.cancelSensitiveImport", notability: "everyday" },
   { key: "runtime.code-execution.manage", notability: "headline" },
   { key: "runtime.execution.recover", notability: "headline" },
   { key: "runtime.supervision.manage", notability: "headline" },
