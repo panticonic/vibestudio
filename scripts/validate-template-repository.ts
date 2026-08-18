@@ -34,7 +34,14 @@ export function validateExactExternalDependencies(root: string, files: readonly 
       string,
       unknown
     >;
-    for (const field of ["dependencies", "devDependencies", "peerDependencies"] as const) {
+    // Dependencies and devDependencies select bytes installed into the
+    // published template, so their coordinates must be exact. Peer
+    // dependencies select no bytes: they describe compatibility with the
+    // consuming app's already-exact dependency graph and may legitimately be
+    // ranges (for example one shared package consumed by React Native 19.0 and
+    // the desktop React 19 renderer). Treating peers as acquisition inputs
+    // makes that honest cross-renderer contract impossible.
+    for (const field of ["dependencies", "devDependencies"] as const) {
       const declarations = packageJson[field];
       if (!declarations || typeof declarations !== "object" || Array.isArray(declarations))
         continue;

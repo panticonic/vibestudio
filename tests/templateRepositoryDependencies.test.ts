@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 describe("template repository dependency versions", () => {
-  it.each(["dependencies", "devDependencies", "peerDependencies"] as const)(
+  it.each(["dependencies", "devDependencies"] as const)(
     "requires exact external %s",
     (field) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-deps-"));
@@ -26,6 +26,17 @@ describe("template repository dependency versions", () => {
       );
     }
   );
+
+  it("accepts peer compatibility ranges because they select no release bytes", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-deps-"));
+    roots.push(root);
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ peerDependencies: { react: "^19.0.0" } })
+    );
+
+    expect(() => validateExactExternalDependencies(root, ["package.json"])).not.toThrow();
+  });
 
   it("accepts exact external versions and workspace packages", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-deps-"));
