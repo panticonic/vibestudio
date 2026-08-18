@@ -2009,10 +2009,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "credential.use",
     presentation: {
-      title: "Use your browser session",
-      action: "load a website using your signed-in browser session",
+      title: "Use your signed-in browser",
+      action: "load a website using your signed-in browser",
       description:
-        "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+        "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account.",
       group: "accounts",
       authorityCategory: {
         domain: "accounts",
@@ -8397,10 +8397,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "credential.use": {
-    title: "Use your browser session",
-    action: "load a website using your signed-in browser session",
+    title: "Use your signed-in browser",
+    action: "load a website using your signed-in browser",
     description:
-      "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+      "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account.",
     group: "accounts",
     authorityCategory: {
       domain: "accounts",

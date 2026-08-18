@@ -35,11 +35,11 @@ describe("chromiumFetchService", () => {
           capability: "credential.use",
           resourceKey: "https://example.com",
           challenge: expect.objectContaining({
-            title: "Use your browser session",
+            title: "Use your signed-in browser",
             description: expect.stringContaining("normal browser page"),
             resource: expect.objectContaining({ value: "https://example.com" }),
             operation: expect.objectContaining({
-              verb: "load a website using your signed-in browser session",
+              verb: "load a website using your signed-in browser",
             }),
           }),
         }),

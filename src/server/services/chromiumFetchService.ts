@@ -10,10 +10,10 @@ import {
 const BROWSER_FETCH_CAPABILITY = "credential.use";
 const BROWSER_FETCH_RESOLVER = "chromiumFetch.openBrowser.origin";
 const BROWSER_FETCH_PRESENTATION = {
-  title: "Use your browser session",
-  action: "load a website using your signed-in browser session",
+  title: "Use your signed-in browser",
+  action: "load a website using your signed-in browser",
   description:
-    "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account or session.",
+    "Load the website as a normal browser page with cookies imported into Vibestudio. The page may make authenticated requests or update your account.",
   group: "accounts",
   authorityCategory: { domain: "accounts", verb: "act" },
 } as const;

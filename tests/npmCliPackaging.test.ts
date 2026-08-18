@@ -14,6 +14,7 @@ describe("npm CLI packaging", () => {
     expect(SERVER_RUNTIME_ARTIFACTS).toEqual([
       "dist/server.mjs",
       "dist/internal-do.bundle.mjs",
+      "dist/sql-wasm.wasm",
       "dist/host-build-fingerprint.json",
     ]);
     for (const relative of SERVER_RUNTIME_ARTIFACTS) {

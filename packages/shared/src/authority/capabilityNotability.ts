@@ -192,6 +192,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "workspace-panels.manage", notability: "everyday" },
   { key: "workspace.configure", notability: "headline" },
   { key: "workspace.config.apply", notability: "headline" },
+  { key: "workspace.update-base", notability: "headline" },
   { key: "workspace.dependencies.install", notability: "headline" },
   { key: "workspace.dependencies.inspect", notability: "everyday" },
   { key: "workspace.build-cache.manage", notability: "everyday" },
