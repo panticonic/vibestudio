@@ -2218,6 +2218,75 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
 });
 
 describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
+  it("preserves a lease transferred by its direct event before acquire returns", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/promoted-chat", [], {
+      runtimeEntityId: asPanelEntityId("panel:nav-promoted-chat"),
+      snapshot: { source: "panels/chat", contextId: "ctx-promoted", options: {} },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "desktop-session",
+        label: "Desktop",
+        platform: "desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+
+    let settleAcquire!: (value: { acquired: true; lease: PanelRuntimeLease }) => void;
+    const acquireResponse = new Promise<{ acquired: true; lease: PanelRuntimeLease }>((resolve) => {
+      settleAcquire = resolve;
+    });
+    serverClient.call.mockImplementation(async (_service, method, args?: unknown[]) => {
+      if (method === "registerClient") return undefined;
+      if (method === "acquire") return acquireResponse;
+      if (method === "reportView") return "reported";
+      if (method === "release") return undefined;
+      if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
+      throw new Error(`Unexpected test RPC ${method}: ${JSON.stringify(args)}`);
+    });
+
+    const loading = orchestrator.ensureLoaded(panel.id);
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "acquire", expect.any(Array))
+    );
+    const acquireCall = serverClient.call.mock.calls.find(([, method]) => method === "acquire");
+    const [, request] = acquireCall?.[2] as [string, { connectionId: string }];
+    const lease = runtimeLease(panel.runtimeEntityId!, {
+      slotId: panel.id,
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: request.connectionId,
+    });
+
+    const leaseEvent = orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: lease.runtimeEntityId,
+      previous: null,
+      next: lease,
+      reason: "acquired",
+    });
+    settleAcquire({ acquired: true, lease });
+
+    await Promise.all([loading, leaseEvent]);
+    expect(serverClient.call.mock.calls.filter(([, method]) => method === "acquire")).toHaveLength(
+      1
+    );
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "release", [
+      lease.runtimeEntityId,
+      lease.connectionId,
+    ]);
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
+  });
+
   it("replaces an existing slot view when its lease moves to a new runtime entity", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/new-news", [], {

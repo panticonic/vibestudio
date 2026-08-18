@@ -1152,10 +1152,23 @@ export class PanelPresentationController {
     // Acquire is idempotent when this host already owns the entity (notably
     // after an automatic replacement transfer). The returned lease is the
     // authority; the proposed connection id may never have been installed.
+    const observedConnection = this.connectionBySlot.get(panelId);
+    const sameLeaseWasAlreadyObserved =
+      observedConnection?.runtimeEntityId === result.lease.runtimeEntityId &&
+      observedConnection.connectionId === result.lease.connectionId;
     this.connectionBySlot.set(panelId, {
       runtimeEntityId: result.lease.runtimeEntityId,
       connectionId: result.lease.connectionId,
-      ...(ownerToken ? { ownerToken } : {}),
+      // The direct lease event can arrive while the acquire RPC is in flight.
+      // Its handler may already have transferred this exact lease to a newer
+      // presentation attempt. The RPC response confirms the lease; it must not
+      // transfer ownership back to the now-cancelled acquiring attempt, whose
+      // cleanup would release the live lease and start an acquire/release loop.
+      ...(sameLeaseWasAlreadyObserved && observedConnection.ownerToken
+        ? { ownerToken: observedConnection.ownerToken }
+        : ownerToken
+          ? { ownerToken }
+          : {}),
     });
     return result.lease.connectionId;
   }
