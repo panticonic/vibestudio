@@ -21,7 +21,12 @@ import {
 } from "./lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import { startLocalTurnRelay } from "./lib/local-turn.mjs";
-import { createRemoteServeArgs, waitForRootInvite } from "./lib/smoke-remote-server.mjs";
+import {
+  assertBaseCheckoutBootable,
+  createRemoteServeArgs,
+  resolveDevelopmentBase,
+  waitForRootInvite,
+} from "./lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -314,6 +319,178 @@ async function adbCapture(device, ...args) {
   return runCommand("adb", makeAdbArgs(device, args));
 }
 
+let cdpRequestId = 0;
+
+async function cdpCommand(socket, method, params = {}) {
+  const id = ++cdpRequestId;
+  const response = new Promise((resolve, reject) => {
+    const onMessage = (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.id !== id) return;
+      socket.removeEventListener("message", onMessage);
+      if (message.error) reject(new Error(message.error.message ?? "CDP evaluation failed"));
+      else resolve(message.result?.result?.value);
+    };
+    socket.addEventListener("message", onMessage);
+  });
+  socket.send(
+    JSON.stringify({
+      id,
+      method,
+      params,
+    })
+  );
+  return response;
+}
+
+function cdpEvaluate(socket, expression) {
+  return cdpCommand(socket, "Runtime.evaluate", { expression, returnByValue: true });
+}
+
+async function openPanelWebViewDebugger(device, packageName, urlFragment, deadlineMs) {
+  let lastFailure = "no debuggable WebView target was found";
+  while (Date.now() < deadlineMs) {
+    const pidResult = await adbCapture(device, "shell", "pidof", packageName).catch(() => null);
+    const pids = new Set((pidResult?.stdout ?? "").trim().split(/\s+/).filter(Boolean));
+    const socketsResult = await adbCapture(device, "shell", "cat", "/proc/net/unix").catch(
+      () => null
+    );
+    const sockets = [
+      ...(socketsResult?.stdout ?? "").matchAll(/@?(webview_devtools_remote_(\d+))/g),
+    ]
+      .filter((match) => pids.has(match[2]))
+      .map((match) => match[1]);
+    for (const remote of sockets) {
+      let localPort = null;
+      let keepForward = false;
+      try {
+        const forwarded = await adbCapture(device, "forward", "tcp:0", `localabstract:${remote}`);
+        localPort = forwarded.stdout.trim();
+        const targets = await fetch(`http://127.0.0.1:${localPort}/json/list`).then((response) => {
+          if (!response.ok) throw new Error(`WebView target listing returned ${response.status}`);
+          return response.json();
+        });
+        const target = targets.find(
+          (candidate) =>
+            typeof candidate.webSocketDebuggerUrl === "string" &&
+            typeof candidate.url === "string" &&
+            candidate.url.includes(urlFragment)
+        );
+        if (!target) {
+          lastFailure = `the debuggable WebView did not expose a ${urlFragment} document`;
+          continue;
+        }
+        const socket = new WebSocket(target.webSocketDebuggerUrl);
+        await new Promise((resolve, reject) => {
+          socket.addEventListener("open", resolve, { once: true });
+          socket.addEventListener("error", () => reject(new Error("CDP socket failed")), {
+            once: true,
+          });
+        });
+        keepForward = true;
+        return {
+          socket,
+          close: async () => {
+            socket.close();
+            if (localPort) {
+              await adbCapture(device, "forward", "--remove", `tcp:${localPort}`).catch(() => null);
+            }
+          },
+        };
+      } catch (error) {
+        lastFailure = error instanceof Error ? error.message : String(error);
+      } finally {
+        if (localPort && !keepForward) {
+          await adbCapture(device, "forward", "--remove", `tcp:${localPort}`).catch(() => null);
+        }
+      }
+    }
+    await sleep(250);
+  }
+  throw new Error(`Timed out opening the launcher WebView debugger: ${lastFailure}`);
+}
+
+async function submitPanelLauncherPrompt(device, packageName, value, deadlineMs) {
+  const debuggerSession = await openPanelWebViewDebugger(
+    device,
+    packageName,
+    "/about/new/",
+    deadlineMs
+  );
+  try {
+    const focused = await cdpEvaluate(
+      debuggerSession.socket,
+      `(() => { const input = document.querySelector("textarea.launcher-input"); ` +
+        `if (!(input instanceof HTMLTextAreaElement)) return false; input.focus(); return true; })()`
+    );
+    if (focused !== true) throw new Error("The launcher textarea is not present");
+    await cdpCommand(debuggerSession.socket, "Input.insertText", { text: value });
+    while (Date.now() < deadlineMs) {
+      const ready = await cdpEvaluate(
+        debuggerSession.socket,
+        `(() => { const input = document.querySelector("textarea.launcher-input"); ` +
+          `const selected = document.querySelector('[role="option"][aria-selected="true"]'); ` +
+          `return input?.value === ${JSON.stringify(value)} && selected !== null; })()`
+      );
+      if (ready === true) {
+        const key = {
+          key: "Enter",
+          code: "Enter",
+          windowsVirtualKeyCode: 13,
+          nativeVirtualKeyCode: 13,
+        };
+        await cdpCommand(debuggerSession.socket, "Input.dispatchKeyEvent", {
+          ...key,
+          type: "rawKeyDown",
+        });
+        await cdpCommand(debuggerSession.socket, "Input.dispatchKeyEvent", {
+          ...key,
+          type: "keyUp",
+        });
+        return;
+      }
+      await sleep(100);
+    }
+    throw new Error("Timed out waiting for the launcher to accept input and select a destination");
+  } finally {
+    await debuggerSession.close();
+  }
+}
+
+async function waitForChatPanelRendered(device, packageName, expectedMessage, deadlineMs) {
+  const debuggerSession = await openPanelWebViewDebugger(
+    device,
+    packageName,
+    "/panels/chat/",
+    deadlineMs
+  );
+  let lastBodyText = "";
+  try {
+    while (Date.now() < deadlineMs) {
+      const state = await cdpEvaluate(
+        debuggerSession.socket,
+        `(() => { const text = document.body?.innerText?.trim() ?? ""; ` +
+          `const placeholder = text.includes("Loading conversation…") || ` +
+          `text.includes("Starting chat…"); ` +
+          `return { rendered: ${
+            expectedMessage === null
+              ? "text.length > 0 && !placeholder"
+              : `text.includes(${JSON.stringify(expectedMessage)})`
+          }, ` +
+          `text: text.slice(0, 500) }; })()`
+      );
+      if (state?.rendered === true) return;
+      lastBodyText = typeof state?.text === "string" ? state.text : lastBodyText;
+      await sleep(100);
+    }
+  } finally {
+    await debuggerSession.close();
+  }
+  throw new Error(
+    `Timed out waiting for rendered chat content; visible panel text: ${JSON.stringify(lastBodyText)}`
+  );
+}
+
 function runCommandBuffer(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -335,67 +512,6 @@ function runCommandBuffer(command, args, options = {}) {
       else reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr}`));
     });
   });
-}
-
-/**
- * Resolve the Base the workspace is created from, exactly as `pnpm dev` and the
- * Electron E2E suite do.
- *
- * A source-checkout smoke rebuilds the phone from current code; pairing that
- * against the last published Base is the same stale-artifact mistake as pairing
- * it against a stale `dist`, and it fails outright once the host's workspace
- * ABI moves ahead of that publication. Resolution is TypeScript, so it runs
- * through the shared resolver rather than a second copy living here.
- */
-
-/**
- * Fail fast on a Base checkout the workspace cannot boot from.
- *
- * Every one of these conditions used to surface the same way: reset the phone,
- * pair, wait, and finally read a Node stack trace rendered on the device while
- * the smoke timed out on an unrelated phase two minutes later. They are all
- * decidable from the checkout alone in well under a second, so decide them
- * before touching the device.
- */
-async function assertBaseCheckoutBootable(checkout) {
-  let failure = null;
-  try {
-    await runCommandBuffer(process.execPath, [
-      "--import",
-      "tsx",
-      path.join(repoRoot, "scripts", "validate-template-repository.ts"),
-      checkout,
-      // Only conditions that stop a workspace booting — not publishing policy.
-      "--boot-only",
-    ]);
-  } catch (error) {
-    // runCommandBuffer rejects with the child's stderr embedded in the message.
-    failure = error instanceof Error ? error.message : String(error);
-  }
-  if (failure === null) return;
-  const detail = failure
-    .split("\n")
-    .filter((line) => line.trim() && !/^\s+at /.test(line))
-    .join("\n");
-  throw new Error(
-    `Base checkout at ${checkout} cannot boot a workspace:\n${detail}\n\n` +
-      `Fix the checkout (for a stale generated manifest: ` +
-      `npx tsx scripts/validate-template-repository.ts ${checkout} --fix), ` +
-      `or point this run elsewhere with --base-checkout <dir>.`
-  );
-}
-
-async function resolveDevelopmentBase(checkpointTarget, productionBase, explicitCheckout = null) {
-  const { stdout } = await runCommandBuffer(process.execPath, [
-    "--import",
-    "tsx",
-    path.join(repoRoot, "scripts", "resolve-development-base.ts"),
-    "--checkpoint-target",
-    checkpointTarget,
-    ...(explicitCheckout ? ["--checkout", explicitCheckout] : []),
-    ...(productionBase ? ["--production-base"] : []),
-  ]);
-  return JSON.parse(stdout.toString().trim());
 }
 
 async function adbCaptureBuffer(device, ...args) {
@@ -825,6 +941,18 @@ async function tapOptionalButtonByLabelPrefix(device, text, timeoutMs = 6_000) {
   return false;
 }
 
+async function dismissNavigationDrawerIfOpen(device) {
+  const xml = await dumpWindowXml(device);
+  if (!findNodeBounds(xml, "YOUR PANELS")) return false;
+  await adb(device, "shell", "input", "keyevent", "KEYCODE_BACK");
+  const deadlineMs = Date.now() + 5_000;
+  while (Date.now() < deadlineMs) {
+    if (!findNodeBounds(await dumpWindowXml(device), "YOUR PANELS")) return true;
+    await sleep(100);
+  }
+  throw new Error("Android navigation drawer remained open after the Back action");
+}
+
 let windowDumpTail = Promise.resolve();
 
 async function dumpWindowXml(device) {
@@ -842,42 +970,6 @@ async function dumpWindowXml(device) {
     () => undefined
   );
   return result;
-}
-
-async function tapFirstEditableControl(device, deadlineMs) {
-  let lastXml = "";
-  while (Date.now() < deadlineMs) {
-    const xml = await dumpWindowXml(device);
-    lastXml = xml;
-    const candidates = [];
-    for (const match of xml.matchAll(/<node\b[^>]*class="android\.widget\.EditText"[^>]*>/g)) {
-      const node = match[0];
-      if (readXmlAttribute(node, "enabled") !== "true") continue;
-      const boundsMatch = node.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-      if (!boundsMatch) continue;
-      const left = Number(boundsMatch[1]);
-      const top = Number(boundsMatch[2]);
-      const right = Number(boundsMatch[3]);
-      const bottom = Number(boundsMatch[4]);
-      if (right <= left || bottom <= top) continue;
-      candidates.push({
-        x: Math.round((left + right) / 2),
-        y: Math.round((top + bottom) / 2),
-        top,
-      });
-    }
-    candidates.sort((left, right) => left.top - right.top);
-    const target = candidates[0];
-    if (target) {
-      await adb(device, "shell", "input", "tap", String(target.x), String(target.y));
-      return;
-    }
-    await sleep(500);
-  }
-  throw new Error(
-    "Timed out waiting for an enabled Android text input. " +
-      `Last visible labels: ${summarizeLabels(collectWindowLabels(lastXml))}`
-  );
 }
 
 function findNodeBounds(xml, text, options = {}) {
@@ -1789,11 +1881,12 @@ async function main() {
           }
         : {}),
     };
-    const developmentBase = await resolveDevelopmentBase(
-      path.join(tempRoot, "base-checkpoint"),
-      options.productionBase,
-      options.baseCheckout
-    );
+    const developmentBase = await resolveDevelopmentBase({
+      repoRoot,
+      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+      productionBase: options.productionBase,
+      explicitCheckout: options.baseCheckout,
+    });
     if (developmentBase) {
       serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
       serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
@@ -1803,7 +1896,7 @@ async function main() {
       console.log(
         `[mobile-smoke] Base:      ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
       );
-      await assertBaseCheckoutBootable(developmentBase.checkout);
+      await assertBaseCheckoutBootable({ repoRoot, checkout: developmentBase.checkout });
     } else {
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
@@ -1943,6 +2036,7 @@ async function main() {
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
+      "workspace-panel-ready",
     ]) {
       await waitForPhaseTappingApprovals(options.device, logcat, phase, managedLaunchDeadlineMs);
     }
@@ -1952,9 +2046,20 @@ async function main() {
     // automatic onboarding turn and also exercises mobile WebView navigation.
     if (!options.noTap) {
       const chatLoadedCount = logcat.phaseCount("workspace-panel-webview-loaded");
-      await tapFirstEditableControl(options.device, managedLaunchDeadlineMs);
-      await adb(options.device, "shell", "input", "text", "Help%sme%sget%sstarted");
-      await tapButtonByText(options.device, "Send", managedLaunchDeadlineMs);
+      const chatReadyCount = logcat.phaseCount("workspace-panel-ready");
+      // UIAutomator cannot see DOM controls inside Android WebViews, and the
+      // launcher's autoFocus can be lost while React Native swaps the panel
+      // document into place. Focus the actual semantic DOM control through the
+      // debuggable internal WebView, then dispatch browser input events through
+      // Chromium's input domain. Waiting for the selected option proves React
+      // processed the text before Enter is delivered; no screen coordinates,
+      // native-focus assumptions, or timing sleeps are involved.
+      await submitPanelLauncherPrompt(
+        options.device,
+        options.packageName,
+        "Help me get started",
+        managedLaunchDeadlineMs
+      );
       // about/new navigates its existing managed panel to panels/chat, so this
       // is a WebView route transition rather than a second panel activation.
       await logcat.waitForPhaseAfter(
@@ -1962,7 +2067,21 @@ async function main() {
         chatLoadedCount,
         options.pairingTimeoutMs
       );
+      await logcat.waitForPhaseAfter(
+        "workspace-panel-ready",
+        chatReadyCount,
+        options.pairingTimeoutMs
+      );
+      await waitForChatPanelRendered(
+        options.device,
+        options.packageName,
+        "Help me get started",
+        managedLaunchDeadlineMs
+      );
       console.log("[mobile-smoke] Started a chat through the new-panel launcher");
+    }
+    if (await dismissNavigationDrawerIfOpen(options.device)) {
+      console.log("[mobile-smoke] Dismissed the native panel drawer before visual validation");
     }
     const panelResult = await captureAndAssertPanelVisible(
       options.device,
@@ -2009,6 +2128,12 @@ async function main() {
       "workspace-panel-ready",
       appRestartPanelReadyCount,
       options.pairingTimeoutMs
+    );
+    await waitForChatPanelRendered(
+      options.device,
+      options.packageName,
+      null,
+      Date.now() + options.pairingTimeoutMs
     );
     if (
       logcat.phaseCount("workspace-panel-cacheable-asset-pipe-miss") !==
@@ -2069,6 +2194,12 @@ async function main() {
       "workspace-panel-ready",
       serverRestartPanelReadyCount,
       options.pairingTimeoutMs
+    );
+    await waitForChatPanelRendered(
+      options.device,
+      options.packageName,
+      null,
+      Date.now() + options.pairingTimeoutMs
     );
     if (
       logcat.phaseCount("workspace-panel-cacheable-asset-pipe-miss") !==
