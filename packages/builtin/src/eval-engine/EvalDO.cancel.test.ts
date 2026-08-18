@@ -153,7 +153,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       () => {
         registerResidentSession(
           channelId: string,
-          receiver: (payload: unknown) => void | Promise<void>
+          receiver: (payload: unknown) => void | Promise<void>,
+          relationship: { targetId: string }
         ): {
           transport: {
             call<T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T>;
@@ -179,10 +180,14 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     let registration!: ReturnType<typeof runtimeRpc.registerResidentSession>;
     registration = activeExecution.run(execution, () =>
-      runtimeRpc.registerResidentSession("channel-eval", async (payload) => {
-        received.push(payload);
-        await registration.transport.call("target", "method", []);
-      })
+      runtimeRpc.registerResidentSession(
+        "channel-eval",
+        async (payload) => {
+          received.push(payload);
+          await registration.transport.call("target", "method", []);
+        },
+        { targetId: "channel-target" }
+      )
     );
 
     await expect(
@@ -355,6 +360,49 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
       expect.any(Object),
     ]);
+  });
+
+  it("retires resident channels through their recorded target without contextual rediscovery", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
+       VALUES ('channel-retire', 'channel-target', 1)`
+    );
+    const lifecycleCall = vi.fn((targetId: string, method: string) => {
+      if (targetId === "channel-target" && method === "relationshipState") {
+        return Promise.resolve({ revision: 4, active: true });
+      }
+      if (targetId === "channel-target" && method === "leave") {
+        return Promise.resolve({ revision: 5 });
+      }
+      return Promise.resolve(undefined);
+    });
+    Object.defineProperty(instance, "rpc", {
+      value: { selfId: "do:test:EvalDO:test-key", call: lifecycleCall },
+      configurable: true,
+    });
+
+    await expect(
+      instance.releaseForLifecycle({
+        epoch: "e-resident",
+        mode: "retire",
+        reason: "test",
+        deadlineMs: 1_000,
+      })
+    ).resolves.toEqual({ status: "ready" });
+
+    expect(lifecycleCall).not.toHaveBeenCalledWith(
+      "main",
+      "workers.resolveService",
+      expect.anything()
+    );
+    expect(lifecycleCall).toHaveBeenCalledWith("channel-target", "relationshipState", [
+      "do:test:EvalDO:test-key",
+    ]);
+    expect(lifecycleCall).toHaveBeenCalledWith("channel-target", "leave", [
+      { participantId: "do:test:EvalDO:test-key", revision: 5 },
+    ]);
+    expect(sql.exec(`SELECT * FROM resident_channel_memberships`).toArray()).toEqual([]);
   });
 
   it("cancels active durable runs before claiming lifecycle release", async () => {

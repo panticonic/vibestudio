@@ -30,7 +30,8 @@ export interface ResidentSessionRegistration {
 export interface ResidentSessionRegistrar {
   registerResidentSession(
     channelId: string,
-    receiver: ResidentSessionReceiver
+    receiver: ResidentSessionReceiver,
+    relationship: { targetId: string }
   ): ResidentSessionRegistration;
 }
 

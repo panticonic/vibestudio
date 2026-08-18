@@ -646,9 +646,17 @@ export class EvalDO extends DurableObjectBase {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS resident_channel_memberships (
         channel_id TEXT PRIMARY KEY,
+        target_id TEXT,
         registered_at INTEGER NOT NULL
       )
     `);
+    const residentMembershipColumns = this.sql
+      .exec(`PRAGMA table_info(resident_channel_memberships)`)
+      .toArray()
+      .map((row) => String(row["name"]));
+    if (!residentMembershipColumns.includes("target_id")) {
+      this.sql.exec(`ALTER TABLE resident_channel_memberships ADD COLUMN target_id TEXT`);
+    }
   }
 
   protected override requiredTables(): readonly string[] {
@@ -3339,13 +3347,16 @@ export class EvalDO extends DurableObjectBase {
       selfId: this.rpc.selfId,
       registerResidentSession: (
         channelId: string,
-        receiver: ResidentSessionReceiver
+        receiver: ResidentSessionReceiver,
+        relationship: { targetId: string }
       ): ResidentSessionRegistration => {
         const execution = this.requireActiveEvalExecution();
         this.sql.exec(
-          `INSERT OR IGNORE INTO resident_channel_memberships (channel_id, registered_at)
-           VALUES (?, ?)`,
+          `INSERT INTO resident_channel_memberships (channel_id, target_id, registered_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(channel_id) DO UPDATE SET target_id = excluded.target_id`,
           channelId,
+          relationship.targetId,
           Date.now()
         );
         const inFlight = new Set<Promise<void>>();
@@ -3455,11 +3466,14 @@ export class EvalDO extends DurableObjectBase {
 
   private async endResidentChannelMemberships(): Promise<void> {
     const channels = this.sql
-      .exec(`SELECT channel_id FROM resident_channel_memberships ORDER BY channel_id`)
+      .exec(`SELECT channel_id, target_id FROM resident_channel_memberships ORDER BY channel_id`)
       .toArray()
-      .map((row) => String(row["channel_id"]));
-    for (const channelId of channels) {
-      const targetId = await this.residentChannelTarget(channelId, this.rpc);
+      .map((row) => ({
+        channelId: String(row["channel_id"]),
+        targetId: typeof row["target_id"] === "string" ? row["target_id"] : null,
+      }));
+    for (const { channelId, targetId: recordedTargetId } of channels) {
+      const targetId = recordedTargetId ?? (await this.residentChannelTarget(channelId, this.rpc));
       const state = await this.rpc.call<{ revision: number; active: boolean }>(
         targetId,
         "relationshipState",
