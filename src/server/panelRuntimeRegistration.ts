@@ -570,6 +570,57 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
+    let chromiumFetchDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
+    container.registerManaged({
+      name: "chromiumFetch",
+      dependencies: ["cdpBridge"],
+      async start(resolve) {
+        const bridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
+        const { createChromiumFetchService } = await import("./services/chromiumFetchService.js");
+        const headlessHost = async (): Promise<string> => {
+          const select = () =>
+            deps.panelRuntimeCoordinator?.getDefaultCdpHostClient({
+              isHostAvailable: (hostConnectionId) => bridge.isProviderConnected(hostConnectionId),
+            }) ?? null;
+          let client = select();
+          if (client?.platform !== "headless" && deps.ensureDefaultHeadlessHost) {
+            await deps.ensureDefaultHeadlessHost();
+            client = select();
+          }
+          if (!client || client.platform !== "headless") {
+            throw new Error("Managed headless Chromium host is unavailable");
+          }
+          return client.hostConnectionId ?? client.clientSessionId;
+        };
+        chromiumFetchDefinition = createChromiumFetchService({
+          open: async (url, session) => {
+            const hostConnectionId = await headlessHost();
+            const response = (await bridge.sendProviderCommand(
+              hostConnectionId,
+              "chromiumFetch.open",
+              [{ url, session }]
+            )) as import("./services/chromiumFetchService.js").ChromiumFetchMetadata;
+            return { hostConnectionId, response };
+          },
+          read: (hostConnectionId, responseId, offset, limit) =>
+            bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.read", [
+              { responseId, offset, limit },
+            ]) as Promise<{ bytesBase64: string; done: boolean }>,
+          close: async (hostConnectionId, responseId) => {
+            await bridge.sendProviderCommand(hostConnectionId, "chromiumFetch.close", [
+              { responseId },
+            ]);
+          },
+        });
+      },
+      getServiceDefinition() {
+        if (!chromiumFetchDefinition) throw new Error("chromiumFetch service not initialized");
+        return chromiumFetchDefinition;
+      },
+    });
+  }
+
+  {
     // Server-resident panel identity for server-side callers and configured
     // agent tools. The chrome owner keeps composing locally from
     // `panel.getChromeState` because it already owns those presentation facts.

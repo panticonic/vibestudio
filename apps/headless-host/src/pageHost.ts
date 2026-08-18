@@ -180,7 +180,8 @@ export class PageHost {
 
   constructor(
     private readonly cdp: CdpConnection,
-    private readonly consoleHistory: ConsoleHistoryStore
+    private readonly consoleHistory: ConsoleHistoryStore,
+    private readonly beforeNavigate?: (browserContextId: string, url: string) => Promise<void>
   ) {
     cdp.onEvent((event) => this.routeEvent(event));
   }
@@ -251,6 +252,7 @@ export class PageHost {
     this.pages.set(input.slotId, page);
 
     try {
+      await this.beforeNavigate?.(browserContextId, input.panelUrl);
       const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(input.panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
       await this.cdp.send(
         "Page.addScriptToEvaluateOnNewDocument",
@@ -330,6 +332,8 @@ export class PageHost {
   async reloadPanel(slotId: string, panelUrl: string, panelInit: unknown): Promise<void> {
     const page = this.requirePage(slotId);
     page.panelUrl = panelUrl;
+    const browserContextId = this.contextsById.get(page.contextId);
+    if (browserContextId) await this.beforeNavigate?.(browserContextId, panelUrl);
     const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
     await this.cdp.send(
       "Page.addScriptToEvaluateOnNewDocument",
@@ -383,6 +387,8 @@ export class PageHost {
     switch (action) {
       case "navigate": {
         if (!url) throw new Error("navigate requires a url");
+        const browserContextId = this.contextsById.get(page.contextId);
+        if (browserContextId) await this.beforeNavigate?.(browserContextId, url);
         await this.navigateAndWait(
           slotId,
           "navigate",

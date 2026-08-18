@@ -25,6 +25,7 @@ export interface HostBridgeHandlers {
   ): Promise<unknown>;
   navCommand(targetId: string, action: string, url?: string): Promise<void>;
   hostCommand(targetId: string, action: string, args: unknown[]): Promise<unknown>;
+  hostOperation(action: string, args: unknown[]): Promise<unknown>;
   detach(targetId: string): Promise<void>;
   /** Server rejected our registration for this target (lease moved etc.). */
   registerRejected(targetId: string, reason: string): void;
@@ -292,6 +293,21 @@ export class CdpHostBridgeClient {
             type: "host:error",
             requestId,
             targetId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+      case "host:operation": {
+        const { requestId, action, args } = message;
+        if (!requestId || !action) return;
+        try {
+          const result = await this.opts.handlers.hostOperation(action, args ?? []);
+          this.send({ type: "host:operation-result", requestId, result });
+        } catch (error) {
+          this.send({
+            type: "host:operation-error",
+            requestId,
             error: error instanceof Error ? error.message : String(error),
           });
         }

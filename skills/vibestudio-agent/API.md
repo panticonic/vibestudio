@@ -131,6 +131,19 @@ Authority principals: `code`, `host`, `user`
 | `build.getPanelMetadata` | Launcher metadata for a panel unit resolved from the caller-selected exact workspace ref, or null if absent or not a panel. |
 | `build.listSkills` | List available workspace skill packages that can be loaded via the eval imports parameter. |
 
+## `chromiumFetch`
+
+Managed Chromium transport for web content retrieval
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `chromiumFetch.openPublic` | Open a cookie-free URL through the managed Chromium host. |
+| `chromiumFetch.openBrowser` | Open a URL through Chromium with the user's canonical browser cookies. |
+| `chromiumFetch.read` | Read an owner-bound chunk from an open Chromium response. |
+| `chromiumFetch.close` | Close an owner-bound Chromium response. |
+
 ## `contentTrust`
 
 Human-owned exact content vouches and bounded trust policies

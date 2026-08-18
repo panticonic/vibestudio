@@ -421,6 +421,40 @@ export class CdpBridge {
     });
   }
 
+  /** Send a native operation to one authenticated provider without inventing a panel target. */
+  async sendProviderCommand(
+    hostConnectionId: string,
+    action: string,
+    args: unknown[] = []
+  ): Promise<unknown> {
+    const provider = this.providers.get(hostConnectionId);
+    if (!provider || provider.readyState !== WebSocket.OPEN) {
+      throw new Error("CDP host provider not connected");
+    }
+    const requestId = String(this.nextRequestId++);
+    const targetId = hostConnectionId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingNavCommands.delete(requestId);
+        reject(new Error(`Host command timed out: ${action}`));
+      }, NAV_COMMAND_TIMEOUT_MS);
+      this.pendingNavCommands.set(requestId, {
+        resolve,
+        reject,
+        timer,
+        targetId,
+        providerHostConnectionId: hostConnectionId,
+      });
+      try {
+        provider.send(JSON.stringify({ type: "host:operation", requestId, action, args }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pendingNavCommands.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
   isProviderConnected(hostConnectionId: string): boolean {
     return this.providers.get(hostConnectionId)?.readyState === WebSocket.OPEN;
   }
@@ -777,6 +811,30 @@ export class CdpBridge {
           if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
           clearTimeout(pending.timer);
           pending.reject(new Error(msg.error ?? "Host command failed"));
+          this.pendingNavCommands.delete(msg.requestId);
+        }
+        break;
+      }
+
+      case "host:operation-result": {
+        if (typeof msg.requestId !== "string") break;
+        const pending = this.pendingNavCommands.get(msg.requestId);
+        if (pending) {
+          if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
+          clearTimeout(pending.timer);
+          pending.resolve(msg.result);
+          this.pendingNavCommands.delete(msg.requestId);
+        }
+        break;
+      }
+
+      case "host:operation-error": {
+        if (typeof msg.requestId !== "string") break;
+        const pending = this.pendingNavCommands.get(msg.requestId);
+        if (pending) {
+          if (!this.isPendingCommandProvider(pending, hostConnectionId)) break;
+          clearTimeout(pending.timer);
+          pending.reject(new Error(msg.error ?? "Host operation failed"));
           this.pendingNavCommands.delete(msg.requestId);
         }
         break;

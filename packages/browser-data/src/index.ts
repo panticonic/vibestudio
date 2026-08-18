@@ -113,6 +113,8 @@ export {
   normalizeCookieExpirationSeconds,
 } from "./cookies.js";
 export type { BrowserCookiePartitionKey } from "./cookies.js";
+export { browserCookieFromChromium, browserCookieToChromium } from "./chromiumCookies.js";
+export type { ChromiumCookie, ChromiumCookieParam } from "./chromiumCookies.js";
 export type {
   ApplyCookieMutationsRequest,
   BrowserCookieInput,

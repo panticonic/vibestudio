@@ -1,49 +1,11 @@
 import { session, WebContentsView, type Session } from "electron";
 import {
-  normalizeBrowserCookiePartitionKey,
-  normalizeCookieExpirationSeconds,
+  browserCookieFromChromium,
+  browserCookieToChromium,
   type BrowserCookieInput,
   type BrowserCookieKey,
+  type ChromiumCookie as CdpCookie,
 } from "@vibestudio/browser-data";
-
-type CdpSameSite = "Strict" | "Lax" | "None";
-type CdpSourceScheme = "Unset" | "NonSecure" | "Secure";
-
-interface CdpCookiePartitionKey {
-  topLevelSite: string;
-  hasCrossSiteAncestor: boolean;
-}
-
-interface CdpCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires: number;
-  httpOnly: boolean;
-  secure: boolean;
-  session: boolean;
-  sameSite?: CdpSameSite;
-  sourceScheme?: CdpSourceScheme;
-  sourcePort?: number;
-  partitionKey?: CdpCookiePartitionKey;
-  partitionKeyOpaque?: boolean;
-}
-
-interface CdpCookieParam {
-  name: string;
-  value: string;
-  url: string;
-  domain?: string;
-  path: string;
-  secure: boolean;
-  httpOnly: boolean;
-  sameSite?: CdpSameSite;
-  expires?: number;
-  sourceScheme?: CdpSourceScheme;
-  sourcePort?: number;
-  partitionKey?: CdpCookiePartitionKey;
-}
 
 interface CdpSetCookieResult {
   success: boolean;
@@ -122,7 +84,7 @@ export class ChromiumCookieJar implements BrowserCookieJar {
         unsupportedOpaquePartitions += 1;
         continue;
       }
-      cookies.push(fromCdpCookie(cookie));
+      cookies.push(browserCookieFromChromium(cookie));
     }
     return { cookies, unsupportedOpaquePartitions };
   }
@@ -130,7 +92,7 @@ export class ChromiumCookieJar implements BrowserCookieJar {
   async set(cookie: BrowserCookieInput): Promise<void> {
     const result = (await this.send(
       "Network.setCookie",
-      toCdpCookie(cookie)
+      browserCookieToChromium(cookie)
     )) as CdpSetCookieResult;
     if (!result.success) {
       throw new Error(`Chromium rejected cookie ${cookie.name} for ${cookie.domain}`);
@@ -170,106 +132,5 @@ export class ChromiumCookieJar implements BrowserCookieJar {
   }
 }
 
-export function fromCdpCookie(cookie: CdpCookie): BrowserCookieInput {
-  const expirationDate = normalizeCookieExpirationSeconds(
-    cookie.session || cookie.expires < 0 ? undefined : cookie.expires
-  );
-  return {
-    name: cookie.name,
-    value: cookie.value,
-    domain: cookie.domain.toLocaleLowerCase(),
-    hostOnly: !cookie.domain.startsWith("."),
-    path: cookie.path || "/",
-    ...(cookie.partitionKey
-      ? {
-          partitionKey: normalizeBrowserCookiePartitionKey({
-            topLevelSite: cookie.partitionKey.topLevelSite,
-            hasCrossSiteAncestor: cookie.partitionKey.hasCrossSiteAncestor,
-          }),
-        }
-      : {}),
-    secure: cookie.secure,
-    httpOnly: cookie.httpOnly,
-    sameSite: fromCdpSameSite(cookie.sameSite),
-    ...(expirationDate === undefined ? {} : { expirationDate }),
-    sourceScheme: fromCdpSourceScheme(cookie.sourceScheme, cookie.secure),
-    sourcePort: cookie.sourcePort ?? (cookie.secure ? 443 : 80),
-  };
-}
-
-export function toCdpCookie(cookie: BrowserCookieInput): CdpCookieParam {
-  const expirationDate = normalizeCookieExpirationSeconds(cookie.expirationDate);
-  const sameSite = toCdpSameSite(cookie.sameSite);
-  return {
-    url: cookieUrl(cookie),
-    name: cookie.name,
-    value: cookie.value,
-    ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
-    path: cookie.path || "/",
-    secure: cookie.secure,
-    httpOnly: cookie.httpOnly,
-    ...(sameSite ? { sameSite } : {}),
-    ...(expirationDate === undefined ? {} : { expires: expirationDate }),
-    ...(cookie.sourceScheme ? { sourceScheme: toCdpSourceScheme(cookie.sourceScheme) } : {}),
-    ...(cookie.sourcePort === undefined ? {} : { sourcePort: cookie.sourcePort }),
-    ...(cookie.partitionKey
-      ? { partitionKey: normalizeBrowserCookiePartitionKey(cookie.partitionKey) }
-      : {}),
-  };
-}
-
-function cookieUrl(cookie: Pick<BrowserCookieInput, "domain" | "path" | "secure">): string {
-  return `${cookie.secure ? "https" : "http"}://${cookie.domain.replace(/^\./, "")}${
-    cookie.path || "/"
-  }`;
-}
-
-function fromCdpSameSite(value: CdpSameSite | undefined): BrowserCookieInput["sameSite"] {
-  switch (value) {
-    case "Strict":
-      return "strict";
-    case "Lax":
-      return "lax";
-    case "None":
-      return "no_restriction";
-    default:
-      return "unspecified";
-  }
-}
-
-function toCdpSameSite(value: BrowserCookieInput["sameSite"]): CdpSameSite | undefined {
-  switch (value) {
-    case "strict":
-      return "Strict";
-    case "lax":
-      return "Lax";
-    case "no_restriction":
-      return "None";
-    default:
-      return undefined;
-  }
-}
-
-function fromCdpSourceScheme(value: CdpSourceScheme | undefined, secure: boolean): string {
-  switch (value) {
-    case "Secure":
-      return "secure";
-    case "NonSecure":
-      return "non_secure";
-    case "Unset":
-      return "unset";
-    default:
-      return secure ? "secure" : "non_secure";
-  }
-}
-
-function toCdpSourceScheme(value: string): CdpSourceScheme {
-  switch (value) {
-    case "secure":
-      return "Secure";
-    case "non_secure":
-      return "NonSecure";
-    default:
-      return "Unset";
-  }
-}
+export const fromCdpCookie = browserCookieFromChromium;
+export const toCdpCookie = browserCookieToChromium;

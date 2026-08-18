@@ -387,6 +387,36 @@ describe("CdpBridge authentication", () => {
     await expect(commandPromise).resolves.toBeNull();
   });
 
+  it("routes host-scoped operations without a panel target", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProviderOnly(harness, "headless-host");
+
+    const operationPromise = harness.bridge.sendProviderCommand(
+      "headless-host",
+      "chromiumFetch.open",
+      [{ url: "https://example.com", session: "public" }]
+    );
+    const operation = await waitForJson(provider);
+
+    expect(operation).toMatchObject({
+      type: "host:operation",
+      action: "chromiumFetch.open",
+      args: [{ url: "https://example.com", session: "public" }],
+      requestId: expect.any(String),
+    });
+    expect(operation).not.toHaveProperty("targetId");
+
+    provider.send(
+      JSON.stringify({
+        type: "host:operation-result",
+        requestId: operation["requestId"],
+        result: { status: 200 },
+      })
+    );
+
+    await expect(operationPromise).resolves.toEqual({ status: 200 });
+  });
+
   it("lets model-aware navigation resolve after the old target unregisters", async () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");

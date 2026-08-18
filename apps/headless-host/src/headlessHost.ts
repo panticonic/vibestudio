@@ -30,6 +30,8 @@ import { CdpConnection } from "./browser/cdpConnection.js";
 import { PageHost } from "./pageHost.js";
 import { ConsoleHistoryStore } from "./consoleHistory.js";
 import { CdpHostBridgeClient } from "./hostBridge.js";
+import { BrowserCookieProjector } from "./browserCookieProjector.js";
+import { ChromiumFetchHost } from "./chromiumFetchHost.js";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 
 const log = createDevLogger("HeadlessHost");
@@ -46,6 +48,7 @@ export class HeadlessHost implements PanelHost {
   private cdp: CdpConnection | null = null;
   private pages: PageHost | null = null;
   private bridge: CdpHostBridgeClient | null = null;
+  private fetchHost: ChromiumFetchHost | null = null;
   private readonly consoleHistory = new ConsoleHistoryStore();
   private tabCounter = 0;
   private readonly tabIds = new Map<string, number>();
@@ -181,7 +184,13 @@ export class HeadlessHost implements PanelHost {
       profileDir: this.config.profileDir,
     });
     this.cdp = await CdpConnection.connect(this.browser.wsEndpoint);
-    this.pages = new PageHost(this.cdp, this.consoleHistory);
+    const cookieProjector = new BrowserCookieProjector(this.cdp, this.connection!.rpc);
+    this.fetchHost = new ChromiumFetchHost(this.cdp, cookieProjector);
+    this.pages = new PageHost(this.cdp, this.consoleHistory, (browserContextId, url) =>
+      cookieProjector.prepare(browserContextId, url).catch((error) => {
+        log.warn(`browser cookies were unavailable for a headless panel: ${String(error)}`);
+      })
+    );
     this.pages.onViewChanged((slotId) => {
       void this.reportPageObservation(slotId);
     });
@@ -287,6 +296,7 @@ export class HeadlessHost implements PanelHost {
             url
           ),
         hostCommand: (targetId, action, args) => this.handleHostCommand(targetId, action, args),
+        hostOperation: (action, args) => this.handleHostOperation(action, args),
         detach: (targetId) => this.pages!.detachRelay(targetId),
         registerRejected: (targetId, reason) => {
           void this.releaseAndUnload(targetId, `register rejected: ${reason}`);
@@ -316,9 +326,9 @@ export class HeadlessHost implements PanelHost {
     action: string,
     args: unknown[]
   ): Promise<unknown> {
-    const panelSlotId = asPanelSlotId(slotId);
     switch (action) {
       case "panelObservation": {
+        const panelSlotId = asPanelSlotId(slotId);
         if (!this.tracker.heldLease(panelSlotId)) {
           throw new Error(`no lease held for panel ${slotId}`);
         }
@@ -355,6 +365,7 @@ export class HeadlessHost implements PanelHost {
           (args[1] ?? {}) as Parameters<PageHost["evaluate"]>[2]
         );
       case "rebuildPanel": {
+        const panelSlotId = asPanelSlotId(slotId);
         const lease = this.tracker.heldLease(panelSlotId);
         if (!lease) throw new Error(`no lease held for panel ${slotId}`);
         const info = await this.panelInit!.getPanelLoadInfo(
@@ -366,6 +377,7 @@ export class HeadlessHost implements PanelHost {
         return { action, status: "reloaded" };
       }
       case "reloadPanel": {
+        const panelSlotId = asPanelSlotId(slotId);
         const lease = this.tracker.heldLease(panelSlotId);
         if (!lease) throw new Error(`no lease held for panel ${slotId}`);
         const info = await this.panelInit!.getPanelLoadInfo(
@@ -384,6 +396,7 @@ export class HeadlessHost implements PanelHost {
         };
       }
       case "navigatePanel": {
+        const panelSlotId = asPanelSlotId(slotId);
         if (!this.tracker.heldLease(panelSlotId)) {
           throw new Error(`no lease held for panel ${slotId}`);
         }
@@ -409,6 +422,7 @@ export class HeadlessHost implements PanelHost {
         return { id: result.panelId, title: result.title };
       }
       case "navigatePanelHistory": {
+        const panelSlotId = asPanelSlotId(slotId);
         if (!this.tracker.heldLease(panelSlotId)) {
           throw new Error(`no lease held for panel ${slotId}`);
         }
@@ -423,6 +437,39 @@ export class HeadlessHost implements PanelHost {
         throw new Error("openDevTools is not supported on a headless host");
       default:
         throw new Error(`Unknown host command: ${action}`);
+    }
+  }
+
+  private handleHostOperation(action: string, args: unknown[]): Promise<unknown> | unknown {
+    switch (action) {
+      case "chromiumFetch.open": {
+        const input = (args[0] ?? {}) as { url?: unknown; session?: unknown };
+        if (typeof input.url !== "string") throw new Error("chromiumFetch.open requires a URL");
+        const session = input.session === "browser" ? "browser" : "public";
+        return this.fetchHost!.open(input.url, session);
+      }
+      case "chromiumFetch.read": {
+        const input = (args[0] ?? {}) as {
+          responseId?: unknown;
+          offset?: unknown;
+          limit?: unknown;
+        };
+        if (typeof input.responseId !== "string") {
+          throw new Error("chromiumFetch.read requires a response id");
+        }
+        return this.fetchHost!.read(
+          input.responseId,
+          typeof input.offset === "number" ? input.offset : 0,
+          typeof input.limit === "number" ? input.limit : 256 * 1024
+        );
+      }
+      case "chromiumFetch.close": {
+        const input = (args[0] ?? {}) as { responseId?: unknown };
+        if (typeof input.responseId === "string") this.fetchHost!.close(input.responseId);
+        return undefined;
+      }
+      default:
+        throw new Error(`Unknown host operation: ${action}`);
     }
   }
 

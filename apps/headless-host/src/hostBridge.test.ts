@@ -58,6 +58,7 @@ function handlers(overrides: Partial<HostBridgeHandlers> = {}): HostBridgeHandle
     cdpCommand: vi.fn(async () => ({ ok: true })),
     navCommand: vi.fn(async () => undefined),
     hostCommand: vi.fn(async () => ({ nodes: [] })),
+    hostOperation: vi.fn(async () => ({ ok: true })),
     detach: vi.fn(async () => undefined),
     registerRejected: vi.fn(),
     ...overrides,
@@ -327,6 +328,20 @@ describe("CdpHostBridgeClient", () => {
     });
     expect(await server.next()).toMatchObject({ type: "host:result", requestId: "r3" });
     expect(h.hostCommand).toHaveBeenCalledWith("panel-1", "accessibilityTree", []);
+
+    server.send({
+      type: "host:operation",
+      requestId: "op-1",
+      action: "chromiumFetch.open",
+      args: [{ url: "https://example.com" }],
+    });
+    expect(await server.next()).toMatchObject({
+      type: "host:operation-result",
+      requestId: "op-1",
+    });
+    expect(h.hostOperation).toHaveBeenCalledWith("chromiumFetch.open", [
+      { url: "https://example.com" },
+    ]);
 
     server.send({ type: "cdp:detach", targetId: "panel-1" });
     server.send({ type: "cdp:register-rejected", targetId: "panel-1", reason: "lease_mismatch" });

@@ -316,6 +316,9 @@ importers:
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../packages/browser-data
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../../packages/dev-log
