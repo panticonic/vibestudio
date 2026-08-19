@@ -20,8 +20,8 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
-function configureWithoutBrowserDataExtension(workspacePath: string): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
+function configureWithoutBrowserDataExtension(sourceRoot: string): void {
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as {
     initPanels?: Array<{ source: string }>;
     extensions?: Array<{ source: string }>;
@@ -46,8 +46,9 @@ test.describe("Browser panel startup", () => {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Browser fixture did not listen");
     const url = `http://127.0.0.1:${address.port}/`;
-    const workspacePath = createManagedTestWorkspace();
-    configureWithoutBrowserDataExtension(workspacePath);
+    const workspacePath = await createManagedTestWorkspace({
+      configureSource: configureWithoutBrowserDataExtension,
+    });
     let testApp: TestApp | null = null;
 
     try {

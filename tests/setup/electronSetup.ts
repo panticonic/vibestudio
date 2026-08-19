@@ -37,6 +37,9 @@ import {
 } from "./automationContext.js";
 import { registerRunCleanupPath, releaseRunCleanupPath } from "./e2eCleanupLedger.js";
 import {
+  DEV_ROOT_TEMPLATE_CHECKOUT_ENV,
+  DEV_ROOT_TEMPLATE_ENV,
+  deriveE2eRootTemplate,
   requireE2eRootTemplate,
   writeWorkspaceCreationDescriptor,
   writeWorkspaceMaterializationReceipt,
@@ -129,6 +132,25 @@ interface ManagedWorkspaceInfo {
   env: Record<string, string>;
 }
 
+/**
+ * A case that customized its source names a root of its own, so its launch has
+ * to acquire that root rather than the run-scoped one every other case uses.
+ */
+const CASE_ROOT_TEMPLATE_FILE = "case-root-template.json";
+
+function readCaseRootTemplateEnv(testRoot: string): Record<string, string> {
+  const selectionPath = path.join(testRoot, CASE_ROOT_TEMPLATE_FILE);
+  if (!fs.existsSync(selectionPath)) return {};
+  const selection = JSON.parse(fs.readFileSync(selectionPath, "utf8")) as {
+    pin: unknown;
+    checkout: string;
+  };
+  return {
+    [DEV_ROOT_TEMPLATE_ENV]: JSON.stringify(selection.pin),
+    [DEV_ROOT_TEMPLATE_CHECKOUT_ENV]: selection.checkout,
+  };
+}
+
 const SHARED_MACHINE_CACHE_DIRS = ["npm-cache", "external-deps", "extension-runtime-deps"] as const;
 
 function linkSharedMachineCaches(isolatedCentralDataDir: string): void {
@@ -190,7 +212,7 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
   return {
     workspaceName,
     testRoot,
-    env: getTestEnv(testRoot),
+    env: { ...getTestEnv(testRoot), ...readCaseRootTemplateEnv(testRoot) },
   };
 }
 
@@ -232,17 +254,35 @@ function initializeUnitGitRepos(sourceRoot: string): void {
   }
 }
 
-export function createManagedTestWorkspace(
+export async function createManagedTestWorkspace(
   options: {
     configureSource?: (sourceRoot: string) => void;
   } = {}
-): string {
-  const rootTemplate = requireE2eRootTemplate();
+): Promise<string> {
+  const runRootTemplate = requireE2eRootTemplate();
   const runTempRoot = process.env[E2E_TEMP_ROOT_ENV];
   const testRoot = fs.mkdtempSync(
     runTempRoot ? path.join(runTempRoot, "case-") : path.join(os.tmpdir(), "vibestudio-e2e-")
   );
   registerRunCleanupPath(testRoot);
+  // Source customization is a property of the root, not an edit applied to a
+  // copy of it: the workspace imports its semantic state from the pinned tree,
+  // so anything the case wants the runtime to read has to be committed into a
+  // root of its own before the workspace names it.
+  const rootTemplate = options.configureSource
+    ? await deriveE2eRootTemplate({
+        base: runRootTemplate,
+        workRoot: path.join(testRoot, "case-root-template"),
+        configureSource: options.configureSource,
+      })
+    : runRootTemplate;
+  if (rootTemplate !== runRootTemplate) {
+    fs.writeFileSync(
+      path.join(testRoot, CASE_ROOT_TEMPLATE_FILE),
+      `${JSON.stringify({ pin: rootTemplate.pin, checkout: rootTemplate.checkout }, null, 2)}\n`,
+      "utf8"
+    );
+  }
   const env = getTestEnv(testRoot);
   const workspaceName = `e2e_${crypto.randomBytes(6).toString("hex")}`;
   const workspaceDir = path.join(getCentralDataDirFromEnv(env), "workspaces", workspaceName);
@@ -270,10 +310,6 @@ export function createManagedTestWorkspace(
     fs.mkdirSync(path.join(sourceRoot, dir), { recursive: true });
   }
 
-  // Source customization belongs to workspace creation, before unit commits
-  // and semantic-state discovery. Mutating the copied source afterward can
-  // manufacture a state that has no canonical content-store tree.
-  options.configureSource?.(sourceRoot);
   initializeUnitGitRepos(sourceRoot);
 
   for (const dir of WORKSPACE_STATE_DIRS) {
@@ -332,7 +368,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   } = options;
 
   const projectRoot = path.resolve(__dirname, "../..");
-  const workspacePath = workspace ?? createManagedTestWorkspace();
+  const workspacePath = workspace ?? (await createManagedTestWorkspace());
   const workspaceInfo = getWorkspaceInfo(workspacePath);
   const ownsWorkspace = workspace === undefined;
 

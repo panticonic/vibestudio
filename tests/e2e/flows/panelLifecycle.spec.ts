@@ -28,7 +28,7 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 test.describe("Panel Rebuild Lifecycle", () => {
   test("visible desktop rebuild replaces the exact attempt and reaches ready", async () => {
     test.setTimeout(300_000);
-    const workspacePath = createManagedTestWorkspace();
+    const workspacePath = await createManagedTestWorkspace();
     let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
 
     try {
@@ -186,7 +186,7 @@ test.describe("Panel Persistence", () => {
   // This test launches the app twice, so it needs a longer timeout
   test("panels persist across app restarts", async () => {
     test.setTimeout(480_000); // Double cold app launch plus graceful server teardown.
-    const workspacePath = createManagedTestWorkspace();
+    const workspacePath = await createManagedTestWorkspace();
     let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
 
     try {

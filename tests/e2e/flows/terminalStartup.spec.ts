@@ -339,13 +339,15 @@ async function approvePendingTerminalWork(
   }
 }
 
-function createTerminalOnlyWorkspace(): string {
-  const workspace = createManagedTestWorkspace();
-  const configPath = path.join(workspace, "source", "meta", "vibestudio.yml");
+function configureTerminalOnlySource(sourceRoot: string): void {
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [{ source: "panels/terminal" }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
-  return workspace;
+}
+
+function createTerminalOnlyWorkspace(): Promise<string> {
+  return createManagedTestWorkspace({ configureSource: configureTerminalOnlySource });
 }
 
 type TerminalSession = {
@@ -762,7 +764,7 @@ test.describe("Terminal Startup", () => {
 
   test("opens one usable terminal after required approvals are resolved", async () => {
     test.setTimeout(240_000);
-    workspacePath = createTerminalOnlyWorkspace();
+    workspacePath = await createTerminalOnlyWorkspace();
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 90_000 });
     const { app } = testApp;
     const resolvedApprovals: PendingApproval[] = [];

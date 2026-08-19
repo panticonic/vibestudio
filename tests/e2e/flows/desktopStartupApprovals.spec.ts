@@ -1537,7 +1537,7 @@ test.describe("Desktop Startup Approvals", () => {
 
   test("launch gate starts shell, then in-app approvals unblock initial chats", async () => {
     let configuredInitialPrompt = "";
-    workspaceDir = createManagedTestWorkspace({
+    workspaceDir = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => {
         configuredInitialPrompt = configureWorkspaceSourceForApproval(sourceRoot);
       },
@@ -1620,7 +1620,7 @@ test.describe("Desktop Startup Approvals", () => {
   test("an ongoing agent chat pauses for scoped network authority and resumes the same turn", async () => {
     const prompt =
       "Read skills/onboarding/SKILL.md first. Then run a short sandbox eval that fetches https://example.com and tell me the page title.";
-    workspaceDir = createManagedTestWorkspace({
+    workspaceDir = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot, prompt);
       },
@@ -1744,7 +1744,7 @@ test.describe("Desktop Startup Approvals", () => {
     // Keep this lifecycle test independent of model credentials and agent
     // execution: it targets the app/extension startup grant and exact shell
     // incarnation restored on the second process.
-    workspaceDir = createManagedTestWorkspace({
+    workspaceDir = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot);
         const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");

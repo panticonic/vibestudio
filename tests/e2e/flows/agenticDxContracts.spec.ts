@@ -17,7 +17,7 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 test.describe("agentic DX contracts", () => {
   test("Electron preserves directory reads and bounded causal diagnostics end to end", async () => {
     test.setTimeout(240_000);
-    const workspacePath = createManagedTestWorkspace();
+    const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
       await approvePendingStartupUnits(testApp.app, 75_000);
@@ -106,7 +106,7 @@ test.describe("agentic DX contracts", () => {
 
   test("Electron captures hosted-panel pixels and historical console diagnostics end to end", async () => {
     test.setTimeout(240_000);
-    const workspacePath = createManagedTestWorkspace();
+    const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
       await approvePendingStartupUnits(testApp.app, 75_000);

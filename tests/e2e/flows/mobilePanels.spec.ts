@@ -54,10 +54,10 @@ type PendingApproval = {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function writeInitPanelsConfig(
-  workspacePath: string,
+  sourceRoot: string,
   panels: Array<{ source: string; stateArgs?: Record<string, unknown> }>
 ): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = panels;
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
@@ -66,8 +66,9 @@ function writeInitPanelsConfig(
 async function launchMobileTestApp(
   panels: Array<{ source: string; stateArgs?: Record<string, unknown> }> = [{ source: "about/new" }]
 ): Promise<TestApp> {
-  const workspacePath = createManagedTestWorkspace();
-  writeInitPanelsConfig(workspacePath, panels);
+  const workspacePath = await createManagedTestWorkspace({
+    configureSource: (sourceRoot) => writeInitPanelsConfig(sourceRoot, panels),
+  });
   let testApp: TestApp | null = null;
   try {
     testApp = await launchTestApp({

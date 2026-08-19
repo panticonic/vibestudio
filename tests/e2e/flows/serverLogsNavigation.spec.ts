@@ -24,7 +24,7 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function configureInitialPanel(sourceRoot: string): void {
-  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [{ source: "about/new" }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
@@ -37,7 +37,7 @@ async function clickServerLogs(app: ElectronApplication, panelId: string): Promi
 test.describe("Server Logs navigation", () => {
   test("opens from About/New without leaving a stuck pending spinner", async () => {
     test.setTimeout(240_000);
-    const workspacePath = createManagedTestWorkspace({ configureSource: configureInitialPanel });
+    const workspacePath = await createManagedTestWorkspace({ configureSource: configureInitialPanel });
     let testApp: TestApp | null = null;
     try {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });

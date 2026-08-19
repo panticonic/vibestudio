@@ -26,7 +26,7 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function configureInitialPanel(sourceRoot: string, source: string): void {
-  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
@@ -154,7 +154,7 @@ async function severePanelDiagnostics(
 test.describe("Panel navigation convergence", () => {
   test("same-panel navigation converges without leaked failures or stuck build state", async () => {
     test.setTimeout(240_000);
-    const workspacePath = createManagedTestWorkspace({
+    const workspacePath = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/new"),
     });
     let testApp: TestApp | null = null;

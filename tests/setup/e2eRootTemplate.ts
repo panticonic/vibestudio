@@ -13,14 +13,23 @@
  * creator through the environment, exactly like the other run-scoped paths.
  */
 
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { GitClient } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import {
+  canonicalTemplateYaml,
+  parseTemplateManifestContent,
+  rootRuntimeFromTemplateManifest,
+} from "@vibestudio/workspace/templateManifest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { resolveDevelopmentBaseSelection } from "../../src/dev/developmentBaseSelection.js";
-import { seedRootTemplateSnapshotFromCheckout } from "../../src/server/acquireRootTemplateSnapshot.js";
+import {
+  inspectRootTemplateCheckout,
+  seedRootTemplateSnapshotFromCheckout,
+} from "../../src/server/acquireRootTemplateSnapshot.js";
 import { WorkspaceRootTemplateBootstrap } from "../../src/server/workspaceRootTemplateBootstrap.js";
 
 export const E2E_ROOT_TEMPLATE_ENV = "VIBESTUDIO_E2E_ROOT_TEMPLATE";
@@ -74,10 +83,31 @@ export async function prepareE2eRootTemplate(input: {
   const gitClient = new GitClient();
 
   const templateRoot = path.join(input.runTempRoot, "root-template");
-  const statePath = path.join(templateRoot, "state");
   const sourcePath = path.join(templateRoot, "source");
+  await materializeRootTemplateSource({
+    pin,
+    checkout: selection.checkout,
+    templateRoot,
+    gitClient,
+  });
+
+  return { pin, checkout: selection.checkout, materializedSource: sourcePath };
+}
+
+/**
+ * Materialize one exact root into `<templateRoot>/source`, the tree per-case
+ * workspaces are copied from.
+ */
+async function materializeRootTemplateSource(input: {
+  pin: WorkspaceTemplatePin;
+  checkout: string;
+  templateRoot: string;
+  gitClient: GitClient;
+}): Promise<string> {
+  const statePath = path.join(input.templateRoot, "state");
+  const sourcePath = path.join(input.templateRoot, "source");
   fs.mkdirSync(sourcePath, { recursive: true });
-  writeWorkspaceCreationDescriptor(statePath, TEMPLATE_PREPARATION_WORKSPACE_ID, pin);
+  writeWorkspaceCreationDescriptor(statePath, TEMPLATE_PREPARATION_WORKSPACE_ID, input.pin);
   const bootstrap = new WorkspaceRootTemplateBootstrap({
     workspaceId: TEMPLATE_PREPARATION_WORKSPACE_ID,
     statePath,
@@ -87,15 +117,95 @@ export async function prepareE2eRootTemplate(input: {
     acquire: (requested) =>
       seedRootTemplateSnapshotFromCheckout({
         statePath,
-        checkout: selection.checkout,
+        checkout: input.checkout,
         pin: requested,
-        git: gitClient,
+        git: input.gitClient,
         sink: hashOnlySink,
       }),
   });
   await bootstrap.prepareSource();
+  return sourcePath;
+}
 
-  return { pin, checkout: selection.checkout, materializedSource: sourcePath };
+function git(dir: string, args: readonly string[], env?: NodeJS.ProcessEnv): void {
+  execFileSync("git", args, { cwd: dir, stdio: "ignore", ...(env ? { env } : {}) });
+}
+
+/**
+ * Republish `meta/vibestudio.yml` from the authored template manifest.
+ *
+ * In a root checkout the runtime manifest is generated, not authored: the root
+ * bootstrap refuses any tree whose `meta/vibestudio.yml` is not the canonical
+ * flattening of `meta/template.yml`. A case therefore edits the authored
+ * manifest and the generated one is republished from it, exactly as the
+ * template tooling does.
+ */
+function regenerateRootRuntimeManifest(checkout: string): void {
+  const manifestPath = path.join(checkout, "meta", "template.yml");
+  const manifest = parseTemplateManifestContent(
+    fs.readFileSync(manifestPath, "utf8"),
+    WORKSPACE_SYSTEM_EPOCH
+  );
+  fs.writeFileSync(
+    path.join(checkout, "meta", "vibestudio.yml"),
+    canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest)),
+    "utf8"
+  );
+}
+
+/**
+ * Derive a per-case root from the run's root by committing the case's source
+ * customization into it.
+ *
+ * A workspace is the exact root it names plus what happened to it since, and
+ * its semantic state is imported from that root's content — not from the bytes
+ * on disk. Editing the materialized copy after creation therefore changes
+ * nothing the runtime reads: the import republishes the pinned tree and the
+ * edit disappears. A case that wants different source must name a different
+ * root, so the customization becomes an ordinary commit and the pin follows.
+ */
+export async function deriveE2eRootTemplate(input: {
+  base: E2eRootTemplate;
+  workRoot: string;
+  configureSource: (sourceRoot: string) => void;
+}): Promise<E2eRootTemplate> {
+  const checkout = path.join(input.workRoot, "checkout");
+  fs.mkdirSync(path.dirname(checkout), { recursive: true, mode: 0o700 });
+  execFileSync(
+    "git",
+    ["clone", "--local", "--no-checkout", input.base.checkout, checkout],
+    { stdio: ["ignore", "pipe", "pipe"] }
+  );
+  git(checkout, ["checkout", "-B", "vibestudio-e2e-case", input.base.pin.commit]);
+  input.configureSource(checkout);
+  regenerateRootRuntimeManifest(checkout);
+  git(checkout, ["add", "-A"]);
+  git(checkout, [
+    "-c",
+    "user.name=Vibestudio E2E",
+    "-c",
+    "user.email=e2e@vibestudio.invalid",
+    "commit",
+    "--allow-empty",
+    "--no-gpg-sign",
+    "-m",
+    "E2E case source customization",
+  ]);
+
+  const gitClient = new GitClient();
+  const { pin } = await inspectRootTemplateCheckout({
+    checkout,
+    url: input.base.pin.url,
+    git: gitClient,
+    sink: hashOnlySink,
+  });
+  const materializedSource = await materializeRootTemplateSource({
+    pin,
+    checkout,
+    templateRoot: path.join(input.workRoot, "root-template"),
+    gitClient,
+  });
+  return { pin, checkout, materializedSource };
 }
 
 /**
