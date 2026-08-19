@@ -63,6 +63,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Materialize pinned Base release
+        env:
+          BASE_RELEASE_DIR: ${{ runner.temp }}/vibestudio-base-release
+        run: |
+          node scripts/checkout-base-template-release.mjs "$BASE_RELEASE_DIR"
+          echo "VIBESTUDIO_USERLAND_ROOT=$BASE_RELEASE_DIR" >> "$GITHUB_ENV"
+
       - name: Link node_modules for Gradle
         run: |
           # Gradle resolves node_modules from apps/mobile/android/ via
