@@ -48,6 +48,7 @@ import {
   diffTrees,
   getBytes,
   materializeTree,
+  putBytes,
   readFileAtTree,
   readTreeDirectory,
   resolveTreePath,
@@ -735,6 +736,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       case "observe-content":
         return this.observeContent(effect);
       case "materialize-context": {
+        if (effect.payload["mode"] === "content-only") return this.persistContent(effect);
         const command = effect.payload as unknown as ContextMaterializationCommand;
         const receipt = await this.materializer.materialize(command);
         await this.rememberVerifiedProjection(command.contextId);
@@ -785,6 +787,49 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       )
     );
     return { files: observed };
+  }
+
+  /**
+   * Persist authored bytes independently of context projection. Semantic-only
+   * contexts deliberately have no filesystem checkout, but their immutable
+   * content is still part of workspace history and must be readable after the
+   * originating request, process, and extension activation have ended.
+   */
+  private async persistContent(effect: SemanticEffect): Promise<Record<string, unknown>> {
+    const version = effect.payload["version"];
+    const blobs = effect.payload["blobs"];
+    if (version !== 1 || !Array.isArray(blobs) || blobs.length === 0) {
+      throw new Error("content persistence effect has an invalid payload");
+    }
+    const seen = new Set<string>();
+    const contentHashes = await Promise.all(
+      blobs.map(async (value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error("content persistence effect contains an invalid blob");
+        }
+        const blob = value as Record<string, unknown>;
+        const contentHash = String(blob["contentHash"] ?? "");
+        const base64 = String(blob["base64"] ?? "");
+        if (!/^[0-9a-f]{64}$/u.test(contentHash) || !base64) {
+          throw new Error("content persistence effect contains an invalid content identity");
+        }
+        if (seen.has(contentHash)) {
+          throw new Error(`content persistence effect repeats ${contentHash}`);
+        }
+        seen.add(contentHash);
+        const bytes = Buffer.from(base64, "base64");
+        if (bytes.toString("base64") !== base64) {
+          throw new Error(`content persistence effect has invalid bytes for ${contentHash}`);
+        }
+        const stored = await putBytes(this.deps.blobsDir, bytes);
+        if (stored.digest !== contentHash) {
+          throw new Error(`content persistence effect bytes do not match ${contentHash}`);
+        }
+        return contentHash;
+      })
+    );
+    contentHashes.sort(compareUtf16CodeUnits);
+    return { version: 1, contentHashes };
   }
 
   private async executeHostRead(request: Record<string, unknown>): Promise<VcsReadFileResult> {

@@ -1088,6 +1088,53 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
   });
 
+  it("persists authored content for a semantic-only context without projecting it", async () => {
+    const { root, blobsDir, vcs } = await harness();
+    const bytes = Buffer.from("semantic-only operation record\n");
+    const contentHash = sha256Hex(bytes);
+    const effect = {
+      effectId: "effect:persist-content",
+      scopeKind: "context" as const,
+      scopeId: "context:semantic-only",
+      commandId: "command:edit",
+      kind: "materialize-context" as const,
+      payloadDigest: "digest:persist-content",
+      payload: {
+        version: 1,
+        mode: "content-only",
+        contextId: "context:semantic-only",
+        targetState: { kind: "application", applicationId: "application:one" },
+        blobs: [{ contentHash, base64: bytes.toString("base64") }],
+      },
+      status: "pending" as const,
+    };
+    let receipt: Record<string, unknown> | null = null;
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEdit") {
+        return { kind: "effects-pending", result: { pending: true }, effects: [effect] };
+      }
+      if (method === "vcsSemanticEffectAck") {
+        receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
+          .acknowledgement.receipt;
+        return { kind: "complete", result: { ok: true } };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+
+    await expect(
+      vcs.semanticCall("vcsEdit", {
+        input: {},
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      })
+    ).resolves.toEqual({ ok: true });
+    await expect(getBytes(blobsDir, contentHash)).resolves.toEqual(bytes);
+    await expect(
+      fsp.stat(path.join(root, "contexts", "context:semantic-only"))
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(receipt).toEqual({ version: 1, contentHashes: [contentHash] });
+  });
+
   it("executes a derived repair command directly without journaling or acknowledging it", async () => {
     const { vcs } = await harness();
     const command = contextMaterializationCommand({
