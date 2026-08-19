@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "NODE_ENV=production node build.mjs",
+    "build:infrastructure": "node scripts/build-infrastructure-packages.mjs",
     "bootstrap": "pnpm install",
     "bootstrap:frozen": "pnpm install --frozen-lockfile",
     "dev": "tsx src/dev/runInstance.ts desktop",
@@ -49,7 +50,7 @@
     "generate:builtin-catalog": "tsx scripts/generate-builtin-catalog.ts",
     "scaffold:builtin-service": "node scripts/scaffold-builtin-service.mjs",
     "check:builtin-catalog": "tsx scripts/generate-builtin-catalog.ts --check",
-    "check:unit-authority": "node scripts/generate-host-authority-catalog.mjs --check && pnpm run check:builtin-catalog && node scripts/check-host-residency-baselines.mjs && node --import tsx scripts/generate-runtime-foundation-ledgers.mjs --check",
+    "check:unit-authority": "pnpm build:infrastructure && node scripts/generate-host-authority-catalog.mjs --check && pnpm run check:builtin-catalog && node scripts/check-host-residency-baselines.mjs && node --import tsx scripts/generate-runtime-foundation-ledgers.mjs --check",
     "check:pair-authority": "node scripts/check-explicit-authority-manifests.mjs && node --import tsx scripts/check-capability-notability.mjs && pnpm check:userland-rpc-contracts && node scripts/check-userland-package-manager-boundary.mjs && pnpm check:product-seed-records && pnpm check:vcs-skill-release",
     "generate:product-seed-records": "node --import tsx scripts/generate-product-seed-records.mjs",
     "check:product-seed-records": "node --import tsx scripts/generate-product-seed-records.mjs --check",
