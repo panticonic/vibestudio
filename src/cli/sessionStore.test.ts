@@ -31,6 +31,7 @@ describe("sessionStore", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-sessions-"));
     vi.stubEnv("HOME", tmpDir);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(tmpDir, ".config"));
   });
 
   afterEach(() => {

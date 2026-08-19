@@ -177,6 +177,7 @@ describe("vibestudio eval commands", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-eval-cli-"));
     vi.stubEnv("HOME", tmpDir);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(tmpDir, ".config"));
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {

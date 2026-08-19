@@ -94,7 +94,7 @@
     "test": "pnpm run check:package-dependencies && pnpm run check:agent-docs && pnpm run check:unit-authority && pnpm run check:base-template-release && pnpm run check:execution-root-providers && node scripts/check-runtime-foundation-evidence.mjs --start host && pnpm run test:host && pnpm run check:ledger-evidence",
     "test:pair": "pnpm check:runtime-docs && pnpm check:pair-authority && pnpm type-check:userland && pnpm test:userland",
     "check:commit": "pnpm check:runtime-docs && pnpm check:agent-docs && pnpm check:unit-authority && pnpm check:product-seed-records && pnpm check:execution-root-providers && pnpm check:host-boundary && pnpm check:userland-package-manager-boundary && pnpm check:userland-dependencies && pnpm type-check && pnpm lint && pnpm format:check",
-    "test:host": "vitest run --config vitest.host.config.ts",
+    "test:host": "pnpm build && vitest run --config vitest.host.config.ts",
     "test:userland": "vitest run --config vitest.userland.config.ts",
     "test:mobile": "pnpm --dir apps/mobile test --runInBand",
     "test:extension-smoke": "NODE_ENV=development node scripts/ensure-host-build.mjs && VIBESTUDIO_RUN_SERVER_INTEGRATION=1 vitest run tests/extension-image-service.integration.test.ts",

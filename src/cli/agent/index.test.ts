@@ -128,6 +128,7 @@ describe("vibestudio agent commands", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-agent-"));
     vi.stubEnv("HOME", tmpDir);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(tmpDir, ".config"));
     clearShellTokenCache();
     transportMock.handle = null;
     transportMock.rpcBodies = [];

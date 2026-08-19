@@ -113,6 +113,7 @@ describe("vibestudio fs commands", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-fs-cli-"));
     vi.stubEnv("HOME", tmpDir);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(tmpDir, ".config"));
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {

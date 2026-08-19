@@ -253,6 +253,7 @@ describe("vibestudio CLI", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-"));
     vi.stubEnv("HOME", tmpDir);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(tmpDir, ".config"));
     clearShellTokenCache();
     panelFacadeMock.starts.length = 0;
     panelFacadeMock.closes = 0;

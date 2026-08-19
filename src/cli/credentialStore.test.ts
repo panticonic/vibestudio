@@ -58,6 +58,7 @@ describe("CLI persisted device credential", () => {
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-credential-"));
     vi.stubEnv("HOME", home);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(home, ".config"));
   });
 
   afterEach(() => {
