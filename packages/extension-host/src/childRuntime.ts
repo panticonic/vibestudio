@@ -7,6 +7,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   createRpcClient,
   envelopeFromMessage,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
@@ -119,6 +121,13 @@ function extensionRuntimeError(
   const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
   if (typeof code === "string") {
     (wrapped as NodeJS.ErrnoException).code = code;
+  }
+  if (error !== null && typeof error === "object" && "errorKind" in error) {
+    (wrapped as Error & { errorKind?: unknown }).errorKind = rpcErrorKindOf(error);
+  }
+  const errorData = rpcErrorDataOf(error);
+  if (errorData !== undefined) {
+    (wrapped as Error & { errorData?: unknown }).errorData = errorData;
   }
   if (error instanceof Error && error.stack) {
     wrapped.stack = `${wrapped.message}\nCaused by: ${error.stack}`;
@@ -633,6 +642,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
           error: message.error,
           errorKind: message.errorKind,
           ...(message.errorCode ? { errorCode: message.errorCode } : {}),
+          ...(message.errorData !== undefined ? { errorData: message.errorData } : {}),
         },
       });
       for (const listener of listeners) listener(envelope);

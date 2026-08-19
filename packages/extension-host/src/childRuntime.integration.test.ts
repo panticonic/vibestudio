@@ -103,6 +103,13 @@ describe("extension child runtime process", () => {
         "    targetEcho(targetId, method, value) {",
         "      return ctx.rpc.call(targetId, method, value);",
         "    },",
+        "    structuredFailure() {",
+        "      const error = new Error('approval required');",
+        "      error.code = 'EACQUIRE';",
+        "      error.errorKind = 'access';",
+        "      error.errorData = { acquisition: { id: 'acq-child', ownerRuntimeId: 'panel-1' } };",
+        "      throw error;",
+        "    },",
         "    providerContracts: {",
         "      gitInterop: {",
         "        providerPing(value) { return `provider-pong:${value}`; },",
@@ -225,7 +232,7 @@ describe("extension child runtime process", () => {
     });
     const ready = await readyPromise;
     expect(ready.message.args[0]).toEqual({
-      methods: ["ping", "callerContext", "targetEcho"],
+      methods: ["ping", "callerContext", "targetEcho", "structuredFailure"],
       providerMethods: { gitInterop: ["providerPing"] },
       hasFetch: false,
     });
@@ -511,6 +518,51 @@ describe("extension child runtime process", () => {
       type: "response",
       requestId: contextRequestId,
       result: "ctx-panel",
+    });
+
+    const structuredFailureRequestId = randomUUID();
+    const structuredFailureResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      ready.ws.on("message", (raw) => {
+        try {
+          const message = JSON.parse(String(raw)) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === structuredFailureRequestId) {
+            resolve(rpc);
+          }
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+      ready.ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: makeEnvelope("main", "@workspace-extensions/process-test", "server", {
+            type: "request",
+            requestId: structuredFailureRequestId,
+            fromId: "main",
+            method: "extension.invoke",
+            args: [
+              "structuredFailure",
+              [],
+              {
+                requestId: structuredFailureRequestId,
+                extensionName: "@workspace-extensions/process-test",
+                method: "structuredFailure",
+                caller: { callerId: "panel-1", callerKind: "panel" },
+              },
+            ],
+          } satisfies RpcRequest),
+        } satisfies WsServerMessage)
+      );
+    });
+
+    expect(structuredFailureResponse).toMatchObject({
+      type: "response",
+      requestId: structuredFailureRequestId,
+      errorCode: "EACQUIRE",
+      errorKind: "access",
+      errorData: { acquisition: { id: "acq-child", ownerRuntimeId: "panel-1" } },
     });
 
     const targetRequestId = randomUUID();

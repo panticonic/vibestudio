@@ -55,6 +55,17 @@ describe("extension child runtime", () => {
     expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain(
       "for (const listener of listeners) listener(envelope)"
     );
+    expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain("errorData: message.errorData");
+  });
+
+  it("preserves structured RPC failures while adding extension context", () => {
+    const source = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("rpcErrorKindOf(error)");
+    expect(source).toContain("rpcErrorDataOf(error)");
   });
 
   it("supports chunked streaming extension fetch bodies", () => {

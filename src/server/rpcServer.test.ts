@@ -1062,6 +1062,47 @@ describe("RpcServer relay behavior", () => {
     ).rejects.toThrow("Worker not found: worker:workers/runtime-fixture:retired");
   });
 
+  it("preserves structured worker failures across the host relay", async () => {
+    const { server } = createServer();
+    server.setWorkerdUrl("http://127.0.0.1:8787");
+    server.setWorkerInstanceResolver(() => "worker-instance");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: {
+            type: "response",
+            requestId: "req",
+            fromId: "worker",
+            error: "approval required",
+            errorKind: "access",
+            errorCode: "EACQUIRE",
+            errorData: {
+              acquisition: { acquisitionId: "acq-worker", ownerRuntimeId: "panel:nav-a" },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    await expect(
+      testServer(server).relayCall(
+        "panel:nav-a",
+        "panel",
+        "worker:workers/runtime-fixture:key",
+        "probe",
+        []
+      )
+    ).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      errorKind: "access",
+      code: "EACQUIRE",
+      errorData: {
+        acquisition: { acquisitionId: "acq-worker", ownerRuntimeId: "panel:nav-a" },
+      },
+    });
+  });
+
   it("allows authenticated panels to relay to panel, DO, and worker targets", () => {
     const { server } = createServer();
 

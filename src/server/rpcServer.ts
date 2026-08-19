@@ -13,6 +13,7 @@ import type { Duplex } from "node:stream";
 import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
   createRpcClient,
+  RemoteRpcError,
   rpcErrorDataOf,
   rpcErrorKindOf,
   envelopeFromMessage,
@@ -4277,16 +4278,12 @@ export class RpcServer {
     const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
     if (responseMessage && responseMessage.type === "response") {
       if ("error" in responseMessage) {
-        const err = new Error(responseMessage.error) as Error & { code?: unknown };
-        if (responseMessage.errorCode) err.code = responseMessage.errorCode;
-        if (responseMessage.errorData !== undefined) {
-          Object.defineProperty(err, "errorData", {
-            value: responseMessage.errorData,
-            enumerable: true,
-            configurable: true,
-          });
-        }
-        throw err;
+        throw new RemoteRpcError(
+          responseMessage.error,
+          responseMessage.errorKind,
+          responseMessage.errorCode,
+          responseMessage.errorData
+        );
       }
       return responseMessage.result;
     }
