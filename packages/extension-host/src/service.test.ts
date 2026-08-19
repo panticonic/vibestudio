@@ -377,6 +377,44 @@ describe("ExtensionHost invocation attribution", () => {
     );
   });
 
+  it("preserves a nested authority acquisition for the original runtime to resume", async () => {
+    const acquisition = {
+      acquisitionId: "acq:terminal-shell",
+      ownerRuntimeId: "panel-1",
+      snapshotDigest: "snapshot:terminal-shell",
+      capability: "userland:extensions/shell/native.shell.execute#version",
+      resourceKey: "native.shell:extension:@workspace-extensions/shell",
+      tier: "gated",
+      cardType: "permission.gated",
+      renderedAction: "open a terminal session",
+      pending: true,
+    };
+    const nested = Object.assign(new Error("terminal shell approval required"), {
+      code: "EACQUIRE",
+      errorKind: "access",
+      errorData: {
+        acquisition,
+        authorityFailure: {
+          reasonCode: "approval-required",
+          reason: "Terminal access needs approval",
+        },
+      },
+    });
+    const extensionTransport = {
+      call: vi.fn(async () => Promise.reject(nested)),
+    };
+    const { host, extensionNode } = makeHost({ extensionTransport });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "open", [])
+    ).rejects.toMatchObject({
+      code: "EACQUIRE",
+      errorKind: "access",
+      errorData: { acquisition },
+    });
+  });
+
   it("fails internal provider dispatch when the approved build does not declare that contract", async () => {
     const extensionTransport = { call: vi.fn(async () => "unexpected") };
     const { host } = makeHost({

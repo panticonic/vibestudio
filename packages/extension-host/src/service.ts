@@ -1074,6 +1074,31 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       if (typeof code === "string") {
         (wrapped as NodeJS.ErrnoException).code = code;
       }
+      // The extension transport is a delegation boundary, not an error-domain
+      // boundary. In particular, a protected operation performed by an
+      // extension can return EACQUIRE for the original panel/worker caller.
+      // The outer runtime owns that acquisition and can wait/retry it, but only
+      // if the structured kind and payload survive this contextual wrapper.
+      // Keeping just `code` turns an actionable approval into a terminal error
+      // and leaves the approval queue detached from the operation that raised
+      // it.
+      if (error !== null && typeof error === "object") {
+        const structured = error as { errorKind?: unknown; errorData?: unknown };
+        if (
+          structured.errorKind === "access" ||
+          structured.errorKind === "service" ||
+          structured.errorKind === "transport" ||
+          structured.errorKind === "protocol" ||
+          structured.errorKind === "application" ||
+          structured.errorKind === "internal"
+        ) {
+          (wrapped as Error & { errorKind?: typeof structured.errorKind }).errorKind =
+            structured.errorKind;
+        }
+        if (structured.errorData !== undefined) {
+          (wrapped as Error & { errorData?: unknown }).errorData = structured.errorData;
+        }
+      }
       this.recordExtensionLog(
         entry.name,
         "error",
