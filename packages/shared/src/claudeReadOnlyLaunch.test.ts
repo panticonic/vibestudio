@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,15 +24,20 @@ describe("confineClaudeReadOnly", () => {
     roots.push(root);
     const profileDir = path.join(root, "launch-1");
     const contextDirectory = path.join(root, "context-1");
+    const binDirectory = path.join(root, "bin");
+    const bubblewrap = path.join(binDirectory, "bwrap");
+    mkdirSync(binDirectory);
+    writeFileSync(bubblewrap, "#!/bin/sh\nexit 0\n");
+    chmodSync(bubblewrap, 0o700);
     const launch = confineClaudeReadOnly({
       argv: ["claude", "--channels", "server:vibestudio"],
       profileDir,
       contextDirectory,
       platform: "linux",
-      pathValue: "/usr/bin",
+      pathValue: binDirectory,
     });
 
-    expect(launch.command).toBe("/usr/bin/bwrap");
+    expect(launch.command).toBe(bubblewrap);
     expect(launch.args).toEqual(
       expect.arrayContaining([
         "--ro-bind",
