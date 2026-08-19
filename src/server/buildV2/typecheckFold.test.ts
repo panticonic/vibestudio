@@ -95,6 +95,19 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     { name: "@workspace/greeter", relativePath: "packages/greeter" },
   ];
 
+  it("fails closed when the requested unit source is absent", async () => {
+    const diagnostics = await typecheckUnit("panels/missing", sourceRoot, [], []);
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: "tsc",
+        severity: "error",
+        file: "panels/missing",
+        message: expect.stringContaining("Typecheck could not complete"),
+      }),
+    ]);
+  });
+
   it("resolves @workspace/* (materialized subtree) and external deps (node_modules) — no false 'Cannot find module'", async () => {
     const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
     const cannotFind = diags.filter((d) => /Cannot find module/.test(d.message));

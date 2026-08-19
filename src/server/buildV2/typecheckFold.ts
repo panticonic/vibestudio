@@ -112,6 +112,10 @@ export async function typecheckUnit(
   const unitDir = path.join(sourceRoot, unitRelativePath);
   let service: import("@vibestudio/typecheck").TypeCheckService | undefined;
   try {
+    const unitStats = await fsp.stat(unitDir);
+    if (!unitStats.isDirectory()) {
+      throw new Error(`Unit source is not a directory: ${unitRelativePath}`);
+    }
     const { TypeCheckService, USERLAND_TYPECHECK_BASELINE, createDiskFileSource, loadSourceFiles } =
       await import("@vibestudio/typecheck");
     const packages = new Map<string, WorkspacePackageInfo>();
