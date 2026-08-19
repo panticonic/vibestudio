@@ -15,6 +15,21 @@ import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js"
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
 import type { Panel, PanelPlacementHint, PanelRecoverySnapshot } from "./types.js";
 
+import type { CommandAgentMode } from "./shellSurface.js";
+
+/** Payload of `open-command-agent`; see `ShellSurfaceTarget`. */
+export interface CommandAgentSurfaceRequest {
+  /**
+   * Panel the overlay is about; the focused panel when omitted. When it names
+   * another panel the shell focuses that panel before opening, so the overlay,
+   * the focused panel, and the bound conversation stay coherent.
+   */
+  panelId?: string;
+  mode?: CommandAgentMode;
+  /** Pre-filled compose text. The user still presses send. */
+  prompt?: string;
+}
+
 /**
  * Known event names that can be subscribed to.
  */
@@ -42,6 +57,8 @@ export type EventName =
   | "open-workspace-switcher"
   | "open-connection-settings"
   | "open-command-palette"
+  | "open-command-agent"
+  | "run-panel-command"
   | "focus-approval-card"
   | "toggle-address-bar"
   | "focus-address-bar"
@@ -266,6 +283,21 @@ export interface EventPayloads {
    * into the conversation" entry point to keep in sync.
    */
   "open-command-palette": undefined;
+  /**
+   * Open the command overlay about a specific panel, optionally in a specific
+   * mode and with the compose box pre-filled (never auto-sent). Raised by
+   * `app.openShellSurface({ kind: "command-agent", … })` so a panel or skill
+   * can hand the user to the agent that sees that panel.
+   */
+  "open-command-agent": CommandAgentSurfaceRequest;
+  /**
+   * Run a host command a panel contributed, by slot id and command id — the
+   * inverse of the contribution event, raised by
+   * `app.openShellSurface({ kind: "panel-command", … })` and its deep link.
+   * The shell routes it exactly as a palette selection; a panel that no longer
+   * contributes the id simply ignores it.
+   */
+  "run-panel-command": { panelId: string; commandId: string };
   "focus-approval-card": undefined;
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
@@ -474,6 +506,8 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "open-workspace-switcher",
   "open-connection-settings",
   "open-command-palette",
+  "open-command-agent",
+  "run-panel-command",
   "focus-approval-card",
   "toggle-address-bar",
   "focus-address-bar",

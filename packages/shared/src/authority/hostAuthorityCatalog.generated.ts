@@ -367,6 +367,18 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "app.describeShellSurfaces": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.read",
+      rationale:
+        "Open bias: read-only list of first-party chrome this host can open; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "app.getInfo": {
     tier: {
       tier: "open",

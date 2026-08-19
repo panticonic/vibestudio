@@ -13,6 +13,7 @@ import {
 import * as path from "path";
 import * as fs from "node:fs";
 import { EventService } from "@vibestudio/shared/eventsService";
+import { SHELL_SURFACE_KINDS, type ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
@@ -47,10 +48,12 @@ import {
   enqueueFirstArgvLink,
   getPendingConnectLink,
   getPendingPanelLocation,
+  getPendingShellSurface,
   getPendingConnectLinkError,
   installEarlyOpenUrlBuffer,
   onConnectLink,
   onPanelLocation,
+  onShellSurface,
   onConnectLinkError,
   peekPendingConnectLink,
   registerProtocol,
@@ -633,6 +636,36 @@ function canAccessIncomingPanelLocations(webContentsId: number): boolean {
   if (!viewId) return false;
   const viewInfo = viewManager.getViewInfo(viewId);
   return viewInfo?.type === "app" && viewInfo.hostChrome === true;
+}
+
+/**
+ * Route a validated shell-surface descriptor to the shell renderer as the one
+ * event that surface already listens for. Every entry point — `app.openShellSurface`,
+ * `vibestudio://ask|about|command|surface` deep links, menu items — converges here.
+ */
+function dispatchShellSurface(target: ShellSurfaceDescriptor): void {
+  switch (target.kind) {
+    case "connection-settings":
+      eventService.emit("open-connection-settings", undefined);
+      return;
+    case "workspace-chooser":
+      eventService.emit("open-workspace-switcher", undefined);
+      return;
+    case "about":
+      eventService.emit("navigate-about", { page: target.page });
+      return;
+    case "command-agent": {
+      const { kind: _kind, ...request } = target;
+      eventService.emit("open-command-agent", request);
+      return;
+    }
+    case "panel-command":
+      eventService.emit("run-panel-command", {
+        panelId: target.panelId,
+        commandId: target.commandId,
+      });
+      return;
+  }
 }
 
 function sendIncomingPanelLocation(location: unknown): void {
@@ -1641,6 +1674,26 @@ app.on("ready", async () => {
   onPanelLocation((location) => {
     if (IS_HEADLESS_HOST) return;
     sendIncomingPanelLocation(location);
+    applicationWindow.showAndFocus();
+  });
+  // Surface deep links: while the shell is up, dispatch straight to it (and
+  // consume the buffered copy so a later drain cannot replay it); a link that
+  // arrived before the shell mounted is drained by the shell on mount via
+  // `vibestudio:drain-shell-surface` and re-enters through `app.openShellSurface`.
+  ipcMain.handle("vibestudio:drain-shell-surface", (event) => {
+    if (!canAccessIncomingPanelLocations(event.sender.id)) {
+      throw new Error("Incoming shell surfaces require the trusted host-chrome surface");
+    }
+    return getPendingShellSurface();
+  });
+  onShellSurface((target) => {
+    if (IS_HEADLESS_HOST) return;
+    // The shell subscribes to `navigate-about` on mount; once it has, it is
+    // listening for every surface event and the live path is safe to take.
+    if (eventService.getSubscriberCount("navigate-about") > 0) {
+      getPendingShellSurface();
+      dispatchShellSurface(target);
+    }
     applicationWindow.showAndFocus();
   });
   // A deep link that failed to parse (e.g. a stale old-format link) used to open
@@ -2693,14 +2746,8 @@ app.on("ready", async () => {
         getAppOrchestrator: () => applicationWindow.appOrchestrator,
         connectionMode: conn.connectionMode,
         remoteHost: undefined,
-        onOpenShellSurface: (target) => {
-          eventService.emit(
-            target === "connection-settings"
-              ? "open-connection-settings"
-              : "open-workspace-switcher",
-            undefined
-          );
-        },
+        shellSurfaces: () => (IS_HEADLESS_HOST ? [] : SHELL_SURFACE_KINDS),
+        onOpenShellSurface: dispatchShellSurface,
       })
     );
     const { createHubControlHostService } = await import("./services/hubControlService.js");

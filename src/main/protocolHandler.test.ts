@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink } from "@vibestudio/shared/connect";
 import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
+import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => void>();
@@ -163,5 +164,30 @@ describe("protocolHandler", () => {
       process.execPath,
       expect.any(Array)
     );
+  });
+
+  it("routes shell-surface deep links to their own buffer and listeners", async () => {
+    const mod = await import("./protocolHandler.js");
+    const seen: unknown[] = [];
+    mod.onShellSurface((target) => seen.push(target));
+    mod.enqueueProtocolLink(
+      createShellSurfaceLink({ kind: "command-agent", prompt: "Add a scene", mode: "quickfire" })
+    );
+    expect(seen).toEqual([{ kind: "command-agent", prompt: "Add a scene", mode: "quickfire" }]);
+    expect(mod.getPendingShellSurface()).toEqual({
+      kind: "command-agent",
+      prompt: "Add a scene",
+      mode: "quickfire",
+    });
+    expect(mod.getPendingShellSurface()).toBeNull();
+    // An https share URL to an About page takes the same path.
+    mod.enqueueProtocolLink(
+      createShellSurfaceLink({ kind: "about", page: "permissions" }, "https")
+    );
+    expect(mod.getPendingShellSurface()).toEqual({ kind: "about", page: "permissions" });
+    // A malformed surface link surfaces an error instead of falling through to pairing.
+    mod.enqueueProtocolLink("vibestudio://about?v=1&page=../etc");
+    expect(mod.getPendingConnectLinkError()).toMatch(/About page/);
+    expect(mod.getPendingConnectLink()).toBeNull();
   });
 });

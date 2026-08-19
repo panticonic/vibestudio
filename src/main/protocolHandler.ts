@@ -2,6 +2,10 @@ import { app } from "electron";
 import * as path from "path";
 import { type ConnectPairing, parseConnectLink } from "@vibestudio/shared/connect";
 import { parsePanelLocationLink, type PanelLocation } from "@vibestudio/shared/panelLocation";
+import {
+  parseShellSurfaceLink,
+  type ShellSurfaceDescriptor,
+} from "@vibestudio/shared/shellSurface";
 
 /** The WebRTC pairing material carried by a `vibestudio://connect` deep link. */
 export type PendingConnectLink = ConnectPairing;
@@ -10,6 +14,8 @@ let pending: PendingConnectLink | null = null;
 const listeners = new Set<(link: PendingConnectLink) => void>();
 let pendingPanel: PanelLocation | null = null;
 const panelListeners = new Set<(location: PanelLocation) => void>();
+let pendingSurface: ShellSurfaceDescriptor | null = null;
+const surfaceListeners = new Set<(target: ShellSurfaceDescriptor) => void>();
 
 /**
  * A deep link that FAILED to parse (e.g. a stale v1 link whose actionable message
@@ -49,6 +55,17 @@ export function enqueueProtocolLink(raw: string): void {
   if (panel.kind === "ok") {
     pendingPanel = panel.location;
     for (const listener of panelListeners) listener(panel.location);
+    return;
+  }
+  const surface = parseShellSurfaceLink(raw);
+  if (surface.kind === "ok") {
+    pendingSurface = surface.target;
+    for (const listener of surfaceListeners) listener(surface.target);
+    return;
+  }
+  if (surface.kind === "error") {
+    pendingError = surface.reason;
+    for (const listener of errorListeners) listener(surface.reason);
     return;
   }
   enqueueConnectLink(raw);
@@ -114,4 +131,15 @@ export function peekPendingPanelLocation(): PanelLocation | null {
 export function onPanelLocation(listener: (location: PanelLocation) => void): () => void {
   panelListeners.add(listener);
   return () => panelListeners.delete(listener);
+}
+
+export function getPendingShellSurface(): ShellSurfaceDescriptor | null {
+  const target = pendingSurface;
+  pendingSurface = null;
+  return target;
+}
+
+export function onShellSurface(listener: (target: ShellSurfaceDescriptor) => void): () => void {
+  surfaceListeners.add(listener);
+  return () => surfaceListeners.delete(listener);
 }

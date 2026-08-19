@@ -97,6 +97,12 @@ contextBridge.exposeInMainWorld("__vibestudioIncomingPairLink", {
     return () => ipcRenderer.off("vibestudio:incoming-pair-link", listener);
   },
 });
+contextBridge.exposeInMainWorld("__vibestudioIncomingShellSurface", {
+  /** A surface deep link that arrived before the shell mounted; null otherwise. */
+  getPending() {
+    return ipcRenderer.invoke("vibestudio:drain-shell-surface") as Promise<unknown>;
+  },
+});
 contextBridge.exposeInMainWorld("__vibestudioIncomingPanelLocation", {
   getPending() {
     return ipcRenderer.invoke("vibestudio:drain-panel-location") as Promise<unknown>;

@@ -1,6 +1,11 @@
 import { app, nativeTheme, shell } from "electron";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { appMethods } from "@vibestudio/service-schemas/app";
+import {
+  validateShellSurfaceTarget,
+  type ShellSurfaceDescriptor,
+  type ShellSurfaceKind,
+} from "@vibestudio/shared/shellSurface";
 import { buildMethods } from "@vibestudio/service-schemas/build";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
@@ -21,7 +26,9 @@ export function createAppService(deps: {
   getAppOrchestrator?: () => AppOrchestrator | null;
   connectionMode: "local" | "remote";
   remoteHost?: string;
-  onOpenShellSurface?: (target: "connection-settings" | "workspace-chooser") => void;
+  /** Surfaces this host's shell can open; absent on hosts without shell chrome. */
+  shellSurfaces?: () => readonly ShellSurfaceKind[];
+  onOpenShellSurface?: (target: ShellSurfaceDescriptor) => void;
 }): ServiceDefinition {
   const serverClient = deps.serverClient;
   const callServer = serverClient
@@ -81,12 +88,22 @@ export function createAppService(deps: {
         return;
       },
       openShellSurface: async (_ctx, [target]) => {
-        if (!deps.onOpenShellSurface) {
-          throw new Error("Shell-owned management navigation is unavailable in this host");
+        const descriptor = validateShellSurfaceTarget(target);
+        const supported = deps.shellSurfaces?.() ?? [];
+        if (!deps.onOpenShellSurface || supported.length === 0) {
+          throw new Error("Shell-owned surface navigation is unavailable in this host");
         }
-        deps.onOpenShellSurface(target);
+        if (!supported.includes(descriptor.kind)) {
+          throw new Error(
+            `This host cannot open the "${descriptor.kind}" surface (available: ${supported.join(", ")})`
+          );
+        }
+        deps.onOpenShellSurface(descriptor);
         return;
       },
+      describeShellSurfaces: async () => ({
+        surfaces: [...(deps.onOpenShellSurface ? (deps.shellSurfaces?.() ?? []) : [])],
+      }),
       clearBuildCache: async (ctx) => {
         await requirePanelHostingAuthority(ctx, "app.clearBuildCache");
         const failures: string[] = [];

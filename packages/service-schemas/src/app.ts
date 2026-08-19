@@ -16,6 +16,43 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 
+/**
+ * Shell-owned surfaces a caller may ask the host to open — the wire shape of
+ * `@vibestudio/shared/shellSurface`'s `ShellSurfaceTarget`. The string forms
+ * are the original management surfaces; object forms open the command agent
+ * overlay about a panel, an About page, or run a panel's contributed host
+ * command. Detailed field rules live in `validateShellSurfaceTarget`.
+ */
+export const ShellSurfaceTargetSchema = z.union([
+  z.enum(["connection-settings", "workspace-chooser"]),
+  z.object({ kind: z.enum(["connection-settings", "workspace-chooser"]) }).strict(),
+  z
+    .object({
+      kind: z.literal("command-agent"),
+      panelId: z.string().min(1).optional(),
+      mode: z.enum(["all", "commands", "goto", "quickfire"]).optional(),
+      prompt: z.string().max(4_000).optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("about"), page: z.string().min(1).max(64) }).strict(),
+  z
+    .object({
+      kind: z.literal("panel-command"),
+      panelId: z.string().min(1),
+      commandId: z.string().min(1).max(256),
+    })
+    .strict(),
+]);
+export type ShellSurfaceTarget = z.infer<typeof ShellSurfaceTargetSchema>;
+
+export const ShellSurfaceKindSchema = z.enum([
+  "connection-settings",
+  "workspace-chooser",
+  "command-agent",
+  "about",
+  "panel-command",
+]);
+
 export const appMethods = defineServiceMethods({
   getInfo: {
     tier: {
@@ -135,10 +172,25 @@ export const appMethods = defineServiceMethods({
         "Open bias: opens bounded first-party shell chrome without changing the managed state; §2 default {code, session} family",
     },
     description:
-      "Open a typed shell-owned management surface without exposing its private state to the caller.",
-    args: z.tuple([z.enum(["connection-settings", "workspace-chooser"])]),
+      "Open a typed shell-owned surface without exposing its private state to the caller: connection settings, the workspace chooser, an About page, the command agent overlay about a panel (optionally pre-filled, never auto-sent), or a panel's contributed host command. Rejects kinds this host cannot open; see describeShellSurfaces.",
+    args: z.tuple([ShellSurfaceTargetSchema]),
     returns: z.void(),
     access: WRITE_ACCESS,
+  },
+  describeShellSurfaces: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.read",
+      rationale:
+        "Open bias: read-only list of first-party chrome this host can open; §2 default {code, session} family",
+    },
+    description:
+      "List the shell surface kinds this host can open with openShellSurface, so a caller can offer only what works here instead of probing.",
+    args: z.tuple([]),
+    returns: z.object({ surfaces: z.array(ShellSurfaceKindSchema) }).strict(),
+    access: { sensitivity: "read" },
   },
   clearBuildCache: {
     capability: "workspace.build-cache.manage",

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:b0c49bc27a9fc30210ffe1bdfe44e1f8a8ae150d49836bfa13c8ac8ab9a92f0d",
+  "censusDigest": "sha256:534a4fcc8ca2090612fc0b9012b23e693e31676510e248dce61efa022a776284",
   "decisions": {
     "host:baseRelease.check": {
       "review": "read-only-base-release-lineage-comparison",
@@ -344,7 +344,11 @@
     },
     "host:app.openShellSurface": {
       "review": "bounded-first-party-shell-navigation",
-      "change": "Adds open navigation to an enumerated first-party shell management surface in the current client; it neither opens an external system nor changes managed state, and the receiver rejects unknown targets."
+      "change": "Opens a typed first-party shell surface in the current client: management chrome, an About page, the command overlay about a panel (prompt pre-filled only, never sent), or a panel's own contributed host command. It opens no external system and changes no managed state; the receiver validates the descriptor and rejects kinds this host cannot open."
+    },
+    "host:app.describeShellSurfaces": {
+      "review": "read-only-shell-surface-capability-list",
+      "change": "Adds a read-only list of the shell surface kinds the current host can open, so callers offer only supported chrome instead of probing openShellSurface; it exposes no private shell state."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmAdoptWorker": {
       "review": "host-only-alarm-worker-generation-adoption",

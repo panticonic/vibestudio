@@ -5655,6 +5655,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:app.describeShellSurfaces",
+      "rpcPlane": "host-service",
+      "owner": "app",
+      "method": "describeShellSurfaces",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "app.read",
+      "reviewRationale": "Open bias: read-only list of first-party chrome this host can open; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:app.describeShellSurfaces"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:app.describeShellSurfaces),allOf(capability(user,service:app.describeShellSurfaces),workspace-member),allOf(capability(code,service:app.describeShellSurfaces),workspace-member))",
+      "r3b": {
+        "review": "read-only-shell-surface-capability-list",
+        "change": "Adds a read-only list of the shell surface kinds the current host can open, so callers offer only supported chrome instead of probing openShellSurface; it exposes no private shell state."
+      },
+      "capability": "service:app.describeShellSurfaces",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:app.getInfo",
       "rpcPlane": "host-service",
       "owner": "app",
@@ -5971,7 +6017,7 @@
       "r3aRequirement": "anyOf(capability(host,service:app.openShellSurface),allOf(capability(user,service:app.openShellSurface),workspace-member),allOf(capability(code,service:app.openShellSurface),workspace-member))",
       "r3b": {
         "review": "bounded-first-party-shell-navigation",
-        "change": "Adds open navigation to an enumerated first-party shell management surface in the current client; it neither opens an external system nor changes managed state, and the receiver rejects unknown targets."
+        "change": "Opens a typed first-party shell surface in the current client: management chrome, an About page, the command overlay about a panel (prompt pre-filled only, never sent), or a panel's own contributed host command. It opens no external system and changes no managed state; the receiver validates the descriptor and rejects kinds this host cannot open."
       },
       "capability": "service:app.openShellSurface",
       "parityAssertion": "generated-census:host-authority"
