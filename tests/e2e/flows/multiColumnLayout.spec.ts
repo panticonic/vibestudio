@@ -43,7 +43,7 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function configureInitialPanel(sourceRoot: string, source: string): void {
-  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
@@ -147,19 +147,25 @@ async function shellErrorOverlayCount(app: ElectronApplication, wcId: number): P
 }
 
 /** Ctrl-click (open-beside) or plain-click a panel's tree row by its current title. */
+/**
+ * Click a tree row by panel *identity*. Rows are addressed by id, not by their
+ * label: a freshly created panel's title lands in the tree asynchronously, so a
+ * label lookup races that write and fails while the row is still showing its
+ * slot id.
+ */
 async function clickTreeRowForPanel(
   app: ElectronApplication,
   wcId: number,
-  title: string,
+  panelId: string,
   modifiers: { ctrlKey?: boolean } = {}
 ): Promise<boolean> {
   return shellEval<boolean>(
     app,
     wcId,
     `(() => {
-       const rows = Array.from(document.querySelectorAll('[data-panel-tree-row="true"]'));
-       const row = rows.find((node) =>
-         (node.getAttribute('aria-label') ?? '') === ${JSON.stringify(`Select panel ${title}`)});
+       const row = document.querySelector(
+         '[data-panel-tree-row="true"][data-panel-id=${JSON.stringify(panelId)}]'
+       );
        if (!row) return false;
        row.dispatchEvent(new MouseEvent('click', {
          bubbles: true,
@@ -230,30 +236,56 @@ async function sendShellMouseDrag(
   );
 }
 
-async function dragTreePanelToViewport(
+/**
+ * Drag a tree row onto a pane and drop it on one of that pane's five zones.
+ *
+ * The drop vocabulary is geometric now: the shell hit-tests the pointer against
+ * the pane rectangles it is already showing, so the test aims at the same
+ * pixels a user would and asserts the preview the user would see before
+ * releasing.
+ */
+async function dragTreePanelToPane(
   app: ElectronApplication,
   wcId: number,
-  title: string,
-  position: "left" | "full" | "right"
+  panelId: string,
+  targetPaneId: string,
+  zone: "left" | "right" | "top" | "bottom" | "center"
 ): Promise<void> {
   await app.evaluate(
     async ({ webContents }, args) => {
       const contents = webContents.fromId(args.wcId);
       if (!contents || contents.isDestroyed()) throw new Error("Shell WebContents gone");
       const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-      const rowLabel = JSON.stringify(`Select panel ${args.title}`);
       const rowCenter = (await contents.executeJavaScript(
         `(() => {
-           const rows = Array.from(document.querySelectorAll('[data-panel-tree-row="true"]'));
-           const row = rows.find((node) =>
-             (node.getAttribute('aria-label') ?? '') === ${rowLabel});
+           const row = document.querySelector('[data-panel-tree-row="true"][data-panel-id=${JSON.stringify(args.panelId)}]');
            if (!row) return null;
            const rect = row.getBoundingClientRect();
            return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
          })()`,
         true
       )) as { x: number; y: number } | null;
-      if (!rowCenter) throw new Error(`Tree row not found: ${args.title}`);
+      if (!rowCenter) throw new Error(`Tree row not found for panel ${args.panelId}`);
+
+      const target = (await contents.executeJavaScript(
+        `(() => {
+           const pane = document.querySelector('[data-pane-id=${JSON.stringify(args.targetPaneId)}]');
+           if (!pane) return null;
+           const rect = pane.getBoundingClientRect();
+           const inset = 10;
+           const zone = ${JSON.stringify(args.zone)};
+           const point = {
+             left: { x: rect.left + inset, y: rect.top + rect.height / 2 },
+             right: { x: rect.right - inset, y: rect.top + rect.height / 2 },
+             top: { x: rect.left + rect.width / 2, y: rect.top + inset },
+             bottom: { x: rect.left + rect.width / 2, y: rect.bottom - inset },
+             center: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+           }[zone];
+           return { x: Math.round(point.x), y: Math.round(point.y) };
+         })()`,
+        true
+      )) as { x: number; y: number } | null;
+      if (!target) throw new Error(`Pane not found: ${args.targetPaneId}`);
 
       contents.focus();
       contents.sendInputEvent({
@@ -271,34 +303,6 @@ async function dragTreePanelToViewport(
         buttons: 1,
       });
 
-      let target: { x: number; y: number; width: number; overlayWidth: number } | null = null;
-      for (let attempt = 0; attempt < 30 && !target; attempt++) {
-        await sleep(25);
-        target = (await contents.executeJavaScript(
-          `(() => {
-             const node = document.querySelector('[data-layout-drop-position=${JSON.stringify(args.position)}]');
-             const overlay = document.querySelector('[data-layout-drop-overlay="true"]');
-             if (!node || !overlay) return null;
-             const rect = node.getBoundingClientRect();
-             return {
-               x: Math.round(rect.left + rect.width / 2),
-               y: Math.round(rect.top + rect.height / 2),
-               width: rect.width,
-               overlayWidth: overlay.getBoundingClientRect().width,
-             };
-           })()`,
-          true
-        )) as { x: number; y: number; width: number; overlayWidth: number } | null;
-      }
-      if (!target) throw new Error("Viewport placement overlay did not appear");
-      const expectedCoverage = args.position === "full" ? 1 : 0.5;
-      const actualCoverage = target.width / target.overlayWidth;
-      if (Math.abs(actualCoverage - expectedCoverage) > 0.03) {
-        throw new Error(
-          `Unexpected ${args.position} preview coverage: ${actualCoverage.toFixed(2)}`
-        );
-      }
-
       for (let step = 1; step <= 10; step++) {
         contents.sendInputEvent({
           type: "mouseMove",
@@ -309,7 +313,23 @@ async function dragTreePanelToViewport(
         });
         await sleep(16);
       }
-      await sleep(50);
+
+      // The blueprint replaces the panel views for the length of the gesture,
+      // and its preview is the promise the drop has to keep.
+      let preview: string | null = null;
+      for (let attempt = 0; attempt < 30 && preview === null; attempt++) {
+        await sleep(25);
+        preview = (await contents.executeJavaScript(
+          `(() => {
+             if (!document.querySelector('[data-layout-blueprint="true"]')) return null;
+             const node = document.querySelector('[data-layout-drop-preview]');
+             return node ? node.getAttribute('data-layout-drop-preview') : null;
+           })()`,
+          true
+        )) as string | null;
+      }
+      if (preview === null) throw new Error("Placement blueprint never resolved a drop target");
+
       contents.sendInputEvent({
         type: "mouseUp",
         x: target.x,
@@ -318,7 +338,7 @@ async function dragTreePanelToViewport(
         clickCount: 1,
       });
     },
-    { wcId, title, position }
+    { wcId, panelId, targetPaneId, zone }
   );
 }
 
@@ -327,7 +347,7 @@ const POLL = { timeout: 60_000, intervals: [250, 500, 1_000] };
 test.describe("Multi-column panel layout", () => {
   test("native slots track panes across child creation, drags, parking, close, and keyboard", async () => {
     test.setTimeout(600_000);
-    const workspacePath = createManagedTestWorkspace({
+    const workspacePath = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/about"),
     });
     let testApp: TestApp | null = null;
@@ -580,24 +600,7 @@ test.describe("Multi-column panel layout", () => {
         expect(parkedReadinessBefore.nativeSlotBound).toBe(false);
 
         // Select the hidden presentation through the ordinary panel tree.
-        const parkedTitle = (await getPanelTree(app)).find(
-          (panel) => panel.id === parkedPanelId
-        )?.title;
-        expect(parkedTitle).toBeTruthy();
-        expect(
-          await shellEval<boolean>(
-            app,
-            wcId,
-            `(() => {
-               const label = ${JSON.stringify(`Select panel ${parkedTitle}`)};
-               const row = Array.from(document.querySelectorAll('[data-panel-tree-row="true"]'))
-                 .find((node) => node.getAttribute('aria-label') === label);
-               if (!(row instanceof HTMLElement)) return false;
-               row.click();
-               return true;
-             })()`
-          )
-        ).toBe(true);
+        expect(await clickTreeRowForPanel(app, wcId, parkedPanelId)).toBe(true);
 
         // The column returns, rebinds its slot, and the panel is live again —
         // no dead surface (§5.4: un-parking re-runs loading if GC unloaded it).
@@ -662,13 +665,13 @@ test.describe("Multi-column panel layout", () => {
         expect(await shellErrorOverlayCount(app, wcId)).toBe(0);
       });
 
-      // ---- Scenario 5: tree drag placement overlay ------------------------
-      await test.step("tree drag previews half/full viewport coverage and applies placement", async () => {
-        const tree = await getPanelTree(app);
-        const panel2Title = tree.find((panel) => panel.id === panel2)?.title;
-        expect(panel2Title).toBeTruthy();
+      // ---- Scenario 5: geometric drag placement ---------------------------
+      await test.step("a tree drag lands where it was dropped, not where focus was", async () => {
+        const survivingPaneId = (await getSurfaceRects(app, wcId))[0]?.paneId;
+        expect(survivingPaneId).toBeTruthy();
 
-        await dragTreePanelToViewport(app, wcId, panel2Title!, "full");
+        // Dropped on the centre of the only pane: it takes that pane over.
+        await dragTreePanelToPane(app, wcId, panel2, survivingPaneId!, "center");
         await expect
           .poll(async () => {
             const surfaces = await getSurfaceRects(app, wcId);
@@ -680,9 +683,10 @@ test.describe("Multi-column panel layout", () => {
           }, POLL)
           .toBe(true);
 
-        const panel1Title = tree.find((panel) => panel.id === panel1)?.title;
-        expect(panel1Title).toBeTruthy();
-        await dragTreePanelToViewport(app, wcId, panel1Title!, "left");
+        // Dropped on that pane's left edge: a new column appears to its left.
+        const occupiedPaneId = (await getSurfaceRects(app, wcId))[0]?.paneId;
+        expect(occupiedPaneId).toBeTruthy();
+        await dragTreePanelToPane(app, wcId, panel1, occupiedPaneId!, "left");
         await expect
           .poll(async () => {
             const surfaces = (await getSurfaceRects(app, wcId)).sort(
@@ -703,11 +707,7 @@ test.describe("Multi-column panel layout", () => {
           .poll(async () => {
             const surfaces = await getSurfaceRects(app, wcId);
             if (surfaces.length >= 2) return true;
-            const tree = await getPanelTree(app);
-            const title = tree.find((panel) => panel.id === panel2)?.title;
-            if (title) {
-              await clickTreeRowForPanel(app, wcId, title, { ctrlKey: true }).catch(() => false);
-            }
+            await clickTreeRowForPanel(app, wcId, panel2, { ctrlKey: true }).catch(() => false);
             return false;
           }, POLL)
           .toBe(true);
