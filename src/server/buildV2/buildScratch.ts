@@ -2,7 +2,11 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-const BUILD_SCRATCH_ROOT = path.join(os.tmpdir(), "vibestudio-builds");
+// esbuild canonicalizes entry paths before resolving their relative imports.
+// macOS reports /var/... from os.tmpdir(), while its canonical path is
+// /private/var/.... Build wrappers must start from that same canonical path or
+// imports to workspace source under /Users resolve below /private instead.
+const BUILD_SCRATCH_ROOT = path.join(fs.realpathSync(os.tmpdir()), "vibestudio-builds");
 
 /**
  * Create a scratch directory owned by one build invocation.

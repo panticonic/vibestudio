@@ -12,6 +12,13 @@ afterEach(() => {
 });
 
 describe("createBuildScratchDir", () => {
+  it("returns a canonical path for generated relative imports", () => {
+    const directory = createBuildScratchDir("build-canonical-path");
+    created.push(directory);
+
+    expect(directory).toBe(fs.realpathSync(directory));
+  });
+
   it("gives concurrent invocations isolated directories for the same build key", () => {
     const directories = Array.from({ length: 32 }, () => {
       const directory = createBuildScratchDir("build-same-key");
