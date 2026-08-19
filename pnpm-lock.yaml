@@ -135,6 +135,9 @@ importers:
       '@vibestudio/workspace-contracts':
         specifier: workspace:*
         version: link:packages/workspace-contracts
+      '@vscode/ripgrep':
+        specifier: 1.18.0
+        version: 1.18.0
       '@xterm/addon-clipboard':
         specifier: ^0.2.0
         version: 0.2.0

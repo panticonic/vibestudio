@@ -27,6 +27,14 @@ describe("published npm dependency surface", () => {
     });
   });
 
+  it("publishes every external native host runtime dependency", () => {
+    expect(publicRuntimeDependencies).toMatchObject({
+      "@vscode/ripgrep": "1.18.0",
+      "node-datachannel": rootPackage.dependencies["node-datachannel"],
+      "node-pty": rootPackage.dependencies["node-pty"],
+    });
+  });
+
   it("does not publish unused host dependencies or type-only packages", () => {
     for (const dependency of [
       "@modelcontextprotocol/sdk",
