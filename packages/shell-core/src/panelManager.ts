@@ -1154,7 +1154,9 @@ export class PanelManager {
       panel.executionDigest = entity?.activeExecutionDigest ?? null;
       panel.authorityRequests = entity?.activeAuthority?.requests;
       if (currentSnapshot) {
-        panel.title = this.titleFor(slotId, currentSnapshot.source);
+        panel.title =
+          normalizePanelTitle(detail?.slot.current_entity_title) ??
+          this.titleFor(slotId, currentSnapshot.source);
         this.registry.replaceCurrentSnapshot(slotId, currentSnapshot, {
           entries: [currentSnapshot],
           index: 0,
@@ -1452,7 +1454,9 @@ export class PanelManager {
           panel?.executionDigest === (entity.activeExecutionDigest ?? null);
         const projected: Panel = {
           id: slotId,
-          title: this.titleFor(slotId, snapshot.source),
+          title:
+            normalizePanelTitle(detail.slot.current_entity_title) ??
+            this.titleFor(slotId, snapshot.source),
           runtimeEntityId: detail.slot.current_entity_id,
           effectiveVersion: source.effectiveVersion,
           buildKey: entity.activeBuildKey ?? null,

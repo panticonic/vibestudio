@@ -612,6 +612,37 @@ describe("PanelManager", () => {
     expect(projectedRegistry.getPanel(created.panelId)?.icon).toBeUndefined();
   });
 
+  it("projects the durable explicit title when refreshing a panel", async () => {
+    const sourceRegistry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const sourceManager = new PanelManager({
+      registry: sourceRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await sourceManager.createBrowser(null, "about:blank", { addAsRoot: true });
+    const originalGetPanelDetail = deps.workspaceState.getPanelDetail.bind(deps.workspaceState);
+    vi.spyOn(deps.workspaceState, "getPanelDetail").mockImplementation(async (slotId) => {
+      const detail = await originalGetPanelDetail(slotId);
+      return detail
+        ? {
+            ...detail,
+            slot: { ...detail.slot, current_entity_title: "Project terminal" },
+          }
+        : detail;
+    });
+
+    const projectedRegistry = new PanelRegistry({});
+    const projectedManager = new PanelManager({
+      registry: projectedRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    await projectedManager.refreshPanel(created.panelId);
+
+    expect(projectedRegistry.getPanel(created.panelId)?.title).toBe("Project terminal");
+  });
+
   it("places an external panel in an explicitly shared orchestration context", async () => {
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps("/tmp/workspace");

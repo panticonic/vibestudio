@@ -1452,25 +1452,56 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const entry = this.registry.get(canonicalName);
     if (!entry || entry.activeBundleKey || entry.status !== "building") return;
     const activation = this.activationTails.get(canonicalName);
-    if (!activation) return;
-    if (!signal) {
-      await activation;
+    if (activation) {
+      if (!signal) {
+        await activation;
+        return;
+      }
+      if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        signal.addEventListener("abort", onAbort, { once: true });
+        void activation.then(
+          () => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", onAbort);
+            reject(error);
+          }
+        );
+      });
       return;
     }
-    if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+
+    // A trusted first build can be queued behind the bounded startup build
+    // pool: its registry entry is already `building`, but its activation tail
+    // does not exist until that target gets a worker slot. Join the exact
+    // registry transition instead of failing early or waiting for unrelated
+    // approvals/reconciliation to settle.
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     await new Promise<void>((resolve, reject) => {
-      const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-      signal.addEventListener("abort", onAbort, { once: true });
-      void activation.then(
-        () => {
-          signal.removeEventListener("abort", onAbort);
-          resolve();
-        },
-        (error: unknown) => {
-          signal.removeEventListener("abort", onAbort);
-          reject(error);
-        }
-      );
+      let settled = false;
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        unsubscribe();
+        signal?.removeEventListener("abort", onAbort);
+        if (error !== undefined) reject(error);
+        else resolve();
+      };
+      const inspect = () => {
+        const current = this.registry.get(canonicalName);
+        if (!current?.activeBundleKey && current?.status === "building") return;
+        finish();
+      };
+      const unsubscribe = this.registry.subscribe((change) => {
+        if (change.name === canonicalName) inspect();
+      });
+      const onAbort = () => finish(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      inspect();
     });
   }
 

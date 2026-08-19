@@ -43,6 +43,8 @@ type PendingApproval = {
   approvalId: string;
   kind: string;
   title?: string;
+  capability?: string;
+  resource?: unknown;
   allowedDecisions?: Array<
     "once" | "session" | "task" | "mission" | "agent" | "version" | "lock" | "deny"
   >;
@@ -60,12 +62,16 @@ type PendingApproval = {
   }>;
 };
 
-async function getTerminalPanelId(app: ElectronApplication, window: Page): Promise<string> {
+async function getTerminalPanelId(
+  app: ElectronApplication,
+  window: Page,
+  resolvedApprovals?: PendingApproval[]
+): Promise<string> {
   const deadline = Date.now() + 45_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await resolvePendingTerminalWork(app, window);
+      await resolvePendingTerminalWork(app, window, resolvedApprovals);
       const id = await app.evaluate(() => {
         type PanelNode = {
           id: string;
@@ -151,18 +157,26 @@ async function clickLaunchApprovalButton(app: ElectronApplication): Promise<bool
   );
 }
 
-async function resolvePendingTerminalWork(app: ElectronApplication, window?: Page): Promise<void> {
-  await approvePendingTerminalWork(app, window);
+async function resolvePendingTerminalWork(
+  app: ElectronApplication,
+  window?: Page,
+  resolvedApprovals?: PendingApproval[]
+): Promise<void> {
+  await approvePendingTerminalWork(app, window, resolvedApprovals);
   await clickLaunchApprovalButton(app).catch(() => false);
 }
 
-async function waitForTerminalPanel(app: ElectronApplication, window: Page): Promise<string> {
-  await resolvePendingTerminalWork(app, window);
-  const panelId = await getTerminalPanelId(app, window);
+async function waitForTerminalPanel(
+  app: ElectronApplication,
+  window: Page,
+  resolvedApprovals?: PendingApproval[]
+): Promise<string> {
+  await resolvePendingTerminalWork(app, window, resolvedApprovals);
+  const panelId = await getTerminalPanelId(app, window, resolvedApprovals);
   await expect
     .poll(
       async () => {
-        await approvePendingTerminalWork(app, window).catch(() => {});
+        await approvePendingTerminalWork(app, window, resolvedApprovals).catch(() => {});
         return isPanelReady(app, panelId).catch(() => false);
       },
       { timeout: 30_000, intervals: [250, 500, 1000] }
@@ -185,6 +199,8 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
       approvalId: string;
       kind: string;
       title?: string;
+      capability?: unknown;
+      resource?: unknown;
       allowedDecisions?: string[];
       mode?: string;
       parts?: Array<{
@@ -203,6 +219,8 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
       approvalId: approval.approvalId,
       kind: approval.kind,
       title: approval.title,
+      capability: typeof approval.capability === "string" ? approval.capability : undefined,
+      resource: approval.resource,
       allowedDecisions: Array.isArray(approval.allowedDecisions)
         ? approval.allowedDecisions.filter(
             (decision): decision is NonNullable<PendingApproval["allowedDecisions"]>[number] =>
@@ -301,10 +319,15 @@ async function resolveApproval(app: ElectronApplication, approval: PendingApprov
   }, approval);
 }
 
-async function approvePendingTerminalWork(app: ElectronApplication, window?: Page): Promise<void> {
+async function approvePendingTerminalWork(
+  app: ElectronApplication,
+  window?: Page,
+  resolved?: PendingApproval[]
+): Promise<void> {
   const pending = await listPendingApprovals(app);
   for (const approval of pending) {
     await resolveApproval(app, approval);
+    resolved?.push(approval);
   }
   if (window) {
     await window
@@ -517,6 +540,62 @@ async function waitForUsableTerminalSession(
   return session;
 }
 
+async function waitForAutomaticallyResumedTerminalSession(
+  app: ElectronApplication,
+  panelId: string,
+  window: Page,
+  resolvedApprovals: PendingApproval[]
+): Promise<TerminalSession> {
+  let lastPanelText = "";
+  let lastPanelHtml = "";
+  try {
+    await expect
+      .poll(
+        async () => {
+          await approvePendingTerminalWork(app, window, resolvedApprovals);
+          const sessions = await listTerminalSessions(app, panelId).catch(() => []);
+          const alive = sessions.find((session) => session.alive !== false);
+          if (alive) return alive.sessionId;
+          lastPanelHtml = await getPanelHtml(app, panelId).catch(() => "");
+          lastPanelText = await app
+            .evaluate(async (_electron, id) => {
+              const testApi = (
+                globalThis as {
+                  __testApi?: { getPanelText: (panelId: string) => Promise<string> };
+                }
+              ).__testApi;
+              return testApi ? await testApi.getPanelText(id) : "";
+            }, panelId)
+            .catch(() => "");
+          return "";
+        },
+        { timeout: 120_000, intervals: [250, 500, 1000, 2000] }
+      )
+      .not.toBe("");
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+        "The initial terminal invocation did not resume after its approval. " +
+        "This assertion intentionally does not click Retry or issue another openSession call.\n" +
+        `resolvedApprovals=${JSON.stringify(
+          resolvedApprovals.map(({ approvalId, kind, capability, title }) => ({
+            approvalId,
+            kind,
+            capability,
+            title,
+          }))
+        )}\n` +
+        `panelText=${JSON.stringify(lastPanelText.slice(0, 2000))}\n` +
+        `panelHtml=${JSON.stringify(lastPanelHtml.slice(0, 4000))}`
+    );
+  }
+
+  const sessions = await listTerminalSessions(app, panelId);
+  const session = sessions.find((item) => item.alive !== false);
+  if (!session) throw new Error("No automatically resumed terminal session");
+  return session;
+}
+
 function severePanelDiagnostics(items: PanelDiagnostic[]): PanelDiagnostic[] {
   return items.filter((item) => {
     if (item.type === "render-process-gone" || item.type === "unresponsive") return true;
@@ -686,7 +765,8 @@ test.describe("Terminal Startup", () => {
     workspacePath = createTerminalOnlyWorkspace();
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 90_000 });
     const { app } = testApp;
-    let terminalPanelId = await waitForTerminalPanel(app, testApp.window);
+    const resolvedApprovals: PendingApproval[] = [];
+    let terminalPanelId = await waitForTerminalPanel(app, testApp.window, resolvedApprovals);
     await startPanelDiagnostics(app, terminalPanelId);
     expect(await terminalAuthorityRequests(app, terminalPanelId)).toContainEqual(
       expect.objectContaining({
@@ -712,7 +792,22 @@ test.describe("Terminal Startup", () => {
         })
       );
 
-    const session = await waitForUsableTerminalSession(app, terminalPanelId, testApp.window);
+    const session = await waitForAutomaticallyResumedTerminalSession(
+      app,
+      terminalPanelId,
+      testApp.window,
+      resolvedApprovals
+    );
+    expect(
+      resolvedApprovals.some(
+        (approval) =>
+          approval.kind === "capability" &&
+          approval.capability?.includes("native.shell.execute") === true
+      ),
+      `Expected terminal startup to exercise its native-shell approval, observed ${JSON.stringify(
+        resolvedApprovals.map(({ kind, capability, title }) => ({ kind, capability, title }))
+      )}`
+    ).toBe(true);
     const sessionRef: TerminalSessionRef = { sessionId: session.sessionId };
 
     await expect

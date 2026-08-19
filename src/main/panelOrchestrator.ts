@@ -1198,6 +1198,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     this.shellCore.applyStateArgsProjection(asPanelSlotId(update.panelId), update.stateArgs);
   }
 
+  /** Refresh server-owned presentation fields before notifying hosted shell chrome. */
+  async refreshPanelPresentations(panelIds: readonly string[]): Promise<void> {
+    await Promise.all(
+      [...new Set(panelIds)].map((panelId) => this.shellCore.refreshPanel(asPanelSlotId(panelId)))
+    );
+  }
+
   async recoverShellSnapshot(
     opts: { loadFocusedView?: boolean } = {}
   ): Promise<PanelRecoverySnapshot> {

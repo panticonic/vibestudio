@@ -1344,6 +1344,9 @@ export class FileUnitIdentityApprovalStore implements UnitIdentityApprovalStore 
 
 export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   private entries = new Map<string, Entry>();
+  private readonly changeListeners = new Set<
+    (change: { name: string; previous: Entry | null; current: Entry | null }) => void
+  >();
   private readonly filePath: string;
   private readonly unitKind: Entry["unitKind"];
   private readonly isEntry: (value: unknown) => value is Entry;
@@ -1377,12 +1380,19 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     return this.entries.has(name);
   }
 
+  subscribe(
+    listener: (change: { name: string; previous: Entry | null; current: Entry | null }) => void
+  ): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
   upsert(entry: Entry): void {
     this.assertUnitKind(entry);
     const next = this.normalizeEntry({ ...entry });
-    this.writeEntry(this.entries.get(next.name) ?? null, next, () =>
-      this.entries.set(next.name, next)
-    );
+    const previous = this.entries.get(next.name) ?? null;
+    this.writeEntry(previous, next, () => this.entries.set(next.name, next));
+    this.notifyChange(next.name, previous, next);
   }
 
   patch(name: string, patch: Partial<Entry>): Entry {
@@ -1391,13 +1401,28 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     const next = this.normalizeEntry({ ...current, ...patch, unitKind: this.unitKind, name });
     this.assertUnitKind(next);
     this.writeEntry(current, next, () => this.entries.set(name, next));
+    this.notifyChange(name, current, next);
     return { ...next };
   }
 
   delete(name: string): boolean {
+    const previous = this.entries.get(name) ?? null;
     const deleted = this.entries.delete(name);
-    if (deleted) this.save();
+    if (deleted) {
+      this.save();
+      this.notifyChange(name, previous, null);
+    }
     return deleted;
+  }
+
+  private notifyChange(name: string, previous: Entry | null, current: Entry | null): void {
+    for (const listener of this.changeListeners) {
+      listener({
+        name,
+        previous: previous ? { ...previous } : null,
+        current: current ? { ...current } : null,
+      });
+    }
   }
 
   private load(): void {

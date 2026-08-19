@@ -317,6 +317,26 @@ export function createServerEventBridge(
       return;
     }
 
+    if (bareEvent === "panel-presentation-changed") {
+      const change =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel-presentation-changed"];
+      if (!panelOrchestrator) {
+        emitNormalized(bareEvent, change);
+        return;
+      }
+      void panelOrchestrator
+        .refreshPanelPresentations(change.panelIds)
+        .catch((error: unknown) => {
+          deps.warn(
+            `[panelPresentation] failed to refresh changed panels: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        })
+        .finally(() => emitNormalized(bareEvent, change));
+      return;
+    }
+
     if (bareEvent === "apps:available") {
       const appPayload = deps.resolveAppAvailableEvent
         ? deps.resolveAppAvailableEvent(payload)

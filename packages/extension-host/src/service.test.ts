@@ -1337,6 +1337,40 @@ describe("ExtensionHost activation", () => {
     ]);
   });
 
+  it("awaits a requested trusted extension queued before its activation tail exists", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, extensionNode } = makeHost({ extensionTransport, installed: false });
+    host.registry.upsert({
+      unitKind: "extension",
+      name: extensionNode.name,
+      version: "1.0.0",
+      source: { kind: "workspace-repo", repo: extensionNode.relativePath, ref: "main" },
+      installedAt: Date.now(),
+      activeEv: null,
+      activeSourceHash: null,
+      activeBundleKey: null,
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      status: "building",
+      lastError: null,
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    const invocation = host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []);
+    await Promise.resolve();
+    expect(extensionTransport.call).not.toHaveBeenCalled();
+
+    host.registry.patch(extensionNode.name, {
+      activeEv: "ev-ready",
+      activeSourceHash: "state-ready",
+      activeBundleKey: "bundle-key",
+      status: "available",
+    });
+
+    await expect(invocation).resolves.toBe("transport-result");
+  });
+
   it("fails with ENOTREADY when an extension is not running", async () => {
     const { host, extensionNode } = makeHost();
     vi.spyOn(host.processes, "isRunning").mockReturnValue(false);

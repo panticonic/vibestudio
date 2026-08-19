@@ -57,6 +57,28 @@ function entry(overrides: Partial<UnitRegistryEntryBase> = {}): UnitRegistryEntr
 }
 
 describe("UnitRegistry", () => {
+  it("publishes committed registry transitions to target-local waiters", () => {
+    const registry = new UnitRegistry<UnitRegistryEntryBase>({
+      statePath: tempRoot(),
+      unitKind: "extension",
+    });
+    const changes: Array<{ name: string; current: UnitRegistryEntryBase | null }> = [];
+    const unsubscribe = registry.subscribe(({ name, current }) => changes.push({ name, current }));
+
+    registry.upsert(entry());
+    registry.patch(entry().name, { status: "available", activeBundleKey: "b".repeat(64) });
+    unsubscribe();
+    registry.delete(entry().name);
+
+    expect(changes).toEqual([
+      { name: entry().name, current: expect.objectContaining({ status: "pending-approval" }) },
+      {
+        name: entry().name,
+        current: expect.objectContaining({ status: "available", activeBundleKey: "b".repeat(64) }),
+      },
+    ]);
+  });
+
   it("does not publish an owner record when exact execution reservation fails", () => {
     const root = tempRoot();
     const registry = new UnitRegistry<UnitRegistryEntryBase>({
