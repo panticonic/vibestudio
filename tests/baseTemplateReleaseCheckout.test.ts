@@ -11,8 +11,8 @@ describe("pinned Base release checkout", () => {
   it("reads the checked-in release coordinates", () => {
     expect(readPinnedBaseRelease()).toEqual({
       url: "https://github.com/panticonic/vibestudio-workspace-base.git",
-      ref: "refs/tags/v0.3.23",
-      commit: "7470d049a97ad0b6b515f57b855970c9d4bf096e",
+      ref: "refs/tags/v0.3.24",
+      commit: "3ab74952a218ad9d2b873b880a29f9a9f1113a6d",
     });
   });
 
