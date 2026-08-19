@@ -14,11 +14,30 @@ export interface LifecycleContextControlStore {
   resolveRecord(id: string): Promise<{ id: string; parentId?: string } | null>;
 }
 
+async function entityIsControlledByCaller(
+  store: LifecycleContextControlStore,
+  callerId: string,
+  ownerEntityId: string
+): Promise<boolean> {
+  const seen = new Set<string>();
+  let currentId: string | undefined = ownerEntityId;
+  while (currentId && !seen.has(currentId)) {
+    if (currentId === callerId) return true;
+    seen.add(currentId);
+    currentId = (await store.resolveRecord(currentId))?.parentId;
+  }
+  return false;
+}
+
 /**
- * True when `callerId` owns one exact direct lifecycle child context.
+ * True when `callerId` owns the lifecycle path from `originContextId` to the
+ * target context.
  *
- * The edge may name the caller itself or an entity directly created by it.
- * Lineage edges and transitive context descendants deliberately do not count.
+ * Lifecycle teardown treats a nested lifecycle tree as one ownership unit, so
+ * context-transition authorization follows the same durable topology. Every
+ * traversed context must have exactly one lifecycle parent and every edge must
+ * name an entity controlled by the caller. Missing owners, branches, and cycles
+ * fail closed.
  */
 export async function callerControlsLifecycleContext(
   store: LifecycleContextControlStore,
@@ -27,15 +46,25 @@ export async function callerControlsLifecycleContext(
   targetContextId: string
 ): Promise<boolean> {
   if (!originContextId) return false;
-  const edges = await store.listContextEdgesByOwner({
-    ownerContextId: originContextId,
-    kind: "lifecycle",
-  });
-  const edge = edges.find((candidate) => candidate.contextId === targetContextId);
-  if (!edge?.ownerEntityId) return false;
-  if (edge.ownerEntityId === callerId) return true;
-  const owner = await store.resolveRecord(edge.ownerEntityId);
-  return owner?.parentId === callerId;
+  const seen = new Set([targetContextId]);
+  let currentContextId = targetContextId;
+  while (currentContextId !== originContextId) {
+    const parents = (await store.listContextEdgesByChild(currentContextId)).filter(
+      (edge) => edge.kind === "lifecycle"
+    );
+    if (parents.length !== 1) return false;
+    const parent = parents[0]!;
+    if (
+      !parent.ownerEntityId ||
+      !(await entityIsControlledByCaller(store, callerId, parent.ownerEntityId))
+    ) {
+      return false;
+    }
+    if (seen.has(parent.ownerContextId)) return false;
+    currentContextId = parent.ownerContextId;
+    seen.add(currentContextId);
+  }
+  return true;
 }
 
 async function entitiesShareControlLineage(
@@ -93,7 +122,8 @@ async function lineagePathToRoot(
 
 /**
  * True when a caller may move an execution surface between two contexts it
- * controls. Lifecycle children retain the existing directed ownership rule.
+ * controls. Lifecycle descendants retain directed ownership across their
+ * complete, durably owned path.
  * Conversation-lineage movement is bidirectional (parent, child, or sibling),
  * but every edge on both paths must carry an entity owner in the caller's
  * durable entity ancestry. Merely knowing a fork context id never grants it.

@@ -412,6 +412,8 @@ describe("system-test durable driver lifecycle", () => {
     );
     expect(code).not.toContain('kind: "do",\n        source: "workers/system-test-runner"');
     expect(code).toContain("let cancellationCleanup = null");
+    expect(code).toContain("const durableHeartbeatLimit = 48 * 1024");
+    expect(code).not.toContain("const durableHeartbeatLimit = 220 * 1024");
     expect(code).toContain("const describeCleanupFailure = (error) =>");
     expect(code).toContain("let cancellationRequested = false");
     expect(code).toContain("cancellationCleanup = cleanup");

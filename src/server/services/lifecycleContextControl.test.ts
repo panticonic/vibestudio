@@ -10,19 +10,18 @@ function store(input: {
   ownerParentId?: string | null;
 }): LifecycleContextControlStore {
   return {
-    listContextEdgesByOwner: vi.fn(async ({ kind }) => {
-      expect(kind).toBe("lifecycle");
-      return input.ownerEntityId === undefined
+    listContextEdgesByOwner: vi.fn(async () => []),
+    listContextEdgesByChild: vi.fn(async (contextId) =>
+      contextId !== "ctx-child" || input.ownerEntityId === undefined
         ? []
         : [
             {
-              contextId: "ctx-child",
+              ownerContextId: "ctx-parent",
               kind: "lifecycle" as const,
               ownerEntityId: input.ownerEntityId,
             },
-          ];
-    }),
-    listContextEdgesByChild: vi.fn(async () => []),
+          ]
+    ),
     resolveRecord: vi.fn(async (id) => ({ id, parentId: input.ownerParentId ?? undefined })),
   };
 }
@@ -48,6 +47,91 @@ describe("callerControlsLifecycleContext", () => {
         "ctx-child"
       )
     ).resolves.toBe(true);
+  });
+
+  it("accepts a fully owned nested lifecycle path", async () => {
+    const controlStore: LifecycleContextControlStore = {
+      listContextEdgesByOwner: vi.fn(async () => []),
+      listContextEdgesByChild: vi.fn(async (contextId) => {
+        if (contextId === "ctx-grandchild") {
+          return [
+            {
+              ownerContextId: "ctx-child",
+              kind: "lifecycle" as const,
+              ownerEntityId: "panel:child",
+            },
+          ];
+        }
+        if (contextId === "ctx-child") {
+          return [
+            {
+              ownerContextId: "ctx-parent",
+              kind: "lifecycle" as const,
+              ownerEntityId: "agent:owner",
+            },
+          ];
+        }
+        return [];
+      }),
+      resolveRecord: vi.fn(async (id) => ({
+        id,
+        parentId:
+          id === "panel:child" ? "agent:owner" : id === "agent:owner" ? "eval:runner" : undefined,
+      })),
+    };
+
+    await expect(
+      callerControlsLifecycleContext(controlStore, "eval:runner", "ctx-parent", "ctx-grandchild")
+    ).resolves.toBe(true);
+  });
+
+  it("rejects nested lifecycle paths with unrelated owners, multiple parents, or cycles", async () => {
+    const lifecycleStore = (
+      edges: Record<string, Array<{ ownerContextId: string; ownerEntityId: string | null }>>,
+      parents: Record<string, string | undefined> = {}
+    ): LifecycleContextControlStore => ({
+      listContextEdgesByOwner: vi.fn(async () => []),
+      listContextEdgesByChild: vi.fn(async (contextId) =>
+        (edges[contextId] ?? []).map((edge) => ({ ...edge, kind: "lifecycle" as const }))
+      ),
+      resolveRecord: vi.fn(async (id) => ({ id, parentId: parents[id] })),
+    });
+
+    await expect(
+      callerControlsLifecycleContext(
+        lifecycleStore({
+          "ctx-grandchild": [{ ownerContextId: "ctx-child", ownerEntityId: "panel:unrelated" }],
+          "ctx-child": [{ ownerContextId: "ctx-parent", ownerEntityId: "eval:runner" }],
+        }),
+        "eval:runner",
+        "ctx-parent",
+        "ctx-grandchild"
+      )
+    ).resolves.toBe(false);
+    await expect(
+      callerControlsLifecycleContext(
+        lifecycleStore({
+          "ctx-child": [
+            { ownerContextId: "ctx-parent", ownerEntityId: "eval:runner" },
+            { ownerContextId: "ctx-other", ownerEntityId: "eval:runner" },
+          ],
+        }),
+        "eval:runner",
+        "ctx-parent",
+        "ctx-child"
+      )
+    ).resolves.toBe(false);
+    await expect(
+      callerControlsLifecycleContext(
+        lifecycleStore({
+          "ctx-child": [{ ownerContextId: "ctx-loop", ownerEntityId: "eval:runner" }],
+          "ctx-loop": [{ ownerContextId: "ctx-child", ownerEntityId: "eval:runner" }],
+        }),
+        "eval:runner",
+        "ctx-parent",
+        "ctx-child"
+      )
+    ).resolves.toBe(false);
   });
 
   it("rejects unrelated callers, missing edges, and callers without an origin context", async () => {
