@@ -14,12 +14,27 @@ on:
 permissions: {}
 
 jobs:
+  release-quality:
+    name: Validate release commit
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   github-release:
     name: Create GitHub release
+    needs: release-quality
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify tag matches the committed package version
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
+
       - name: GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
@@ -61,8 +76,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Set version from tag
-        run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
+      - name: Verify tag matches the committed package version
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
 
       - name: Build Linux installers
         run: pnpm dist:linux
@@ -140,8 +155,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Set version from tag
-        run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
+      - name: Verify tag matches the committed package version
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
 
       # Compile before any signing secret enters the environment. electron-builder
       # currently couples macOS packaging, signing, and notarization in one command,

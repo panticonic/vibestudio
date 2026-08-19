@@ -8,12 +8,32 @@ import {
 } from "../scripts/checkout-base-template-release.mjs";
 
 describe("pinned Base release checkout", () => {
-  it("reads the checked-in release coordinates", () => {
-    expect(readPinnedBaseRelease()).toEqual({
-      url: "https://github.com/panticonic/vibestudio-workspace-base.git",
-      ref: "refs/tags/v0.3.24",
-      commit: "3ab74952a218ad9d2b873b880a29f9a9f1113a6d",
-    });
+  it("reads release coordinates from the artifact without duplicating the current pin", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-base-release-read-"));
+    const commit = "a".repeat(40);
+    try {
+      fs.mkdirSync(path.join(root, "build-resources"));
+      fs.writeFileSync(
+        path.join(root, "build-resources", "base-template-release.json"),
+        JSON.stringify({
+          format: "vibestudio-base-release/1",
+          baseTemplate: {
+            url: "git+https://example.test/base.git",
+            ref: "refs/tags/v1.2.3",
+            commit,
+            snapshot: `v1-sha256:${"b".repeat(64)}`,
+          },
+        })
+      );
+
+      expect(readPinnedBaseRelease(root)).toEqual({
+        url: "https://example.test/base.git",
+        ref: "refs/tags/v1.2.3",
+        commit,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("checks out only the pinned ref and verifies the detached commit", () => {
