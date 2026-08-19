@@ -132,6 +132,34 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     expect(diags.some((diagnostic) => diagnostic.file.includes("leaky-host"))).toBe(false);
   });
 
+  it("accepts bundler asset imports (css, svg, png) without a checkout-provided types/assets.d.ts", async () => {
+    const typesDir = path.join(sourceRoot, "types");
+    const saved = path.join(sourceRoot, "types.saved");
+    await fsp.rename(typesDir, saved);
+    const sourcePath = path.join(sourceRoot, "panels/hello/with-assets.ts");
+    await fsp.writeFile(
+      sourcePath,
+      `import "./styles.css";
+import logo from "./logo.svg";
+import photo from "./photo.png";
+export const assets: string = logo + photo;`
+    );
+    await fsp.writeFile(path.join(sourceRoot, "panels/hello/styles.css"), `.root{}`);
+    await fsp.writeFile(path.join(sourceRoot, "panels/hello/logo.svg"), `<svg/>`);
+    await fsp.writeFile(path.join(sourceRoot, "panels/hello/photo.png"), "");
+    try {
+      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      expect(diags.filter((diagnostic) => diagnostic.file.endsWith("with-assets.ts"))).toEqual([]);
+    } finally {
+      await Promise.all(
+        ["with-assets.ts", "styles.css", "logo.svg", "photo.png"].map((name) =>
+          fsp.rm(path.join(sourceRoot, "panels/hello", name), { force: true })
+        )
+      );
+      await fsp.rename(saved, typesDir);
+    }
+  });
+
   it("loads exact workspace-wide asset declarations for side-effect CSS imports", async () => {
     const sourcePath = path.join(sourceRoot, "panels/hello/with-style.ts");
     const stylePath = path.join(sourceRoot, "panels/hello/styles.css");

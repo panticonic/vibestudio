@@ -16,6 +16,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as esbuild from "esbuild";
+import { ASSET_URL_EXTENSIONS } from "@vibestudio/shared/assetModules";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -170,43 +171,9 @@ function resolveMaxConcurrentBuilds(): number {
 }
 
 const MAX_CONCURRENT_BUILDS = resolveMaxConcurrentBuilds();
-const PANEL_ASSET_LOADERS: Record<string, esbuild.Loader> = {
-  ".png": "file",
-  ".jpg": "file",
-  ".jpeg": "file",
-  ".gif": "file",
-  ".webp": "file",
-  ".avif": "file",
-  ".svg": "file",
-  ".ico": "file",
-  ".bmp": "file",
-  ".tif": "file",
-  ".tiff": "file",
-  ".woff": "file",
-  ".woff2": "file",
-  ".ttf": "file",
-  ".otf": "file",
-  ".eot": "file",
-  ".mp3": "file",
-  ".aac": "file",
-  ".m4a": "file",
-  ".flac": "file",
-  ".oga": "file",
-  ".wav": "file",
-  ".ogg": "file",
-  ".opus": "file",
-  ".aif": "file",
-  ".aiff": "file",
-  ".mp4": "file",
-  ".m4v": "file",
-  ".webm": "file",
-  ".ogv": "file",
-  ".mov": "file",
-  ".avi": "file",
-  ".mkv": "file",
-  ".wasm": "file",
-  ".pdf": "file",
-};
+const PANEL_ASSET_LOADERS: Record<string, esbuild.Loader> = Object.fromEntries(
+  ASSET_URL_EXTENSIONS.map((ext) => [ext, "file" as esbuild.Loader])
+);
 
 const LIBRARY_ASSET_LOADERS: Record<string, esbuild.Loader> = Object.fromEntries(
   Object.keys(PANEL_ASSET_LOADERS).map((ext) => [ext, "dataurl" as esbuild.Loader])

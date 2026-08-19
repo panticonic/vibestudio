@@ -13,6 +13,7 @@
  */
 
 import * as path from "path";
+import { assetModuleDeclarations } from "@vibestudio/shared/assetModules";
 import * as fsp from "fs/promises";
 import type {
   TypeCheckDiagnostic,
@@ -144,6 +145,14 @@ export async function typecheckUnit(
       service.updateFile(path.resolve(unitDir, relPath), content);
     }
     const sharedTypesDir = path.join(sourceRoot, "types");
+    // The bundler's asset contract: every extension esbuild loads as a URL or
+    // stylesheet must also be an importable module for tsc, in every
+    // repository view — not only in a checkout that happens to carry a
+    // hand-written `types/assets.d.ts`.
+    service.updateFile(
+      path.join(sharedTypesDir, "__vibestudio_asset_modules__.d.ts"),
+      assetModuleDeclarations()
+    );
     try {
       const sharedTypes = await loadSourceFiles(createDiskFileSource(sharedTypesDir), ".");
       for (const [relPath, content] of sharedTypes) {
