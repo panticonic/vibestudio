@@ -426,6 +426,10 @@ export class PanelManager {
       await workspaceState.createSlot({
         slotId,
         parentSlotId: opts?.parentId ?? null,
+        // The title is known here, so it is part of the creation fact. Leaving
+        // it out is what made a new panel present as its own slot id until its
+        // document loaded and reported a title of its own.
+        title: displayTitle,
         initialEntry: {
           entryKey: historyEntryKey,
           entityId,
@@ -556,6 +560,13 @@ export class PanelManager {
     const browserSource = `browser:${url}`;
 
     const snapshot = createSnapshot(browserSource, contextId, {});
+    // Resolved before the slot exists: the binding carries it, so the tree can
+    // name the tab from the first render instead of after the page loads.
+    const title =
+      normalizePanelTitle(opts?.title) ??
+      normalizePanelTitle(parsed.hostname) ??
+      normalizePanelTitle(parsed.protocol.replace(/:$/, "")) ??
+      "browser";
 
     const handle = await runtime.createEntity({
       kind: "panel",
@@ -569,6 +580,7 @@ export class PanelManager {
       await workspaceState.createSlot({
         slotId,
         parentSlotId: parentId,
+        title,
         initialEntry: {
           entryKey: historyEntryKey,
           entityId,
@@ -593,11 +605,6 @@ export class PanelManager {
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
-    const title =
-      normalizePanelTitle(opts?.title) ??
-      normalizePanelTitle(parsed.hostname) ??
-      normalizePanelTitle(parsed.protocol.replace(/:$/, "")) ??
-      "browser";
     const panel: Panel = {
       id: slotId,
       title,

@@ -129,6 +129,7 @@ function createWorkspaceMemory() {
     cleanupComplete: entity.status === "retired",
   });
 
+  const slotCreateInputs: SlotCreateInput[] = [];
   const workspaceState: WorkspaceStateClient & {
     commitPreparedNavigation(
       input: SlotCommitPreparedNavigationInput
@@ -234,6 +235,7 @@ function createWorkspaceMemory() {
       return null;
     },
     async createSlot(input: SlotCreateInput) {
+      slotCreateInputs.push(input);
       slots.set(input.slotId, {
         slot_id: input.slotId,
         parent_slot_id: input.parentSlotId,
@@ -470,6 +472,7 @@ function createWorkspaceMemory() {
       entities,
       retired,
       created,
+      slotCreateInputs,
       get revision() {
         return revision;
       },
@@ -501,6 +504,26 @@ describe("PanelManager", () => {
     await expect(manager.hasRootPanelSource("panels/existing")).resolves.toBe(true);
     await expect(manager.hasRootPanelSource("panels/missing")).resolves.toBe(false);
     expect(mem.state.slots.size).toBe(1);
+  });
+
+  it("creates a slot with the title it already knows, so the tree never shows a slot id", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+
+    await manager.create("panels/existing", {
+      isRoot: true,
+      addAsRoot: true,
+      title: "Ad Blocking",
+    });
+    expect(mem.state.slotCreateInputs.at(-1)?.title).toBe("Ad Blocking");
+
+    // With no requested title the manifest still names the panel: a slot id is
+    // never a display name, so creation must carry *something* humane.
+    await manager.create("panels/other", { isRoot: true, addAsRoot: true });
+    const created = mem.state.slotCreateInputs.at(-1);
+    expect(created?.title).toBe("other");
+    expect(created?.title).not.toBe(created?.slotId);
   });
 
   const tempDirs: string[] = [];

@@ -42,9 +42,16 @@ const searchResultSchema = z
 export const workspacePresentationMethods = defineReceiverServiceMethods({
   bindSlot: {
     ...method("write"),
-    description: "Bind a shell slot to the presented panel and entity.",
-    args: z.tuple([z.string().min(1), z.string().min(1), z.string().min(1)]),
-    argumentNames: ["slotId", "entityId", "source"],
+    description:
+      "Bind a shell slot to the presented panel and entity, recording the display " +
+      "title the binder already knows so the tree never has to present a slot id.",
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1),
+      z.string().min(1),
+      z.string().nullable().optional(),
+    ]),
+    argumentNames: ["slotId", "entityId", "source", "title"],
     returns: z.void(),
   },
   removeSlots: {

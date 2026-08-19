@@ -62,6 +62,12 @@ export interface SlotCommitPreparedNavigationResult {
 export interface SlotCreateInput {
   slotId: PanelSlotId;
   parentSlotId: PanelSlotId | null;
+  /**
+   * Display title known at creation. Presentation only: it is recorded with the
+   * slot's binding so the new node is never presented as its own slot id, and a
+   * title the entity already carries still wins.
+   */
+  title?: string;
   placement?: WorkspacePanelTreePlacement;
   initialEntry?: SlotHistoryEntryInput;
 }

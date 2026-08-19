@@ -538,6 +538,79 @@ describe("workspaceStateService — slot-state change hook", () => {
     });
   });
 
+  it("binds the creation-time title so a new slot is never presented as its id", async () => {
+    const { svc, calls, presentationCalls } = makeService({});
+    const input = {
+      slotId: "panel:tree/news",
+      parentSlotId: null,
+      title: "Daily News",
+      initialEntry: {
+        entryKey: "nav-news",
+        entityId: "panel:nav-news",
+        source: "panels/news",
+        contextId: "ctx-news",
+      },
+    };
+
+    await svc.handler(makeCtx() as never, "slot.create", [input]);
+
+    expect(presentationCalls).toContainEqual({
+      method: "bindSlot",
+      args: [input.slotId, input.initialEntry.entityId, input.initialEntry.source, "Daily News"],
+    });
+    // Presentation only: the state engine stores slots, not display names.
+    const slotCreate = calls.find((call) => call.method === "slotCreate");
+    expect(slotCreate?.args[0]).not.toHaveProperty("title");
+  });
+
+  it("presents an untitled node by its source rather than by its slot id", async () => {
+    const { svc } = makeService({
+      dispatchReturns: {
+        panelTreePage: {
+          revision: 1,
+          nodes: [
+            {
+              slotId: "panel:tree/news",
+              parentSlotId: null,
+              source: "panels/news",
+              childCount: 0,
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+      // Nothing has recorded a title for this slot yet.
+      presentationDispatch: async (method) => (method === "titlesForSlots" ? {} : undefined),
+    });
+
+    const page = (await svc.handler(makeCtx() as never, "panelTree.page", [
+      { group: { kind: "roots", ownerUserId: null }, limit: 50 },
+    ])) as { nodes: Array<{ title: string }> };
+
+    expect(page.nodes[0]?.title).toBe("panels/news");
+  });
+
+  it("binds a null title when the opener had none to give", async () => {
+    const { svc, presentationCalls } = makeService({});
+    await svc.handler(makeCtx() as never, "slot.create", [
+      {
+        slotId: "panel:tree/news",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: "nav-news",
+          entityId: "panel:nav-news",
+          source: "panels/news",
+          contextId: "ctx-news",
+        },
+      },
+    ]);
+
+    expect(presentationCalls).toContainEqual({
+      method: "bindSlot",
+      args: ["panel:tree/news", "panel:nav-news", "panels/news", null],
+    });
+  });
+
   const reads: Array<[method: string, args: unknown[]]> = [
     ["panelTree.rootGroups", [{}]],
     ["panelTree.rootsForCaller", [{ limit: 50 }]],

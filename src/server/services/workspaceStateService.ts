@@ -143,7 +143,10 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       const icon = node.source ? deps.getUnitIcon?.(node.source) : undefined;
       return {
         ...node,
-        title: titles[node.slotId] ?? node.slotId,
+        // A slot id is an address, not a name. Slots created before titles were
+        // recorded with the binding, and any node whose title write is still in
+        // flight, fall back to the source they present — never to their id.
+        title: titles[node.slotId] ?? node.source ?? node.slotId,
         ...(icon ? { icon } : {}),
         ...(node.source
           ? {
@@ -170,7 +173,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       ...detail,
       slot: {
         ...detail.slot,
-        current_entity_title: titles[detail.slot.slot_id] ?? detail.slot.slot_id,
+        current_entity_title:
+          titles[detail.slot.slot_id] ?? detail.currentHistory.source ?? detail.slot.slot_id,
       },
       ...(icon ? { icon } : {}),
     };
@@ -315,14 +319,18 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         dispatch<string | null>("slotResolveByEntity", [entityId]),
       "slot.create": async (ctx, [input]) => {
         const ownerUserId = verifiedInitiatingUserId(ctx);
+        // `title` is presentation, not slot state: it travels with the binding
+        // below and never reaches the state engine.
+        const { title, ...slotInput } = input;
         await dispatch<undefined>("slotCreate", [
-          { ...input, ...(ownerUserId ? { ownerUserId } : {}) },
+          { ...slotInput, ...(ownerUserId ? { ownerUserId } : {}) },
         ]);
         if (input.initialEntry) {
           await deps.presentationDispatch("bindSlot", [
             input.slotId,
             input.initialEntry.entityId,
             input.initialEntry.source,
+            title ?? null,
           ]);
         }
         deps.onSlotStateChanged?.(

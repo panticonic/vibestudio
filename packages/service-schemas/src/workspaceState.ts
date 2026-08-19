@@ -80,6 +80,13 @@ export type SlotCommitPreparedNavigationResult = z.infer<
 export const SlotCreateInputSchema = z.object({
   slotId: z.string(),
   parentSlotId: z.string().nullable(),
+  /**
+   * Display title known at creation (manifest title, or the one the opener
+   * asked for). Presentation only: it is recorded with the binding so the new
+   * node is never presented as its own slot id, and any title the entity
+   * already has still wins.
+   */
+  title: z.string().optional(),
   placement: z
     .object({
       beforeSlotId: z.string().nullable().optional(),
