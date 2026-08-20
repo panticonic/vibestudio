@@ -198,7 +198,11 @@ test.describe("command overlay", () => {
         timeout: 300_000,
         intervals: [1000, 2000, 5000],
       })
-      .toContain("why is this panel laid out this way?");
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("why is this panel laid out this way?"),
+        ])
+      );
 
     const snapshot = await probeCommandOverlay(testApp);
     expect(snapshot?.conversation).toBe(true);

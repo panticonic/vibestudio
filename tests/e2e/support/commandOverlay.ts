@@ -158,8 +158,10 @@ export async function probeCommandOverlay(
           open: true,
           activeMode: active ? active.textContent.trim() : null,
           rows: Array.from(card.querySelectorAll("[data-row-id]")).map((row) => row.textContent.trim()),
-          conversation: !!card.querySelector(".quickfire-compose"),
-          transcript: Array.from(card.querySelectorAll(".quickfire-message-text"))
+          conversation: card.getAttribute("data-mode") === "conversation",
+          transcript: Array.from(card.querySelectorAll(
+            '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
+          ))
             .map((message) => message.textContent.trim()),
           text: card.textContent ?? "",
         };
@@ -233,7 +235,6 @@ async function evaluateInOverlayDocument<T>(
           contents.executeJavaScript(request.script, true),
           new Promise((resolve) => setTimeout(() => resolve(undefined), request.timeoutMs)),
         ]);
-
       if (request.knownId !== null) {
         const known = webContents.fromId(request.knownId);
         if (known && !known.isDestroyed()) {
@@ -292,9 +293,10 @@ export async function typeIntoCommandOverlay(testApp: TestApp, value: string): P
     testApp,
     `(() => {
       const input = document.querySelector(".quickfire-input");
-      if (!input) return false;
+      if (!(input instanceof HTMLTextAreaElement)) return false;
       const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype, "value").set;
+        window.HTMLTextAreaElement.prototype, "value").set;
+      if (!setter) return false;
       setter.call(input, ${JSON.stringify(value)});
       input.dispatchEvent(new Event("input", { bubbles: true }));
       return true;
