@@ -1760,8 +1760,8 @@ test.describe("Desktop Startup Approvals", () => {
 
   test("persisted startup trust survives a same-workspace warm launch with scoped app RPC", async () => {
     // Keep this lifecycle test independent of model credentials and agent
-    // execution: it targets the app/extension startup grant and exact shell
-    // incarnation restored on the second process.
+    // execution: it targets the workspace-creation grant for the app and the
+    // exact shell incarnation restored on the second process.
     workspaceDir = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot);
@@ -1776,8 +1776,7 @@ test.describe("Desktop Startup Approvals", () => {
 
     testApp = await launchTestApp({ workspace: workspaceDir, launchTimeout: 240_000 });
     try {
-      const firstLaunchReviews = await reachHostedShellAndDrainStartupApprovals(testApp);
-      expect(firstLaunchReviews.length).toBeGreaterThan(0);
+      await reachHostedShellAndDrainStartupApprovals(testApp);
       expect(await callHostedShellService(testApp, "app.getInfo")).toMatchObject({
         connectionMode: "local",
         connectionStatus: "connected",
