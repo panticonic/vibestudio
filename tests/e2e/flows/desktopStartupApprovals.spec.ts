@@ -137,7 +137,12 @@ function configureWorkspaceSourceForApproval(
         vibestudio: {
           displayName: "E2E Approval Extension",
           entry: "index.ts",
-          extension: { activationEvents: ["*"] },
+          extension: {
+            activationEvents: ["*"],
+            methodAuthority: {
+              ping: { effect: { kind: "open" } },
+            },
+          },
           authority: { requests: [], provides: [] },
         },
       },
@@ -158,12 +163,20 @@ function configureWorkspaceSourceForApproval(
     ].join("\n"),
     "utf8"
   );
-  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
+  const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
+    template?: { repositories?: string[] };
     defaultAgentConfig?: { model?: string };
     extensions?: unknown[];
     initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
   };
+  const repositories = config.template?.repositories;
+  if (!Array.isArray(repositories)) {
+    throw new Error("Expected the workspace template to declare its repositories");
+  }
+  if (!repositories.includes("extensions/e2e-approval")) {
+    repositories.push("extensions/e2e-approval");
+  }
   config.defaultAgentConfig = {
     ...config.defaultAgentConfig,
     model: "openai-codex:gpt-5.4-mini",
@@ -379,7 +392,10 @@ async function hostedShellHasChrome(testApp: TestApp): Promise<boolean> {
     const contents = webContents
       .getAllWebContents()
       .find(
-        (candidate) => !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+        (candidate) =>
+          !candidate.isDestroyed() &&
+          candidate.getTitle() === "@workspace-apps/shell" &&
+          !candidate.getURL().includes("overlaySurface=")
       );
     if (!contents) return false;
     try {
@@ -409,7 +425,9 @@ async function callHostedShellService(
         .getAllWebContents()
         .find(
           (candidate) =>
-            !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+            !candidate.isDestroyed() &&
+            candidate.getTitle() === "@workspace-apps/shell" &&
+            !candidate.getURL().includes("overlaySurface=")
         );
       if (!contents) throw new Error("Hosted shell app WebContents was not found");
       return contents.executeJavaScript(

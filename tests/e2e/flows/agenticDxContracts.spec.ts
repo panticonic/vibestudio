@@ -14,6 +14,28 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
+async function waitForPanelRuntime(
+  app: Parameters<typeof executePanelScript>[0],
+  panelId: string
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        try {
+          return await executePanelScript<boolean>(
+            app,
+            panelId,
+            `typeof globalThis.__vibestudioRequireAsync__ === "function"`
+          );
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 30_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
+}
+
 test.describe("agentic DX contracts", () => {
   test("Electron preserves directory reads and bounded causal diagnostics end to end", async () => {
     test.setTimeout(240_000);
@@ -28,6 +50,7 @@ test.describe("agentic DX contracts", () => {
       await approvePendingWorkspaceCreationReview(testApp.app);
       const panel = (await getPanelTree(testApp.app))[0];
       expect(panel).toBeTruthy();
+      await waitForPanelRuntime(testApp.app, panel!.id);
 
       const result = await executePanelScript<{
         entries: string[];
@@ -117,6 +140,7 @@ test.describe("agentic DX contracts", () => {
       await approvePendingWorkspaceCreationReview(testApp.app);
       const panel = (await getPanelTree(testApp.app))[0];
       expect(panel).toBeTruthy();
+      await waitForPanelRuntime(testApp.app, panel!.id);
 
       const result = await executePanelScript<{
         screenshot: {
