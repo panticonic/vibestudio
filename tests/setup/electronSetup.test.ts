@@ -1,11 +1,48 @@
 import type { ElectronApplication } from "@playwright/test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TestApi } from "../../src/main/testApi.js";
-import { ensureHostedShellReady, panelInitializationFailureError } from "./electronSetup.js";
+import {
+  ensureHostedShellReady,
+  linkSharedMachineCaches,
+  panelInitializationFailureError,
+} from "./electronSetup.js";
+
+const temporaryRoots: string[] = [];
+const originalSharedDerivedCacheDir = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
 
 describe("hosted-shell initialization diagnostics", () => {
   afterEach(() => {
     delete globalThis.__testApi;
+    if (originalSharedDerivedCacheDir === undefined) {
+      delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+    } else {
+      process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = originalSharedDerivedCacheDir;
+    }
+    for (const root of temporaryRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("links shared machine caches at the derived-data path consumed by the runtime", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-e2e-cache-link-"));
+    temporaryRoots.push(root);
+    const sharedDerivedDataDir = path.join(root, "shared-derived-cache");
+    const isolatedCentralDataDir = path.join(root, "isolated-profile");
+    process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = sharedDerivedDataDir;
+    for (const cacheDir of ["npm-cache", "external-deps", "extension-runtime-deps"]) {
+      fs.mkdirSync(path.join(sharedDerivedDataDir, cacheDir), { recursive: true });
+    }
+
+    linkSharedMachineCaches(isolatedCentralDataDir);
+
+    for (const cacheDir of ["npm-cache", "external-deps", "extension-runtime-deps"]) {
+      const linked = path.join(isolatedCentralDataDir, "derived-cache", cacheDir);
+      expect(fs.realpathSync(linked)).toBe(path.join(sharedDerivedDataDir, cacheDir));
+    }
+    expect(fs.existsSync(path.join(isolatedCentralDataDir, "external-deps"))).toBe(false);
   });
 
   it("does not manufacture a terminal error while initialization is healthy", () => {

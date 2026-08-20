@@ -20,7 +20,7 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import {
   WORKSPACE_SOURCE_DIRS,
   WORKSPACE_STATE_DIRS,
@@ -153,14 +153,15 @@ function readCaseRootTemplateEnv(testRoot: string): Record<string, string> {
 
 const SHARED_MACHINE_CACHE_DIRS = ["npm-cache", "external-deps", "extension-runtime-deps"] as const;
 
-function linkSharedMachineCaches(isolatedCentralDataDir: string): void {
-  const sharedCentralDataDir = getCentralDataPath();
-  if (path.resolve(sharedCentralDataDir) === path.resolve(isolatedCentralDataDir)) return;
+export function linkSharedMachineCaches(isolatedCentralDataDir: string): void {
+  const sharedDerivedDataDir = getSharedDerivedDataPath();
+  const isolatedDerivedDataDir = path.join(isolatedCentralDataDir, "derived-cache");
+  if (path.resolve(sharedDerivedDataDir) === path.resolve(isolatedDerivedDataDir)) return;
 
-  fs.mkdirSync(isolatedCentralDataDir, { recursive: true });
+  fs.mkdirSync(isolatedDerivedDataDir, { recursive: true });
   for (const cacheDir of SHARED_MACHINE_CACHE_DIRS) {
-    const source = path.join(sharedCentralDataDir, cacheDir);
-    const destination = path.join(isolatedCentralDataDir, cacheDir);
+    const source = path.join(sharedDerivedDataDir, cacheDir);
+    const destination = path.join(isolatedDerivedDataDir, cacheDir);
     if (!fs.existsSync(source) || fs.existsSync(destination)) continue;
     fs.symlinkSync(source, destination, process.platform === "win32" ? "junction" : "dir");
   }
