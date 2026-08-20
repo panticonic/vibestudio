@@ -3327,6 +3327,7 @@ async function main() {
         admissionProvenance: (repoPath, effectiveVersion) =>
           unitAdmissionStore.provenanceForVersion(repoPath, effectiveVersion),
         pendingAcquisitionCount: () => acquisitionCoordinator.pending().length,
+        pendingAcquisitions: () => acquisitionCoordinator.pendingViews(),
         activeAgentBindingCount: () => new Set(activeAgentBindings()).size,
         activeAgentBindings: () => [...new Set(activeAgentBindings())],
         closeAgentAcquisitions: (bindingId) => acquisitionCoordinator.closeAgent(bindingId),

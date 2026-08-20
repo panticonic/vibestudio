@@ -445,6 +445,7 @@ Authority principals: `code`, `host`, `user`
 | `permissions.revoke` | Revoke one durable permission grant by its opaque id. |
 | `permissions.listAgentProfiles` | List the living authority profile for every agent with standing permissions or locks. |
 | `permissions.safetyStatus` | Read the live emergency authority state and the work it can immediately interrupt. |
+| `permissions.listPendingRequests` | List the authority requests currently paused on a human decision, so the waiting count on the safety status can be read as work rather than as a number. |
 | `permissions.updateAgentProfile` | Pause or resume an agent, revoke all of its authority, or change one lasting authority setting. |
 | `permissions.setWorkspaceAuthorityLock` | Engage or release the emergency workspace lock for every agent's protected authority. |
 

@@ -4506,6 +4506,26 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "permissions.listPendingRequests": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "grant-authority",
+      family: "permissions.read",
+      rationale: "G4: privacy or live authority-map read; §2 default {code, session} family",
+    },
+    capability: "permissions.read",
+    presentation: {
+      title: "View requests waiting for a decision",
+      action: "view requests waiting for a decision",
+      description: "See which protected actions are paused waiting for you to decide.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+  },
   "permissions.revoke": {
     tier: {
       tier: "critical",

@@ -64,6 +64,28 @@ function createHarness() {
     } as never,
     workspaceId: "workspace-test",
     pendingAcquisitionCount: () => 2,
+    pendingAcquisitions: () => [
+      {
+        acquisitionId: "acq-1",
+        ownerRuntimeId: "do:workers/agent-worker:assistant",
+        capability: "external.open",
+        resource: { kind: "origin", origin: "https://example.com" } as const,
+        tier: "gated" as const,
+        renderedAction: "Open https://example.com",
+        requestedAt: 900,
+        agentBindingId: "do:workers/agent-worker:assistant@context-1",
+      },
+      {
+        acquisitionId: "acq-0",
+        ownerRuntimeId: "panel:about/permissions",
+        capability: "external.open",
+        resource: { kind: "origin", origin: "https://example.org" } as const,
+        tier: "critical" as const,
+        renderedAction: "Open https://example.org",
+        requestedAt: 100,
+        agentBindingId: null,
+      },
+    ],
     activeAgentBindingCount: () => 1,
     interruptAgent,
     interruptAllAgents,
@@ -116,6 +138,30 @@ describe("permissions service", () => {
     harness.capabilityGrants.close();
   });
 
+  it("lists what the waiting count counts, oldest first and in the screen's vocabulary", async () => {
+    const harness = createHarness();
+
+    const pending = (await harness.definition.handler(
+      context(),
+      "listPendingRequests",
+      []
+    )) as Array<Record<string, unknown>>;
+
+    expect(pending.map((request) => request["acquisitionId"])).toEqual(["acq-0", "acq-1"]);
+    expect(pending[0]).toMatchObject({
+      tier: "critical",
+      requesterLabel: "panel:about/permissions",
+      domain: "sharing",
+    });
+    expect(pending[1]).toMatchObject({
+      tier: "gated",
+      // An agent request is named by the agent, not by its runtime id.
+      requesterLabel: "Assistant",
+      agentBindingId: "do:workers/agent-worker:assistant@context-1",
+    });
+    harness.capabilityGrants.close();
+  });
+
   it("durably pauses an agent before cancelling its pending and active work", async () => {
     const harness = createHarness();
     const bindingId = "do:workers/agent-worker:assistant@context-1";
@@ -140,11 +186,16 @@ describe("permissions service", () => {
       { locked: true },
     ]);
 
-    expect(status).toEqual({
+    // The lock reports the decision it is, not just the state it left behind:
+    // a reviewer coming back to this screen has to be able to see who engaged
+    // it and when without going to a separate log.
+    expect(status).toMatchObject({
       workspaceLocked: true,
       activeAgentCount: 1,
       pendingAcquisitionCount: 2,
+      lockedBy: "You",
     });
+    expect((status as { lockedAt?: number }).lockedAt).toBeTypeOf("number");
     expect(harness.closeAllAcquisitions).toHaveBeenCalledOnce();
     expect(harness.interruptAllAgents).toHaveBeenCalledOnce();
     expect(

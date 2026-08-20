@@ -20036,6 +20036,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:permissions.listPendingRequests",
+      "rpcPlane": "host-service",
+      "owner": "permissions",
+      "method": "listPendingRequests",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "permissions.read",
+      "reviewRationale": "G4: privacy or live authority-map read; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:permissions.listPendingRequests"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:permissions.listPendingRequests),allOf(capability(user,service:permissions.listPendingRequests),workspace-member),allOf(capability(code,service:permissions.listPendingRequests),workspace-member))",
+      "r3b": {
+        "review": "bounded-waiting-authority-request-read",
+        "change": "Adds a read-only projection of the authority requests already paused on a human decision, under the same permissions.read capability as the safety status that has always counted them. It returns the reviewed action sentence, resource phrase, tier, and requesting binding only; it carries no resolution path, so reading what is waiting cannot decide it."
+      },
+      "capability": "service:permissions.listPendingRequests",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:permissions.revoke",
       "rpcPlane": "host-service",
       "owner": "permissions",

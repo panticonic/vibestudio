@@ -93,8 +93,37 @@ export const authoritySafetyStatusSchema = z
     workspaceLocked: z.boolean(),
     activeAgentCount: z.number().int().nonnegative(),
     pendingAcquisitionCount: z.number().int().nonnegative(),
+    /** When the standing workspace lock was engaged; absent while unlocked. */
+    lockedAt: z.number().optional(),
+    /** Who engaged it, in the same humanized words a grant's `approvedBy` uses. */
+    lockedBy: z.string().min(1).optional(),
   })
   .strict();
+
+/**
+ * One authority request currently waiting on a human decision.
+ *
+ * `safetyStatus` has always reported how many of these exist; without the list
+ * the count is a number nobody can act on. Read-only and derived: resolving a
+ * request stays with the approval surface that presented it.
+ */
+export const pendingAuthorityRequestSchema = z
+  .object({
+    acquisitionId: z.string().min(1),
+    capability: z.string().min(1),
+    /** The reviewed sentence for the capability, e.g. "Read your files". */
+    action: z.string().min(1),
+    resource: z.string().optional(),
+    domain: authorityDomainSchema.optional(),
+    verb: authorityVerbSchema.optional(),
+    tier: z.enum(["gated", "critical"]),
+    requestedAt: z.number(),
+    requesterLabel: z.string().min(1),
+    agentBindingId: z.string().min(1).optional(),
+  })
+  .strict();
+
+export type PendingAuthorityRequest = z.infer<typeof pendingAuthorityRequestSchema>;
 
 export const permissionsMethods = defineServiceMethods({
   list: {
@@ -201,6 +230,31 @@ export const permissionsMethods = defineServiceMethods({
       "Read the live emergency authority state and the work it can immediately interrupt.",
     args: z.tuple([]),
     returns: authoritySafetyStatusSchema,
+    access: { sensitivity: "read" },
+  },
+  listPendingRequests: {
+    capability: "permissions.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "grant-authority",
+      family: "permissions.read",
+      rationale: "G4: privacy or live authority-map read; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View requests waiting for a decision",
+      action: "view requests waiting for a decision",
+      description: "See which protected actions are paused waiting for you to decide.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+    description:
+      "List the authority requests currently paused on a human decision, so the waiting count on the safety status can be read as work rather than as a number.",
+    args: z.tuple([]),
+    returns: z.array(pendingAuthorityRequestSchema),
     access: { sensitivity: "read" },
   },
   updateAgentProfile: {

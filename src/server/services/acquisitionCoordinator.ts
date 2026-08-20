@@ -40,9 +40,33 @@ interface PendingAcquisition {
   info: AcquisitionInfo;
   sessionId: string;
   agentBindingId: string | null;
+  /** The scope the request was made against, kept for the waiting-list projection. */
+  resource: ResourceScope;
+  /** When the request began waiting, so a reviewer can see what has been stuck. */
+  requestedAt: number;
   outcome: Promise<AcquisitionOutcome>;
   settle: (outcome: AcquisitionOutcome) => void;
   continuation: "in-band" | "owner-redrive";
+}
+
+/**
+ * A read-only view of one waiting acquisition, for the permissions surface.
+ *
+ * Deliberately narrower than `PendingAcquisition`: no promise, no settle
+ * handle, no request key. Reading what is waiting must never be a way to
+ * resolve it — that stays with the approval presentation that owns the
+ * rendezvous.
+ */
+export interface PendingAcquisitionView {
+  acquisitionId: string;
+  ownerRuntimeId: string;
+  capability: string;
+  resource: ResourceScope;
+  resourceKey: string;
+  tier: "gated" | "critical";
+  renderedAction: string;
+  requestedAt: number;
+  agentBindingId: string | null;
 }
 
 interface CompletedAcquisition {
@@ -235,6 +259,8 @@ export class AcquisitionCoordinator {
       info,
       sessionId: input.snapshot.sessionId,
       agentBindingId: input.snapshot.agentBindingId ?? null,
+      resource: input.resource,
+      requestedAt: now,
       outcome,
       settle,
       continuation,
@@ -346,6 +372,21 @@ export class AcquisitionCoordinator {
 
   pending(): readonly AcquisitionInfo[] {
     return [...this.byId.values()].map((entry) => ({ ...entry.info, pending: true }));
+  }
+
+  /** What is waiting on a human right now, as data a review surface can render. */
+  pendingViews(): readonly PendingAcquisitionView[] {
+    return [...this.byId.values()].map((entry) => ({
+      acquisitionId: entry.info.acquisitionId,
+      ownerRuntimeId: entry.info.ownerRuntimeId,
+      capability: entry.info.capability,
+      resource: entry.resource,
+      resourceKey: entry.info.resourceKey,
+      tier: entry.info.tier,
+      renderedAction: entry.info.renderedAction,
+      requestedAt: entry.requestedAt,
+      agentBindingId: entry.agentBindingId,
+    }));
   }
 
   /** Consume a once/confirmation grant before its protected effect runs. */

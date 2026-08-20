@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:534a4fcc8ca2090612fc0b9012b23e693e31676510e248dce61efa022a776284",
+  "censusDigest": "sha256:52440c45d444bea62a164285049efb7348a43c783e28175c0ad2758e49fd0140",
   "decisions": {
     "host:baseRelease.check": {
       "review": "read-only-base-release-lineage-comparison",
@@ -333,6 +333,10 @@
     "host:permissions.safetyStatus": {
       "review": "bounded-live-authority-safety-read",
       "change": "Adds the permission inventory's bounded read of workspace and per-agent authority locks; the ordinary permissions.read capability and workspace membership checks remain in force."
+    },
+    "host:permissions.listPendingRequests": {
+      "review": "bounded-waiting-authority-request-read",
+      "change": "Adds a read-only projection of the authority requests already paused on a human decision, under the same permissions.read capability as the safety status that has always counted them. It returns the reviewed action sentence, resource phrase, tier, and requesting binding only; it carries no resolution path, so reading what is waiting cannot decide it."
     },
     "host:permissions.setWorkspaceAuthorityLock": {
       "review": "user-approved-emergency-authority-barrier",

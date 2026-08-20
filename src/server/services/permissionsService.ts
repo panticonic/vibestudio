@@ -3,6 +3,7 @@ import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   permissionsMethods,
+  type PendingAuthorityRequest,
   type SavedPermissionGrant,
 } from "@vibestudio/service-schemas/permissions";
 import type { AuthorityGrant, AuthorityGrantSubject, ResourceScope } from "@vibestudio/rpc";
@@ -39,6 +40,12 @@ export function createPermissionsService(deps: {
    */
   admissionProvenance?: UnitAdmissionProvenanceLookup;
   pendingAcquisitionCount?: () => number;
+  /**
+   * The requests behind `pendingAcquisitionCount`. Reporting a count with no
+   * way to see what it counts leaves the one number on this screen that a
+   * person cannot act on; this is the same data, readable.
+   */
+  pendingAcquisitions?: () => readonly PendingAcquisitionSource[];
   activeAgentBindingCount?: () => number;
   activeAgentBindings?: () => readonly string[];
   interruptAgent?: (bindingId: string, reason: string) => Promise<void>;
@@ -47,11 +54,25 @@ export function createPermissionsService(deps: {
   closeAgentAcquisitions?: (bindingId: string) => number;
   closeAllAcquisitions?: () => number;
 }): ServiceDefinition {
-  const safetyStatus = () => ({
-    workspaceLocked: deps.capabilityGrants.workspaceAuthorityLocked(),
-    activeAgentCount: deps.activeAgentBindingCount?.() ?? 0,
-    pendingAcquisitionCount: deps.pendingAcquisitionCount?.() ?? 0,
-  });
+  const safetyStatus = (reviewingUserId?: string) => {
+    // The lock is stored as an ordinary workspace-level lock record, so who
+    // engaged it and when are already known. Reading them back turns "Locked"
+    // from a state into an account of a decision someone made.
+    const lock = deps.capabilityGrants
+      .listLocks("*")
+      .find((entry) => entry.level === "workspace" && entry.revokedAt === undefined);
+    return {
+      workspaceLocked: deps.capabilityGrants.workspaceAuthorityLocked(),
+      activeAgentCount: deps.activeAgentBindingCount?.() ?? 0,
+      pendingAcquisitionCount: deps.pendingAcquisitionCount?.() ?? 0,
+      ...(lock
+        ? {
+            lockedAt: lock.createdAt,
+            lockedBy: humanizeDecisionPrincipal(lock.decidedBy, reviewingUserId),
+          }
+        : {}),
+    };
+  };
   return {
     name: SERVICE,
     description: "Trusted review and revocation of durable permission grants",
@@ -174,7 +195,11 @@ export function createPermissionsService(deps: {
           ctx.caller.subject?.userId
         );
       },
-      safetyStatus: async () => safetyStatus(),
+      safetyStatus: async (ctx) => safetyStatus(ctx.caller.subject?.userId),
+      listPendingRequests: async () =>
+        (deps.pendingAcquisitions?.() ?? [])
+          .map(pendingAuthorityRequest)
+          .sort((a, b) => a.requestedAt - b.requestedAt),
       updateAgentProfile: async (ctx, [request]) => {
         let changed = false;
         const decidedBy = ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system";
@@ -223,7 +248,7 @@ export function createPermissionsService(deps: {
             "The user engaged the emergency workspace authority lock."
           );
         }
-        return safetyStatus();
+        return safetyStatus(ctx.caller.subject?.userId);
       },
     }),
   };
@@ -484,6 +509,42 @@ function authorityGrantDuration(grant: AuthorityGrant): string {
     default:
       return "Until you revoke it";
   }
+}
+
+/** What the acquisition coordinator can tell Permissions about a waiting request. */
+export interface PendingAcquisitionSource {
+  acquisitionId: string;
+  ownerRuntimeId: string;
+  capability: string;
+  resource: ResourceScope;
+  tier: "gated" | "critical";
+  renderedAction: string;
+  requestedAt: number;
+  agentBindingId: string | null;
+}
+
+/**
+ * One waiting request, in the same vocabulary the rest of this screen uses:
+ * a reviewed action sentence, a resource phrase, and the domain/verb cell it
+ * belongs to. An unrecognized capability keeps its rendered action and simply
+ * has no cell — better an uncategorized row than an invented category.
+ */
+function pendingAuthorityRequest(request: PendingAcquisitionSource): PendingAuthorityRequest {
+  const category = capabilityDomain(request.capability);
+  const resource = resourcePhrase(request.resource);
+  return {
+    acquisitionId: request.acquisitionId,
+    capability: request.capability,
+    action: request.renderedAction || describeCapability(request.capability).action,
+    ...(resource ? { resource } : {}),
+    ...(category ? { domain: category.domain, verb: category.verb } : {}),
+    tier: request.tier,
+    requestedAt: request.requestedAt,
+    requesterLabel: request.agentBindingId
+      ? agentBindingLabel(request.agentBindingId)
+      : request.ownerRuntimeId,
+    ...(request.agentBindingId ? { agentBindingId: request.agentBindingId } : {}),
+  };
 }
 
 function humanizeDecisionPrincipal(principal: string, reviewingUserId?: string): string {
