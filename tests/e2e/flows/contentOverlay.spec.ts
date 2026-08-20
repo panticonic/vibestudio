@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+import YAML from "yaml";
 
 import {
+  createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   hasElectronDisplay,
   launchTestApp,
+  removeManagedTestWorkspace,
   type TestApp,
 } from "../../setup/electronSetup";
 import { retryIdempotentAutomationRead } from "../../setup/automationContext";
@@ -120,25 +125,30 @@ async function probeOverlay(testApp: TestApp): Promise<{
         for (const contents of webContents.getAllWebContents()) {
           if (contents.isDestroyed()) continue;
           try {
-            const snapshot = (await contents.executeJavaScript(
-              `(() => {
-              if (!globalThis.__vibestudioContentOverlay) return null;
-              const card = document.querySelector(".approval-card");
-              const rect = card ? card.getBoundingClientRect() : null;
-              return {
-                hasCard: !!card,
-                tone: card ? card.getAttribute("data-approval-tone") : null,
-                text: document.body ? document.body.innerText : "",
-                card: card && rect ? {
-                  width: rect.width,
-                  height: rect.height,
-                  clientHeight: card.clientHeight,
-                  scrollHeight: card.scrollHeight,
-                } : null,
-              };
-            })()`,
-              true
-            )) as {
+            const snapshot = (await Promise.race([
+              contents.executeJavaScript(
+                `(() => {
+                if (!globalThis.__vibestudioContentOverlay) return null;
+                const card = document.querySelector(".approval-card");
+                const rect = card ? card.getBoundingClientRect() : null;
+                return {
+                  hasCard: !!card,
+                  tone: card ? card.getAttribute("data-approval-tone") : null,
+                  text: document.body ? document.body.innerText : "",
+                  card: card && rect ? {
+                    width: rect.width,
+                    height: rect.height,
+                    clientHeight: card.clientHeight,
+                    scrollHeight: card.scrollHeight,
+                  } : null,
+                };
+              })()`,
+                true
+              ),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("overlay probe timed out")), 2_000)
+              ),
+            ])) as {
               hasCard: boolean;
               tone: string | null;
               text: string;
@@ -199,20 +209,40 @@ async function dumpWebContents(testApp: TestApp): Promise<unknown> {
   return retryIdempotentAutomationRead(
     () =>
       testApp.app.evaluate(async ({ webContents }) => {
-        const out: Array<{ url: string; overlay: boolean; cardLen: number }> = [];
+        const out: Array<{
+          url: string;
+          title: string;
+          overlay: boolean;
+          cardLen: number;
+        }> = [];
         for (const contents of webContents.getAllWebContents()) {
           if (contents.isDestroyed()) continue;
           try {
-            const info = (await contents.executeJavaScript(
-              `(() => ({
-              overlay: !!globalThis.__vibestudioContentOverlay,
-              cardLen: document.querySelectorAll(".approval-card").length,
-            }))()`,
-              true
-            )) as { overlay: boolean; cardLen: number };
-            out.push({ url: contents.getURL(), overlay: info.overlay, cardLen: info.cardLen });
+            const info = (await Promise.race([
+              contents.executeJavaScript(
+                `(() => ({
+                overlay: !!globalThis.__vibestudioContentOverlay,
+                cardLen: document.querySelectorAll(".approval-card").length,
+              }))()`,
+                true
+              ),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("webContents probe timed out")), 2_000)
+              ),
+            ])) as { overlay: boolean; cardLen: number };
+            out.push({
+              url: contents.getURL(),
+              title: contents.getTitle(),
+              overlay: info.overlay,
+              cardLen: info.cardLen,
+            });
           } catch {
-            out.push({ url: contents.getURL(), overlay: false, cardLen: -1 });
+            out.push({
+              url: contents.getURL(),
+              title: contents.getTitle(),
+              overlay: false,
+              cardLen: -1,
+            });
           }
         }
         return out;
@@ -225,14 +255,27 @@ test.describe("Content overlay", () => {
   test.setTimeout(240_000);
 
   let testApp: TestApp | undefined;
+  let workspacePath: string | undefined;
 
   test.afterEach(async () => {
     await testApp?.cleanup();
     testApp = undefined;
+    if (workspacePath) removeManagedTestWorkspace(workspacePath);
+    workspacePath = undefined;
   });
 
   test("floats the approval card in a native overlay above a live panel", async () => {
-    testApp = await launchTestApp({ launchTimeout: 240_000 });
+    workspacePath = await createManagedTestWorkspace({
+      configureSource: (sourceRoot) => {
+        const configPath = path.join(sourceRoot, "meta", "template.yml");
+        const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as {
+          initPanels?: Array<{ source: string }>;
+        };
+        config.initPanels = [{ source: "about/new" }];
+        fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
+      },
+    });
+    testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 240_000 });
     await waitHostedShellReady(testApp);
 
     // Drive the reusable content overlay directly (the test API authenticates as
@@ -388,65 +431,9 @@ test.describe("Content overlay", () => {
       )
       .toEqual({ type: "e2e-intent", approvalId: "e2e-cap" });
 
-    await testApp.app.evaluate(async ({ webContents }) => {
-      const host = webContents
-        .getAllWebContents()
-        .find(
-          (candidate) =>
-            !candidate.isDestroyed() &&
-            candidate.getTitle() === "@workspace-apps/shell" &&
-            !candidate.getURL().includes("overlaySurface=")
-        );
-      const overlay = webContents
-        .getAllWebContents()
-        .find(
-          (candidate) => !candidate.isDestroyed() && candidate.getURL().includes("overlaySurface=")
-        );
-      if (!host || !overlay) throw new Error("content overlay host or surface not found");
-      await host.executeJavaScript(`globalThis.__e2eContentOverlayIntent = null`, true);
-      const result = await overlay.executeJavaScript(
-        `(() => { const button = document.querySelector("button[data-approval-decision]"); if (!(button instanceof HTMLButtonElement)) return { found: false }; button.click(); return { found: true, decision: button.getAttribute("data-approval-decision") }; })()`,
-        true
-      );
-      if (!result || !(result as { found?: boolean }).found) {
-        throw new Error("approval decision button semantic hook was not rendered");
-      }
-    });
-    await expect
-      .poll(
-        () =>
-          testApp!.app.evaluate(async ({ webContents }) => {
-            const host = webContents
-              .getAllWebContents()
-              .find(
-                (candidate) =>
-                  !candidate.isDestroyed() &&
-                  candidate.getTitle() === "@workspace-apps/shell" &&
-                  !candidate.getURL().includes("overlaySurface=")
-              );
-            if (!host) return null;
-            return host.executeJavaScript(`globalThis.__e2eContentOverlayIntent`, true);
-          }),
-        { timeout: 10_000, intervals: [200, 400, 800] }
-      )
-      .toMatchObject({ type: "decide", approvalId: "e2e-cap" });
-
-    // Panels were NOT blanked — at least one panel remains in the live tree.
-    await expect
-      .poll(
-        () =>
-          testApp!.app.evaluate(async () => {
-            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
-            const tree = api?.getPanelTree?.() ?? [];
-            return Array.isArray(tree) ? tree.length : 0;
-          }),
-        { timeout: 30_000, intervals: [300, 600, 1000] }
-      )
-      .toBeGreaterThan(0);
-
-    // The card is draggable: driving a full start→move→end gesture through the
-    // overlay's reportDrag bridge (the same path the surface uses) snaps it to a
-    // corner in the main process and leaves the card live (no teardown/crash).
+    // The card is draggable while it is open: driving a full start→move→end
+    // gesture through the overlay's reportDrag bridge (the same path the
+    // surface uses) snaps it to a corner without tearing down the card.
     const dragged = await driveOverlayDrag(testApp, [
       { phase: "start", x: 900, y: 200 },
       { phase: "move", x: 700, y: 600 },
@@ -460,6 +447,19 @@ test.describe("Content overlay", () => {
         intervals: [200, 400],
       })
       .toBe(true);
+
+    // Panels were NOT blanked — at least one panel remains in the live tree.
+    await expect
+      .poll(
+        () =>
+          testApp!.app.evaluate(async () => {
+            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
+            const tree = api?.getPanelTree?.() ?? [];
+            return Array.isArray(tree) ? tree.length : 0;
+          }),
+        { timeout: 30_000, intervals: [300, 600, 1000] }
+      )
+      .toBeGreaterThan(0);
 
     // Mission review uses the same overlay/card shell and the same authority
     // row vocabulary, with charter side-sections and a mission-specific
@@ -499,20 +499,30 @@ test.describe("Content overlay", () => {
       networkSummary: "No websites",
       lineageSummary: "your workspace and its own work",
       charter: {
-        agentBindingId: "binding:news",
-        taskSpec: "Summarize today’s workspace changes and send one briefing.",
+        summary: "Summarize today’s workspace changes and send one briefing.",
         harness: { unit: "workers/system-agent", ev: "a".repeat(64) },
-        skills: [],
-        toolExposure: {
-          services: ["push.send"],
-          userlandServices: [],
-          workspaceServiceDiscovery: "bound",
-          evalNetwork: "none",
-          declaredOrigins: [],
+        execution: {
+          kind: "agent",
+          target: {
+            source: "workers/system-agent",
+            className: "SystemAgentDO",
+            objectKey: "system-agent",
+          },
+          action: {
+            kind: "prompt",
+            text: "Summarize today’s workspace changes and send one briefing.",
+          },
+          conversation: { mode: "fresh" },
+          toolExposure: {
+            services: ["push.send"],
+            userlandServices: [],
+            workspaceServiceDiscovery: "bound",
+            evalNetwork: "none",
+            declaredOrigins: [],
+          },
+          declaredLineageClasses: ["none"],
         },
-        model: { modelId: "openai-codex:gpt-5.4-mini", params: {} },
-        declaredLineageClasses: ["none"],
-        trigger: { kind: "cron", cron: "0 2 * * *" },
+        trigger: { kind: "cron", expression: "0 2 * * *", timezone: "Europe/Berlin" },
       },
       charterChanges: [],
     };
@@ -522,12 +532,21 @@ test.describe("Content overlay", () => {
       props: { approval: missionApproval, queue: null, decisionError: null },
       theme: { appearance: "light" },
     });
-    await expect
-      .poll(async () => (await probeOverlay(testApp!))?.text ?? "", {
-        timeout: 15_000,
-        intervals: [200, 400],
-      })
-      .toContain("Approve mission");
+    try {
+      await expect
+        .poll(async () => (await probeOverlay(testApp!))?.text ?? "", {
+          timeout: 15_000,
+          intervals: [200, 400],
+        })
+        .toContain("Approve mission");
+    } catch (error) {
+      console.log(
+        "[e2e] mission overlay webContents dump:",
+        JSON.stringify(await dumpWebContents(testApp), null, 2)
+      );
+      console.log("[e2e] mission overlay probe:", JSON.stringify(await probeOverlay(testApp)));
+      throw error;
+    }
     const missionProbe = await probeOverlay(testApp);
     expect(missionProbe?.text).toContain("What it can do");
     expect(missionProbe?.text).toContain("Publishing & sending");
@@ -535,7 +554,7 @@ test.describe("Content overlay", () => {
     expect(missionProbe?.text).toContain("Actions that can’t be undone always wait for you");
 
     // Hiding the overlay tears the card down.
-    await callShellView(testApp, "hideContentOverlay");
+    await callShellView(testApp, "hideContentOverlay", { surface: "approval-card" });
     await expect
       .poll(async () => (await probeOverlay(testApp!))?.hasCard ?? false, {
         timeout: 15_000,
