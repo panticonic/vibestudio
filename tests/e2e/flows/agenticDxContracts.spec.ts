@@ -205,7 +205,7 @@ test.describe("agentic DX contracts", () => {
               },
             };
           } finally {
-            await bounded("about panel close", () => handle.close());
+            await bounded("about panel archive", () => handle.archive());
           }
         })()`
       );
