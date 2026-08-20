@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { createRpcClient, envelopeFromMessage } from "@vibestudio/rpc";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
@@ -25,6 +26,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const defaultResultsRoot = path.join(repoRoot, "test-results", "full-system-smoke");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
+// Capture the profile-level cache before isolated smoke phases replace HOME
+// and XDG_CONFIG_HOME. Mutable identity and workspace state stay per phase;
+// receipt-validated derived dependencies and builds remain machine-shared.
+const sharedDerivedCacheDir = getSharedDerivedDataPath();
 
 function requireExactUserlandRoot() {
   return developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot);
@@ -884,6 +889,8 @@ async function main() {
     printHelp();
     return;
   }
+
+  process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = sharedDerivedCacheDir;
 
   const resultsDir =
     options.resultsDir ?? path.join(defaultResultsRoot, `${timestamp()}-${process.pid}`);
