@@ -57,6 +57,14 @@ export const SlotHistoryEntryInputSchema = z.object({
 export const SlotCommitPreparedNavigationInputSchema = z.object({
   slotId: z.string(),
   expectedCurrentEntityId: z.string(),
+  /**
+   * Display title the navigator already knows for the destination (manifest
+   * title, or the host it is browsing). Presentation only, exactly as on
+   * `slot.create`: it is recorded with the binding so a navigated slot is named
+   * before its document loads, and a title the destination entity already has
+   * still wins.
+   */
+  title: z.string().optional(),
   mutation: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("append"), entry: SlotHistoryEntryInputSchema }),
     z.object({ kind: z.literal("replace"), entry: SlotHistoryEntryInputSchema }),

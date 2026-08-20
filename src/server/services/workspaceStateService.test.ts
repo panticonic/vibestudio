@@ -563,6 +563,81 @@ describe("workspaceStateService — slot-state change hook", () => {
     expect(slotCreate?.args[0]).not.toHaveProperty("title");
   });
 
+  it("binds the destination title when a slot navigates", async () => {
+    const result = {
+      previousEntityId: "panel:nav-about",
+      currentEntityId: "panel:nav-news",
+      currentEntryKey: "nav-news",
+      cursor: 1,
+    };
+    const { svc, calls, presentationCalls } = makeService({
+      dispatchReturns: {
+        slotCommitPreparedNavigation: result,
+        panelTreeDetail: {
+          slot: { slot_id: "panel:tree/news" },
+          currentHistory: { source: "panels/news", context_id: "ctx-news" },
+          entity: { id: result.currentEntityId },
+        },
+      },
+    });
+    const input = {
+      slotId: "panel:tree/news",
+      expectedCurrentEntityId: result.previousEntityId,
+      title: "Daily News",
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: result.currentEntryKey,
+          entityId: result.currentEntityId,
+          source: "panels/news",
+          contextId: "ctx-news",
+        },
+      },
+    };
+
+    await svc.handler(makeCtx() as never, "slot.commitPreparedNavigation", [input]);
+
+    expect(presentationCalls).toContainEqual({
+      method: "bindSlot",
+      args: ["panel:tree/news", result.currentEntityId, "panels/news", "Daily News"],
+    });
+    // Presentation only: history rows carry no display name.
+    const commit = calls.find((call) => call.method === "slotCommitPreparedNavigation");
+    expect(commit?.args[0]).not.toHaveProperty("title");
+  });
+
+  it("binds a null title when a navigation had none to give", async () => {
+    const result = {
+      previousEntityId: "panel:nav-about",
+      currentEntityId: "panel:nav-news",
+      currentEntryKey: "nav-news",
+      cursor: 1,
+    };
+    const { svc, presentationCalls } = makeService({
+      dispatchReturns: {
+        slotCommitPreparedNavigation: result,
+        panelTreeDetail: {
+          slot: { slot_id: "panel:tree/news" },
+          currentHistory: { source: "panels/news", context_id: "ctx-news" },
+          entity: { id: result.currentEntityId },
+        },
+      },
+    });
+
+    await svc.handler(makeCtx() as never, "slot.commitPreparedNavigation", [
+      {
+        slotId: "panel:tree/news",
+        expectedCurrentEntityId: result.previousEntityId,
+        mutation: { kind: "select", entryKey: result.currentEntryKey },
+      },
+    ]);
+
+    expect(presentationCalls).toContainEqual({
+      method: "bindSlot",
+      args: ["panel:tree/news", result.currentEntityId, "panels/news", null],
+    });
+  });
+
   it("presents an untitled node by its source rather than by its slot id", async () => {
     const { svc } = makeService({
       dispatchReturns: {

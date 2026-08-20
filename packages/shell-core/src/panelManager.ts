@@ -899,6 +899,7 @@ export class PanelManager {
       {
         slotId,
         expectedCurrentEntityId: previousEntityId,
+        title,
         mutation: {
           kind: "append",
           entry: {
@@ -991,6 +992,7 @@ export class PanelManager {
       {
         slotId,
         expectedCurrentEntityId: currentEntityId,
+        title: this.titleFor(slotId, targetSnapshot.source),
         mutation: { kind: "select", entryKey: targetEntryKey },
       }
     );
@@ -1277,6 +1279,7 @@ export class PanelManager {
       {
         slotId,
         expectedCurrentEntityId: currentEntityId,
+        title: this.titleFor(slotId, nextSnapshot.source),
         mutation: {
           kind: "replace",
           entry: {

@@ -49,6 +49,12 @@ export interface SlotCommitPreparedNavigationInput {
   slotId: PanelSlotId;
   /** Compare-and-swap guard: the entity current when preparation began. */
   expectedCurrentEntityId: PanelEntityId;
+  /**
+   * Display title known for the destination. Presentation only: it is recorded
+   * with the slot's new binding so a navigated node is named before its
+   * document loads, and a title the destination entity already carries wins.
+   */
+  title?: string;
   mutation: SlotPreparedNavigationMutation;
 }
 

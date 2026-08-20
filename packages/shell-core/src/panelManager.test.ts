@@ -130,6 +130,7 @@ function createWorkspaceMemory() {
   });
 
   const slotCreateInputs: SlotCreateInput[] = [];
+  const navigationInputs: SlotCommitPreparedNavigationInput[] = [];
   const workspaceState: WorkspaceStateClient & {
     commitPreparedNavigation(
       input: SlotCommitPreparedNavigationInput
@@ -264,6 +265,7 @@ function createWorkspaceMemory() {
       revision += 1;
     },
     async commitPreparedNavigation(input) {
+      navigationInputs.push(input);
       const { slotId, expectedCurrentEntityId, mutation } = input;
       const slot = slots.get(slotId);
       const rows = history.get(slotId) ?? [];
@@ -473,6 +475,7 @@ function createWorkspaceMemory() {
       retired,
       created,
       slotCreateInputs,
+      navigationInputs,
       get revision() {
         return revision;
       },
@@ -524,6 +527,21 @@ describe("PanelManager", () => {
     const created = mem.state.slotCreateInputs.at(-1);
     expect(created?.title).toBe("other");
     expect(created?.title).not.toBe(created?.slotId);
+  });
+
+  it("carries the destination title through a navigation, as creation does", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const created = await manager.create("panels/existing", { isRoot: true, addAsRoot: true });
+    const slotId = created.panelId;
+
+    await manager.navigate(slotId, "panels/other");
+    expect(mem.state.navigationInputs.at(-1)?.title).toBe("other");
+
+    // Going back names the slot for where it lands, not for where it was.
+    await manager.navigateHistory(slotId, -1);
+    expect(mem.state.navigationInputs.at(-1)?.title).toBe("existing");
   });
 
   const tempDirs: string[] = [];

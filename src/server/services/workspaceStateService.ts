@@ -348,9 +348,12 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         );
       },
       "slot.commitPreparedNavigation": async (_ctx, [input]) => {
+        // As on `slot.create`, `title` is presentation and travels with the
+        // binding rather than the history mutation.
+        const { title, ...navigation } = input;
         const result = await dispatch<SlotCommitPreparedNavigationResult>(
           "slotCommitPreparedNavigation",
-          [input]
+          [navigation]
         );
         const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [
           input.slotId,
@@ -360,6 +363,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
             input.slotId,
             detail.entity.id,
             detail.currentHistory.source,
+            title ?? null,
           ]);
         }
         deps.onSlotStateChanged?.({
