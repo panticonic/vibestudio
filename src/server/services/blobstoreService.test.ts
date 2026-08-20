@@ -18,6 +18,7 @@ import {
 import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
 import {
   blobPath,
+  collectTreeReachableDigests,
   collectExactTreeListing,
   createBlobstoreService,
   diffTrees,
@@ -269,6 +270,23 @@ describe("blobstoreService", () => {
       if (previousGlobalCas === undefined) delete process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
       else process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = previousGlobalCas;
     }
+  });
+
+  it("verifies reachable content bytes against their CAS addresses", async () => {
+    const content = await putBytes(blobsDir, Buffer.from("trusted content", "utf8"));
+    const tree = await putTree(
+      blobsDir,
+      [{ name: "value.txt", kind: "file", contentHash: content.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    await expect(
+      collectTreeReachableDigests(blobsDir, tree.stateHash!, { verifyContent: true })
+    ).resolves.toMatchObject({ contentDigests: [content.digest] });
+
+    await fsp.writeFile(blobPath(blobsDir, content.digest), Buffer.from("corrupt content", "utf8"));
+    await expect(
+      collectTreeReachableDigests(blobsDir, tree.stateHash!, { verifyContent: true })
+    ).rejects.toThrow(/CAS object digest mismatch/);
   });
 
   it("returns 404 for unknown digests and 400 for malformed digests", async () => {
@@ -979,6 +997,21 @@ describe("blobstoreService", () => {
 
       await fsp.writeFile(childPath, "not canonical tree JSON", "utf8");
       await expect(listTree(blobsDir, rootTree, { limit: 1 })).rejects.toThrow(/not valid JSON/);
+    });
+
+    it("rejects valid canonical tree bytes stored under the wrong address", async () => {
+      const digest = await seed("body");
+      const expectedChild = (await putTree(blobsDir, [file("expected.txt", digest)])).treeHash;
+      const otherChild = (await putTree(blobsDir, [file("other.txt", digest)])).treeHash;
+      const rootTree = (await putTree(blobsDir, [dir("nested", expectedChild)])).treeHash;
+
+      await fsp.copyFile(
+        blobPath(blobsDir, treeHashDigest(otherChild)),
+        blobPath(blobsDir, treeHashDigest(expectedChild))
+      );
+      await expect(listTree(blobsDir, rootTree, { limit: 1 })).rejects.toThrow(
+        /Tree object CAS digest mismatch/
+      );
     });
 
     it("distinguishes an absent requested root from a present state pointer with a missing root", async () => {

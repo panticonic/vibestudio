@@ -43,7 +43,9 @@ import {
   blobCasPath,
   centralBlobCasDir,
   ensureBlobCasLayout,
+  linkBlobFile,
   putBlobBytes,
+  verifyBlob,
 } from "../storage/blobCas.js";
 import { assertPresent } from "../../lintHelpers";
 
@@ -94,29 +96,7 @@ async function ensureWorkspaceBlobReference(
 ): Promise<void> {
   if (path.resolve(blobsDir) === path.resolve(backingDir)) return;
   const sourcePath = blobCasPath(backingDir, digest);
-  const referencePath = blobPath(blobsDir, digest);
-  await ensureImmutableHardlink(sourcePath, referencePath);
-}
-
-/**
- * Register immutable content in a logical CAS namespace. Existing targets are
- * already the function's success state, so check that dominant repeated-write
- * path before allocating an EEXIST exception from link() or entering recursive
- * mkdir. The link-after-miss path retains atomic cross-process convergence.
- */
-async function ensureImmutableHardlink(sourcePath: string, targetPath: string): Promise<void> {
-  try {
-    await fsp.access(targetPath);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
-  try {
-    await fsp.link(sourcePath, targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
+  await linkBlobFile(blobsDir, digest, sourcePath);
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -161,8 +141,7 @@ async function sha256File(filePath: string): Promise<string> {
 async function promoteTempBlob(blobsDir: string, tmpPath: string, digest: string): Promise<void> {
   const backingDir = backingCasDir(blobsDir);
   ensureBlobCasLayout(backingDir);
-  const finalPath = blobCasPath(backingDir, digest);
-  await ensureImmutableHardlink(tmpPath, finalPath);
+  await linkBlobFile(backingDir, digest, tmpPath);
   await ensureWorkspaceBlobReference(blobsDir, backingDir, digest);
 }
 
@@ -496,14 +475,26 @@ function missingTreeObjectError(hash: string): Error {
   return new Error(`Tree object missing from store: ${hash}`);
 }
 
+function assertObjectAddress(bytes: Buffer, expectedDigest: string, label: string): void {
+  const observed = createHash("sha256").update(bytes).digest("hex");
+  if (observed !== expectedDigest) {
+    throw new Error(
+      `${label} CAS digest mismatch: expected ${expectedDigest}, observed ${observed}`
+    );
+  }
+}
+
 /** Read + strictly decode a stored directory node; null when absent. */
 async function readTreeNode(
   blobsDir: string,
   treeHash: string
 ): Promise<ManifestHashEntry[] | null> {
-  const bytes = await getBytes(blobsDir, treeHashDigest(treeHash));
+  const expectedDigest = treeHashDigest(treeHash);
+  const bytes = await getBytes(blobsDir, expectedDigest);
   if (!bytes) return null;
-  return decodeTreeNode(bytes.toString("utf8"));
+  const entries = decodeTreeNode(bytes.toString("utf8"));
+  assertObjectAddress(bytes, expectedDigest, "Tree object");
+  return entries;
 }
 
 /** Resolve a `manifest:`/`state:` reference to its root `manifest:` hash;
@@ -511,9 +502,12 @@ async function readTreeNode(
 async function resolveTreeRef(blobsDir: string, ref: string): Promise<string | null> {
   if (TREE_HASH_RE.test(ref)) return ref;
   if (STATE_HASH_RE.test(ref)) {
-    const bytes = await getBytes(blobsDir, treeHashDigest(ref));
+    const expectedDigest = treeHashDigest(ref);
+    const bytes = await getBytes(blobsDir, expectedDigest);
     if (!bytes) return null;
-    return decodeStateNode(bytes.toString("utf8"));
+    const root = decodeStateNode(bytes.toString("utf8"));
+    assertObjectAddress(bytes, expectedDigest, "State object");
+    return root;
   }
   throw new Error(`Invalid tree reference: ${JSON.stringify(ref)}`);
 }
@@ -984,8 +978,8 @@ export async function collectTreeReachableDigests(
       { length: Math.min(32, pending.length) },
       async (): Promise<void> => {
         while (cursor < pending.length) {
-          const digest = pending[cursor++]!;
-          if (!(await pathExists(blobPath(blobsDir, digest)))) {
+          const digest = assertPresent(pending[cursor++]);
+          if (!(await verifyBlob(blobsDir, digest))) {
             throw new Error(`Content object missing from store: ${digest}`);
           }
         }
