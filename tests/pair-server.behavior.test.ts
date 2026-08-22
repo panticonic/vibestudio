@@ -143,6 +143,47 @@ describe("pair-server runner", () => {
     expect(fs.existsSync(path.dirname(readyFile))).toBe(false);
   });
 
+  it("prints renewed root invites until the first device claims the server", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+    let readyFile = "";
+    const renewedCode = fixedCode("PAIRING_RENEWED_CODE");
+
+    runPairServer(config, ["--port", "3456"], {
+      spawnServer({ serverArgs }: { serverArgs: string[] }) {
+        readyFile = serverArgs[serverArgs.indexOf("--ready-file") + 1] ?? "";
+        setTimeout(() => {
+          fs.writeFileSync(
+            readyFile,
+            JSON.stringify(
+              hubReady(
+                invite("room-initial-root", "AA".repeat(32), "wss://signal.test", READY_CODE)
+              )
+            )
+          );
+        }, 10);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+
+    await waitFor(() => logText(logSpy).includes(READY_CODE));
+    fs.writeFileSync(
+      readyFile,
+      JSON.stringify(
+        hubReady(invite("room-renewed-root", "BB".repeat(32), "wss://signal.test", renewedCode))
+      )
+    );
+    await vi.waitFor(() => expect(logText(logSpy)).toContain(renewedCode), { timeout: 2_500 });
+
+    fs.writeFileSync(readyFile, JSON.stringify(hubReady(null)));
+    await vi.waitFor(() => expect(logText(logSpy)).toContain("Root account already exists"), {
+      timeout: 2_500,
+    });
+    child.emit("exit", 0, null);
+  });
+
   it("polls a custom server --ready-file instead of an unused generated file", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);

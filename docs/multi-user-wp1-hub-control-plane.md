@@ -153,8 +153,9 @@ Both ride `mintPairingInvite` (`auth/model.ts:122-151`), split by intent (WP0 §
 | `hubControl.pairDevice()`                                          | authenticated member                                 | pairing invite bound to the **caller's own** `userId`   |
 | first root-invite redemption (implicit)                            | only when `UserStore` empty                          | first pair becomes root (WP0 §4)                        |
 
-The startup QR print (`hubServer.ts:902-903,1014`) becomes the **root bootstrap** invite when
-no users exist.
+When no users exist, `RootBootstrapInviteLifecycle` owns one live **root
+bootstrap** invite at a time. Expiry rotates its hub room and republishes the
+ready payload; first redemption creates root and terminates renewal.
 
 ---
 

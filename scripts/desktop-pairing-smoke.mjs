@@ -573,11 +573,11 @@ async function dismissConnectionDialog(app) {
             `(() => {
               const dialog = document.querySelector('[role="dialog"]');
               const text = dialog?.textContent ?? "";
-              if (!/paired devices/i.test(text) || !/Pair & relaunch/i.test(text)) return false;
-              const cancel = Array.from(dialog.querySelectorAll("button"))
-                .find((button) => button.textContent?.trim() === "Cancel");
-              if (!(cancel instanceof HTMLButtonElement) || cancel.disabled) return false;
-              cancel.click();
+              if (!/paired devices/i.test(text)) return false;
+              const close = Array.from(dialog.querySelectorAll("button"))
+                .find((button) => button.textContent?.trim() === "Close");
+              if (!(close instanceof HTMLButtonElement) || close.disabled) return false;
+              close.click();
               return true;
             })()`,
             true

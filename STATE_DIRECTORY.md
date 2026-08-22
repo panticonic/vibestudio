@@ -299,27 +299,30 @@ Hub-owned reachability state for the advertised workspace, deliberately outside
 its semantic `state/` tree:
 
 - `identity.pem` is the combined WebRTC DTLS certificate and private key. Its
-  SHA-256 fingerprint is embedded as `fp` in pairing links.
-- `routes.json` maps authenticated devices, users, and outstanding invites to
-  their durable signaling rooms.
-- `pairing-activations.json` holds bounded, expiring activation receipts while
-  a one-time invite is promoted into a durable device route.
+  SHA-256 fingerprint is returned as `fp` only in the child reach minted by the
+  hub after exact workspace routing.
+- `routes.json` maps authenticated devices to their durable child signaling
+  rooms. Pairing invites and activation live only on the stable hub control
+  ingress; the child has no invite or shadow-control state.
 
 Deleting or reseeding semantic state must not rotate either file: a paired
 device's transport contract is independent of semantic history. Deleting the
 workspace removes the whole workspace envelope, including reachability.
 `vibestudio remote repair-identity --workspace <name> --yes` deliberately
-rotates the identity and therefore requires devices to re-pair. No retired
-`state/webrtc/` layout is read or migrated.
+rotates only the child reach identity. The device keeps its hub credential and
+obtains a fresh child room/fingerprint by routing that workspace again; it does
+not re-pair. No retired `state/webrtc/` layout is read or migrated.
 
 ### `server-auth/hub-ready.json`
 
 Ready file written by the one detached local hub once its gateway is listening
-(`src/server/hubServer.ts`). Payload includes `mode`, `gatewayPort`, the first-run
-`rootInvite` (one complete pairing invite, or `null` after bootstrap),
-`serverId`, `serverBootId`, `pid`, and `version`. The desktop accepts only a
-fresh hub-mode record, pairs its global device once, and asks the hub to route
-the selected workspace child.
+(`src/server/hubServer.ts`). Payload includes `mode`, `gatewayPort`, the current
+first-run `rootInvite` (one complete pairing invite, or `null` after bootstrap),
+`serverId`, `serverBootId`, `pid`, and `version`. While no root exists, invite
+expiry atomically replaces this file with the newly armed invite; first
+redemption rewrites it with `rootInvite: null`. The desktop accepts only a fresh
+hub-mode record, pairs its global device once, and asks the hub to route the
+selected workspace child.
 
 ### `logs/hub.log`
 

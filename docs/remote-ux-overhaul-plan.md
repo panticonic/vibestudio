@@ -25,24 +25,26 @@ the owning artifacts, and the verification gates for future maintainers.
 
 ## Work Package Outcomes
 
-| WP | Outcome | Primary artifacts |
-| --- | --- | --- |
-| WP1 zero-config signaling | Default signaling is centralized and used by server spawn, CLI pairing, mobile dev, and smoke scripts. Self-hosted endpoints use the canonical flag or environment variable. | `packages/shared/src/connect.ts`, `scripts/cli/lib/pair-server.mjs`, `docs/webrtc-deployment.md` |
-| WP2 identity/preflight | `identity.pem` is the only accepted DTLS identity. Doctor checks hub control by default or an explicitly selected child. Repair may rotate only an explicit workspace child; hub trust must be restored from its exact backup. | `src/node/webrtc/cert.ts`, `src/node/webrtc/nodeDatachannelPeer.ts`, `scripts/cli/remote-doctor.mjs`, `scripts/cli/remote-repair-identity.mjs` |
-| WP3 remote deploy | SSH deploy/status/log/update/remove automation is implemented with a user systemd unit and version-pinned artifacts. | `scripts/cli/remote-deploy.mjs`, `src/cli/client.ts`, `docs/cli.md`, `workspace/skills/remote-access/SKILL.md` |
-| WP4 invites | Invite creation returns the complete link shape and supports local loopback admin minting for colocated server CLI use. | `packages/service-schemas/src/auth.ts`, `src/server/services/authService.test.ts`, `src/server/hubServer.ts`, `src/cli/remoteClient.ts`, `scripts/cli/lib/connect-grammar.generated.mjs` |
-| WP5 desktop Connect a device | The desktop shell exposes paired-device management, invite creation, QR/pair URL display, countdown, copy, and revoke. | `workspace/apps/shell/components/PairedDevicesSection.tsx`, `workspace/apps/shell/components/ConnectionSettingsDialog.tsx`, `workspace/apps/shell/shell/client.ts`, `workspace/apps/shell/SKILL.md` |
-| WP6 HTTPS pair carrier | Pair URLs use the HTTPS carrier, app-link metadata is served by the apex relay Worker, and fallback behavior requires explicit user action. | `scripts/cli/lib/connect-grammar.generated.mjs`, `apps/webhook-relay/src/index.ts`, `apps/webhook-relay/src/oauthLanding.ts`, `apps/mobile/android/app/src/main/AndroidManifest.xml`, `apps/mobile/ios/Vibestudio/Info.plist` |
-| WP7 mobile packaging | Android and iOS install/dev/smoke paths are platform-aware. The native shell includes scanner and paste-link entry points. | `scripts/cli/mobile-install.mjs`, `scripts/cli/mobile-dev.mjs`, `scripts/cli/mobile-smoke.mjs`, `scripts/cli/mobile-doctor.mjs`, `apps/mobile/index.js`, `apps/mobile/README.md` |
-| WP8 one credential store | Desktop remote and loopback credentials use one encrypted store keyed by server identity. Split store modules and tests are deleted. | `src/main/services/deviceCredentialStore.ts`, `src/main/services/deviceCredentialStore.test.ts`, `src/main/services/remoteCredService.ts`, `STATE_DIRECTORY.md` |
-| WP9 one connect path | Remote desktop shells serve manifests, panels, assets, CDP provider streams, and app launches over the paired bridge. | `src/main/serverSession.ts`, `src/main/panelOrchestrator.ts`, `src/main/index.ts`, `src/server/services/gatewayFetchService.ts`, `tests/webrtc-system.e2e.test.ts` |
-| WP10 docs and skills | Operator docs, state docs, CLI docs, workspace-wide skills, and repo-local skills cover deploy, pair, mobile, iOS, troubleshooting, and smoke verification. | `docs/cli.md`, `docs/webrtc-deployment.md`, `docs/webrtc-local-e2e.md`, `workspace/skills/remote-access/SKILL.md`, `workspace/apps/mobile/SKILL.md`, `workspace/extensions/mobile-debug/SKILL.md`, `workspace/extensions/react-native/SKILL.md` |
+| WP                           | Outcome                                                                                                                                                                                                                                                     | Primary artifacts                                                                                                                                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WP1 zero-config signaling    | Default signaling is centralized and used by server spawn, CLI pairing, mobile dev, and smoke scripts. Self-hosted endpoints use the canonical flag or environment variable.                                                                                | `packages/shared/src/connect.ts`, `scripts/cli/lib/pair-server.mjs`, `docs/webrtc-deployment.md`                                                                                                                                                  |
+| WP2 identity/preflight       | `identity.pem` is the only accepted DTLS identity. Doctor checks hub control by default or an explicitly selected child. Repair may rotate only an explicit workspace child; hub trust must be restored from its exact backup.                              | `src/node/webrtc/cert.ts`, `src/node/webrtc/nodeDatachannelPeer.ts`, `scripts/cli/remote-doctor.mjs`, `scripts/cli/remote-repair-identity.mjs`                                                                                                    |
+| WP3 remote deploy            | Local or SSH deploy/status/log/update/remove automation uses one systemd user-service lifecycle and version-pinned artifacts.                                                                                                                               | `scripts/cli/remote-deploy.mjs`, `src/cli/client.ts`, `docs/cli.md`, `workspace/skills/remote-access/SKILL.md`                                                                                                                                    |
+| WP4 invites                  | Invite creation returns the complete link shape and supports local loopback admin minting for colocated server CLI use. A fresh server owns one live root-bootstrap invite at a time and renews it until claimed.                                           | `packages/service-schemas/src/auth.ts`, `src/server/services/authService.test.ts`, `src/server/hubServer.ts`, `src/server/rootBootstrapInviteLifecycle.ts`, `src/cli/remoteClient.ts`, `scripts/cli/lib/connect-grammar.generated.mjs`            |
+| WP5 desktop Connect a device | The desktop shell exposes paired-device management, invite creation, QR/pair URL display, countdown, copy, and revoke.                                                                                                                                      | `workspace/apps/shell/components/PairedDevicesSection.tsx`, `workspace/apps/shell/components/ConnectionSettingsDialog.tsx`, `workspace/apps/shell/shell/client.ts`, `workspace/apps/shell/SKILL.md`                                               |
+| WP6 HTTPS pair carrier       | Pair URLs use the HTTPS carrier, app-link metadata is served by the apex relay Worker, and fallback behavior requires explicit user action.                                                                                                                 | `scripts/cli/lib/connect-grammar.generated.mjs`, `apps/webhook-relay/src/index.ts`, `apps/webhook-relay/src/oauthLanding.ts`, `apps/mobile/android/app/src/main/AndroidManifest.xml`, `apps/mobile/ios/Vibestudio/Info.plist`                     |
+| WP7 mobile packaging         | Android and iOS install/dev/smoke paths are platform-aware. The native shell includes scanner and paste-link entry points; the connected mobile workspace exposes Settings → Devices for creating and sharing another-device invites.                       | `scripts/cli/mobile-install.mjs`, `scripts/cli/mobile-dev.mjs`, `scripts/cli/mobile-smoke.mjs`, `scripts/cli/mobile-doctor.mjs`, `apps/mobile/index.js`, `workspace/apps/mobile/src/components/SettingsScreen.tsx`, `apps/mobile/README.md`       |
+| WP8 one credential store     | Desktop remote and loopback credentials use one encrypted store keyed by server identity. Split store modules and tests are deleted.                                                                                                                        | `src/main/services/deviceCredentialStore.ts`, `src/main/services/deviceCredentialStore.test.ts`, `src/main/services/remoteCredService.ts`, `STATE_DIRECTORY.md`                                                                                   |
+| WP9 one connect path         | Remote desktop shells serve manifests, panels, assets, CDP provider streams, and app launches over the paired bridge.                                                                                                                                       | `src/main/serverSession.ts`, `src/main/panelOrchestrator.ts`, `src/main/index.ts`, `src/server/services/gatewayFetchService.ts`, `tests/webrtc-system.e2e.test.ts`                                                                                |
+| WP10 docs and skills         | Operator docs, state docs, CLI docs, workspace-wide skills, and repo-local skills cover local/SSH deploy, renewable bootstrap pairing, workspace switching without re-pairing, mobile/desktop device invites, iOS, troubleshooting, and smoke verification. | `README.md`, `docs/cli.md`, `docs/webrtc-deployment.md`, `docs/webrtc-local-e2e.md`, `workspace/skills/remote-access/SKILL.md`, `workspace/skills/onboarding/REMOTE_SERVER.md`, `workspace/apps/mobile/SKILL.md`, `workspace/apps/shell/SKILL.md` |
 
 ## CLI Surface
 
 ```bash
-vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030]
-vibestudio remote deploy status|logs|update|remove <user@host>
+vibestudio remote deploy local
+vibestudio remote deploy status|logs|update|remove local
+vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--signal-url <url>] [--port 3030]
+vibestudio remote deploy status|logs|update|remove <user@host|local>
 vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]
 vibestudio remote repair-identity --workspace <name> --yes
 vibestudio remote pair "https://vibestudio.app/pair#..."
@@ -63,7 +65,8 @@ vibestudio mobile doctor
 Use focused gates for the shipped behavior:
 
 ```bash
-pnpm vitest run tests/remote-overhaul-skill-guard.test.ts tests/ios-entitlements.test.ts packages/shared/src/connect.test.ts tests/pair-server.test.ts --config vitest.host.config.ts
+pnpm vitest run tests/remote-overhaul-skill-guard.test.ts --config vitest.userland.config.ts
+pnpm vitest run tests/ios-entitlements.test.ts packages/shared/src/connect.test.ts tests/pair-server.test.ts --config vitest.host.config.ts
 pnpm vitest run tests/remote-deploy.test.ts src/cli/client.test.ts src/server/hubServer.test.ts --config vitest.host.config.ts
 pnpm test:desktop-pairing-smoke
 node scripts/cli/mobile-smoke.mjs --platform android --avd NatStack_Test --timeout-ms 420000 --no-build
@@ -74,8 +77,8 @@ pnpm smoke:full
 desktop e2e, and Android emulator pairing. Run the narrower desktop pairing and
 mobile smoke commands when iterating on one side of the system. The real-client
 pairing phases use `signal.vibestudio.app`, the normal `remote serve` hub, and a
-workspace-scoped `remote invite` by default; pass `--local-signaling` for an
-offline Miniflare/coturn run.
+current root-bootstrap invite from the strict ready payload by default; pass
+`--local-signaling` for an offline Miniflare/coturn run.
 
 ## Documentation And Skills
 

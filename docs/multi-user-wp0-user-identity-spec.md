@@ -286,12 +286,16 @@ later option only if large images are wanted. Children/panels get the avatar fro
 
 On hub first-run with an **empty `UserStore`**:
 
-1. The hub creates a **pending root invite** and prints/QR-displays a pairing code (reusing
-   today's startup pairing print, `hubServer.ts:902-903,1014`, and `mintPairingInvite`).
+1. The hub's `RootBootstrapInviteLifecycle` owns exactly one live **pending root
+   invite** and prints/QR-displays its complete pairing link. If that invite
+   expires before redemption, the lifecycle replaces it and republishes the
+   ready payload; an empty server therefore remains claimable without a manual
+   restart.
 2. The first device to redeem it triggers `UserStore.createRoot({handle, displayName})`
    (handle/name supplied during the pair flow, or defaulted then editable), and the device
    is issued with `userId = root.id`, `role: "root"`.
-3. Thereafter `createRoot` refuses (users exist); new humans arrive only via
+3. Root creation completes the bootstrap lifecycle and publishes
+   `rootInvite: null`. Thereafter `createRoot` refuses (users exist); new humans arrive only via
    `inviteUser` (root/admin), which creates the `User` **and** a pairing code bound to that
    user; the invitee's first device redeems it and gets `userId = invitee.id`.
 
@@ -440,21 +444,21 @@ is attached purely for attribution/routing and never widens a grant.
 
 ## 9. File-change checklist
 
-| File                                       | Change                                                                                                                                                                  |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/identity/src/types.ts`       | **new** — `User`, `UserRole`, `UserSubject`                                                                                                                             |
-| `packages/identity/src/userStore.ts`   | **new** — hub `UserStore` (file-backed, atomic)                                                                                                                         |
-| `packages/identity/src/membership.ts`  | **new** — `WorkspaceMembership` + store                                                                                                                                 |
-| `packages/shared/src/serviceDispatcher.ts` | `VerifiedCaller.subject`; `createVerifiedCaller` param; `AgentBinding.userId`                                                                                           |
-| `packages/identity/src/identityDb.ts`  | **new** — hub-owned SQLite identity DB; hub opens read-write, children open read-only (WAL)                                                                             |
-| `src/server/hostCore/deviceAuthStore.ts`   | `DeviceRecord.userId`, `AgentCredentialRecord.userId`, pairing-code `userId` binding, guards, issue/complete signatures                                                 |
-| `src/server/hostCore/auth/model.ts`        | `responseForCredential`/`DeviceCredentialResponse` carry `userId`; split invite intents                                                                                 |
-| `src/server/hubServer.ts`                  | `hubControl.inviteUser` (root/admin), `pairDevice` (member), first-redemption root bootstrap; resolve current role from the identity DB                                 |
-| `src/server/services/principalIdentity.ts` | **new** `resolveUserSubject(entityCache, callerId)` sibling to `resolveCodeIdentity`                                                                                    |
-| `src/server/rpcServer.ts`                  | `userSubjectSource` dep; `handleAuth` device-credential→identity-DB subject on each path; `verifiedCallerFor` + `redeemPairingCredential` return `subject`              |
-| `packages/builtin/src/workspace-state/WorkspaceDO.ts`    | `entities.owner_user_id` (+ stamp at `entityActivate`)                                                                                                                  |
-| `src/server/hubServer.ts`                  | remove per-child device store; hub owns the identity DB (`UserStore`/`DeviceAuthStore`/`MembershipStore`, hub-side minting is WP1); pass its read-only path to children |
-| `STATE_DIRECTORY.md`                       | document the hub-owned identity DB + clean-cut re-pair                                                                                                                  |
+| File                                                  | Change                                                                                                                                                                  |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/identity/src/types.ts`                      | **new** — `User`, `UserRole`, `UserSubject`                                                                                                                             |
+| `packages/identity/src/userStore.ts`                  | **new** — hub `UserStore` (file-backed, atomic)                                                                                                                         |
+| `packages/identity/src/membership.ts`                 | **new** — `WorkspaceMembership` + store                                                                                                                                 |
+| `packages/shared/src/serviceDispatcher.ts`            | `VerifiedCaller.subject`; `createVerifiedCaller` param; `AgentBinding.userId`                                                                                           |
+| `packages/identity/src/identityDb.ts`                 | **new** — hub-owned SQLite identity DB; hub opens read-write, children open read-only (WAL)                                                                             |
+| `src/server/hostCore/deviceAuthStore.ts`              | `DeviceRecord.userId`, `AgentCredentialRecord.userId`, pairing-code `userId` binding, guards, issue/complete signatures                                                 |
+| `src/server/hostCore/auth/model.ts`                   | `responseForCredential`/`DeviceCredentialResponse` carry `userId`; split invite intents                                                                                 |
+| `src/server/hubServer.ts`                             | `hubControl.inviteUser` (root/admin), `pairDevice` (member), first-redemption root bootstrap; resolve current role from the identity DB                                 |
+| `src/server/services/principalIdentity.ts`            | **new** `resolveUserSubject(entityCache, callerId)` sibling to `resolveCodeIdentity`                                                                                    |
+| `src/server/rpcServer.ts`                             | `userSubjectSource` dep; `handleAuth` device-credential→identity-DB subject on each path; `verifiedCallerFor` + `redeemPairingCredential` return `subject`              |
+| `packages/builtin/src/workspace-state/WorkspaceDO.ts` | `entities.owner_user_id` (+ stamp at `entityActivate`)                                                                                                                  |
+| `src/server/hubServer.ts`                             | remove per-child device store; hub owns the identity DB (`UserStore`/`DeviceAuthStore`/`MembershipStore`, hub-side minting is WP1); pass its read-only path to children |
+| `STATE_DIRECTORY.md`                                  | document the hub-owned identity DB + clean-cut re-pair                                                                                                                  |
 
 ---
 

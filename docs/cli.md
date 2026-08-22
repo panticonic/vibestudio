@@ -99,9 +99,12 @@ pnpm cli remote serve --port 3030
 pnpm --silent cli remote serve --dev --ready-file /tmp/vibestudio-ready.json
 ```
 
-The ready file contains one-time root pairing secrets; protect it and delete it
-after redemption. `--ready-file` makes pairing unattended; it does not
-auto-approve workspace extensions, tool calls, credentials, or Git publication.
+The ready file contains the current one-time root pairing secret; protect it.
+While the server has no root account, expiry atomically replaces that payload
+with a fresh invite. Successful root redemption rewrites it with
+`rootInvite: null`; stopping the owned server removes its temporary ready state.
+`--ready-file` makes pairing unattended; it does not auto-approve workspace
+extensions, tool calls, credentials, or Git publication.
 Source-mode `remote serve` rebuilds the internal Durable Object bundle before
 startup. Its disposable `--dev` workspace does not mirror test commits back
 into the source checkout.
@@ -158,10 +161,16 @@ vibestudio remote logout
 and creates that account's first device link. Both commands require an existing
 paired administrator credential.
 
+The equivalent desktop path is connection badge → **Paired devices** →
+**Connect a device**. On mobile, use **Settings** → **Devices** → **Connect
+another device** and share the complete one-time link.
+
 Pairing saves a durable device credential. After pairing, desktop, mobile, and
 terminal hosts all choose a workspace, ask the server to launch their selected
 host target, and show the same privileged workspace-unit approval before
-running workspace code.
+running workspace code. Choosing another workspace retains the same hub device
+identity and replaces only the routed child reach; it does not require pairing
+again.
 
 Desktop pairing and workspace selection happen in the desktop bootstrap UI.
 `terminal start` runs fully in the CLI; use `--yes` only for automation that
@@ -195,9 +204,14 @@ or credential-storage path.
 
 ## Remote Deploy
 
-Deploy or manage a remote server over SSH/systemd:
+Deploy or manage a systemd user service on this computer or over SSH:
 
 ```sh
+vibestudio remote deploy local
+vibestudio remote deploy status local
+vibestudio remote deploy logs local
+vibestudio remote deploy update local
+vibestudio remote deploy remove local
 vibestudio remote deploy user@host --port 3030 --signal-url wss://signaling.example.workers.dev
 vibestudio remote deploy status user@host
 vibestudio remote deploy logs user@host
@@ -207,14 +221,20 @@ vibestudio remote doctor
 vibestudio remote repair-identity --workspace default --yes
 ```
 
-Deploy installs a `systemd --user` unit, enables linger, and starts
+Use `local` when the computer running the command is the server; it uses the
+same installer and service lifecycle without requiring an SSH daemon. Deploy
+installs a `systemd --user` unit, enables linger, and starts
 `vibestudio remote serve` bound to loopback. The unit's `ExecStart` uses the
 absolute path resolved from `command -v vibestudio` on the host (so it survives
 nvm / user-prefix npm installs). Deploy then polls the loopback gateway
 `/healthz` for hub readiness and waits for the managed `default` workspace
-identity before running `remote doctor` over SSH. Pairing invites are minted by
+identity before running `remote doctor` against both the stable hub identity
+and the default workspace reach. Pairing invites are minted by
 the hub with an exact target workspace ID; their rooms remain on the stable hub
-control ingress. Deploy itself does not consume or print an invite.
+control ingress. Deploy never consumes an invite. It prints the recent service
+journal after startup, including the current root QR/link on a fresh server;
+`remote deploy logs <target>` follows later invite renewals until the first
+device claims the root account.
 
 `update` reuses `deploy` and explicitly restarts the unit, so a new build
 replaces the running old binary. `remove` disables and deletes the unit; add
