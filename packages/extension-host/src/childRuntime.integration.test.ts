@@ -96,6 +96,11 @@ describe("extension child runtime process", () => {
         "  ctx.log.info('activated');",
         "  return {",
         "    ping(value) { return `pong:${value}`; },",
+        "    async replaceStorage(value) {",
+        "      await ctx.storage.mkdir('atomic');",
+        "      await ctx.storage.replaceFile('atomic/value.txt', value);",
+        "      return ctx.storage.readFile('atomic/value.txt', 'utf8');",
+        "    },",
         "    callerContext() {",
         "      const invocation = ctx.invocation.current();",
         "      return invocation?.chainCaller?.contextId ?? invocation?.caller.contextId ?? null;",
@@ -232,7 +237,7 @@ describe("extension child runtime process", () => {
     });
     const ready = await readyPromise;
     expect(ready.message.args[0]).toEqual({
-      methods: ["ping", "callerContext", "targetEcho", "structuredFailure"],
+      methods: ["ping", "replaceStorage", "callerContext", "targetEcho", "structuredFailure"],
       providerMethods: { gitInterop: ["providerPing"] },
       hasFetch: false,
     });
@@ -280,6 +285,49 @@ describe("extension child runtime process", () => {
       requestId,
       result: "pong:ok",
     });
+
+    const storageRequestId = randomUUID();
+    const storageResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      ready.ws.on("message", (raw) => {
+        try {
+          const message = JSON.parse(String(raw)) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === storageRequestId) resolve(rpc);
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+      ready.ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: makeEnvelope("main", "@workspace-extensions/process-test", "server", {
+            type: "request",
+            requestId: storageRequestId,
+            fromId: "main",
+            method: "extension.invoke",
+            args: [
+              "replaceStorage",
+              ["durable"],
+              {
+                requestId: storageRequestId,
+                extensionName: "@workspace-extensions/process-test",
+                method: "replaceStorage",
+                caller: { callerId: "test", callerKind: "shell" },
+              },
+            ],
+          } satisfies RpcRequest),
+        } satisfies WsServerMessage)
+      );
+    });
+    expect(storageResponse).toEqual({
+      type: "response",
+      requestId: storageRequestId,
+      result: "durable",
+    });
+    const storagePath = path.join(root, "storage", "atomic", "value.txt");
+    expect(fs.readFileSync(storagePath, "utf8")).toBe("durable");
+    expect(fs.statSync(storagePath).mode & 0o777).toBe(0o600);
 
     const providerRequestId = randomUUID();
     const providerResponse = await waitForMessage<RpcResponse>((resolve, reject) => {

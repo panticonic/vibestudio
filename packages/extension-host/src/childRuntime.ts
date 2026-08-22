@@ -37,6 +37,7 @@ import {
   type BodyEnvelope,
   type StreamChunkEnvelope,
 } from "./wireEnvelopes.js";
+import { replaceExtensionStorageFile } from "./atomicStorage.js";
 
 type ChildMessage = { type: "shutdown" };
 
@@ -416,6 +417,8 @@ function createContext() {
         nodeFs.mkdir(storagePath(p), { recursive: opts?.recursive ?? true }),
       readFile: (p: string, encoding?: BufferEncoding) => nodeFs.readFile(storagePath(p), encoding),
       writeFile: (p: string, data: string | Uint8Array) => nodeFs.writeFile(storagePath(p), data),
+      replaceFile: (p: string, data: string | Uint8Array) =>
+        replaceExtensionStorageFile(normalizedRoot, p, data),
       rm: (p: string, opts?: { recursive?: boolean; force?: boolean }) =>
         nodeFs.rm(storagePath(p), opts),
       readdir: (p = ".") => nodeFs.readdir(storagePath(p)),
