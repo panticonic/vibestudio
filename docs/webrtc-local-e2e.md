@@ -79,7 +79,7 @@ cd apps/signaling && wrangler dev --port 8787 --local &
 # 2. the server, with the ingress pool armed
 VIBESTUDIO_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
 # → startup banner prints fresh invites:
-#      Pair URL:     https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2&ice=all
+#      Pair URL:     https://vibestudio.app/p#<compact-payload>
 #   and the pool logs:  [webrtc-ingress] armed room <uuid> (invite)
 ```
 
@@ -127,9 +127,8 @@ pairing so the next normal `pnpm dev` remains local.
 ## Notes
 
 - **The CLI uses the same paired bootstrap.** `vibestudio remote pair
-"vibestudio://connect?…"` dials the room with `createPairedConnection`, stores the
-  global device refresh credential plus the selected child's `room`/`fp`/`sig`
-  reach, and later RPC calls present `refresh:<deviceId>:<refreshToken>` over the
+`vibestudio://connect/<compact-payload>`dials the derived room with`createPairedConnection`, stores the
+  global device refresh credential plus the selected child's `room`/`fp`/`sig`  reach, and later RPC calls present`refresh:<deviceId>:<refreshToken>` over the
   pipe. Workspace switches replace reach information, not identity.
 
 - **TURN** is optional for local/loopback (host candidates suffice). For symmetric

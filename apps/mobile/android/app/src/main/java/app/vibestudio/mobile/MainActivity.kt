@@ -70,9 +70,9 @@ class MainActivity : ReactActivity() {
      * A Vibestudio pairing link, in either carrier form (mirrors iOS
      * AppDelegate `VibestudioIsPairingURL`):
      *   - the custom scheme `vibestudio://connect`
-     *   - the verified App Link `https://vibestudio.app/pair`
+     *   - the verified App Link `https://vibestudio.app/p`
      * Both must reset the app to the native pairing bootstrap so index.js can
-     * redeem the invite; only handling the scheme form left a tapped /pair App
+     * redeem the invite; only handling the scheme form left a tapped /p App
      * Link opening the (already-loaded) workspace bundle, which has no pairing
      * listener, so nothing happened.
      */
@@ -82,7 +82,7 @@ class MainActivity : ReactActivity() {
         val scheme = data.scheme?.lowercase()
         val host = data.host?.lowercase()
         if (scheme == "vibestudio" && host == "connect") return true
-        if (scheme == "https" && host == "vibestudio.app" && data.path == "/pair") return true
+        if (scheme == "https" && host == "vibestudio.app" && data.path == "/p") return true
         return false
     }
 

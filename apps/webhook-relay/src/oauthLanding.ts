@@ -137,16 +137,16 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
 // ---- Pair-link landing -----------------------------------------------------
 
 /**
- * HTTPS carrier for pairing QR codes (`https://vibestudio.app/pair#...`).
+ * HTTPS carrier for pairing QR codes (`https://vibestudio.app/p#...`).
  *
  * The private pairing material lives in the URL fragment, so it is never sent
- * to this Worker. The page reconstructs the native `vibestudio://connect?...`
+ * to this Worker. The page reconstructs the native `vibestudio://connect/...`
  * URL client-side and opens the installed app. Desktop browsers show the custom
- * scheme for copy/retry; Android uses an intent URL for a better install/open
+ * compact path for copy/retry; Android uses an intent URL for a better install/open
  * handoff.
  */
 export function handlePairLanding(url: URL): Response {
-  if (url.pathname !== "/pair")
+  if (url.pathname !== "/p")
     return htmlError(404, "Not found", "This Vibestudio page does not exist.");
   return new Response(PAIR_LANDING_HTML, {
     status: 200,
@@ -236,7 +236,7 @@ export function buildAppleAppSiteAssociation(config: UniversalLinkConfig): unkno
           components: [
             { "/": "/oauth/callback/*", comment: "OAuth provider callbacks" },
             { "/": "/oauth/linkback/*", comment: "OAuth account-linking callbacks" },
-            { "/": "/pair", comment: "Pairing trampoline" },
+            { "/": "/p", comment: "Pairing trampoline" },
             { "/": "/panel", comment: "Logical panel location" },
           ],
         },
@@ -317,13 +317,13 @@ code{overflow-wrap:anywhere}
     open.disabled = true;
     return;
   }
-  const scheme = "vibestudio://connect?" + fragment;
+  const scheme = "vibestudio://connect/" + fragment;
   link.textContent = scheme;
   const isAndroid = /Android/i.test(navigator.userAgent);
   const isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
   const openLink = () => {
     if (isAndroid) {
-      location.href = "intent://connect?" + fragment + "#Intent;scheme=vibestudio;package=app.vibestudio.mobile;end";
+      location.href = "intent://connect/" + fragment + "#Intent;scheme=vibestudio;package=app.vibestudio.mobile;end";
       return;
     }
     location.href = scheme;

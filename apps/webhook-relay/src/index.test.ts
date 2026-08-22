@@ -45,11 +45,11 @@ describe("webhook relay Worker — routing", () => {
 
   it("serves the pair trampoline without seeing the private fragment", async () => {
     const { env, stub } = makeEnv();
-    const resp = await worker.fetch(new Request("https://vibestudio.app/pair#room=secret"), env);
+    const resp = await worker.fetch(new Request("https://vibestudio.app/p#compact-secret"), env);
     expect(resp.status).toBe(200);
     expect(resp.headers.get("content-type")).toContain("text/html");
     const html = await resp.text();
-    expect(html).toContain("vibestudio://connect?");
+    expect(html).toContain("vibestudio://connect/");
     expect(html).toContain("location.hash");
     expect(html).not.toContain("room=secret");
     expect(stub.fetch).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe("webhook relay Worker — universal-link host", () => {
     expect(doc.applinks.details[0].components.map((component: any) => component["/"])).toEqual([
       "/oauth/callback/*",
       "/oauth/linkback/*",
-      "/pair",
+      "/p",
       "/panel",
     ]);
   });

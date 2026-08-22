@@ -18,7 +18,7 @@
  * redemption re-tags the invite's room onto the device record
  * (`onPairingRoomRedeemed` → `armRoom`), and clients connect through the ONE
  * shared bootstrap (`createPairedConnection`), parsing the invite's real
- * `vibestudio://connect` (v=2) deep link.
+ * compact `vibestudio://connect` v3 deep link.
  *
  * Scenarios: invite → pairing → RPC dispatch; consumed-code rejection;
  * pairing → refresh-credential reconnect; TWO concurrent clients on two invite
@@ -171,7 +171,7 @@ let clientSeq = 0;
 
 /**
  * Dial the invite's deep link the way every real platform does now: parse the
- * v=2 `vibestudio://connect` link, then `createPairedConnection` (the ONE shared
+ * compact v3 `vibestudio://connect` link, then `createPairedConnection` (the ONE shared
  * bootstrap — connect + main-session auth + close-on-failure).
  */
 async function dial(
@@ -255,7 +255,7 @@ describe.runIf(RUN)(
         ice: "all",
         exp: invite.expiresAt,
       });
-      expect(deepLink).toContain("v=2");
+      expect(deepLink).toMatch(/^vibestudio:\/\/connect\/[A-Za-z0-9_-]+$/u);
       return { room: invite.room, code: invite.code, deepLink };
     };
 

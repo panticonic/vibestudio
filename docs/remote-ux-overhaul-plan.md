@@ -47,7 +47,7 @@ vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--signal-url <url
 vibestudio remote deploy pairing|status|logs|update|remove <user@host|local>
 vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]
 vibestudio remote repair-identity --workspace <name> --yes
-vibestudio remote pair "https://vibestudio.app/pair#..."
+vibestudio remote pair "https://vibestudio.app/p#..."
 vibestudio remote invite-user --handle <handle> --workspace <name>
 vibestudio remote pair-device [--workspace <name>]
 vibestudio remote add-member|remove-member --workspace <name> --handle <handle>

@@ -158,7 +158,7 @@ async function attach(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const isPairingLink = (value: string) =>
-      value.startsWith("vibestudio://") || value.startsWith("https://vibestudio.app/pair");
+      value.startsWith("vibestudio://") || value.startsWith("https://vibestudio.app/p#");
     const link = inv.positionals.find(isPairingLink);
     const workspace =
       typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : "";

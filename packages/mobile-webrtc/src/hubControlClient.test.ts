@@ -10,7 +10,7 @@ const route = {
     room: "workspace-b-2222",
     fp: "AA".repeat(32),
     sig: "wss://signal.example/",
-    v: 2 as const,
+    v: 3 as const,
     ice: "relay" as const,
   },
   serverId: `srv_${"s".repeat(24)}`,

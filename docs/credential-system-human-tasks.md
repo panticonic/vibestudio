@@ -94,7 +94,7 @@ Follow-up TODOs:
 - TODO: Add DNS records for:
   - `vibestudio.app`
 - TODO: Bind `vibestudio.app` to the apex webhook-relay Worker custom domain.
-  This single Worker owns `/`, `/pair`, `/.well-known/*`, `/oauth/callback/*`,
+  This single Worker owns `/`, `/p`, `/.well-known/*`, `/oauth/callback/*`,
   `/i/*`, and `/backhaul`.
 - TODO: Bind `signal.vibestudio.app` to the signaling Worker custom domain.
 - TODO: Configure Cloudflare Realtime TURN secrets for the signaling Worker:
@@ -115,7 +115,7 @@ Follow-up TODOs:
   - `https://vibestudio.app/.well-known/assetlinks.json`
 - TODO: Confirm iOS associated domains include `applinks:vibestudio.app`.
 - TODO: Confirm Android intent filters include `https://vibestudio.app/oauth/callback`
-  and `https://vibestudio.app/pair`.
+  and `https://vibestudio.app/p`.
 - Done: OAuth callbacks are app-link/universal-link only. `vibestudio://` remains
   registered only for connect-link onboarding and is not accepted as an OAuth
   callback path.

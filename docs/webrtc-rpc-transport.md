@@ -225,23 +225,24 @@ WHATWG). No client signaling library needed.
 handed to both peers through the signaling room. Force `iceTransportPolicy`
 options so TURN-over-TLS:443 is always reachable.
 
-### Extended pairing payload
+### Compact pairing payload
 
-The `url`+`code` link and its parser (`connect.ts:107`, mobile
-`deepLinkConnect.ts:25`) are **replaced outright** — `url`-style links are deleted
-with remote mode (§8), and the parser is **rewritten to accept only the new form**
-(no versioned shim, no old-link handling, nothing to fall back to). New link:
+The old query-field link and its parser are replaced outright. Protocol v3
+accepts only one compact, self-contained payload in either canonical carrier:
 
 ```
-vibestudio://connect?room=<uuid>&fp=<dtls-sha256>&code=<pairing-secret>
-   &sig=<signaling-endpoint>&v=<proto-version>&ice=<turn-policy>
+https://vibestudio.app/p#<compact-payload>
+vibestudio://connect/<compact-payload>
 ```
 
-`fp` is the server's persistent-cert DTLS SHA-256 (proven pinnable in §11).
-`sig`/`v` decouple us from a hard-coded signaling host and allow protocol
-evolution. Pairing reach contains transport coordinates only; semantic identity
-comes from the authenticated `serverId` and exact `workspaceId` returned by the
-control plane.
+The binary payload carries a version/flags byte, the server certificate's full
+DTLS SHA-256 pin, the 24-byte one-time secret, an exact 48-bit millisecond
+expiry, and only a non-default signaling endpoint. Its signaling room is a
+domain-separated SHA-256 projection of the secret. This keeps the public
+signaling service blind to the redeemable secret while removing the room and
+hosted-default settings from the URL. Pairing reach contains transport
+coordinates only; semantic identity comes from the authenticated `serverId`
+and exact `workspaceId` returned by the control plane.
 
 ## 3. Panel RPC over the pipe — N principals, one channel
 

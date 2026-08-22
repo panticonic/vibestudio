@@ -2,7 +2,7 @@
 
 Cloudflare Worker bound to the apex `https://vibestudio.app` host. It owns:
 
-- pairing trampoline pages (`/pair`)
+- pairing trampoline pages (`/p`)
 - mobile app-link verification (`/.well-known/...`)
 - public **webhooks**
 - OAuth **redirect callbacks**
@@ -46,16 +46,16 @@ token — relayed verbatim, never re-signed. Lookup is by the explicit
 
 ## Routes
 
-| Method | Path                                      | Auth                      | Purpose                                                                                  |
-| ------ | ----------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
-| GET    | `/healthz` or `/health`                   | none                      | Liveness.                                                                                |
-| GET    | `/`                                       | none                      | Operator/browser sanity landing.                                                         |
-| GET    | `/pair`                                   | none                      | Pairing trampoline from `https://vibestudio.app/pair#...` to `vibestudio://connect?...`. |
-| WS     | `/backhaul?relayId&ts&key&sig`            | P-256 proof of possession | Workspace's persistent backhaul into the registry DO.                                    |
-| POST   | `/i/:subscriptionId`                      | first-writer-wins owner   | Webhook ingress → buffered → delivered over the backhaul.                                |
-| GET    | `/oauth/callback/:transactionId`          | transaction registration  | OAuth landing (desktop backhaul-forward; mobile deep-link host).                         |
-| GET    | `/.well-known/apple-app-site-association` | none                      | Apple universal-link host.                                                               |
-| GET    | `/.well-known/assetlinks.json`            | none                      | Android App Links host.                                                                  |
+| Method | Path                                      | Auth                      | Purpose                                                                               |
+| ------ | ----------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------- |
+| GET    | `/healthz` or `/health`                   | none                      | Liveness.                                                                             |
+| GET    | `/`                                       | none                      | Operator/browser sanity landing.                                                      |
+| GET    | `/p`                                      | none                      | Pairing trampoline from `https://vibestudio.app/p#...` to `vibestudio://connect/...`. |
+| WS     | `/backhaul?relayId&ts&key&sig`            | P-256 proof of possession | Workspace's persistent backhaul into the registry DO.                                 |
+| POST   | `/i/:subscriptionId`                      | first-writer-wins owner   | Webhook ingress → buffered → delivered over the backhaul.                             |
+| GET    | `/oauth/callback/:transactionId`          | transaction registration  | OAuth landing (desktop backhaul-forward; mobile deep-link host).                      |
+| GET    | `/.well-known/apple-app-site-association` | none                      | Apple universal-link host.                                                            |
+| GET    | `/.well-known/assetlinks.json`            | none                      | Android App Links host.                                                               |
 
 ## Deploy
 
@@ -82,7 +82,7 @@ are in `wrangler.toml`.
   `relayId = SHA-256(publicKey)` before accepting the socket.
 - `VIBESTUDIO_APPLE_APP_ID` — `<teamId>.<bundleId>` (comma-separated for multiple);
   powers the Apple App Site Association. The AASA covers `/oauth/callback/*`,
-  `/oauth/linkback/*`, and `/pair`.
+  `/oauth/linkback/*`, and `/p`.
 - `VIBESTUDIO_ANDROID_PACKAGE_NAME`, `VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS`
   (uppercase, colon-separated; comma-separated for multiple) — power assetlinks.
 

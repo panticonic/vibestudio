@@ -11,7 +11,7 @@ const controlPairing = {
   room: "control-2222",
   fp: "AA".repeat(32),
   sig: "wss://signal.example/",
-  v: 2 as const,
+  v: 3 as const,
   ice: "all" as const,
   code: "c".repeat(32),
   exp: 2_000_000_000_000,
@@ -20,7 +20,7 @@ const workspaceReach = {
   room: "workspace-b-2222",
   fp: "BB".repeat(32),
   sig: "wss://signal.example/",
-  v: 2 as const,
+  v: 3 as const,
   ice: "relay" as const,
 };
 const pairingContext = { workspaceId: "ws-b" };

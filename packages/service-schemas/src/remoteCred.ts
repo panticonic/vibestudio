@@ -15,7 +15,7 @@ export const RemotePairArgsSchema = z
       .string()
       .min(1)
       .describe(
-        "A vibestudio://connect or https://vibestudio.app/pair link containing WebRTC pairing material."
+        "A vibestudio://connect or https://vibestudio.app/p link containing compact WebRTC pairing material."
       ),
     label: z.string().trim().min(1).max(128).optional(),
   })

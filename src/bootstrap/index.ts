@@ -601,7 +601,7 @@ function appendPairRemote(parent: HTMLElement): void {
   const linkInput = document.createElement("input");
   linkInput.name = "link";
   linkInput.type = "text";
-  linkInput.placeholder = "vibestudio://connect?room=...";
+  linkInput.placeholder = "https://vibestudio.app/p#...";
   linkInput.value = pairLinkValue;
   linkInput.autocomplete = "off";
   linkInput.oninput = () => {

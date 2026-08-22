@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { derivePairingRoom } from "@vibestudio/shared/connect";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { MembershipStore } from "@vibestudio/identity/membership";
@@ -677,7 +678,7 @@ const CHILD_REACH = {
   room: "child-room",
   fp: "AA".repeat(32),
   sig: "wss://signal.example/",
-  v: 2 as const,
+  v: 3 as const,
   ice: "all",
 };
 
@@ -806,12 +807,12 @@ describe("hub RPC pairing surfacing (§5)", () => {
     const { state } = makeState(fakeRuntime(9, {}));
     const invite = (() => {
       const pairing = {
-        room: "root-room",
+        room: derivePairingRoom("R".repeat(32)),
         fp: "AA".repeat(32),
         sig: "wss://signal.example/",
         code: "R".repeat(32),
         exp: 2_000_000_000_000,
-        v: 2 as const,
+        v: 3 as const,
         ice: "all" as const,
       };
       return {

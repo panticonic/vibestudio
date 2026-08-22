@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
+import {
+  createConnectDeepLink,
+  createConnectPairUrl,
+  derivePairingRoom,
+} from "@vibestudio/shared/connect";
 import { clearShellTokenCache } from "./rpcClient.js";
 
 const TEST_SERVER_ID = `srv_${"S".repeat(24)}`;
@@ -110,7 +114,7 @@ vi.mock("./webrtcClient.js", () => ({
             room: `child-${workspace}`,
             fp: "BB".repeat(32),
             sig: "wss://signal.example/",
-            v: 2,
+            v: 3,
             ice: "all",
           },
           serverId: TEST_SERVER_ID,
@@ -173,12 +177,12 @@ const FP = "AA".repeat(32);
 const ISSUER_FP = Array.from({ length: 32 }, () => "AA").join(":");
 function pairing(code: string) {
   return {
-    room: "room-1111-2222",
+    room: derivePairingRoom(code),
     fp: ISSUER_FP,
     code,
     exp: 2_000_000_000_000,
     sig: "wss://signal.example/",
-    v: 2 as const,
+    v: 3 as const,
     ice: "all" as const,
   };
 }
@@ -186,12 +190,12 @@ function pairing(code: string) {
 function pairingInvite(code = "P".repeat(32)) {
   const expiresAt = Date.now() + 60_000;
   const coordinates = {
-    room: "invite-room",
+    room: derivePairingRoom(code),
     fp: FP,
     code,
     exp: expiresAt,
     sig: "wss://signal.example/",
-    v: 2 as const,
+    v: 3 as const,
     ice: "all" as const,
   };
   return {
@@ -230,14 +234,14 @@ describe("vibestudio CLI", () => {
           fp: FP,
           sig: "wss://signal.example/",
           ice: "all",
-          v: 2,
+          v: 3,
         },
         workspacePairing: {
           room: "room-1111-2222",
           fp: FP,
           sig: "wss://signal.example/",
           ice: "all",
-          v: 2,
+          v: 3,
         },
         pairedAt: 1,
         ...overrides,
@@ -298,7 +302,7 @@ describe("vibestudio CLI", () => {
       deviceId: TEST_DEVICE_ID,
       refreshToken: TEST_REFRESH_TOKEN,
       controlPairing: {
-        room: "room-1111-2222",
+        room: derivePairingRoom("A".repeat(32)),
         fp: FP,
         sig: "wss://signal.example/",
       },
@@ -309,7 +313,7 @@ describe("vibestudio CLI", () => {
       },
     });
     expect(webrtcMock.calls).toContainEqual({
-      room: "room-1111-2222",
+      room: derivePairingRoom("A".repeat(32)),
       method: "hubControl.routeWorkspace",
       args: [{ workspaceId: "ws_dev" }],
       token: "A".repeat(32),
@@ -486,14 +490,14 @@ describe("vibestudio CLI", () => {
         room: "room-1111-2222",
         fp: FP,
         sig: "wss://signal.example/",
-        v: 2,
+        v: 3,
         ice: "all",
       },
       workspacePairing: {
         room: "child-docs",
         fp: "BB".repeat(32),
         sig: "wss://signal.example/",
-        v: 2,
+        v: 3,
         ice: "all",
       },
     });
@@ -577,7 +581,7 @@ describe("vibestudio CLI", () => {
         room: "child-docs",
         fp: "BB".repeat(32),
         sig: "wss://signal.example/",
-        v: 2,
+        v: 3,
         ice: "all",
       },
       serverId: `srv_${"X".repeat(24)}`,

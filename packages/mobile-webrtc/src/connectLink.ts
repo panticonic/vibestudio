@@ -7,7 +7,7 @@
 // convenience.
 //
 // A pairing link arrives in either carrier form — the custom scheme
-// `vibestudio://connect?…` or the verified App Link `https://vibestudio.app/pair#…`
+// `vibestudio://connect/…` or the verified App Link `https://vibestudio.app/p#…`
 // — and both are user-triggered (scan QR, tap link), so any installed app can
 // fire one. The replay guard suppresses a link that was already consumed (so a
 // cold-launch `getInitialURL()` followed by an `addEventListener("url")` for the
@@ -35,7 +35,7 @@ interface ConsumedConnectLink {
 export function isConnectLink(rawUrl: unknown): rawUrl is string {
   return (
     typeof rawUrl === "string" &&
-    (rawUrl.startsWith("vibestudio://connect") || rawUrl.startsWith("https://vibestudio.app/pair"))
+    (rawUrl.startsWith("vibestudio://connect/") || rawUrl.startsWith("https://vibestudio.app/p#"))
   );
 }
 

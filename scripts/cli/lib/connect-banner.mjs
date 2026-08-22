@@ -35,6 +35,7 @@ export function printConnectBanner({
   if (qrInvite.pairUrl !== invite.pairUrl) {
     console.log(`  QR ${deepLinkLabel}:  ${qrInvite.pairUrl}`);
   }
+  console.log(`  Desktop:    vibestudio open ${invite.pairUrl}`);
   console.log();
   qrcode.generate(qrInvite.pairUrl, { small: true });
   console.log(divider);

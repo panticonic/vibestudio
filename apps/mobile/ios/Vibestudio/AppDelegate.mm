@@ -123,7 +123,7 @@ static BOOL VibestudioIsPairingURL(NSURL *url)
   NSString *host = url.host.lowercaseString ?: @"";
   NSString *path = url.path ?: @"";
   if ([scheme isEqualToString:@"vibestudio"] && [host isEqualToString:@"connect"]) return YES;
-  if ([scheme isEqualToString:@"https"] && [host isEqualToString:@"vibestudio.app"] && [path isEqualToString:@"/pair"]) return YES;
+  if ([scheme isEqualToString:@"https"] && [host isEqualToString:@"vibestudio.app"] && [path isEqualToString:@"/p"]) return YES;
   return NO;
 }
 

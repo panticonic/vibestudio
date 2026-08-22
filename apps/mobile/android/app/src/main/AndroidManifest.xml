@@ -88,7 +88,7 @@
                 <data
                     android:scheme="https"
                     android:host="vibestudio.app"
-                    android:path="/pair" />
+                    android:path="/p" />
                 <data
                     android:scheme="https"
                     android:host="vibestudio.app"

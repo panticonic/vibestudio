@@ -10,7 +10,7 @@ const pairing = {
   room: "room-1111",
   fp: "AA".repeat(32),
   sig: "wss://signal.example/",
-  v: 2 as const,
+  v: 3 as const,
   ice: "all" as const,
   code: "C".repeat(32),
   exp: 2_000_000_000_000,
@@ -106,7 +106,7 @@ describe("mobile stored shell credential", () => {
     expect(stored.workspacePairing).toMatchObject({
       fp: "AA".repeat(32),
       sig: "wss://signal.example/",
-      v: 2,
+      v: 3,
       ice: "all",
     });
     expect(stored).toMatchObject({

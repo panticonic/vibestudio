@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createConnectDeepLink } from "@vibestudio/shared/connect";
+import { createConnectDeepLink, derivePairingRoom } from "@vibestudio/shared/connect";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
@@ -47,14 +47,14 @@ const sampleStored: StoredRemote = {
     room: "room-control",
     fp: "AA".repeat(32),
     sig: "wss://sig.example/",
-    v: 2,
+    v: 3,
     ice: "all",
   },
   workspacePairing: {
     room: "room-abc",
     fp: "AA".repeat(32),
     sig: "wss://sig.example/",
-    v: 2,
+    v: 3,
     ice: "all",
   },
   deviceId: SELF_DEVICE_ID,
@@ -154,7 +154,7 @@ describe("remoteCredService", () => {
         room: `room_${"w".repeat(24)}`,
         fp: "CC".repeat(32),
         sig: "wss://sig.example/",
-        v: 2,
+        v: 3,
         ice: "all",
       },
       serverId: sampleStored.serverId,
@@ -183,7 +183,7 @@ describe("remoteCredService", () => {
           room: `room_${"w".repeat(24)}`,
           fp: "CC".repeat(32),
           sig: "wss://sig.example/",
-          v: 2,
+          v: 3,
           ice: "all",
         },
         serverId: `srv_${"x".repeat(24)}`,
@@ -232,17 +232,17 @@ describe("remoteCredService", () => {
     expect(mocks.app.relaunch).not.toHaveBeenCalled();
 
     const link = createConnectDeepLink({
-      room: "room-abc",
+      room: derivePairingRoom("B".repeat(32)),
       fp: "AA".repeat(32),
       code: "B".repeat(32),
       exp: Date.now() + 60_000,
       sig: "wss://sig.example/",
-      v: 2,
+      v: 3,
       ice: "all",
     });
     await expect(service.handler(shellCtx, "pair", [{ link }])).resolves.toEqual({ ok: true });
     expect(mocks.app.relaunch).toHaveBeenCalledWith({
-      args: expect.arrayContaining([expect.stringMatching(/^vibestudio:\/\/connect\?/)]),
+      args: expect.arrayContaining([expect.stringMatching(/^vibestudio:\/\/connect\//)]),
     });
     expect(mocks.app.exit).toHaveBeenCalledWith(0);
   });

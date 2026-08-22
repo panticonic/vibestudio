@@ -138,7 +138,9 @@ function hasExplicitWorkspaceSelection(): boolean {
 }
 
 function hasConnectDeepLinkArg(): boolean {
-  return process.argv.some((arg) => arg.startsWith("vibestudio://connect"));
+  return process.argv.some(
+    (arg) => arg.startsWith("vibestudio://connect") || arg.startsWith("https://vibestudio.app/p#")
+  );
 }
 
 function shouldCreateExplicitWorkspaceIfMissing(): boolean {
@@ -158,7 +160,8 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
     if (arg === DEV_WEBRTC_REMOTE_ARG) continue;
     if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
-    if (arg?.startsWith("vibestudio://connect")) continue;
+    if (arg?.startsWith("vibestudio://connect") || arg?.startsWith("https://vibestudio.app/p#"))
+      continue;
     if (arg?.startsWith("vibestudio://panel")) continue;
     if (arg !== undefined) filteredArgs.push(arg);
   }

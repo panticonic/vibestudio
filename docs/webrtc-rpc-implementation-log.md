@@ -92,10 +92,11 @@ zero importers). Export map updated in `packages/rpc/package.json`.
 
 ## Pairing link (Workstream B — `packages/shared/src/connect.ts`)
 
-Rewritten **outright** to the new grammar (no shim):
-`vibestudio://connect?room=<uuid>&fp=<dtls-sha256>&code=<secret>&sig=<endpoint>&v=<ver>&ice=<policy>`.
-Kept the load-bearing manual (non-`new URL()`) parse for the vibestudio: custom
-scheme. `isTrustedCleartextHost` + `isPrivateIPv4`/`isTailscaleIPv4`/
+Rewritten **outright** to the compact v3 grammar (no shim):
+`https://vibestudio.app/p#<compact-payload>` and
+`vibestudio://connect/<compact-payload>`. The single binary payload carries the
+fingerprint, one-time code, expiry, flags, and only a non-default signaling
+endpoint; the room is derived one-way from the code. `isTrustedCleartextHost` + `isPrivateIPv4`/`isTailscaleIPv4`/
 `isSingleLabelHostname` DELETED → one `isLoopbackHost` (127/8, ::1, localhost,
 10.0.2.2). `parseConnectServerUrl` kept, gate swapped to `isLoopbackHost`. Tests:
 `connect.test.ts` (15 + 1 `it.todo` flagging the generated raw-node grammar

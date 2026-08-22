@@ -6,7 +6,7 @@ public inbound port. Cloudflare hosts only the public coordination surfaces:
 
 ```text
 desktop / mobile / CLI client                    home server / VPS
-         |  https://vibestudio.app/pair#...              |
+         |  https://vibestudio.app/p#...                 |
          v                                               v
   +----------------------+  offer/answer/ICE  +-------------------------+
   | signal.vibestudio.app|<------------------>| hub control answerer    |
@@ -19,7 +19,7 @@ OAuth redirects / webhooks -> vibestudio.app apex Worker -> server backhaul
 ```
 
 The signaling Worker blind-relays SDP/ICE and mints ICE servers. The apex Worker
-owns `/pair`, app-link verification, OAuth callbacks, webhook ingress, and the
+owns `/p`, app-link verification, OAuth callbacks, webhook ingress, and the
 server backhaul. Neither Worker is a data-plane proxy for workspace traffic.
 
 The hub owns users, devices, memberships, pairing codes, workspace routing, and
@@ -105,7 +105,7 @@ Deploy target: `https://vibestudio.app/`
 Routes owned by this Worker:
 
 - `GET /`
-- `GET /pair`
+- `GET /p`
 - `GET /panel`
 - `GET /.well-known/apple-app-site-association`
 - `GET /.well-known/assetlinks.json`
@@ -139,7 +139,7 @@ Smoke it:
 pnpm smoke:cloudflare:apex
 ```
 
-The smoke checks `/healthz`, `/`, `/pair`, the two `.well-known` app-link
+The smoke checks `/healthz`, `/`, `/p`, the two `.well-known` app-link
 documents, and a real P-256-authenticated `/backhaul` registration/unregistration
 round trip.
 
@@ -210,8 +210,16 @@ vibestudio remote serve --port 3030
 The server prints a pair URL:
 
 ```text
-https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2
+https://vibestudio.app/p#<compact-payload>
 ```
+
+The v3 payload is self-contained. It compactly encodes the one-time pairing
+secret, DTLS fingerprint pin, exact millisecond expiry, ICE policy, and an
+optional non-default signaling endpoint. The room is a domain-separated
+SHA-256 projection of the secret, so it consumes no link bytes and the blind
+signaling service still cannot redeem the invite. The hosted-default URL is 109
+characters and contains no `&`, `?`, `=`, or `+`, so it can be passed to
+`vibestudio open` without shell quoting.
 
 This root-bootstrap invite is one-time and expiring, but server ownership is
 continuous: until a first device claims the root account, the hub replaces an
@@ -276,7 +284,7 @@ connection.
 
 ## Pair A Client
 
-Open or scan the printed `https://vibestudio.app/pair#...` URL from desktop,
+Open or scan the printed `https://vibestudio.app/p#...` URL from desktop,
 mobile, or CLI. The URL reaches a one-time room on the hub control ingress. Its
 redemption atomically promotes that room to the new device's durable control
 room and returns:

@@ -37,13 +37,13 @@ async function main() {
   if (!landing.text.includes("Vibestudio")) throw new Error("/ did not contain the apex landing");
   console.log("[smoke:cloudflare:apex] landing ok");
 
-  const pair = await fetchText(new URL("/pair", origin));
-  if (!pair.response.ok) throw new Error(`/pair failed: ${pair.response.status}`);
+  const pair = await fetchText(new URL("/p", origin));
+  if (!pair.response.ok) throw new Error(`/p failed: ${pair.response.status}`);
   if (!pair.response.headers.get("content-type")?.includes("text/html")) {
-    throw new Error(`/pair content-type was ${pair.response.headers.get("content-type")}`);
+    throw new Error(`/p content-type was ${pair.response.headers.get("content-type")}`);
   }
-  if (!pair.text.includes("vibestudio://connect?") || !pair.text.includes("location.hash")) {
-    throw new Error("/pair did not contain the pairing trampoline");
+  if (!pair.text.includes("vibestudio://connect/") || !pair.text.includes("location.hash")) {
+    throw new Error("/p did not contain the pairing trampoline");
   }
   console.log("[smoke:cloudflare:apex] pair ok");
 
@@ -205,8 +205,8 @@ async function checkWellKnown(origin, expectAppLinks) {
   expectWellKnownHeaders(android.response, "assetlinks");
 
   const components = apple.body?.applinks?.details?.[0]?.components;
-  if (!Array.isArray(components) || !components.some((component) => component?.["/"] === "/pair")) {
-    throw new Error("AASA does not include /pair");
+  if (!Array.isArray(components) || !components.some((component) => component?.["/"] === "/p")) {
+    throw new Error("AASA does not include /p");
   }
   if (!Array.isArray(android.body) || android.body.length === 0) {
     throw new Error("assetlinks is empty");

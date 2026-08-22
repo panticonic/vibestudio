@@ -52,8 +52,8 @@ describe("shell surface targets", () => {
     expect(parseShellSurfaceLink("vibestudio://panel?v=1&source=panels/tour")).toEqual({
       kind: "unrelated",
     });
-    expect(parseShellSurfaceLink("vibestudio://connect?room=x")).toEqual({ kind: "unrelated" });
-    expect(parseShellSurfaceLink("https://vibestudio.app/pair#x")).toEqual({ kind: "unrelated" });
+    expect(parseShellSurfaceLink("vibestudio://connect/compact")).toEqual({ kind: "unrelated" });
+    expect(parseShellSurfaceLink("https://vibestudio.app/p#compact")).toEqual({ kind: "unrelated" });
     expect(parseShellSurfaceLink("vibestudio://about?v=2&page=permissions").kind).toBe("error");
     expect(parseShellSurfaceLink("vibestudio://ask?v=1&prompt=hi&auto=1").kind).toBe("error");
     expect(parseShellSurfaceLink("https://vibestudio.app/about?page=x#v=1").kind).toBe("error");

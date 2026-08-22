@@ -1,7 +1,9 @@
+import { sha256Hex } from "@vibestudio/content-addressing";
+
 export const CONNECT_DEEP_LINK_SCHEME = "vibestudio:";
 export const CONNECT_DEEP_LINK_HOST = "connect";
 export const PAIR_LINK_ORIGIN = "https://vibestudio.app";
-export const PAIR_LINK_PATH = "/pair";
+export const PAIR_LINK_PATH = "/p";
 export const DEFAULT_SIGNAL_URL = "wss://signal.vibestudio.app/";
 /** Current pairing issuer output: exactly 24 random bytes encoded as base64url. */
 export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
@@ -10,11 +12,18 @@ export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 export const PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 /** DTLS SHA-256 fingerprint after stripping colons: 32 bytes = 64 hex chars. */
 const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
-const CONNECT_PARAMETER_KEYS = new Set(["room", "fp", "code", "sig", "v", "ice", "exp"]);
 /**
  * Current room-per-invite pairing protocol. Parsers require this exact version.
  */
-export const PAIRING_PROTOCOL_VERSION = 2;
+export const PAIRING_PROTOCOL_VERSION = 3;
+
+const COMPACT_HEADER_VERSION_SHIFT = 4;
+const COMPACT_FLAG_RELAY = 1 << 0;
+const COMPACT_FLAG_CUSTOM_SIGNALING = 1 << 1;
+const COMPACT_KNOWN_FLAGS = COMPACT_FLAG_RELAY | COMPACT_FLAG_CUSTOM_SIGNALING;
+const COMPACT_FIXED_BYTES = 1 + 32 + 24 + 6;
+const MAX_CUSTOM_SIGNALING_BYTES = 2_048;
+const PAIRING_ROOM_DOMAIN = new TextEncoder().encode("vibestudio-pairing-room-v3\0");
 
 export type TurnPolicy = "all" | "relay";
 export type ConnectLinkCarrier = "scheme" | "https";
@@ -46,27 +55,101 @@ export interface ConnectPairing extends ReconnectReach {
 
 export type ConnectLink = ({ kind: "ok" } & ConnectPairing) | { kind: "error"; reason: string };
 export type SignalingResolution = { url: string; source: SignalingResolutionSource };
-type QueryParseResult =
-  | { kind: "ok"; values: Map<string, string> }
-  | { kind: "error"; reason: string };
-type QueryDecodeResult = { kind: "ok"; value: string } | { kind: "error"; reason: string };
-
 /** Strip colons/whitespace and upper-case a DTLS fingerprint for comparison. */
 export function normalizeFingerprint(fp: string): string {
   return fp.replace(/[:\s]/g, "").toUpperCase();
 }
 
-function encodeConnectParams(pairing: ConnectPairing): string {
-  const signaling = parseSignalingEndpoint(pairing.sig);
-  if (!PAIRING_ROOM_PATTERN.test(pairing.room)) {
-    throw new Error("Cannot create pairing link: room has an unexpected format");
+function concatBytes(...parts: readonly Uint8Array[]): Uint8Array {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
   }
+  return output;
+}
+
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let output = "";
+  for (let offset = 0; offset < bytes.length; offset += 3) {
+    const remaining = bytes.length - offset;
+    const value =
+      (bytes[offset]! << 16) |
+      ((remaining > 1 ? bytes[offset + 1]! : 0) << 8) |
+      (remaining > 2 ? bytes[offset + 2]! : 0);
+    output += BASE64URL_ALPHABET[(value >>> 18) & 63];
+    output += BASE64URL_ALPHABET[(value >>> 12) & 63];
+    if (remaining > 1) output += BASE64URL_ALPHABET[(value >>> 6) & 63];
+    if (remaining > 2) output += BASE64URL_ALPHABET[value & 63];
+  }
+  return output;
+}
+
+function decodeBase64Url(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) return null;
+  const output = new Uint8Array(Math.floor((value.length * 6) / 8));
+  let accumulator = 0;
+  let bits = 0;
+  let outputOffset = 0;
+  for (const character of value) {
+    const digit = BASE64URL_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    accumulator = accumulator * 64 + digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output[outputOffset++] = (accumulator >>> bits) & 0xff;
+      accumulator &= (1 << bits) - 1;
+    }
+  }
+  if (accumulator !== 0 || outputOffset !== output.length) return null;
+  return output;
+}
+
+function bytesFromHex(value: string): Uint8Array {
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function hexFromBytes(bytes: Uint8Array): string {
+  let output = "";
+  for (const byte of bytes) output += byte.toString(16).padStart(2, "0");
+  return output.toUpperCase();
+}
+
+/**
+ * The signaling rendezvous is a one-way, domain-separated projection of the
+ * invite secret. It therefore need not consume bytes in the user-facing link,
+ * while the blind signaling service still never learns the redeemable secret.
+ */
+export function derivePairingRoom(code: string): string {
+  if (!PAIRING_CODE_PATTERN.test(code)) {
+    throw new Error("Cannot derive pairing room: code has an unexpected format");
+  }
+  const codeBytes = decodeBase64Url(code);
+  if (!codeBytes || codeBytes.length !== 24) {
+    throw new Error("Cannot derive pairing room: code is not canonical base64url");
+  }
+  return sha256Hex(concatBytes(PAIRING_ROOM_DOMAIN, codeBytes));
+}
+
+function encodeCompactPairing(pairing: ConnectPairing): string {
+  const signaling = parseSignalingEndpoint(pairing.sig);
   const fingerprint = normalizeFingerprint(pairing.fp);
   if (!FINGERPRINT_HEX_PATTERN.test(fingerprint)) {
     throw new Error("Cannot create pairing link: fingerprint must be SHA-256");
   }
   if (!PAIRING_CODE_PATTERN.test(pairing.code)) {
     throw new Error("Cannot create pairing link: code has an unexpected format");
+  }
+  if (pairing.room !== derivePairingRoom(pairing.code)) {
+    throw new Error("Cannot create pairing link: room does not match the pairing code");
   }
   if (signaling.kind === "error") {
     throw new Error(`Cannot create pairing link: ${signaling.reason}`);
@@ -77,27 +160,46 @@ function encodeConnectParams(pairing: ConnectPairing): string {
   if (pairing.ice !== "all" && pairing.ice !== "relay") {
     throw new Error("Cannot create pairing link: ice must be `all` or `relay`");
   }
-  const params: string[] = [
-    `room=${encodeURIComponent(pairing.room)}`,
-    `fp=${encodeURIComponent(fingerprint)}`,
-    `code=${encodeURIComponent(pairing.code)}`,
-    `sig=${encodeURIComponent(signaling.url)}`,
-    `v=${encodeURIComponent(String(pairing.v))}`,
-    `ice=${encodeURIComponent(pairing.ice)}`,
-  ];
-  params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
-  return params.join("&");
+  if (!Number.isSafeInteger(pairing.exp) || pairing.exp <= 0 || pairing.exp > 0xffffffffffff) {
+    throw new Error("Cannot create pairing link: expiry has an unexpected format");
+  }
+
+  const customSignaling =
+    signaling.url === DEFAULT_SIGNAL_URL
+      ? new Uint8Array()
+      : new TextEncoder().encode(signaling.url);
+  if (customSignaling.length > MAX_CUSTOM_SIGNALING_BYTES) {
+    throw new Error("Cannot create pairing link: signaling endpoint is too long");
+  }
+  const bytes = new Uint8Array(COMPACT_FIXED_BYTES + customSignaling.length);
+  const flags =
+    (pairing.ice === "relay" ? COMPACT_FLAG_RELAY : 0) |
+    (customSignaling.length > 0 ? COMPACT_FLAG_CUSTOM_SIGNALING : 0);
+  bytes[0] = (PAIRING_PROTOCOL_VERSION << COMPACT_HEADER_VERSION_SHIFT) | flags;
+  bytes.set(bytesFromHex(fingerprint), 1);
+  const codeBytes = decodeBase64Url(pairing.code);
+  if (!codeBytes || codeBytes.length !== 24) {
+    throw new Error("Cannot create pairing link: code is not canonical base64url");
+  }
+  bytes.set(codeBytes, 33);
+  let expiry = pairing.exp;
+  for (let index = 62; index >= 57; index -= 1) {
+    bytes[index] = expiry % 256;
+    expiry = Math.floor(expiry / 256);
+  }
+  bytes.set(customSignaling, COMPACT_FIXED_BYTES);
+  return encodeBase64Url(bytes);
 }
 
 export function createConnectLink(
   pairing: ConnectPairing,
   carrier: ConnectLinkCarrier = "scheme"
 ): string {
-  const params = encodeConnectParams(pairing);
+  const payload = encodeCompactPairing(pairing);
   if (carrier === "https") {
-    return `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}#${params}`;
+    return `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}#${payload}`;
   }
-  return `vibestudio://connect?${params}`;
+  return `vibestudio://connect/${payload}`;
 }
 
 /**
@@ -197,28 +299,23 @@ export function parseConnectLink(raw: string): ConnectLink {
 
   const prefix = `${CONNECT_DEEP_LINK_SCHEME}//${CONNECT_DEEP_LINK_HOST}`;
   const httpsPrefix = `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}`;
-  // The prefix must be followed by a real delimiter — otherwise
-  // `vibestudio://connect-anything?…` would parse as a connect link (the host is
-  // exactly `connect`, no more).
-  const afterScheme = raw.slice(prefix.length);
-  const isSchemeLink =
-    raw.startsWith(prefix) &&
-    (afterScheme === "" ||
-      afterScheme[0] === "?" ||
-      afterScheme[0] === "/" ||
-      afterScheme[0] === "#");
-  let rawParams: string;
-  if (isSchemeLink) {
-    const queryStart = raw.indexOf("?");
-    if (queryStart < 0) {
-      return { kind: "error", reason: "Deep link is missing pairing parameters" };
+  if (raw.startsWith(`${prefix}?`) || raw.startsWith(`${PAIR_LINK_ORIGIN}/pair`)) {
+    return {
+      kind: "error",
+      reason: `Old or unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION}); generate a fresh link from an updated server`,
+    };
+  }
+  let compactPayload: string;
+  if (raw.startsWith(`${prefix}/`)) {
+    compactPayload = raw.slice(prefix.length + 1);
+    if (
+      !compactPayload ||
+      compactPayload.includes("/") ||
+      compactPayload.includes("?") ||
+      compactPayload.includes("#")
+    ) {
+      return { kind: "error", reason: "Deep link has malformed compact pairing material" };
     }
-    // Manual (non-`new URL()`) query parse — the vibestudio: custom scheme is not
-    // URL-parseable on RN/Hermes (asserted by connect.test.ts). Strip any
-    // `#fragment` so it can't fold into the last query value.
-    const fragmentStart = raw.indexOf("#", queryStart);
-    rawParams =
-      fragmentStart >= 0 ? raw.slice(queryStart + 1, fragmentStart) : raw.slice(queryStart + 1);
   } else if (raw.startsWith(httpsPrefix)) {
     let url: URL;
     try {
@@ -229,62 +326,71 @@ export function parseConnectLink(raw: string): ConnectLink {
     if (url.origin !== PAIR_LINK_ORIGIN || url.pathname !== PAIR_LINK_PATH) {
       return { kind: "error", reason: "Not a Vibestudio pair URL" };
     }
+    if (url.search) {
+      return { kind: "error", reason: "Pair URL has unsupported query parameters" };
+    }
     if (!url.hash || url.hash === "#") {
       return { kind: "error", reason: "Pair URL is missing pairing parameters" };
     }
-    rawParams = url.hash.slice(1);
+    compactPayload = url.hash.slice(1);
   } else {
     return { kind: "error", reason: "Not a vibestudio://connect link or Vibestudio pair URL" };
   }
 
-  const params = parseQuery(rawParams);
-  if (params.kind === "error") return params;
-
-  // Version gate first so an incompatible link gets one precise error.
-  if (params.values.get("v") !== String(PAIRING_PROTOCOL_VERSION)) {
+  const bytes = decodeBase64Url(compactPayload);
+  if (
+    !bytes ||
+    bytes.length < COMPACT_FIXED_BYTES ||
+    bytes.length > COMPACT_FIXED_BYTES + MAX_CUSTOM_SIGNALING_BYTES
+  ) {
+    return { kind: "error", reason: "Pairing link has malformed compact pairing material" };
+  }
+  const header = bytes[0]!;
+  const version = header >>> COMPACT_HEADER_VERSION_SHIFT;
+  const flags = header & ((1 << COMPACT_HEADER_VERSION_SHIFT) - 1);
+  if (version !== PAIRING_PROTOCOL_VERSION) {
     return {
       kind: "error",
-      reason: `Old or unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION}); re-pair this device with a fresh link`,
+      reason: `Old or unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION}); generate a fresh link from an updated server`,
     };
   }
-  const room = params.values.get("room");
-  const fp = params.values.get("fp");
-  const code = params.values.get("code");
-  const sig = params.values.get("sig");
-  const ice = params.values.get("ice");
-  if (!room || !fp || !code || !sig || !ice) {
-    return {
-      kind: "error",
-      reason: "Deep link is missing `room`, `fp`, `code`, `sig`, or `ice`",
-    };
+  if ((flags & ~COMPACT_KNOWN_FLAGS) !== 0) {
+    return { kind: "error", reason: "Pairing link uses unsupported compact flags" };
   }
 
-  if (!PAIRING_ROOM_PATTERN.test(room)) {
-    return { kind: "error", reason: "Signaling room id has an unexpected format" };
+  const hasCustomSignaling = (flags & COMPACT_FLAG_CUSTOM_SIGNALING) !== 0;
+  if (!hasCustomSignaling && bytes.length !== COMPACT_FIXED_BYTES) {
+    return { kind: "error", reason: "Pairing link contains trailing compact data" };
   }
-  if (!FINGERPRINT_HEX_PATTERN.test(normalizeFingerprint(fp).toLowerCase())) {
-    return { kind: "error", reason: "DTLS fingerprint must be a SHA-256 (64 hex chars)" };
+  if (hasCustomSignaling && bytes.length === COMPACT_FIXED_BYTES) {
+    return { kind: "error", reason: "Pairing link is missing its custom signaling endpoint" };
   }
-  if (!PAIRING_CODE_PATTERN.test(code)) {
-    return { kind: "error", reason: "Pairing code has an unexpected format" };
-  }
-  const sigParsed = parseSignalingEndpoint(sig);
-  if (sigParsed.kind === "error") return sigParsed;
 
-  if (ice !== "all" && ice !== "relay") {
-    return { kind: "error", reason: "TURN policy `ice` must be `all` or `relay`" };
-  }
-  const expRaw = params.values.get("exp");
-  const exp = expRaw ? Number(expRaw) : undefined;
-  if (exp === undefined || !Number.isSafeInteger(exp) || exp <= 0) {
+  const fp = hexFromBytes(bytes.slice(1, 33));
+  const code = encodeBase64Url(bytes.slice(33, 57));
+  let exp = 0;
+  for (let index = 57; index < 63; index += 1) exp = exp * 256 + bytes[index]!;
+  if (!Number.isSafeInteger(exp) || exp <= 0) {
     return { kind: "error", reason: "Pairing link expiry has an unexpected format" };
   }
-  if (exp !== undefined && exp <= Date.now()) {
+  if (exp <= Date.now()) {
     return {
       kind: "error",
       reason: "This pairing link has expired — generate a new invite on the server",
     };
   }
+
+  let sig = DEFAULT_SIGNAL_URL;
+  if (hasCustomSignaling) {
+    const signalBytes = bytes.slice(COMPACT_FIXED_BYTES);
+    sig = new TextDecoder().decode(signalBytes);
+    if (!sig || !bytesEqual(new TextEncoder().encode(sig), signalBytes)) {
+      return { kind: "error", reason: "Pairing link has an invalid signaling endpoint encoding" };
+    }
+  }
+  const sigParsed = parseSignalingEndpoint(sig);
+  if (sigParsed.kind === "error") return sigParsed;
+  const room = derivePairingRoom(code);
 
   return {
     kind: "ok",
@@ -293,9 +399,17 @@ export function parseConnectLink(raw: string): ConnectLink {
     code,
     sig: sigParsed.url,
     v: PAIRING_PROTOCOL_VERSION,
-    ice,
+    ice: (flags & COMPACT_FLAG_RELAY) !== 0 ? "relay" : "all",
     exp,
   };
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 export function resolveSignalingUrl(
@@ -356,42 +470,6 @@ export function parseSignalingEndpoint(
     };
   }
   return { kind: "ok", url: endpoint.toString() };
-}
-
-function parseQuery(raw: string): QueryParseResult {
-  const values = new Map<string, string>();
-  for (const part of raw.split("&")) {
-    if (!part) return { kind: "error", reason: "Deep link contains an empty parameter" };
-    const separator = part.indexOf("=");
-    const key = separator >= 0 ? part.slice(0, separator) : part;
-    const value = separator >= 0 ? part.slice(separator + 1) : "";
-    const decodedKey = decodeQueryComponent(key);
-    const decodedValue = decodeQueryComponent(value);
-    if (decodedKey.kind === "error") return decodedKey;
-    if (decodedValue.kind === "error") return decodedValue;
-    if (!CONNECT_PARAMETER_KEYS.has(decodedKey.value)) {
-      return {
-        kind: "error",
-        reason: `Deep link contains unsupported parameter \`${decodedKey.value}\``,
-      };
-    }
-    if (values.has(decodedKey.value)) {
-      return {
-        kind: "error",
-        reason: `Deep link contains duplicate parameter \`${decodedKey.value}\``,
-      };
-    }
-    values.set(decodedKey.value, decodedValue.value);
-  }
-  return { kind: "ok", values };
-}
-
-function decodeQueryComponent(raw: string): QueryDecodeResult {
-  try {
-    return { kind: "ok", value: decodeURIComponent(raw.replace(/\+/g, " ")) };
-  } catch {
-    return { kind: "error", reason: "Deep link is not a valid URL" };
-  }
 }
 
 /**

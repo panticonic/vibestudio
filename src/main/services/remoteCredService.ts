@@ -165,7 +165,7 @@ export function createRemoteCredService(deps: {
           .filter(
             (arg) =>
               !arg.startsWith("vibestudio://") &&
-              !arg.startsWith("https://vibestudio.app/pair") &&
+              !arg.startsWith("https://vibestudio.app/p#") &&
               !arg.startsWith(PAIR_LABEL_ARG_PREFIX)
           );
         relaunchArgs.push(deepLink);

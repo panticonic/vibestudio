@@ -33,7 +33,7 @@ describe("smoke remote-server root invite selection", () => {
 
   it("selects the one universal invite from the ready-file contract", async () => {
     const ready = {
-      rootInvite: { pairUrl: "https://vibestudio.app/pair#root" },
+      rootInvite: { pairUrl: "https://vibestudio.app/p#root" },
     };
 
     const file = await readyFile(ready);
@@ -54,9 +54,9 @@ describe("smoke remote-server root invite selection", () => {
     const pending = waitForRootInvite({ readyFile: file, timeoutMs: 2_000 });
     await fs.writeFile(
       file,
-      JSON.stringify({ rootInvite: { pairUrl: "https://vibestudio.app/pair#ready" } })
+      JSON.stringify({ rootInvite: { pairUrl: "https://vibestudio.app/p#ready" } })
     );
-    await expect(pending).resolves.toEqual({ pairUrl: "https://vibestudio.app/pair#ready" });
+    await expect(pending).resolves.toEqual({ pairUrl: "https://vibestudio.app/p#ready" });
   });
 
   it("rejects a malformed ready-file contract immediately", async () => {

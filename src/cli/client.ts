@@ -86,10 +86,10 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
     if (
       !positional ||
       (!positional.startsWith("vibestudio://") &&
-        !positional.startsWith("https://vibestudio.app/pair"))
+        !positional.startsWith("https://vibestudio.app/p#"))
     ) {
       throw new UsageError(
-        "pass a Vibestudio pairing link (https://vibestudio.app/pair#... or vibestudio://connect?...)"
+        "pass a Vibestudio pairing link (https://vibestudio.app/p#... or vibestudio://connect/...)"
       );
     }
     assertCliProfileIsUnpaired();
@@ -440,14 +440,14 @@ function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
   const positional = inv.positionals[0];
   if (
     positional?.startsWith("vibestudio://") ||
-    positional?.startsWith("https://vibestudio.app/pair")
+    positional?.startsWith("https://vibestudio.app/p#")
   ) {
     if (link)
       throw new UsageError("pass the pairing link once, either positionally or with --pair");
     link = positional;
   } else if (positional) {
     throw new UsageError(
-      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link or an https://vibestudio.app/pair URL (also accepted via --pair).`
+      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link or an https://vibestudio.app/p URL (also accepted via --pair).`
     );
   }
 
@@ -481,7 +481,7 @@ async function terminalCredentials(
     const loaded = loadCliCredentials();
     if (!loaded) {
       throw new AuthError(
-        'not paired - run `vibestudio terminal start --pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"`'
+        'not paired - run `vibestudio terminal start --pair "https://vibestudio.app/p#..."`'
       );
     }
     creds = requireDeviceCliCredentials(loaded, "terminal start");
@@ -1165,7 +1165,7 @@ ${claudeSection}
 
 Getting started:
   1. Get a pairing invite from the desktop app or the server host.
-  2. vibestudio remote pair "https://vibestudio.app/pair#..."
+  2. vibestudio remote pair "https://vibestudio.app/p#..."
   3. vibestudio remote status
 
 Run \`vibestudio <group> --help\` for a group's commands and

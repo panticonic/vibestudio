@@ -5,9 +5,11 @@ import {
   createConnectDeepLink,
   createConnectPairUrl,
   DEFAULT_SIGNAL_URL,
+  derivePairingRoom,
   isLoopbackHost,
   isSelectedWorkspaceUrl,
   normalizeFingerprint,
+  PAIRING_PROTOCOL_VERSION,
   parseConnectLink,
   parseSignalingEndpoint,
   resolveSignalingUrl,
@@ -20,42 +22,58 @@ import {
 } from "./connect";
 
 const FP = "AA".repeat(32); // 64 hex chars = a SHA-256
+const CODE = "A".repeat(32);
 const PAIR: ConnectPairing = {
-  room: "11111111-2222-3333-4444-555555555555",
+  room: derivePairingRoom(CODE),
   fp: FP,
-  code: "A".repeat(32),
+  code: CODE,
   exp: 2_000_000_000_000,
   sig: "wss://signal.example/",
-  v: 2,
+  v: PAIRING_PROTOCOL_VERSION,
   ice: "all",
 };
 
-function replaceConnectParam(link: string, key: string, value: string): string {
-  return link.replace(new RegExp(`([?&#])${key}=[^&]*`), `$1${key}=${encodeURIComponent(value)}`);
+function mutateCompactPayload(link: string, mutate: (bytes: Buffer) => Buffer | void): string {
+  const separator = link.startsWith("https:") ? "#" : "/";
+  const offset = link.lastIndexOf(separator);
+  const prefix = link.slice(0, offset + 1);
+  const bytes = Buffer.from(link.slice(offset + 1), "base64url");
+  const replacement = mutate(bytes) ?? bytes;
+  return `${prefix}${replacement.toString("base64url")}`;
+}
+
+function setCompactExpiry(link: string, expiry: number): string {
+  return mutateCompactPayload(link, (bytes) => {
+    let remaining = expiry;
+    for (let index = 62; index >= 57; index -= 1) {
+      bytes[index] = remaining % 256;
+      remaining = Math.floor(remaining / 256);
+    }
+  });
 }
 
 describe("connect deep links (WebRTC pairing grammar)", () => {
   it("round-trips every field the grammar defines", () => {
     const pairing = {
-      room: "room-1234-5678",
       // Canonical (uppercase) form, since encoding normalizes the fingerprint.
       fp: "A".repeat(64),
       code: "abcdefghijklmnopqrstuvwxyzABCDEF",
       sig: "wss://signal.example/",
-      v: 2 as const,
+      v: 3 as const,
       ice: "all" as const,
       exp: Date.now() + 600_000,
     };
+    const canonicalPairing = { ...pairing, room: derivePairingRoom(pairing.code) };
 
-    const parsed = parseConnectLink(createConnectDeepLink(pairing));
+    const parsed = parseConnectLink(createConnectDeepLink(canonicalPairing));
     if (parsed.kind !== "ok") throw new Error(parsed.reason);
     const projected = connectPairingFromLink(parsed);
 
     // Every field survives, and the parse tag does not leak into the pairing.
     // Retyping this projection by hand is how `exp` went missing on the device,
     // where the loss only surfaced after the server had issued a credential.
-    expect(projected).toEqual(pairing);
-    expect(Object.keys(projected).sort()).toEqual(Object.keys(pairing).sort());
+    expect(projected).toEqual(canonicalPairing);
+    expect(Object.keys(projected).sort()).toEqual(Object.keys(canonicalPairing).sort());
     expect(projected).not.toHaveProperty("kind");
     expect(parseConnectLink(createConnectDeepLink(projected))).toMatchObject({ kind: "ok" });
   });
@@ -69,14 +87,14 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       code: PAIR.code,
       exp: PAIR.exp,
       sig: "wss://signal.example/",
-      v: 2,
+      v: PAIRING_PROTOCOL_VERSION,
       ice: "all",
     });
   });
 
   it("round-trips the https pair carrier with identical payload semantics", () => {
     const link = createConnectPairUrl(PAIR);
-    expect(link).toMatch(/^https:\/\/vibestudio\.app\/pair#/);
+    expect(link).toMatch(/^https:\/\/vibestudio\.app\/p#[A-Za-z0-9_-]+$/);
     expect(parseConnectLink(link)).toEqual({
       kind: "ok",
       room: PAIR.room,
@@ -84,18 +102,17 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       code: PAIR.code,
       exp: PAIR.exp,
       sig: "wss://signal.example/",
-      v: 2,
+      v: PAIRING_PROTOCOL_VERSION,
       ice: "all",
     });
   });
 
   it("requires the exact current protocol version", () => {
     const canonical = createConnectDeepLink(PAIR);
-    for (const stale of [
-      replaceConnectParam(canonical, "v", "1"),
-      replaceConnectParam(canonical, "v", "3"),
-      canonical.replace("&v=2", ""),
-    ]) {
+    for (const staleVersion of [1, 2, 4]) {
+      const stale = mutateCompactPayload(canonical, (bytes) => {
+        bytes[0] = (staleVersion << 4) | (bytes[0]! & 0b1111);
+      });
       const parsed = parseConnectLink(stale);
       expect(parsed.kind).toBe("error");
       if (parsed.kind === "error") {
@@ -113,19 +130,18 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }
   });
 
-  it("rejects the removed srv transport label", () => {
-    const canonical = createConnectDeepLink(PAIR);
-    expect(parseConnectLink(`${canonical}&srv=home`)).toEqual({
-      kind: "error",
-      reason: "Deep link contains unsupported parameter `srv`",
-    });
+  it("keeps the default hosted carrier compact and shell-safe", () => {
+    const link = createConnectPairUrl({ ...PAIR, sig: DEFAULT_SIGNAL_URL });
+    expect(link).toHaveLength(109);
+    expect(link).not.toMatch(/[&?=+]/u);
+    expect(parseConnectLink(link)).toMatchObject({ kind: "ok", sig: DEFAULT_SIGNAL_URL });
   });
 
   it("round-trips a live expiry and rejects an expired invite", () => {
     const live = createConnectDeepLink({ ...PAIR, exp: Date.now() + 60_000 });
     expect(parseConnectLink(live)).toMatchObject({ kind: "ok", exp: expect.any(Number) });
 
-    const expired = replaceConnectParam(live, "exp", String(Date.now() - 1));
+    const expired = setCompactExpiry(live, Date.now() - 1);
     expect(parseConnectLink(expired)).toEqual({
       kind: "error",
       reason: "This pairing link has expired — generate a new invite on the server",
@@ -150,34 +166,26 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }
   });
 
-  it("rejects a link missing required params", () => {
-    expect(parseConnectLink("vibestudio://connect?room=abcdefgh&fp=" + FP).kind).toBe("error");
-    expect(parseConnectLink("vibestudio://connect?room=abcdefgh").kind).toBe("error");
-    expect(parseConnectLink(createConnectDeepLink(PAIR).replace("&ice=all", "")).kind).toBe(
-      "error"
-    );
-  });
-
-  it("rejects unknown, duplicate, empty, and non-canonical carrier material", () => {
+  it("rejects truncated, extended, and non-canonical compact carriers", () => {
     const canonical = createConnectDeepLink(PAIR);
-    expect(parseConnectLink(`${canonical}&url=https%3A%2F%2Fold.example`).kind).toBe("error");
-    expect(parseConnectLink(`${canonical}&room=another-room`).kind).toBe("error");
-    expect(parseConnectLink(`${canonical}&`).kind).toBe("error");
+    const truncated = mutateCompactPayload(canonical, (bytes) => bytes.subarray(0, 62));
+    const extendedDefault = mutateCompactPayload(
+      createConnectDeepLink({ ...PAIR, sig: DEFAULT_SIGNAL_URL }),
+      (bytes) => Buffer.concat([bytes, Buffer.from([0])])
+    );
+    const unknownFlags = mutateCompactPayload(canonical, (bytes) => {
+      bytes[0] = bytes[0]! | 0b0100;
+    });
+    expect(parseConnectLink(truncated).kind).toBe("error");
+    expect(parseConnectLink(extendedDefault).kind).toBe("error");
+    expect(parseConnectLink(unknownFlags).kind).toBe("error");
+    expect(parseConnectLink(`${canonical}?extra=1`).kind).toBe("error");
+    expect(parseConnectLink(`${canonical}*`).kind).toBe("error");
     expect(
-      parseConnectLink(canonical.replace("vibestudio://connect?", "vibestudio://connect-old?"))
+      parseConnectLink(canonical.replace("vibestudio://connect/", "vibestudio://connect-old/"))
     ).toEqual({
       kind: "error",
       reason: "Not a vibestudio://connect link or Vibestudio pair URL",
-    });
-  });
-
-  it("rejects a fingerprint that is not a SHA-256", () => {
-    const bad = parseConnectLink(
-      replaceConnectParam(createConnectDeepLink(PAIR), "fp", "DE:AD:BE:EF")
-    );
-    expect(bad).toEqual({
-      kind: "error",
-      reason: "DTLS fingerprint must be a SHA-256 (64 hex chars)",
     });
   });
 
@@ -188,26 +196,11 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     expect(normalizeFingerprint(colons)).toBe(FP.toUpperCase());
   });
 
-  it("rejects malformed pairing codes", () => {
-    const canonical = createConnectDeepLink(PAIR);
-    expect(parseConnectLink(replaceConnectParam(canonical, "code", "short"))).toEqual({
-      kind: "error",
-      reason: "Pairing code has an unexpected format",
-    });
-    expect(parseConnectLink(replaceConnectParam(canonical, "code", "A".repeat(31))).kind).toBe(
-      "error"
-    );
-    expect(parseConnectLink(replaceConnectParam(canonical, "code", "A".repeat(33))).kind).toBe(
-      "error"
-    );
-  });
-
-  it("rejects a cleartext signaling endpoint on a public host", () => {
-    expect(
-      parseConnectLink(
-        replaceConnectParam(createConnectDeepLink(PAIR), "sig", "ws://signal.example/")
-      ).kind
-    ).toBe("error");
+  it("derives a deterministic room without exposing the pairing code", () => {
+    const room = derivePairingRoom(PAIR.code);
+    expect(room).toMatch(/^[a-f0-9]{64}$/u);
+    expect(room).not.toContain(PAIR.code);
+    expect(derivePairingRoom(PAIR.code)).toBe(room);
   });
 
   it("refuses to mint non-canonical pairing links", () => {
@@ -217,10 +210,16 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     expect(() => createConnectDeepLink({ ...PAIR, code: "short" })).toThrow(
       /code has an unexpected format/
     );
+    expect(() => createConnectDeepLink({ ...PAIR, room: "wrong-room" })).toThrow(
+      /room does not match/
+    );
     expect(() => createConnectDeepLink({ ...PAIR, sig: "ws://signal.example/" })).toThrow(
       /Cleartext signaling/
     );
-    expect(() => createConnectDeepLink({ ...PAIR, v: 1 } as never)).toThrow(/expected v=2/);
+    expect(() =>
+      createConnectDeepLink({ ...PAIR, sig: `wss://signal.example/${"a".repeat(2_049)}` })
+    ).toThrow(/signaling endpoint is too long/);
+    expect(() => createConnectDeepLink({ ...PAIR, v: 2 } as never)).toThrow(/expected v=3/);
   });
 
   it("allows a loopback cleartext signaling endpoint for dev", () => {
@@ -283,6 +282,7 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     parseConnectLink: (raw: string) => unknown;
     parseSignalingEndpoint: (raw: string) => unknown;
     normalizeFingerprint: (fp: string) => string;
+    derivePairingRoom: (code: string) => string;
     isLoopbackHost: (host: string) => boolean;
     resolveSignalingUrl: (options: {
       flag?: string | null;
@@ -324,19 +324,24 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     it("rejects the same malformed links the shared parser rejects", async () => {
       const mirror = await loadMirror();
       const canonical = createConnectDeepLink(PAIR);
+      const stale = mutateCompactPayload(canonical, (bytes) => {
+        bytes[0] = (2 << 4) | (bytes[0]! & 0b1111);
+      });
       for (const bad of [
-        "vibestudio://connect?room=abcdefgh&fp=" + FP,
-        replaceConnectParam(canonical, "fp", "DE:AD:BE:EF"),
-        replaceConnectParam(canonical, "code", "short"),
-        replaceConnectParam(canonical, "sig", "ws://signal.example/"),
-        replaceConnectParam(canonical, "v", "1"),
-        `${canonical}&url=https%3A%2F%2Fold.example`,
-        `${canonical}&room=duplicate-room`,
-        "https://vibestudio.app/pair",
-        "https://example.com/pair#v=2",
+        "vibestudio://connect/short",
+        stale,
+        `${canonical}?extra=1`,
+        `${canonical}*`,
+        "https://vibestudio.app/p",
+        "https://example.com/p#compact",
       ]) {
         expect(mirror.parseConnectLink(bad)).toEqual(parseConnectLink(bad));
       }
+    });
+
+    it("derives the same signaling room", async () => {
+      const mirror = await loadMirror();
+      expect(mirror.derivePairingRoom(PAIR.code)).toBe(derivePairingRoom(PAIR.code));
     });
 
     it("normalizes fingerprints and validates signaling endpoints identically", async () => {

@@ -47,7 +47,7 @@ function stableReach(value: {
   room: string;
   fp: string;
   sig: string;
-  v: 2;
+  v: 3;
   ice: "all" | "relay";
 }): CliStoredPairing {
   return canonicalStoredPairing({

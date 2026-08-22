@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { createConnectDeepLink, type ConnectPairing } from "@vibestudio/shared/connect";
+import {
+  createConnectDeepLink,
+  derivePairingRoom,
+  type ConnectPairing,
+} from "@vibestudio/shared/connect";
 import { formatPairUrlLine } from "./pairingBanner";
 
 describe("server pairing banner", () => {
   it("formats the Pair URL line with the canonical WebRTC deep link", () => {
     const pairing: ConnectPairing = {
-      room: "11111111-2222-3333-4444-555555555555",
+      room: derivePairingRoom("A".repeat(32)),
       fp: "AA".repeat(32),
       code: "A".repeat(32),
       exp: 2_000_000_000_000,
       sig: "wss://signal.example/",
-      v: 2,
+      v: 3,
       ice: "all",
     };
     expect(formatPairUrlLine(pairing)).toBe(`  Pair URL:     ${createConnectDeepLink(pairing)}`);

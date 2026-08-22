@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createConnectDeepLink } from "@vibestudio/shared/connect";
+import { createConnectDeepLink, derivePairingRoom } from "@vibestudio/shared/connect";
 import { createPanelDeepLink } from "@vibestudio/shared/panelLocation";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 
@@ -19,31 +19,31 @@ const mocks = vi.hoisted(() => {
 vi.mock("electron", () => ({ app: mocks.app }));
 
 const FP = "AA".repeat(32);
-function pair(room: string, code: string) {
+function pair(code: string) {
   return {
-    room,
+    room: derivePairingRoom(code),
     fp: FP,
     code,
     exp: 2_000_000_000_000,
     sig: "wss://signal.example/",
-    v: 2 as const,
+    v: 3 as const,
     ice: "all" as const,
   };
 }
-function expectedPairing(room: string, code: string) {
+function expectedPairing(code: string) {
   return {
-    room,
+    room: derivePairingRoom(code),
     fp: FP,
     code,
     exp: 2_000_000_000_000,
     sig: "wss://signal.example/",
-    v: 2,
+    v: 3,
     ice: "all",
   };
 }
 
 describe("protocolHandler", () => {
-  const link = createConnectDeepLink(pair("room-1111-2222", "A".repeat(32)));
+  const link = createConnectDeepLink(pair("A".repeat(32)));
 
   beforeEach(() => {
     vi.resetModules();
@@ -57,7 +57,7 @@ describe("protocolHandler", () => {
     const mod = await import("./protocolHandler.js");
     mod.enqueueConnectLink(link);
 
-    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("room-1111-2222", "A".repeat(32)));
+    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("A".repeat(32)));
     expect(mod.getPendingConnectLink()).toBeNull();
   });
 
@@ -65,7 +65,7 @@ describe("protocolHandler", () => {
     const mod = await import("./protocolHandler.js");
     mod.enqueueConnectLink(link);
 
-    const expected = expectedPairing("room-1111-2222", "A".repeat(32));
+    const expected = expectedPairing("A".repeat(32));
     expect(mod.peekPendingConnectLink()).toEqual(expected);
     expect(mod.peekPendingConnectLink()).toEqual(expected);
     expect(mod.getPendingConnectLink()).toEqual(expected);
@@ -79,10 +79,10 @@ describe("protocolHandler", () => {
 
     mod.enqueueConnectLink(link);
     off();
-    mod.enqueueConnectLink(createConnectDeepLink(pair("room-3333-4444", "B".repeat(32))));
+    mod.enqueueConnectLink(createConnectDeepLink(pair("B".repeat(32))));
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith(expectedPairing("room-1111-2222", "A".repeat(32)));
+    expect(listener).toHaveBeenCalledWith(expectedPairing("A".repeat(32)));
   });
 
   it("captures macOS open-url and argv-borne second-instance links", async () => {
@@ -92,11 +92,11 @@ describe("protocolHandler", () => {
     const preventDefault = vi.fn();
     mocks.handlers.get("open-url")?.({ preventDefault }, link);
     expect(preventDefault).toHaveBeenCalled();
-    expect(mod.getPendingConnectLink()?.room).toBe("room-1111-2222");
+    expect(mod.getPendingConnectLink()?.room).toBe(derivePairingRoom("A".repeat(32)));
 
-    const secondLink = createConnectDeepLink(pair("room-5555-6666", "C".repeat(32)));
+    const secondLink = createConnectDeepLink(pair("C".repeat(32)));
     mocks.handlers.get("second-instance")?.({}, ["--flag", secondLink]);
-    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("room-5555-6666", "C".repeat(32)));
+    expect(mod.getPendingConnectLink()).toEqual(expectedPairing("C".repeat(32)));
   });
 
   it("buffers and dispatches canonical panel locations through the same OS protocol", async () => {
@@ -123,7 +123,7 @@ describe("protocolHandler", () => {
     const errorListener = vi.fn();
     mod.onConnectLinkError(errorListener);
 
-    // A v1-style link (no v=2) — the parser rejects it with the re-pair message.
+    // An old query-style link — the compact parser rejects it with the re-pair message.
     mod.enqueueConnectLink(
       "vibestudio://connect?room=room-1111-2222&fp=" +
         FP +
@@ -133,9 +133,9 @@ describe("protocolHandler", () => {
     );
 
     expect(errorListener).toHaveBeenCalledTimes(1);
-    expect(errorListener.mock.calls[0]?.[0]).toMatch(/old protocol version|re-pair/i);
+    expect(errorListener.mock.calls[0]?.[0]).toMatch(/unsupported pairing protocol|fresh link/i);
     // Buffered too, then drained once.
-    expect(mod.getPendingConnectLinkError()).toMatch(/re-pair/i);
+    expect(mod.getPendingConnectLinkError()).toMatch(/fresh link/i);
     expect(mod.getPendingConnectLinkError()).toBeNull();
     // A failed parse must NOT leave a pending (dial-able) link.
     expect(mod.getPendingConnectLink()).toBeNull();
@@ -148,7 +148,7 @@ describe("protocolHandler", () => {
     mod.getPendingConnectLinkError(); // drain
     mod.enqueueConnectLink(link);
     expect(mod.getPendingConnectLinkError()).toBeNull();
-    expect(mod.getPendingConnectLink()?.room).toBe("room-1111-2222");
+    expect(mod.getPendingConnectLink()?.room).toBe(derivePairingRoom("A".repeat(32)));
   });
 
   it("registers packaged and development protocol handlers", async () => {

@@ -93,6 +93,7 @@ function stageServer() {
 
   // Bin shims.
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
+  copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
   stageNpmUpdateLauncherFiles(root);
   copyFile(
     "scripts/vibestudio-server-shim.mjs",
@@ -147,6 +148,7 @@ function stageApp() {
   copyTree(path.join(repoRoot, "dist"), path.join(root, "dist"), defaultSkip);
 
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
+  copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
   stageNpmUpdateLauncherFiles(root);
   copyFile(
     "scripts/vibestudio-server-shim.mjs",

@@ -22,7 +22,7 @@ is emitted only when `VIBESTUDIO_IOS_APS_ENV` is set.
 ## Pairing And OAuth
 
 The native host handles `vibestudio://connect` and
-`https://vibestudio.app/pair#...` pairing links, clears any active OTA bundle,
+`https://vibestudio.app/p#...` pairing links, clears any active OTA bundle,
 and reloads the shipped bootstrap before React Native processes the link.
 
 iOS OAuth uses `VibestudioAuthSession` (`ASWebAuthenticationSession`) with

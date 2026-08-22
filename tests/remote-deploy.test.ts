@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createConnectDeepLink,
   createConnectPairUrl,
+  derivePairingRoom,
   PAIRING_PROTOCOL_VERSION,
 } from "@vibestudio/shared/connect";
 
@@ -44,7 +45,7 @@ function managedReady(rootInvite: Record<string, unknown> | null) {
 
 function managedInvite() {
   const coordinates = {
-    room: "managed-room",
+    room: derivePairingRoom("M".repeat(32)),
     fp: "AB".repeat(32),
     sig: "wss://signal.test/",
     code: "M".repeat(32),

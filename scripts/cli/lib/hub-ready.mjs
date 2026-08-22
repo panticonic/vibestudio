@@ -1,5 +1,6 @@
 import {
   normalizeFingerprint,
+  PAIRING_PROTOCOL_VERSION,
   parseConnectLink,
   parseSignalingEndpoint,
 } from "./connect-grammar.generated.mjs";
@@ -94,7 +95,9 @@ function parseInvite(value, label, ready) {
   if (typeof invite.sig !== "string") throw new Error(`${label}.sig must be a string`);
   const signaling = parseSignalingEndpoint(invite.sig);
   if (signaling.kind === "error") throw new Error(`${label}.sig: ${signaling.reason}`);
-  if (invite.v !== 2) throw new Error(`${label}.v must be 2`);
+  if (invite.v !== PAIRING_PROTOCOL_VERSION) {
+    throw new Error(`${label}.v must be ${PAIRING_PROTOCOL_VERSION}`);
+  }
   if (invite.ice !== "all" && invite.ice !== "relay") {
     throw new Error(`${label}.ice must be all or relay`);
   }
@@ -119,8 +122,8 @@ function parseInvite(value, label, ready) {
   }
 
   for (const [field, prefix] of [
-    ["deepLink", "vibestudio://connect?"],
-    ["pairUrl", "https://vibestudio.app/pair#"],
+    ["deepLink", "vibestudio://connect/"],
+    ["pairUrl", "https://vibestudio.app/p#"],
   ]) {
     const link = invite[field];
     if (typeof link !== "string" || !link.startsWith(prefix)) {

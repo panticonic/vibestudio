@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
-import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
+import {
+  createConnectDeepLink,
+  createConnectPairUrl,
+  derivePairingRoom,
+} from "@vibestudio/shared/connect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
 
@@ -62,12 +66,12 @@ const LEASE = {
 
 function readyInvite() {
   const pairing = {
-    room: "root-room",
+    room: derivePairingRoom("D".repeat(32)),
     fp: "AA".repeat(32),
     sig: "wss://signal.example/",
     code: "D".repeat(32),
     exp: 2_000_000_000_000,
-    v: 2 as const,
+    v: 3 as const,
     ice: "all" as const,
   };
   return {
@@ -164,7 +168,7 @@ function workspaceRoute(workspace: string, workspaceId: string) {
       room: `workspace-${workspace}`,
       fp: "AA".repeat(32),
       sig: "wss://signal.example/",
-      v: 2 as const,
+      v: 3 as const,
       ice: "all" as const,
     },
     serverId: CHILD_SERVER_ID,

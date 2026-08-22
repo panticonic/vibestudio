@@ -29,13 +29,13 @@ describe("mobile connect-link routing", () => {
   it("consumes trusted USB links immediately even when the app is already running", async () => {
     const deps = dependencies({ consumeUsbApproval: vi.fn(async () => true) });
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).resolves.toBe(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).resolves.toBe(
       "connected"
     );
     expect(deps.onUsbApproved).toHaveBeenCalledOnce();
     expect(deps.connect).toHaveBeenCalledWith({
       pairing: { room: "room-1" },
-      rawUrl: "vibestudio://connect?test",
+      rawUrl: "vibestudio://connect/test",
     });
     expect(deps.present).not.toHaveBeenCalled();
   });
@@ -43,10 +43,10 @@ describe("mobile connect-link routing", () => {
   it("keeps ordinary links behind explicit in-app confirmation", async () => {
     const deps = dependencies();
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).resolves.toBe(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).resolves.toBe(
       "presented"
     );
-    expect(deps.present).toHaveBeenCalledWith("vibestudio://connect?test");
+    expect(deps.present).toHaveBeenCalledWith("vibestudio://connect/test");
     expect(deps.connect).not.toHaveBeenCalled();
   });
 
@@ -57,7 +57,7 @@ describe("mobile connect-link routing", () => {
       }),
     });
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).resolves.toBe(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).resolves.toBe(
       "presented"
     );
     expect(deps.present).toHaveBeenCalledOnce();
@@ -67,7 +67,7 @@ describe("mobile connect-link routing", () => {
   it("ignores replayed links before consulting native approval", async () => {
     const deps = dependencies({ consumeReplay: vi.fn(async () => true) });
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).resolves.toBe(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).resolves.toBe(
       "replay"
     );
     expect(deps.consumeUsbApproval).not.toHaveBeenCalled();
@@ -85,10 +85,10 @@ describe("mobile connect-link routing", () => {
       connect: vi.fn(async () => pairing),
     });
 
-    const first = routeIncomingConnectLink("vibestudio://connect?test", deps);
+    const first = routeIncomingConnectLink("vibestudio://connect/test", deps);
     await vi.waitFor(() => expect(deps.connect).toHaveBeenCalledOnce());
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).resolves.toBe(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).resolves.toBe(
       "replay"
     );
     expect(deps.consumeUsbApproval).toHaveBeenCalledOnce();
@@ -107,13 +107,13 @@ describe("mobile connect-link routing", () => {
       }),
     });
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).rejects.toThrow(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).rejects.toThrow(
       "bundle activation failed"
     );
-    expect(deps.markConsumed).toHaveBeenCalledWith("vibestudio://connect?test");
+    expect(deps.markConsumed).toHaveBeenCalledWith("vibestudio://connect/test");
     expect(deps.release).not.toHaveBeenCalled();
 
-    await expect(routeIncomingConnectLink("vibestudio://connect?test", deps)).resolves.toBe(
+    await expect(routeIncomingConnectLink("vibestudio://connect/test", deps)).resolves.toBe(
       "replay"
     );
     expect(deps.present).not.toHaveBeenCalled();

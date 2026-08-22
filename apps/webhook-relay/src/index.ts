@@ -3,7 +3,7 @@
  *
  * Plan §7: one public edge serving two profiles on one backhaul.
  *
- *   - Pair landing:       GET  /pair                     -> custom-scheme trampoline
+ *   - Pair landing:       GET  /p                        -> custom-scheme trampoline
  *   - WEBHOOK (stateful):  POST /i/<subscriptionId>      -> RelayRegistry DO
  *   - OAUTH landing:       GET  /oauth/callback/...       -> RelayRegistry DO
  *   - Universal-link host: GET  /.well-known/apple-app-site-association
@@ -61,7 +61,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/") {
       return handleApexLanding();
     }
-    if (request.method === "GET" && url.pathname === "/pair") {
+    if (request.method === "GET" && url.pathname === "/p") {
       return handlePairLanding(url);
     }
     if (request.method === "GET" && url.pathname === "/panel") {

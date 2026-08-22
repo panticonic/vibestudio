@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
+import {
+  createConnectDeepLink,
+  createConnectPairUrl,
+  derivePairingRoom,
+} from "@vibestudio/shared/connect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadCliCredentials, saveCliCredentials } from "../cli/credentialStore.js";
 import { ConnectionError } from "../cli/output.js";
@@ -34,14 +38,14 @@ describe("bootstrapInstanceCliFromDevice", () => {
           room: "development-cli",
           fp: "AA".repeat(32),
           sig: "wss://signal.example/",
-          v: 2,
+          v: 3,
           ice: "all",
         },
         workspacePairing: {
           room: "workspace-old",
           fp: "BB".repeat(32),
           sig: "wss://signal.example/",
-          v: 2,
+          v: 3,
           ice: "all",
         },
         pairedAt: 123,
@@ -64,7 +68,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
             room: "workspace-current",
             fp: "CC".repeat(32),
             sig: "wss://signal.example/",
-            v: 2,
+            v: 3,
             ice: "all",
           },
           serverId,
@@ -107,12 +111,12 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverId = `srv_${"S".repeat(24)}`;
     const serverBootId = `boot_${"B".repeat(24)}`;
     const pairing = {
-      room: "development-cli",
+      room: derivePairingRoom("D".repeat(32)),
       fp: "AA".repeat(32),
       sig: "wss://signal.example/",
       code: "D".repeat(32),
       exp: 2_000_000_000_000,
-      v: 2 as const,
+      v: 3 as const,
       ice: "all" as const,
     };
     const invite = {
@@ -140,7 +144,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
             room: "workspace-dev",
             fp: "BB".repeat(32),
             sig: "wss://signal.example/",
-            v: 2,
+            v: 3,
             ice: "all",
           },
           serverId,
@@ -205,12 +209,12 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverId = `srv_${"S".repeat(24)}`;
     const serverBootId = `boot_${"B".repeat(24)}`;
     const pairing = {
-      room: "development-cli",
+      room: derivePairingRoom("D".repeat(32)),
       fp: "AA".repeat(32),
       sig: "wss://signal.example/",
       code: "D".repeat(32),
       exp: 2_000_000_000_000,
-      v: 2 as const,
+      v: 3 as const,
       ice: "all" as const,
     };
     const invite = {
@@ -239,7 +243,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
             room: "workspace-dev",
             fp: "BB".repeat(32),
             sig: "wss://signal.example/",
-            v: 2,
+            v: 3,
             ice: "all",
           },
           serverId,

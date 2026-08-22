@@ -21,6 +21,7 @@ import {
   handleElectronUpdateExit,
   resolveNpmGlobalInstall,
 } from "./npm-update-launcher.mjs";
+import { resolveDesktopLaunchArgs } from "./desktop-launch-args.mjs";
 
 const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -31,8 +32,7 @@ if (!process.env["VIBESTUDIO_APP_ROOT"]) {
 }
 
 const argv = process.argv.slice(2);
-const GUI_TRIGGERS = new Set(["open", "gui", "app", "--gui"]);
-const wantsGui = argv.length === 0 || GUI_TRIGGERS.has(argv[0]);
+const desktopLaunch = resolveDesktopLaunchArgs(argv);
 
 const lock = await checkForActiveUpdateLock(centralDataPath);
 if (lock.active) {
@@ -165,9 +165,9 @@ function recordRelaunchFailure(error) {
   }
 }
 
-if (wantsGui && hasElectron()) {
-  await launchGui(argv.filter((arg) => !GUI_TRIGGERS.has(arg)));
-} else if (wantsGui) {
+if (desktopLaunch.wantsGui && hasElectron()) {
+  await launchGui(desktopLaunch.args);
+} else if (desktopLaunch.wantsGui) {
   console.error(
     "The desktop GUI is not included in @panticonic/vibestudio-server; install @panticonic/vibestudio to use the app."
   );

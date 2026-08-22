@@ -327,7 +327,7 @@ directory. On startup the pairing server prints a QR/deep-link:
 Pair a Vibestudio device
   Room:        ...
   Fingerprint: ...
-  Pair URL:    vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all
+  Pair URL:    https://vibestudio.app/p#<compact-payload>
 ```
 
 On a fresh server, that root-bootstrap invite is automatically replaced when it
@@ -374,8 +374,12 @@ equivalent paired-CLI flow.
 no managed server is running. From a source checkout, run `pnpm build` first,
 then use `pnpm cli mobile install --launch` and the same pairing flow.
 
-The QR carries the complete
-`vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all` invitation. See
+The QR carries the complete, self-contained
+`https://vibestudio.app/p#<compact-payload>` invitation. Protocol v3 packs the
+one-time secret, DTLS fingerprint, expiry, ICE policy, and any non-default
+signaling endpoint into one URL-safe fragment; the signaling room is derived
+one-way from the secret. The normal hosted link has no shell metacharacters and
+does not depend on SSH or a link-shortening service. See
 [docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the transport and local
 development harness. The first phone, desktop, or CLI to redeem a fresh
 server's current startup invitation becomes the root account.

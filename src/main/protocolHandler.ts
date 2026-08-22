@@ -46,7 +46,11 @@ export function installEarlyOpenUrlBuffer(): void {
 }
 
 export function enqueueFirstArgvLink(argv: readonly string[]): void {
-  const raw = argv.find((arg) => typeof arg === "string" && arg.startsWith("vibestudio://"));
+  const raw = argv.find(
+    (arg) =>
+      typeof arg === "string" &&
+      (arg.startsWith("vibestudio://") || arg.startsWith("https://vibestudio.app/p#"))
+  );
   if (raw) enqueueProtocolLink(raw);
 }
 

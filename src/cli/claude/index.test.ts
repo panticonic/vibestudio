@@ -16,7 +16,7 @@ const PAIRING = {
   room: "paired-room",
   fp: "AA".repeat(32),
   sig: "wss://signal.example/",
-  v: 2 as const,
+  v: 3 as const,
   ice: "all" as const,
 };
 const directRoute = (url = "http://local") => ({

@@ -147,10 +147,10 @@ Pair this terminal, choose a workspace, start the terminal app, and mint
 account-bound device links:
 
 ```sh
-vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"
+vibestudio remote pair "https://vibestudio.app/p#<compact-payload>"
 vibestudio remote workspaces
 vibestudio remote select dev
-vibestudio terminal start --pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"
+vibestudio terminal start --pair "https://vibestudio.app/p#<compact-payload>"
 vibestudio terminal start
 vibestudio remote pair-device --workspace dev
 vibestudio remote invite-user --handle alice --workspace dev
@@ -275,7 +275,7 @@ pnpm smoke:cloudflare
 ```
 
 `signal.vibestudio.app` is owned by `apps/signaling`; `vibestudio.app` is owned by
-`apps/webhook-relay` for `/pair`, `/panel`, `.well-known`, OAuth callbacks,
+`apps/webhook-relay` for `/p`, `/panel`, `.well-known`, OAuth callbacks,
 webhooks, and backhaul.
 
 ## Agent

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { derivePairingRoom } from "@vibestudio/shared/connect";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import {
   DEVICE_REFRESH_TOKEN_PATTERN,
@@ -120,7 +121,7 @@ export class DeviceAuthStore {
     const codeHash = hashSecret(code);
     const createdAt = this.now();
     const expiresAt = createdAt + ttlMs;
-    const room = randomUUID();
+    const room = derivePairingRoom(code);
     this.db.insertPairingInvite({
       code: codeHash,
       room,

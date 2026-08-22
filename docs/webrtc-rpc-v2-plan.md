@@ -1,6 +1,7 @@
 # WebRTC RPC v2 — Full Redesign Plan
 
-**Status:** Implemented (this pass). Supersedes the fix-list in
+**Status:** Implemented, then superseded for pairing-link encoding by the compact
+v3 carrier documented in `webrtc-rpc-transport.md`. Supersedes the fix-list in
 `webrtc-rpc-remediation-plan.md` (whose Parts 1–2, the validation register and
 findings, remain the evidence base; its incremental Part 3 is replaced by this).
 See "Implementation notes" at the end for deviations landed with the build.
@@ -19,7 +20,7 @@ implementation; test the negative.
 ## 0. Target architecture (one page)
 
 ```
- pairing invite ──► fresh room UUID per invite ──► QR: room+fp+code+sig+v=2
+ pairing invite ──► room derived one-way from code ──► QR: compact v3 payload
                                                         │
  ┌─────────────────────────── Cloudflare ───────────────┼───────────────┐
  │ Signaling DO: one room per paired device / invite    ▼               │

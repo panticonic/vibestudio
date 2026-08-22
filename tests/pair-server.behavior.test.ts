@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createConnectDeepLink,
   createConnectPairUrl,
+  derivePairingRoom,
   PAIRING_PROTOCOL_VERSION,
 } from "@vibestudio/shared/connect";
 
@@ -43,9 +44,10 @@ const REMOTE_CODE = fixedCode("PAIRING_REMOTE_CODE");
 const SERVER_ID = `srv_${"S".repeat(24)}`;
 const SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
 const PAIRING_EXPIRES_AT = 4_000_000_000_000;
-function invite(room: string, fp: string, sig: string, code: string) {
+function invite(_room: string, fp: string, sig: string, code: string) {
+  const canonicalRoom = derivePairingRoom(code);
   const pairing = {
-    room,
+    room: canonicalRoom,
     fp,
     code,
     sig,
@@ -54,7 +56,7 @@ function invite(room: string, fp: string, sig: string, code: string) {
     exp: PAIRING_EXPIRES_AT,
   };
   return {
-    room,
+    room: canonicalRoom,
     fp,
     sig,
     code,
@@ -123,20 +125,20 @@ describe("pair-server runner", () => {
     const output = logText(logSpy);
     expect(output).toContain("Pair Test");
     expect(output).toContain("Room:");
-    expect(output).toContain("room-ready-7f3a9c2b");
+    expect(output).toContain(derivePairingRoom(READY_CODE));
     expect(output).toContain("Fingerprint:");
     expect(output).toContain("4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a");
     expect(output).toContain("Signaling:");
     expect(output).toContain("wss://signal.vibestudio.dev");
     expect(output).toMatch(new RegExp(`Pair code:\\s+${READY_CODE}`));
-    expect(output).toContain(
-      invite(
-        "room-ready-7f3a9c2b",
-        "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a",
-        "wss://signal.vibestudio.dev",
-        READY_CODE
-      ).pairUrl
-    );
+    const pairUrl = invite(
+      "room-ready-7f3a9c2b",
+      "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a",
+      "wss://signal.vibestudio.dev",
+      READY_CODE
+    ).pairUrl;
+    expect(output).toContain(pairUrl);
+    expect(output).toContain(`vibestudio open ${pairUrl}`);
     expect(output).toContain("Pair from test.");
 
     child.emit("exit", 0, null);
@@ -226,7 +228,7 @@ describe("pair-server runner", () => {
       await waitFor(() => logText(logSpy).includes("Root account already exists"));
       const output = logText(logSpy);
       expect(output).not.toContain(CUSTOM_CODE);
-      expect(output).not.toContain("https://vibestudio.app/pair#");
+      expect(output).not.toContain("https://vibestudio.app/p#");
       child.emit("exit", 0, null);
       expect(fs.existsSync(readyDir)).toBe(true);
     } finally {
