@@ -68,6 +68,7 @@ through the encrypted WebRTC connection described below. Manage it with:
 
 ```bash
 vibestudio remote deploy status local
+vibestudio remote deploy pairing local
 vibestudio remote deploy logs local
 vibestudio remote deploy update local
 ```
@@ -101,7 +102,7 @@ Identity lives in one hub-owned database (`server-auth/identity.db`); the flow i
 1. **Root bootstrap** — on a fresh server the startup pairing code is the root
    invite: the first device to redeem it becomes the `root` user. Until that
    happens, the server replaces expired root invites and publishes the current
-   QR/link through its ready file and logs; it never becomes permanently
+   QR/link through `remote deploy pairing <target>`; it never becomes permanently
    unclaimable because an operator stepped away.
 2. **Invite a user** (root/admin only) — mint a user-bound pairing code with a
    handle and optional workspace memberships; the invitee's first device
@@ -309,8 +310,9 @@ For an always-on Linux server managed by the normal user-service lifecycle:
 vibestudio remote deploy local
 ```
 
-Use `remote deploy status local`, `logs local`, and `update local` to manage
-that same service. For a foreground session instead:
+Use `remote deploy pairing local`, `status local`, `logs local`, and `update
+local` to manage that same service. Pairing is the secret-bearing setup surface;
+logs remain diagnostic output. For a foreground session instead:
 
 ```bash
 vibestudio remote serve --port 3030
@@ -330,8 +332,9 @@ Pair a Vibestudio device
 
 On a fresh server, that root-bootstrap invite is automatically replaced when it
 expires. The foreground command prints each replacement; a managed service
-writes it to the journal, so `vibestudio remote deploy logs local` shows the
-latest link until the first device claims the root account.
+atomically updates its protected ready state, so
+`vibestudio remote deploy pairing local` always shows the current QR/link until
+the first device claims the root account.
 
 ### CLI Flags
 

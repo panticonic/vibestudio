@@ -177,7 +177,8 @@ Options:
       accepted for loopback development.
   --ready-file <path>
       Write the structured hub-ready payload to this path. Useful for unattended
-      pairing; protect and delete it because initial root invites are one-time secrets.
+      pairing; suppresses the QR/link on stdout. Protect and delete the file
+      because initial root invites are one-time secrets.
   --bootstrap-workspace <name>
       Register a named source workspace and preserve its state across server restarts.
   --dev
@@ -234,6 +235,19 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     ownedReadyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-"));
     readyFile = path.join(ownedReadyDir, "ready.json");
     serverArgs = [...serverArgs, "--ready-file", readyFile];
+  }
+  // With an explicit ready path, the caller has selected a protected machine
+  // handoff. Do not duplicate its rotating secret onto stdout (and, for a
+  // managed service, into journald). Foreground sessions without one still get
+  // the human QR/link banner from their wrapper-owned temporary handoff.
+  const printPairingBanner = ownedReadyDir !== null;
+  // A caller-owned ready path survives process lifetimes. Remove the previous
+  // process's payload before spawning so a management command can never expose
+  // a stale invite while the replacement hub is still starting.
+  try {
+    fs.unlinkSync(readyFile);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
   }
 
   await hooks.beforeStart?.({ options, serverArgs });
@@ -405,6 +419,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
   const tryPrintBanner = () => {
     if (!rootInvite) return;
+    if (!printPairingBanner) return;
     if (lastPrintedInviteCode === rootInvite.code) return;
     printConnectBanner({
       title: config.bannerTitle,

@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseSignalingEndpoint } from "./lib/connect-grammar.generated.mjs";
+import { printConnectBanner } from "./lib/connect-banner.mjs";
+import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 const SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
+const MANAGED_READY_FILE_RELATIVE = ".config/vibestudio/server-auth/hub-ready.json";
 const nodeEngineMatch = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(pkg.engines?.node ?? "");
 if (!nodeEngineMatch) {
   throw new Error("package.json engines.node must be an exact >=major.minor.patch requirement");
@@ -28,7 +32,9 @@ export function parseArgs(argv) {
       help: true,
     };
   }
-  const verb = ["status", "logs", "update", "remove"].includes(args[0]) ? args.shift() : "deploy";
+  const verb = ["status", "logs", "pairing", "update", "remove"].includes(args[0])
+    ? args.shift()
+    : "deploy";
   const options = {
     verb,
     target: args.shift() ?? null,
@@ -73,6 +79,7 @@ Usage:
   vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
   vibestudio remote deploy status <user@host|local>
   vibestudio remote deploy logs <user@host|local>
+  vibestudio remote deploy pairing <user@host|local>
   vibestudio remote deploy update <user@host|local> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
   vibestudio remote deploy remove <user@host|local> [--purge]
 
@@ -85,6 +92,109 @@ package and every workspace child's WebRTC reach. Hub identity, accounts, and
 device pairing remain intact; clients obtain fresh workspace reaches through
 the stable hub control ingress after reinstall.
 `);
+}
+
+export function managedReadyFile(home = os.homedir()) {
+  if (typeof home !== "string" || !path.isAbsolute(home)) {
+    throw new Error("Cannot resolve the current user's home directory for managed pairing state");
+  }
+  return path.join(home, MANAGED_READY_FILE_RELATIVE);
+}
+
+async function readHealth(fetchImpl, url, label) {
+  let response;
+  try {
+    response = await fetchImpl(url);
+  } catch (error) {
+    throw new Error(
+      `${label} is unreachable: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!response.ok) {
+    throw new Error(`${label} is unavailable (HTTP ${response.status})`);
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`${label} returned malformed health data`);
+  }
+}
+
+/** Display the one current root invite from the managed server's protected
+ * ready-state contract. The journal is diagnostic output, never a secret API. */
+export async function showManagedPairing({
+  readyFile = managedReadyFile(),
+  fetchImpl = globalThis.fetch,
+  now = Date.now,
+} = {}) {
+  let stat;
+  try {
+    stat = fs.lstatSync(readyFile);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(
+        `Managed pairing state is not ready at ${readyFile}; check \`vibestudio remote deploy status local\``
+      );
+    }
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`Managed pairing state is not a regular file: ${readyFile}`);
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    throw new Error(
+      `Managed pairing state has unsafe permissions at ${readyFile}; expected mode 0600`
+    );
+  }
+
+  let ready;
+  try {
+    ready = parseHubReadyPayload(JSON.parse(fs.readFileSync(readyFile, "utf8")));
+  } catch (error) {
+    throw new Error(
+      `Managed pairing state is invalid: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const hubHealth = await readHealth(
+    fetchImpl,
+    new URL("/healthz", ready.gatewayUrl),
+    "Managed Vibestudio hub"
+  );
+  for (const field of ["serverId", "serverBootId", "pid", "buildId"]) {
+    if (hubHealth?.[field] !== ready[field]) {
+      throw new Error(
+        `Managed pairing state does not belong to the running hub (${field} mismatch)`
+      );
+    }
+  }
+  const invite = ready.rootInvite;
+  if (!invite) {
+    console.log(
+      "Root account already claimed. Create another device invite from a paired desktop, mobile, or CLI client."
+    );
+    return ready;
+  }
+  const defaultWorkspace = ready.workspaces.find((workspace) => workspace.name === "default");
+  if (!defaultWorkspace) {
+    throw new Error("The managed server has no default workspace");
+  }
+  await readHealth(
+    fetchImpl,
+    new URL("/_workspace/default/healthz", ready.gatewayUrl),
+    "Managed default workspace"
+  );
+
+  if (invite.expiresAt <= now()) {
+    throw new Error("The root pairing invite is renewing; run this command again in a moment");
+  }
+  printConnectBanner({
+    title: "Pair the first Vibestudio device",
+    invite,
+    deepLinkLabel: "Pair URL",
+    instructions: "Open the link on a desktop, or scan the QR with the Vibestudio mobile app.",
+  });
+  console.log(`  Expires: ${new Date(invite.expiresAt).toISOString()}`);
+  return ready;
 }
 
 export function run(command, args, options = {}) {
@@ -246,16 +356,20 @@ npm install -g ${shellQuote(`${SERVER_PACKAGE_NAME}@${pkg.version}`)}
     );
     console.log(`✓ Installed package         ${SERVER_PACKAGE_NAME}@${pkg.version}`);
   }
-  const serverCommand = `__NODE_BIN__ __VIBESTUDIO_ENTRY__ remote serve --port ${options.port}`;
+  const serverCommand =
+    `__NODE_BIN__ __VIBESTUDIO_ENTRY__ remote serve --port ${options.port} ` +
+    `--ready-file "%h/${MANAGED_READY_FILE_RELATIVE}"`;
   const unit = `[Unit]
 Description=Vibestudio remote server
 After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 UMask=0077
 ${signalEnv}ExecStart=${serverCommand}
-Restart=always
+Restart=on-failure
 RestartSec=3
 
 [Install]
@@ -274,12 +388,18 @@ systemctl --user enable vibestudio-server.service
 # restart (not just enable --now) so an UPDATE replaces the running old binary.
 systemctl --user restart vibestudio-server.service
 systemctl --user is-active --quiet vibestudio-server.service
-identity_path="$HOME/.config/vibestudio/workspaces/default/reach/webrtc/identity.pem"
+ready_file="$HOME/${MANAGED_READY_FILE_RELATIVE}"
 deadline=$((SECONDS + 120))
-until "$node_bin" -e "fetch('http://127.0.0.1:${options.port}/healthz').then(r => r.json()).then(v => process.exit(v.ok && v.mode === 'hub' ? 0 : 1)).catch(() => process.exit(1))" && [ -s "$identity_path" ]; do
+until [ -s "$ready_file" ] && "$node_bin" -e "Promise.all([fetch('http://127.0.0.1:${options.port}/healthz'), fetch('http://127.0.0.1:${options.port}/_workspace/default/healthz')]).then(async ([hubResponse, workspaceResponse]) => { if (!hubResponse.ok || !workspaceResponse.ok) return process.exit(1); const [hub, workspace] = await Promise.all([hubResponse.json(), workspaceResponse.json()]); process.exit(hub.ok && hub.mode === 'hub' && workspace.ok ? 0 : 1); }).catch(() => process.exit(1))"; do
+  if ! systemctl --user is-active --quiet vibestudio-server.service; then
+    journalctl --user -u vibestudio-server.service -n 100 --no-pager >&2
+    echo "Vibestudio service exited before the hub and default workspace became ready" >&2
+    exit 1
+  fi
   if [ "$SECONDS" -ge "$deadline" ]; then
     journalctl --user -u vibestudio-server.service -n 100 --no-pager >&2
-    echo "Timed out waiting for the hub and default workspace identity" >&2
+    systemctl --user stop vibestudio-server.service
+    echo "Timed out waiting for the hub, default workspace runtime, and managed pairing state; the failed service was stopped" >&2
     exit 1
   fi
   sleep 1
@@ -293,17 +413,17 @@ done
     options.target,
     `set -e
 ${RESOLVE_REMOTE_RUNTIME}
-journalctl --user -u vibestudio-server.service -n 100 --no-pager
 "$node_bin" "$vibestudio_entry" remote doctor${signalArg}
 "$node_bin" "$vibestudio_entry" remote doctor${signalArg} --workspace default
+"$node_bin" "$vibestudio_entry" remote deploy pairing local
 `,
     hooks
   );
   console.log("✓ Server ready               default workspace");
-  console.log("  Pair the first device with the QR shown above; it becomes the root account.");
-  console.log(`  Logs:   vibestudio remote deploy logs ${options.target}`);
-  console.log(`  Status: vibestudio remote deploy status ${options.target}`);
-  console.log(`  Update: vibestudio remote deploy update ${options.target}`);
+  console.log(`  Pairing: vibestudio remote deploy pairing ${options.target}`);
+  console.log(`  Logs:    vibestudio remote deploy logs ${options.target}`);
+  console.log(`  Status:  vibestudio remote deploy status ${options.target}`);
+  console.log(`  Update:  vibestudio remote deploy update ${options.target}`);
 }
 
 function removeScript(purge) {
@@ -332,6 +452,19 @@ export async function main(argv = process.argv.slice(2), hooks = {}) {
     );
   if (options.verb === "logs")
     return targetShell(options.target, "journalctl --user -u vibestudio-server.service -f", hooks);
+  if (options.verb === "pairing") {
+    if (options.target === "local") {
+      return (hooks.showManagedPairing ?? showManagedPairing)();
+    }
+    return targetShell(
+      options.target,
+      `set -e
+${RESOLVE_REMOTE_RUNTIME}
+"$node_bin" "$vibestudio_entry" remote deploy pairing local
+`,
+      hooks
+    );
+  }
   if (options.verb === "remove") {
     return targetShell(options.target, removeScript(options.purge), hooks);
   }

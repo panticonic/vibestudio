@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
+import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 
@@ -77,6 +78,17 @@ const contracts = [
     runtime: "bundled sql.js runtime",
     mustStartWithBytes: [0x00, 0x61, 0x73, 0x6d],
   },
+  ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => ({
+    path: `dist/${filename}`,
+    runtime: "standalone Node worker",
+    format: "esm",
+    mustContain: [NODE_ESM_COMPAT_BANNER],
+  })),
+  ...Object.values(SERVER_WORKER_ENTRIES.electron).map((filename) => ({
+    path: `dist/${filename}`,
+    runtime: "Electron utility-process worker",
+    format: "cjs",
+  })),
   {
     path: "src/server/buildV2/builder.ts",
     runtime: "runtime workspace builder",

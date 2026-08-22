@@ -2929,7 +2929,12 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
           publishReady();
         },
         onRenewed: (invite) => {
-          console.log(`[Hub] Root pairing invite renewed: ${invite.pairUrl}`);
+          // A ready-file caller has selected the protected structured handoff;
+          // its wrapper decides whether the secret belongs on an interactive
+          // terminal. Only a low-level hub with no handoff logs the replacement.
+          if (!args.readyFile) {
+            console.log(`[Hub] Root pairing invite renewed: ${invite.pairUrl}`);
+          }
         },
         onRenewalError: (error) => {
           console.error("[Hub] Could not renew the root pairing invite; retrying:", error);
@@ -2974,9 +2979,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
-  if (startupInvite) {
+  if (startupInvite && !args.readyFile) {
     console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
-  } else {
+  } else if (!startupInvite) {
     console.log("  Identity:    root already bootstrapped (add users via invite)");
   }
 

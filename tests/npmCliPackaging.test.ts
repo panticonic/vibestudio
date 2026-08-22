@@ -13,6 +13,12 @@ describe("npm CLI packaging", () => {
   it("stages every standalone server boot artifact", () => {
     expect(SERVER_RUNTIME_ARTIFACTS).toEqual([
       "dist/server.mjs",
+      "dist/browserTransport.js",
+      "dist/authority-analysis-worker.mjs",
+      "dist/library-lowering-worker.mjs",
+      "dist/typecheck-worker.mjs",
+      "dist/workspace-rpc-catalog-worker.mjs",
+      "dist/sqlite-integrity-worker.mjs",
       "dist/internal-do.bundle.mjs",
       "dist/sql-wasm.wasm",
       "dist/host-build-fingerprint.json",

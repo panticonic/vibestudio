@@ -193,8 +193,8 @@ vibestudio remote deploy local
 The same deployment lifecycle accepts `user@host` when the server is a
 different machine. It installs a loopback-only systemd user service, enables
 linger, validates the hub plus the default workspace, and prints the service's
-current root pairing QR. Use `remote deploy status`, `logs`, `update`, and
-`remove` with the same `local` or `user@host` target.
+current root pairing QR. Use `remote deploy pairing`, `status`, `logs`, `update`,
+and `remove` with the same `local` or `user@host` target.
 
 For a foreground session, signaling resolves as flag > environment > config >
 hosted default:
@@ -215,9 +215,11 @@ https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2
 
 This root-bootstrap invite is one-time and expiring, but server ownership is
 continuous: until a first device claims the root account, the hub replaces an
-expired invite, atomically updates its ready payload, and logs the new link.
-Foreground `remote serve` prints each replacement; for a managed service use
-`vibestudio remote deploy logs <target>` to see the latest one.
+expired invite and atomically updates its ready payload. Foreground `remote
+serve` prints each replacement. A managed service keeps the secret out of its
+journal; use `vibestudio remote deploy pairing <target>` to display the current
+protected link and QR. Service logs are diagnostic output, not a pairing
+interface.
 
 The hub control ingress presents a persistent DTLS identity at:
 
@@ -252,16 +254,19 @@ For the managed local-or-SSH systemd lifecycle:
 
 ```bash
 vibestudio remote deploy local
+vibestudio remote deploy pairing local
 vibestudio remote deploy logs local
 vibestudio remote deploy user@host --port 3030 --signal-url wss://signal.vibestudio.app/
+vibestudio remote deploy pairing user@host
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 vibestudio remote deploy remove user@host --purge
 ```
 
 Deploy writes the systemd unit with an absolute `ExecStart` (resolved via
-`command -v vibestudio` on the host), waits for the loopback gateway `/healthz`
-and default child identity, then diagnoses both the hub and workspace reaches.
+`command -v vibestudio` on the host), waits for both the loopback hub and routed
+default-workspace health endpoints plus the protected managed ready file, then
+diagnoses both the hub and workspace reaches.
 The hub independently owns and renews the root invite described above. On
 `update`, deployment restarts the unit so the new build takes over. `remove
 --purge` also uninstalls the npm package and deletes workspace-child reaches. It

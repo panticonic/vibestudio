@@ -103,6 +103,8 @@ The ready file contains the current one-time root pairing secret; protect it.
 While the server has no root account, expiry atomically replaces that payload
 with a fresh invite. Successful root redemption rewrites it with
 `rootInvite: null`; stopping the owned server removes its temporary ready state.
+Supplying `--ready-file` selects that protected handoff instead of printing the
+secret to stdout, which keeps managed-service journals free of pairing links.
 `--ready-file` makes pairing unattended; it does not auto-approve workspace
 extensions, tool calls, credentials, or Git publication.
 Source-mode `remote serve` rebuilds the internal Durable Object bundle before
@@ -209,11 +211,13 @@ Deploy or manage a systemd user service on this computer or over SSH:
 ```sh
 vibestudio remote deploy local
 vibestudio remote deploy status local
+vibestudio remote deploy pairing local
 vibestudio remote deploy logs local
 vibestudio remote deploy update local
 vibestudio remote deploy remove local
 vibestudio remote deploy user@host --port 3030 --signal-url wss://signaling.example.workers.dev
 vibestudio remote deploy status user@host
+vibestudio remote deploy pairing user@host
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 vibestudio remote deploy remove user@host [--purge]
@@ -226,15 +230,15 @@ same installer and service lifecycle without requiring an SSH daemon. Deploy
 installs a `systemd --user` unit, enables linger, and starts
 `vibestudio remote serve` bound to loopback. The unit's `ExecStart` uses the
 absolute path resolved from `command -v vibestudio` on the host (so it survives
-nvm / user-prefix npm installs). Deploy then polls the loopback gateway
-`/healthz` for hub readiness and waits for the managed `default` workspace
-identity before running `remote doctor` against both the stable hub identity
-and the default workspace reach. Pairing invites are minted by
+nvm / user-prefix npm installs). Deploy then polls both the loopback hub and the
+routed `default` workspace health endpoint and requires protected managed ready
+state before running `remote doctor` against both the stable hub identity and
+the default workspace reach. Pairing invites are minted by
 the hub with an exact target workspace ID; their rooms remain on the stable hub
-control ingress. Deploy never consumes an invite. It prints the recent service
-journal after startup, including the current root QR/link on a fresh server;
-`remote deploy logs <target>` follows later invite renewals until the first
-device claims the root account.
+control ingress. Deploy never consumes an invite. `remote deploy pairing
+<target>` reads that target's mode-`0600` managed ready file, proves it belongs
+to the live hub and a healthy default workspace, and prints the current root
+QR/link. `remote deploy logs <target>` is only for diagnostics.
 
 `update` reuses `deploy` and explicitly restarts the unit, so a new build
 replaces the running old binary. `remove` disables and deletes the unit; add

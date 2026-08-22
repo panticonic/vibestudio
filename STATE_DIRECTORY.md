@@ -324,6 +324,14 @@ redemption rewrites it with `rootInvite: null`. The desktop accepts only a fresh
 hub-mode record, pairs its global device once, and asks the hub to route the
 selected workspace child.
 
+The managed systemd service keeps this file at the path above with mode `0600`.
+`vibestudio remote deploy pairing <local|user@host>` validates that the record
+belongs to the live hub and that the default workspace is actually healthy
+before displaying its link and QR. The service does not duplicate pairing
+secrets into its journal; journals are diagnostics, not the pairing interface.
+The service wrapper removes stale ready state before each start, and atomic
+invite renewal replaces it in place.
+
 ### `logs/hub.log`
 
 Combined stdout/stderr of the detached hub (`stdio` target of the spawn),

@@ -102,9 +102,11 @@ describe("remote/mobile overhaul skill coverage", () => {
 
     for (const file of hostGuides) {
       expect(readHost(file), file).toContain("remote deploy local");
+      expect(readHost(file), file).toContain("remote deploy pairing");
     }
     for (const file of baseGuides) {
       expect(readBase(file), file).toContain("remote deploy local");
+      expect(readBase(file), file).toContain("remote deploy pairing");
     }
     expect(readHost("docs/remote-ux-overhaul-plan.md")).toContain("<user@host|local>");
     expect(readHost("README.md").match(/vibestudio remote deploy local/g)?.length).toBeGreaterThan(

@@ -1,8 +1,21 @@
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
-import { deploy, main, parseArgs, REQUIRED_NODE_VERSION } from "../scripts/cli/remote-deploy.mjs";
+import {
+  deploy,
+  main,
+  parseArgs,
+  REQUIRED_NODE_VERSION,
+  showManagedPairing,
+} from "../scripts/cli/remote-deploy.mjs";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createConnectDeepLink,
+  createConnectPairUrl,
+  PAIRING_PROTOCOL_VERSION,
+} from "@vibestudio/shared/connect";
 
 type RunCall = {
   command: string;
@@ -12,6 +25,42 @@ type RunCall = {
 
 function sshScripts(calls: RunCall[]): string[] {
   return calls.filter((call) => call.command === "ssh").map((call) => call.options?.input ?? "");
+}
+
+function managedReady(rootInvite: Record<string, unknown> | null) {
+  return {
+    mode: "hub",
+    gatewayUrl: "http://127.0.0.1:3030",
+    rootInvite,
+    serverId: `srv_${"S".repeat(24)}`,
+    serverBootId: `boot_${"B".repeat(24)}`,
+    gatewayPort: 3030,
+    pid: 4242,
+    version: "0.1.11-test",
+    buildId: "a".repeat(64),
+    workspaces: [{ workspaceId: "ws_default", name: "default", lastOpened: 1, running: true }],
+  };
+}
+
+function managedInvite() {
+  const coordinates = {
+    room: "managed-room",
+    fp: "AB".repeat(32),
+    sig: "wss://signal.test/",
+    code: "M".repeat(32),
+    exp: 4_000_000_000_000,
+    v: PAIRING_PROTOCOL_VERSION,
+    ice: "all" as const,
+  };
+  return {
+    ...coordinates,
+    deepLink: createConnectDeepLink(coordinates),
+    pairUrl: createConnectPairUrl(coordinates),
+    expiresInMs: 60_000,
+    expiresAt: coordinates.exp,
+    serverId: `srv_${"S".repeat(24)}`,
+    serverBootId: `boot_${"B".repeat(24)}`,
+  };
 }
 
 describe("remote-deploy CLI", () => {
@@ -63,6 +112,10 @@ describe("remote-deploy CLI", () => {
     expect(install).toContain("npm install -g '@panticonic/vibestudio-server@");
     expect(service).toContain("cat > $HOME/.config/systemd/user/vibestudio-server.service");
     expect(service).toContain("UMask=0077");
+    expect(service).toContain("StartLimitBurst=5");
+    expect(service).toContain(
+      'remote serve --port 3035 --ready-file "%h/.config/vibestudio/server-auth/hub-ready.json"'
+    );
     expect(service).not.toContain("VIBESTUDIO_WEBRTC_IDENTITY");
     expect(service).toContain(
       'Environment="VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://signal.example.test"\nExecStart=__NODE_BIN__ __VIBESTUDIO_ENTRY__ remote serve --port 3035'
@@ -76,14 +129,16 @@ describe("remote-deploy CLI", () => {
     expect(service).not.toContain('Environment="PATH=');
     expect(service).toContain("systemctl --user restart vibestudio-server.service");
     expect(service).toContain("fetch('http://127.0.0.1:3035/healthz')");
-    expect(service).toContain("Timed out waiting for the hub and default workspace identity");
-    expect(postStart).toContain("journalctl --user -u vibestudio-server.service -n 100 --no-pager");
+    expect(service).toContain("fetch('http://127.0.0.1:3035/_workspace/default/healthz')");
+    expect(service).toContain("the failed service was stopped");
+    expect(postStart).not.toContain("journalctl");
     expect(postStart).toContain(
       '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\''
     );
     expect(postStart).toContain(
       '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\' --workspace default'
     );
+    expect(postStart).toContain('"$node_bin" "$vibestudio_entry" remote deploy pairing local');
   });
 
   it("rejects the removed deployment-time workspace flag", () => {
@@ -172,6 +227,66 @@ describe("remote-deploy CLI", () => {
         options: { input: "systemctl --user --no-pager status vibestudio-server.service" },
       },
     ]);
+  });
+
+  it("shows local managed pairing without routing through SSH", async () => {
+    const show = vi.fn(async () => undefined);
+
+    await main(["pairing", "local"], { showManagedPairing: show });
+
+    expect(show).toHaveBeenCalledOnce();
+  });
+
+  it("shows remote managed pairing through the installed target CLI", async () => {
+    const calls: RunCall[] = [];
+
+    await main(["pairing", "deploy@example.test"], {
+      run: async (command: string, args: string[], options?: { input?: string }) => {
+        calls.push({ command, args, options });
+      },
+    });
+
+    const [script] = sshScripts(calls);
+    expect(script).toContain('"$node_bin" "$vibestudio_entry" remote deploy pairing local');
+  });
+
+  it("prints only a live protected invite from a ready default workspace", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-managed-pairing-"));
+    const readyFile = path.join(root, "hub-ready.json");
+    const payload = managedReady(managedInvite());
+    fs.writeFileSync(readyFile, JSON.stringify(payload), { mode: 0o600 });
+    const fetchImpl = vi.fn(async (input: URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/healthz") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            mode: "hub",
+            serverId: payload.serverId,
+            serverBootId: payload.serverBootId,
+            pid: payload.pid,
+            buildId: payload.buildId,
+          })
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }));
+    });
+
+    await expect(showManagedPairing({ readyFile, fetchImpl })).resolves.toMatchObject({
+      serverBootId: payload.serverBootId,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects overexposed managed pairing state", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-managed-pairing-"));
+    const readyFile = path.join(root, "hub-ready.json");
+    fs.writeFileSync(readyFile, JSON.stringify(managedReady(managedInvite())), { mode: 0o644 });
+
+    await expect(showManagedPairing({ readyFile })).rejects.toThrow(/unsafe permissions/);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("purges only workspace reaches and preserves the stable hub identity epoch", async () => {

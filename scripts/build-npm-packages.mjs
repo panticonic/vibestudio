@@ -19,6 +19,7 @@ import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
+import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
@@ -26,12 +27,7 @@ const rootPkg = readJson(path.join(repoRoot, "package.json"));
 const VERSION = rootPkg.version;
 const PUBLIC_APP_PACKAGE_NAME = "@panticonic/vibestudio";
 const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
-export const SERVER_RUNTIME_ARTIFACTS = [
-  "dist/server.mjs",
-  "dist/internal-do.bundle.mjs",
-  "dist/sql-wasm.wasm",
-  "dist/host-build-fingerprint.json",
-];
+export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
 
 // Only run the build when invoked directly (`node scripts/build-npm-packages.mjs`),
 // not when imported (e.g. by the drift-guard test) — importing must be free of

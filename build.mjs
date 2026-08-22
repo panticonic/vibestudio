@@ -10,6 +10,7 @@ import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
+import { SERVER_WORKER_ENTRIES } from "./scripts/server-runtime-artifacts.mjs";
 import {
   computeHostBuildFingerprint,
   DESKTOP_HOST_BUILD_FINGERPRINT_PATH,
@@ -287,17 +288,19 @@ const authorityAnalysisWorkerConfig = {
   platform: "node",
   target: "node20",
   format: "esm",
-  outfile: "dist/authority-analysis-worker.mjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.standalone.authorityAnalysis}`,
   external: ["@vibestudio/typecheck", "typescript"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
 };
 
 const authorityAnalysisWorkerElectronConfig = {
   ...authorityAnalysisWorkerConfig,
   format: "cjs",
-  outfile: "dist/authority-analysis-worker.cjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.electron.authorityAnalysis}`,
+  banner: undefined,
 };
 
 const libraryLoweringWorkerConfig = {
@@ -306,16 +309,18 @@ const libraryLoweringWorkerConfig = {
   platform: "node",
   target: "node20",
   format: "esm",
-  outfile: "dist/library-lowering-worker.mjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.standalone.libraryLowering}`,
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
 };
 
 const libraryLoweringWorkerElectronConfig = {
   ...libraryLoweringWorkerConfig,
   format: "cjs",
-  outfile: "dist/library-lowering-worker.cjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.electron.libraryLowering}`,
+  banner: undefined,
 };
 
 const typecheckWorkerConfig = {
@@ -324,17 +329,19 @@ const typecheckWorkerConfig = {
   platform: "node",
   target: "node20",
   format: "esm",
-  outfile: "dist/typecheck-worker.mjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.standalone.typecheck}`,
   external: ["@vibestudio/typecheck", "typescript"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
 };
 
 const typecheckWorkerElectronConfig = {
   ...typecheckWorkerConfig,
   format: "cjs",
-  outfile: "dist/typecheck-worker.cjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.electron.typecheck}`,
+  banner: undefined,
 };
 
 const workspaceRpcCatalogWorkerConfig = {
@@ -343,17 +350,19 @@ const workspaceRpcCatalogWorkerConfig = {
   platform: "node",
   target: "node20",
   format: "esm",
-  outfile: "dist/workspace-rpc-catalog-worker.mjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.standalone.workspaceRpcCatalog}`,
   external: ["@vibestudio/typecheck", "typescript"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
 };
 
 const workspaceRpcCatalogWorkerElectronConfig = {
   ...workspaceRpcCatalogWorkerConfig,
   format: "cjs",
-  outfile: "dist/workspace-rpc-catalog-worker.cjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.electron.workspaceRpcCatalog}`,
+  banner: undefined,
 };
 
 const sqliteIntegrityWorkerConfig = {
@@ -362,16 +371,18 @@ const sqliteIntegrityWorkerConfig = {
   platform: "node",
   target: "node20",
   format: "esm",
-  outfile: "dist/sqlite-integrity-worker.mjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.standalone.sqliteIntegrity}`,
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
 };
 
 const sqliteIntegrityWorkerElectronConfig = {
   ...sqliteIntegrityWorkerConfig,
   format: "cjs",
-  outfile: "dist/sqlite-integrity-worker.cjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.electron.sqliteIntegrity}`,
+  banner: undefined,
 };
 
 const clientConfig = {
@@ -717,17 +728,19 @@ async function build() {
         ...(serverElectronConfig.define ?? {}),
         ...internalDoBundleDefine,
         "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
-          "authority-analysis-worker.cjs"
+          SERVER_WORKER_ENTRIES.electron.authorityAnalysis
         ),
         "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
-          "library-lowering-worker.cjs"
+          SERVER_WORKER_ENTRIES.electron.libraryLowering
         ),
-        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify("typecheck-worker.cjs"),
+        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify(
+          SERVER_WORKER_ENTRIES.electron.typecheck
+        ),
         "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
-          "workspace-rpc-catalog-worker.cjs"
+          SERVER_WORKER_ENTRIES.electron.workspaceRpcCatalog
         ),
         "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
-          "sqlite-integrity-worker.cjs"
+          SERVER_WORKER_ENTRIES.electron.sqliteIntegrity
         ),
       },
     };
@@ -737,17 +750,19 @@ async function build() {
         ...(serverConfig.define ?? {}),
         ...internalDoBundleDefine,
         "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
-          "authority-analysis-worker.mjs"
+          SERVER_WORKER_ENTRIES.standalone.authorityAnalysis
         ),
         "globalThis.__VIBESTUDIO_LIBRARY_LOWERING_WORKER_ENTRY__": JSON.stringify(
-          "library-lowering-worker.mjs"
+          SERVER_WORKER_ENTRIES.standalone.libraryLowering
         ),
-        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify("typecheck-worker.mjs"),
+        "globalThis.__VIBESTUDIO_TYPECHECK_WORKER_ENTRY__": JSON.stringify(
+          SERVER_WORKER_ENTRIES.standalone.typecheck
+        ),
         "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
-          "workspace-rpc-catalog-worker.mjs"
+          SERVER_WORKER_ENTRIES.standalone.workspaceRpcCatalog
         ),
         "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
-          "sqlite-integrity-worker.mjs"
+          SERVER_WORKER_ENTRIES.standalone.sqliteIntegrity
         ),
       },
     };

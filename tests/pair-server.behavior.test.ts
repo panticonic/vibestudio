@@ -184,12 +184,18 @@ describe("pair-server runner", () => {
     child.emit("exit", 0, null);
   });
 
-  it("polls a custom server --ready-file instead of an unused generated file", async () => {
+  it("uses a custom ready file without duplicating its pairing secret to logs", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const child = new FakeChild();
     const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-custom-"));
     const readyFile = path.join(readyDir, "server-ready.json");
+    fs.writeFileSync(
+      readyFile,
+      JSON.stringify(
+        hubReady(invite("stale-room-1a2b3c4d", "11".repeat(32), "ws://127.0.0.1:8787", CUSTOM_CODE))
+      )
+    );
     try {
       runPairServer(config, ["--port", "3456"], {
         buildServerArgs() {
@@ -197,6 +203,7 @@ describe("pair-server runner", () => {
         },
         spawnServer({ serverArgs }: { serverArgs: string[] }) {
           expect(serverArgs).toEqual(["dist/server.mjs", "--ready-file", readyFile]);
+          expect(fs.existsSync(readyFile)).toBe(false);
           setTimeout(() => {
             const fp = "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66";
             const rootInvite = invite(
@@ -212,17 +219,14 @@ describe("pair-server runner", () => {
         onChildExit: () => true,
       });
 
-      await waitFor(() => logText(logSpy).includes(CUSTOM_CODE));
+      await waitFor(() => fs.existsSync(readyFile));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(logText(logSpy)).not.toContain(CUSTOM_CODE);
+      fs.writeFileSync(readyFile, JSON.stringify(hubReady(null)));
+      await waitFor(() => logText(logSpy).includes("Root account already exists"));
       const output = logText(logSpy);
-      expect(output).toMatch(new RegExp(`Pair code:\\s+${CUSTOM_CODE}`));
-      expect(output).toContain(
-        invite(
-          "room-custom-1a2b3c4d",
-          "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
-          "ws://127.0.0.1:8787",
-          CUSTOM_CODE
-        ).pairUrl
-      );
+      expect(output).not.toContain(CUSTOM_CODE);
+      expect(output).not.toContain("https://vibestudio.app/pair#");
       child.emit("exit", 0, null);
       expect(fs.existsSync(readyDir)).toBe(true);
     } finally {
