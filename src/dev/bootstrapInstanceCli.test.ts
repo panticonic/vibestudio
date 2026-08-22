@@ -197,7 +197,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
       workspaceId: "ws_dev",
       workspaceName: "dev",
       deviceId: `dev_${"C".repeat(24)}`,
-      controlPairing: { room: "development-cli" },
+      controlPairing: { room: pairing.room },
       workspacePairing: { room: "workspace-dev" },
     });
   });
