@@ -62,6 +62,7 @@ describe("remote-deploy CLI", () => {
     expect(preflight).toContain("loginctl enable-linger");
     expect(install).toContain("npm install -g '@panticonic/vibestudio-server@");
     expect(service).toContain("cat > $HOME/.config/systemd/user/vibestudio-server.service");
+    expect(service).toContain("UMask=0077");
     expect(service).not.toContain("VIBESTUDIO_WEBRTC_IDENTITY");
     expect(service).toContain(
       'Environment="VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://signal.example.test"\nExecStart=__NODE_BIN__ __VIBESTUDIO_ENTRY__ remote serve --port 3035'
@@ -78,7 +79,10 @@ describe("remote-deploy CLI", () => {
     expect(service).toContain("Timed out waiting for the hub and default workspace identity");
     expect(postStart).toContain("journalctl --user -u vibestudio-server.service -n 100 --no-pager");
     expect(postStart).toContain(
-      '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\' --identity $HOME/.config/vibestudio/workspaces/default/reach/webrtc/identity.pem'
+      '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\''
+    );
+    expect(postStart).toContain(
+      '"$node_bin" "$vibestudio_entry" remote doctor --signal-url \'wss://signal.example.test\' --workspace default'
     );
   });
 
@@ -119,6 +123,52 @@ describe("remote-deploy CLI", () => {
       {
         command: "ssh",
         args: ["deploy@example.test", "bash", "-l", "-s"],
+        options: { input: "systemctl --user --no-pager status vibestudio-server.service" },
+      },
+    ]);
+  });
+
+  it("deploys this computer through the same service lifecycle without SSH", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const calls: RunCall[] = [];
+    const run = vi.fn(async (command: string, args: string[], options?: { input?: string }) => {
+      calls.push({ command, args, options });
+    });
+
+    await deploy(
+      {
+        verb: "deploy",
+        target: "local",
+        artifact: null,
+        signalUrl: null,
+        port: "3030",
+        help: false,
+      },
+      { run }
+    );
+
+    expect(calls).toHaveLength(4);
+    expect(calls.every((call) => call.command === "bash")).toBe(true);
+    expect(calls.every((call) => call.args.join(" ") === "-l -s")).toBe(true);
+    const scripts = calls.map((call) => call.options?.input ?? "");
+    expect(scripts[1]).toContain("npm install -g '@panticonic/vibestudio-server@");
+    expect(scripts[2]).toContain("vibestudio-server.service");
+    expect(scripts[3]).toContain("remote doctor");
+  });
+
+  it("manages the local service without requiring an SSH daemon", async () => {
+    const calls: RunCall[] = [];
+
+    await main(["status", "local"], {
+      run: async (command: string, args: string[], options?: { input?: string }) => {
+        calls.push({ command, args, options });
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        command: "bash",
+        args: ["-l", "-s"],
         options: { input: "systemctl --user --no-pager status vibestudio-server.service" },
       },
     ]);

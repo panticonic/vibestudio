@@ -175,7 +175,7 @@ pnpm smoke:full -- --android-avd NatStack_Test
 ```
 
 These commands start the normal `vibestudio remote serve` hub in an isolated
-home, consume its one-time root-device invite from the strict ready file, and
+home, consume its current one-time root-device invite from the strict ready file, and
 assert that the invite contains `wss://signal.vibestudio.app/`. Android
 emulators attempt normal host/STUN/TURN ICE by default. Add `--require-turn` for
 a relay-readiness pass that fails during preflight when the service is still
@@ -183,7 +183,21 @@ STUN-only. Use `--local-signaling` only for an offline Miniflare/coturn run.
 
 ## Run A Server
 
-Signaling resolves as flag > environment > config > hosted default:
+For an always-on Linux server on the computer running the command:
+
+```bash
+npm install -g @panticonic/vibestudio-server
+vibestudio remote deploy local
+```
+
+The same deployment lifecycle accepts `user@host` when the server is a
+different machine. It installs a loopback-only systemd user service, enables
+linger, validates the hub plus the default workspace, and prints the service's
+current root pairing QR. Use `remote deploy status`, `logs`, `update`, and
+`remove` with the same `local` or `user@host` target.
+
+For a foreground session, signaling resolves as flag > environment > config >
+hosted default:
 
 ```bash
 vibestudio remote doctor --signal-url wss://signal.vibestudio.app/
@@ -198,6 +212,12 @@ The server prints a pair URL:
 ```text
 https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2
 ```
+
+This root-bootstrap invite is one-time and expiring, but server ownership is
+continuous: until a first device claims the root account, the hub replaces an
+expired invite, atomically updates its ready payload, and logs the new link.
+Foreground `remote serve` prints each replacement; for a managed service use
+`vibestudio remote deploy logs <target>` to see the latest one.
 
 The hub control ingress presents a persistent DTLS identity at:
 
@@ -228,9 +248,11 @@ Force a TURN-only pass when validating production NAT traversal:
 VIBESTUDIO_WEBRTC_ICE=relay vibestudio remote serve --port 3030
 ```
 
-For a managed SSH/systemd host:
+For the managed local-or-SSH systemd lifecycle:
 
 ```bash
+vibestudio remote deploy local
+vibestudio remote deploy logs local
 vibestudio remote deploy user@host --port 3030 --signal-url wss://signal.vibestudio.app/
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
@@ -239,11 +261,13 @@ vibestudio remote deploy remove user@host --purge
 
 Deploy writes the systemd unit with an absolute `ExecStart` (resolved via
 `command -v vibestudio` on the host), waits for the loopback gateway `/healthz`
-before minting the first invite, and — on `update` — restarts the unit so the
-new build takes over. `remove --purge` also uninstalls the npm package and
-deletes workspace-child reaches. It preserves the hub control identity,
-accounts, and paired devices; after reinstall, clients re-route workspaces
-through their existing control connection.
+and default child identity, then diagnoses both the hub and workspace reaches.
+The hub independently owns and renews the root invite described above. On
+`update`, deployment restarts the unit so the new build takes over. `remove
+--purge` also uninstalls the npm package and deletes workspace-child reaches. It
+preserves the hub control identity, accounts, and paired devices; after
+reinstall, clients re-route workspaces through their existing control
+connection.
 
 ## Pair A Client
 

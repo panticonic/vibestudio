@@ -83,14 +83,17 @@ VIBESTUDIO_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
 #   and the pool logs:  [webrtc-ingress] armed room <uuid> (invite)
 ```
 
-On first bootstrap the hub publishes one `rootInvite`; its deep link and HTTPS
-pair/QR URL are presentation carriers for that same invitation fact. Later
-device invites come from `hubControl.pairDevice`. Every invite arms a fresh room
-on the stable hub control ingress, and redemption atomically promotes that room
-to the issued device's durable control reach. The client then routes the exact
-invited workspace ID and receives only the child `workspaceReach`. After a
-restart, returning devices keep their hub control reach and obtain fresh child
-reach coordinates through exact workspace routing.
+On first bootstrap the hub publishes exactly one live `rootInvite` at a time;
+its deep link and HTTPS pair/QR URL are presentation carriers for that same
+invitation fact. If it expires before redemption, the hub cancels that room,
+arms a replacement, and atomically republishes the ready payload. Renewal stops
+as soon as the first device creates the root account. Later device invites come
+from `hubControl.pairDevice`. Every invite arms a fresh room on the stable hub
+control ingress, and redemption atomically promotes that room to the issued
+device's durable control reach. The client then routes the exact invited
+workspace ID and receives only the child `workspaceReach`. After a restart,
+returning devices keep their hub control reach and obtain fresh child reach
+coordinates through exact workspace routing.
 
 Optional env: `VIBESTUDIO_WEBRTC_ICE=relay` (force TURN). The isolated hub owns
 the persistent control identity whose certificate SHA-256 is the root invite's

@@ -17,6 +17,10 @@ The shipped native bootstrap owns first pairing. It accepts the HTTPS pair
 carrier (`https://vibestudio.app/pair#...`) and the custom scheme
 (`vibestudio://connect?...`) through the same shared parser, and also exposes
 in-app Scan QR and Paste pairing link actions for fresh installs and recovery.
+After activation, the streamed workspace app owns ordinary device management:
+**Settings** → **Devices** → **Connect another device** creates and shares a
+server-minted one-time link for the exact current workspace. That flow does not
+reset or expose the current phone's native credential.
 
 Android installs default to the version-matched prebuilt release APK and verify
 it against the release `SHA256SUMS` file. `--from-source` builds the internal

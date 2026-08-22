@@ -19,6 +19,14 @@ function read(file: string): string {
   return fs.readFileSync(path.join(root, file), "utf8");
 }
 
+function readHost(file: string): string {
+  return fs.readFileSync(path.join(process.cwd(), file), "utf8");
+}
+
+function readBase(file: string): string {
+  return fs.readFileSync(path.join(exactUserlandRoot, file), "utf8");
+}
+
 function skillFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -79,6 +87,97 @@ describe("remote/mobile overhaul skill coverage", () => {
       for (const term of forbidden) {
         if (text.includes(term)) misses.push(`${path.relative(exactUserlandRoot, file)}: ${term}`);
       }
+    }
+    expect(misses).toEqual([]);
+  });
+
+  it("keeps every active remote-server guide on the local-or-SSH deployment lifecycle", () => {
+    const hostGuides = [
+      "README.md",
+      "docs/cli.md",
+      "docs/webrtc-deployment.md",
+      "docs/remote-ux-overhaul-plan.md",
+    ];
+    const baseGuides = ["skills/remote-access/SKILL.md", "skills/onboarding/REMOTE_SERVER.md"];
+
+    for (const file of hostGuides) {
+      expect(readHost(file), file).toContain("remote deploy local");
+    }
+    for (const file of baseGuides) {
+      expect(readBase(file), file).toContain("remote deploy local");
+    }
+    expect(readHost("docs/remote-ux-overhaul-plan.md")).toContain("<user@host|local>");
+    expect(readHost("README.md").match(/vibestudio remote deploy local/g)?.length).toBeGreaterThan(
+      1
+    );
+  });
+
+  it("documents renewable root ownership and the real desktop/mobile device paths", () => {
+    const renewableHostGuides = [
+      "README.md",
+      "STATE_DIRECTORY.md",
+      "docs/cli.md",
+      "docs/webrtc-deployment.md",
+      "docs/webrtc-local-e2e.md",
+      "docs/multi-user-wp0-user-identity-spec.md",
+      "docs/multi-user-wp1-hub-control-plane.md",
+    ];
+    for (const file of renewableHostGuides) {
+      expect(readHost(file), file).toMatch(/renew|replace/i);
+    }
+    for (const file of ["skills/remote-access/SKILL.md", "skills/onboarding/REMOTE_SERVER.md"]) {
+      expect(readBase(file), file).toMatch(/renew|replace/i);
+    }
+
+    const help = readBase("about/help/index.tsx");
+    expect(help).toContain("Paired devices → Connect a device");
+    expect(help).toContain("Settings → Devices → Connect another device");
+    expect(readHost("apps/mobile/README.md")).toContain(
+      "Settings** → **Devices** → **Connect another device"
+    );
+    expect(readBase("apps/mobile/README.md")).toContain(
+      "Settings** → **Devices** → **Connect another"
+    );
+    expect(readBase("apps/mobile/SKILL.md")).toContain("hubControl.pairDevice");
+    expect(readBase("apps/shell/SKILL.md")).toMatch(
+      /never tell the\s+user to pair again merely to switch workspaces/
+    );
+    expect(readBase("skills/onboarding/REMOTE_SERVER.md")).toContain(
+      "Selecting another remote workspace reuses this identity without pairing again."
+    );
+  });
+
+  it("rejects the stale setup and child-pairing claims from active documentation", () => {
+    const activeHostDocs = [
+      "README.md",
+      "STATE_DIRECTORY.md",
+      "docs/cli.md",
+      "docs/webrtc-deployment.md",
+      "docs/webrtc-local-e2e.md",
+      "docs/remote-ux-overhaul-plan.md",
+    ];
+    const activeBaseDocs = [
+      "skills/remote-access/SKILL.md",
+      "skills/onboarding/REMOTE_SERVER.md",
+      "apps/mobile/SKILL.md",
+      "apps/shell/SKILL.md",
+    ];
+    const stale = [
+      "Deploy or manage a remote server over SSH/systemd",
+      "Deploy itself does not consume or print an invite",
+      "rotates the identity and therefore requires devices to re-pair",
+      "pairing-activations.json",
+      "**Pair another device**",
+      "**Hidden** — local",
+    ];
+    const misses: string[] = [];
+    for (const file of activeHostDocs) {
+      const text = readHost(file);
+      for (const phrase of stale) if (text.includes(phrase)) misses.push(`${file}: ${phrase}`);
+    }
+    for (const file of activeBaseDocs) {
+      const text = readBase(file);
+      for (const phrase of stale) if (text.includes(phrase)) misses.push(`${file}: ${phrase}`);
     }
     expect(misses).toEqual([]);
   });

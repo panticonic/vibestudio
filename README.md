@@ -58,8 +58,24 @@ Local, linked, `npx`, pnpm, and development launches do not self-update.
 
 ```bash
 npm install -g @panticonic/vibestudio-server
+vibestudio remote deploy local
+```
+
+On Linux with systemd, `deploy local` installs an always-on user service on this
+computer, enables it at login/boot, runs end-to-end diagnostics, and prints the
+first-device pairing QR. The gateway remains loopback-only; clients reach it
+through the encrypted WebRTC connection described below. Manage it with:
+
+```bash
+vibestudio remote deploy status local
+vibestudio remote deploy logs local
+vibestudio remote deploy update local
+```
+
+For a foreground session instead, or a quick one-off without a global install:
+
+```bash
 vibestudio remote serve --port 3030
-# quick one-off (no global install):
 npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030
 ```
 
@@ -69,11 +85,13 @@ endpoint is only used to rendezvous, not to carry workspace data. See
 The hosted signaling service (`wss://signal.vibestudio.app`) is used by default;
 self-hosting is optional.
 
-The headless server does not update itself. Re-run the npm install through the
-service supervisor or deployment workflow that owns the server process:
+The headless server does not update itself. Install the desired CLI release,
+then let the deployment lifecycle reinstall that exact version and restart the
+service:
 
 ```bash
 npm install -g @panticonic/vibestudio-server@latest
+vibestudio remote deploy update local
 ```
 
 #### Inviting a user
@@ -81,7 +99,10 @@ npm install -g @panticonic/vibestudio-server@latest
 Identity lives in one hub-owned database (`server-auth/identity.db`); the flow is:
 
 1. **Root bootstrap** — on a fresh server the startup pairing code is the root
-   invite: the first device to redeem it becomes the `root` user.
+   invite: the first device to redeem it becomes the `root` user. Until that
+   happens, the server replaces expired root invites and publishes the current
+   QR/link through its ready file and logs; it never becomes permanently
+   unclaimable because an operator stepped away.
 2. **Invite a user** (root/admin only) — mint a user-bound pairing code with a
    handle and optional workspace memberships; the invitee's first device
    redeems it and is issued as that user.
@@ -96,7 +117,7 @@ See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
 for the operational runbook.
 
 The real-client smoke tests use that deployed route, the normal `remote serve`
-hub, and its one-time root-device invite from the strict ready file. Use
+hub, and the current one-time root-device invite from the strict ready file. Use
 `pnpm smoke:full -- --local-signaling` only for an offline Miniflare/coturn run.
 
 ### Develop (contributors)
@@ -282,6 +303,15 @@ For development from a source checkout instead: `pnpm bootstrap && pnpm build`.
 
 ### Running
 
+For an always-on Linux server managed by the normal user-service lifecycle:
+
+```bash
+vibestudio remote deploy local
+```
+
+Use `remote deploy status local`, `logs local`, and `update local` to manage
+that same service. For a foreground session instead:
+
 ```bash
 vibestudio remote serve --port 3030
 # from a source checkout:
@@ -297,6 +327,11 @@ Pair a Vibestudio device
   Fingerprint: ...
   Pair URL:    vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all
 ```
+
+On a fresh server, that root-bootstrap invite is automatically replaced when it
+expires. The foreground command prints each replacement; a managed service
+writes it to the journal, so `vibestudio remote deploy logs local` shows the
+latest link until the first device claims the root account.
 
 ### CLI Flags
 
@@ -319,20 +354,25 @@ reserved for internal child runtimes and are rejected by the public server.
 
 ### Android phone pairing
 
-For an npm installation, install the Android app and start a QR-pairing server:
-Pairing is over WebRTC (signaling room + DTLS fingerprint) — no Tailscale/VPN or
-HTTPS serve setup:
+For an npm installation, install the Android app. Pairing is over WebRTC
+(signaling room + DTLS fingerprint) — no Tailscale/VPN or HTTPS serve setup:
 
 ```bash
 vibestudio mobile install --launch
-vibestudio mobile pair --port 3030
 ```
 
-From a source checkout, run `pnpm build` first, then use `pnpm cli mobile
-install --launch` and `pnpm cli mobile pair --port 3030`.
+Scan the managed server's current startup QR if this is the first device. For an
+additional phone, create a link from desktop via the connection badge →
+**Paired devices** → **Connect a device**, or from mobile via **Settings** →
+**Devices** → **Connect another device**. `vibestudio remote pair-device` is the
+equivalent paired-CLI flow.
 
-Scan the printed `vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all` QR. See
-[docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the WebRTC pairing +
-local setup. Use the desktop app's bootstrap screen to pair a laptop without
-copying an admin token. After one desktop client is connected, use **Remote
-server** → **Paired devices** → **Connect a device** for additional links.
+`vibestudio mobile pair --port 3030` remains the foreground, one-off path when
+no managed server is running. From a source checkout, run `pnpm build` first,
+then use `pnpm cli mobile install --launch` and the same pairing flow.
+
+The QR carries the complete
+`vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all` invitation. See
+[docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the transport and local
+development harness. The first phone, desktop, or CLI to redeem a fresh
+server's current startup invitation becomes the root account.

@@ -637,7 +637,7 @@ const remoteCommands: CliCommand[] = [
     "Deploy/manage a systemd user remote server",
     {
       usage:
-        "vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030]",
+        "vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--signal-url <url>] [--port 3030]",
       passthroughHelp: true,
     }
   ),

@@ -70,16 +70,16 @@ export function printHelp() {
   console.log(`vibestudio remote deploy
 
 Usage:
-  vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
-  vibestudio remote deploy status <user@host>
-  vibestudio remote deploy logs <user@host>
-  vibestudio remote deploy update <user@host> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
-  vibestudio remote deploy remove <user@host> [--purge]
+  vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
+  vibestudio remote deploy status <user@host|local>
+  vibestudio remote deploy logs <user@host|local>
+  vibestudio remote deploy update <user@host|local> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
+  vibestudio remote deploy remove <user@host|local> [--purge]
 
 Deploys a systemd user unit named vibestudio-server. With --artifact, the
-tarball is copied to the host and installed with npm install -g. Without
---artifact, the remote host installs the invoking CLI package/version with npm.
-The remote host must run Node.js ${pkg.engines.node}.
+tarball is installed with npm install -g. Without --artifact, the target
+installs the invoking CLI package/version from npm. Use \`local\` to make this
+computer the server without SSH. The target must run Node.js ${pkg.engines.node}.
 Remove leaves workspace source intact. --purge also removes the installed npm
 package and every workspace child's WebRTC reach. Hub identity, accounts, and
 device pairing remain intact; clients obtain fresh workspace reaches through
@@ -123,6 +123,18 @@ export function assertSafeTarget(target) {
 export async function ssh(target, script, hooks = {}) {
   assertSafeTarget(target);
   await (hooks.run ?? run)("ssh", [target, "bash", "-l", "-s"], { input: script });
+}
+
+/** Run one deployment script on either this computer or an SSH target. The
+ * script is identical on both transports so local setup is not a second
+ * lifecycle with different service, identity, or cleanup behavior. */
+export async function targetShell(target, script, hooks = {}) {
+  assertSafeTarget(target);
+  if (target === "local") {
+    await (hooks.run ?? run)("bash", ["-l", "-s"], { input: script });
+    return;
+  }
+  await ssh(target, script, hooks);
 }
 
 function systemdQuote(value) {
@@ -172,8 +184,12 @@ export async function deploy(options, hooks = {}) {
     ? `Environment=${systemdQuote(`VIBESTUDIO_WEBRTC_SIGNAL_URL=${options.signalUrl}`)}\n`
     : "";
   const requiredNodeTuple = JSON.stringify(REQUIRED_NODE_VERSION);
-  console.log(`✓ SSH connection            ${options.target}`);
-  await ssh(
+  console.log(
+    options.target === "local"
+      ? "✓ Deployment target          this computer"
+      : `✓ SSH connection            ${options.target}`
+  );
+  await targetShell(
     options.target,
     `set -e
 command -v node >/dev/null || { echo "Node.js ${REQUIRED_NODE_VERSION_TEXT}+ is required on the remote host" >&2; exit 1; }
@@ -199,19 +215,29 @@ fi
   console.log("✓ Node.js                   remote runtime OK");
 
   if (options.artifact) {
-    const remoteArtifact = `/tmp/vibestudio-${Date.now()}.tgz`;
-    await (hooks.run ?? run)("scp", [options.artifact, `${options.target}:${remoteArtifact}`]);
-    await ssh(
-      options.target,
-      `set -e
+    if (options.target === "local") {
+      await targetShell(
+        options.target,
+        `set -e
+npm install -g ${shellQuote(options.artifact)}
+`,
+        hooks
+      );
+    } else {
+      const remoteArtifact = `/tmp/vibestudio-${Date.now()}.tgz`;
+      await (hooks.run ?? run)("scp", [options.artifact, `${options.target}:${remoteArtifact}`]);
+      await targetShell(
+        options.target,
+        `set -e
 npm install -g ${shellQuote(remoteArtifact)}
 rm -f ${shellQuote(remoteArtifact)}
 `,
-      hooks
-    );
+        hooks
+      );
+    }
     console.log(`✓ Installed artifact        ${path.basename(options.artifact)}`);
   } else {
-    await ssh(
+    await targetShell(
       options.target,
       `set -e
 npm install -g ${shellQuote(`${SERVER_PACKAGE_NAME}@${pkg.version}`)}
@@ -227,6 +253,7 @@ After=network-online.target
 
 [Service]
 Type=simple
+UMask=0077
 ${signalEnv}ExecStart=${serverCommand}
 Restart=always
 RestartSec=3
@@ -234,7 +261,7 @@ RestartSec=3
 [Install]
 WantedBy=default.target
 `;
-  await ssh(
+  await targetShell(
     options.target,
     `set -e
 ${RESOLVE_REMOTE_RUNTIME}
@@ -262,15 +289,21 @@ done
   );
   console.log("✓ systemd user service      vibestudio-server.service");
   const signalArg = options.signalUrl ? ` --signal-url ${shellQuote(options.signalUrl)}` : "";
-  await ssh(
+  await targetShell(
     options.target,
     `set -e
 ${RESOLVE_REMOTE_RUNTIME}
 journalctl --user -u vibestudio-server.service -n 100 --no-pager
-"$node_bin" "$vibestudio_entry" remote doctor${signalArg} --identity $HOME/.config/vibestudio/workspaces/default/reach/webrtc/identity.pem
+"$node_bin" "$vibestudio_entry" remote doctor${signalArg}
+"$node_bin" "$vibestudio_entry" remote doctor${signalArg} --workspace default
 `,
     hooks
   );
+  console.log("✓ Server ready               default workspace");
+  console.log("  Pair the first device with the QR shown above; it becomes the root account.");
+  console.log(`  Logs:   vibestudio remote deploy logs ${options.target}`);
+  console.log(`  Status: vibestudio remote deploy status ${options.target}`);
+  console.log(`  Update: vibestudio remote deploy update ${options.target}`);
 }
 
 function removeScript(purge) {
@@ -292,15 +325,15 @@ export async function main(argv = process.argv.slice(2), hooks = {}) {
   }
   if (options.verb === "deploy" || options.verb === "update") return deploy(options, hooks);
   if (options.verb === "status")
-    return ssh(
+    return targetShell(
       options.target,
       "systemctl --user --no-pager status vibestudio-server.service",
       hooks
     );
   if (options.verb === "logs")
-    return ssh(options.target, "journalctl --user -u vibestudio-server.service -f", hooks);
+    return targetShell(options.target, "journalctl --user -u vibestudio-server.service -f", hooks);
   if (options.verb === "remove") {
-    return ssh(options.target, removeScript(options.purge), hooks);
+    return targetShell(options.target, removeScript(options.purge), hooks);
   }
   throw new Error(`unknown verb: ${options.verb}`);
 }

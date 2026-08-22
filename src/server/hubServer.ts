@@ -61,6 +61,7 @@ import {
   hashSecret,
   type PairedDeviceCredential,
 } from "./hostCore/deviceAuthStore.js";
+import { RootBootstrapInviteLifecycle } from "./rootBootstrapInviteLifecycle.js";
 import { updateAccountProfile } from "./hostCore/accountProfile.js";
 import {
   WorkspaceChildAgentCredentialMintInputSchema,
@@ -192,6 +193,8 @@ export interface HubRuntimeState {
   runtimes: Map<string, WorkspaceRuntime | PendingWorkspaceRuntime>;
   /** Stable machine-level control/pairing ingress; never owned by a workspace child. */
   controlTransport?: HubControlTransport;
+  /** Installed only while a fresh server is waiting for its first/root device. */
+  onRootBootstrapCompleted?: () => void;
   shuttingDown: boolean;
 }
 
@@ -964,6 +967,7 @@ async function completeControlPairing(
   });
   clearControlInviteExpiry(transport, codeHash);
   await transport.ingress.armRoom(credential.controlRoom, { deviceId: credential.deviceId });
+  if (bootstrapRoot) state.onRootBootstrapCompleted?.();
   return credential;
 }
 
@@ -2867,12 +2871,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   // is issued with the new root's userId (see the complete-pairing route). Once
   // a root exists, new humans arrive by invite (WP1), so no startup code is minted.
   const needsRootBootstrap = !identityDb.hasUsers();
-  const startupPairing = needsRootBootstrap
-    ? deviceAuthStore.createPairingInvite(DEFAULT_PAIRING_CODE_TTL_MS, {
-        workspaceId: bootstrapWorkspaceId,
-        intent: "root-bootstrap",
-      })
-    : null;
   // No public ingress: the hub is loopback HTTP only. connectUrl is the loopback
   // gateway URL; remote reach is the per-workspace WebRTC pipe (answerer seam).
   const gatewayUrl = `${hostConfig.protocol}://${hostConfig.externalHost}:${gatewayPort}`;
@@ -2907,6 +2905,41 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   await startHubControlTransport(activeState, getCentralDataPath());
 
   let startupInvite: HubPairingInvite | null = null;
+  let readyPublished = false;
+  const publishReady = (): void => {
+    if (!readyPublished || !args.readyFile) return;
+    const payload = buildHubReadyPayload(activeState, startupInvite);
+    writeFileAtomicSync(args.readyFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+  };
+  const rootBootstrapLifecycle = needsRootBootstrap
+    ? new RootBootstrapInviteLifecycle({
+        hasRoot: () => identityDb.hasUsers(),
+        createPairing: () =>
+          deviceAuthStore.createPairingInvite(DEFAULT_PAIRING_CODE_TTL_MS, {
+            workspaceId: bootstrapWorkspaceId,
+            intent: "root-bootstrap",
+          }),
+        armPairing: async (pairing) => {
+          const reach = await armControlInvite(activeState, pairing);
+          return pairingInviteFromReach(activeState, pairing.code, pairing.expiresAt, reach);
+        },
+        cancelPairing: (pairing) => disarmControlInvite(activeState, pairing.code),
+        publish: (invite) => {
+          startupInvite = invite;
+          publishReady();
+        },
+        onRenewed: (invite) => {
+          console.log(`[Hub] Root pairing invite renewed: ${invite.pairUrl}`);
+        },
+        onRenewalError: (error) => {
+          console.error("[Hub] Could not renew the root pairing invite; retrying:", error);
+        },
+      })
+    : null;
+  if (rootBootstrapLifecycle) {
+    activeState.onRootBootstrapCompleted = () => rootBootstrapLifecycle.complete();
+    startupInvite = await rootBootstrapLifecycle.start();
+  }
   // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.
   // A persisted device room is a live reach contract, so routed children must
   // restart for returning clients — but pairing and hub control must not wait
@@ -2938,34 +2971,18 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     });
   }, 10_000);
   revocationCleanupTimer.unref();
-  if (startupPairing) {
-    let rootReach: ChildReach;
-    try {
-      rootReach = await armControlInvite(state, startupPairing);
-    } catch (error) {
-      await disarmControlInvite(state, startupPairing.code);
-      throw error;
-    }
-    startupInvite = pairingInviteFromReach(
-      state,
-      startupPairing.code,
-      startupPairing.expiresAt,
-      rootReach
-    );
-  }
-
   console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
-  if (startupPairing) {
+  if (startupInvite) {
     console.log(`  Root Pair URL: ${startupInvite?.pairUrl ?? "unavailable"}`);
   } else {
     console.log("  Identity:    root already bootstrapped (add users via invite)");
   }
 
   if (args.readyFile) {
-    const payload = buildHubReadyPayload(state, startupInvite);
-    writeFileAtomicSync(args.readyFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+    readyPublished = true;
+    publishReady();
   }
 
   const workspaceChildren = (): ChildProcess[] => [
@@ -2979,6 +2996,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   async function shutdown(): Promise<void> {
     if (!state || state.shuttingDown) return;
     state.shuttingDown = true;
+    rootBootstrapLifecycle?.stop();
     clearInterval(revocationCleanupTimer);
     console.log("[Hub] Shutting down...");
     if (state.controlTransport) {

@@ -273,7 +273,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   // The hub ready file is the only pairing contract. One complete invite owns
   // the room/code and both presentation links; the CLI never reconstructs it.
   let rootInvite = null;
-  let bannerPrinted = false;
+  let lastPrintedInviteCode = null;
+  let rootStatusPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
   let readinessWarningPrinted = false;
@@ -290,7 +291,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
   const cleanupReadyState = () => {
     if (readyPoll !== null) {
-      clearInterval(readyPoll);
+      clearTimeout(readyPoll);
       readyPoll = null;
     }
     if (ownedReadyDir) {
@@ -307,7 +308,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     stderrBuffer = "";
     if (hasSpawned) {
       rootInvite = null;
-      bannerPrinted = false;
+      lastPrintedInviteCode = null;
+      rootStatusPrinted = false;
       readinessWarningPrinted = false;
       if (ownedReadyDir) {
         try {
@@ -339,22 +341,29 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   const applyReadyPayload = (payload) => {
     const ready = parseHubReadyPayload(payload);
     if (ready.rootInvite === null) {
-      if (!bannerPrinted) {
-        bannerPrinted = true;
+      rootInvite = null;
+      if (!rootStatusPrinted) {
+        rootStatusPrinted = true;
         console.log(
           `[${config.logPrefix}] Root account already exists; create invites from a paired device.`
         );
       }
-      return;
+      return false;
     }
+    rootStatusPrinted = false;
     rootInvite = ready.rootInvite;
     tryPrintBanner();
+    return true;
   };
 
   const startReadyPoll = () => {
-    if (readyPoll !== null) clearInterval(readyPoll);
+    if (readyPoll !== null) clearTimeout(readyPoll);
     readyPollStartedAt = Date.now();
-    readyPoll = setInterval(() => {
+    const poll = () => {
+      readyPoll = null;
+      // Keep polling until the first valid ready payload. A null root invite is
+      // the only terminal state; a live invite stays watched for hourly rotation.
+      let keepWatching = true;
       if (!readinessWarningPrinted && Date.now() - readyPollStartedAt >= 60_000) {
         readinessWarningPrinted = true;
         const missing = [
@@ -367,12 +376,9 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       }
       try {
         const stat = fs.statSync(readyFile);
-        if (stat.mtimeMs < readyPollStartedAt - 1) return;
-        const text = fs.readFileSync(readyFile, "utf8");
-        applyReadyPayload(JSON.parse(text));
-        if (bannerPrinted) {
-          clearInterval(readyPoll);
-          readyPoll = null;
+        if (stat.mtimeMs >= readyPollStartedAt - 1) {
+          const text = fs.readFileSync(readyFile, "utf8");
+          keepWatching = applyReadyPayload(JSON.parse(text));
         }
       } catch (error) {
         // The hub replaces the ready file atomically. A poll can stat the old
@@ -380,22 +386,26 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
         // the tiny interval where it does not exist. That is readiness still in
         // progress, not a malformed contract; the replacement will be read on
         // the next tick.
-        if (error?.code === "ENOENT") return;
+        if (error?.code === "ENOENT") {
+          readyPoll = setTimeout(poll, rootInvite ? 1_000 : 100);
+          return;
+        }
         if (fs.existsSync(readyFile)) {
           console.error(
             `[${config.logPrefix}] Invalid hub ready file: ${error instanceof Error ? error.message : String(error)}`
           );
-          clearInterval(readyPoll);
-          readyPoll = null;
           signalHubGracefully(child, "SIGTERM");
+          return;
         }
       }
-    }, 100);
+      if (keepWatching) readyPoll = setTimeout(poll, 1_000);
+    };
+    readyPoll = setTimeout(poll, 100);
   };
 
   const tryPrintBanner = () => {
-    if (bannerPrinted) return;
     if (!rootInvite) return;
+    if (lastPrintedInviteCode === rootInvite.code) return;
     printConnectBanner({
       title: config.bannerTitle,
       invite: rootInvite,
@@ -403,7 +413,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       deepLinkLabel: config.deepLinkLabel,
       instructions: config.instructions,
     });
-    bannerPrinted = true;
+    lastPrintedInviteCode = rootInvite.code;
   };
 
   const control = {
