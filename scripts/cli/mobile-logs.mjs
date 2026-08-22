@@ -2,6 +2,7 @@
 // Tail adb logcat for the Vibestudio Android app process.
 
 import { spawn } from "node:child_process";
+import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
 
 function parseArgs(argv) {
   const options = {
@@ -68,9 +69,53 @@ function runCapture(command, args) {
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`));
+      else
+        reject(
+          new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`)
+        );
     });
   });
+}
+
+async function streamOwned(command, args) {
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    detached: process.platform !== "win32",
+  });
+  if (!child.pid) throw new Error(`Could not start ${command}`);
+
+  let requestedSignal = null;
+  let termination = null;
+  const requestTermination = (signal) => {
+    if (requestedSignal) return;
+    requestedSignal = signal;
+    termination = terminateOwnedProcessTree(child.pid);
+    void termination.catch(() => {});
+  };
+  const onSigint = () => requestTermination("SIGINT");
+  const onSigterm = () => requestTermination("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+
+  try {
+    const exit = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    const retired = await (termination ?? terminateOwnedProcessTree(child.pid));
+    if (!retired.gone) {
+      throw new Error(retired.detail ?? `${command} process tree did not retire`);
+    }
+    return { code: exit.code, signal: requestedSignal ?? exit.signal };
+  } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  }
+}
+
+function finishStream(result) {
+  if (result.signal) process.kill(process.pid, result.signal);
+  else process.exitCode = result.code ?? 0;
 }
 
 async function main() {
@@ -84,47 +129,42 @@ async function main() {
       throw new Error("iOS logs require macOS. Use Console.app for hardware-device logs.");
     }
     if (options.device) {
-      throw new Error("iOS hardware-device logs are not streamed by this CLI; use Console.app with the device selected.");
+      throw new Error(
+        "iOS hardware-device logs are not streamed by this CLI; use Console.app with the device selected."
+      );
     }
     console.log("[mobile-logs] Streaming iOS simulator logs for Vibestudio. Press Ctrl-C to stop.");
-    const child = spawn("xcrun", [
-      "simctl",
-      "spawn",
-      "booted",
-      "log",
-      "stream",
-      "--style",
-      "compact",
-      "--predicate",
-      'process == "Vibestudio"',
-    ], { stdio: "inherit" });
-    child.on("exit", (code, signal) => {
-      if (signal) process.kill(process.pid, signal);
-      else process.exit(code ?? 0);
-    });
-    process.on("SIGINT", () => child.kill("SIGINT"));
-    process.on("SIGTERM", () => child.kill("SIGTERM"));
+    finishStream(
+      await streamOwned("xcrun", [
+        "simctl",
+        "spawn",
+        "booted",
+        "log",
+        "stream",
+        "--style",
+        "compact",
+        "--predicate",
+        'process == "Vibestudio"',
+      ])
+    );
     return;
   }
 
-  const pidResult = await runCapture("adb", adbArgs(options.device, ["shell", "pidof", options.packageName]));
+  const pidResult = await runCapture(
+    "adb",
+    adbArgs(options.device, ["shell", "pidof", options.packageName])
+  );
   const pid = pidResult.stdout.trim().split(/\s+/)[0];
   if (!pid) {
-    throw new Error(`Could not find a running process for ${options.packageName}. Launch the app first.`);
+    throw new Error(
+      `Could not find a running process for ${options.packageName}. Launch the app first.`
+    );
   }
 
   console.log(`[mobile-logs] Tailing ${options.packageName} pid ${pid}. Press Ctrl-C to stop.`);
-  const child = spawn("adb", adbArgs(options.device, ["logcat", "--pid", pid, "-v", "time"]), {
-    stdio: "inherit",
-  });
-
-  child.on("exit", (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    else process.exit(code ?? 0);
-  });
-
-  process.on("SIGINT", () => child.kill("SIGINT"));
-  process.on("SIGTERM", () => child.kill("SIGTERM"));
+  finishStream(
+    await streamOwned("adb", adbArgs(options.device, ["logcat", "--pid", pid, "-v", "time"]))
+  );
 }
 
 try {
