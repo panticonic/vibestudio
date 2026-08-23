@@ -4214,13 +4214,25 @@ function validateNpmVersion(version: string): void {
   );
 }
 
-/** Cache key for npm library builds */
-function npmBuildKey(specifier: string, version: string, externals: string[]): string {
-  const hash = createHash("sha256")
-    .update(JSON.stringify({ specifier, version, externals: externals.slice().sort() }))
-    .digest("hex")
-    .slice(0, 16);
-  return `npm:${specifier}@${version}:${hash}`;
+/**
+ * Canonical cache identity for libraries sourced outside the workspace graph.
+ *
+ * Build-store keys are also filesystem entry names, so package coordinates
+ * cannot safely appear in them: scoped packages and export subpaths contain
+ * path separators. Keep the descriptive coordinate in build metadata and use
+ * one canonical, opaque identity at the storage boundary.
+ */
+function externalLibraryBuildKey(
+  source:
+    | { kind: "npm"; specifier: string; version: string }
+    | { kind: "platform"; specifier: string },
+  externals: readonly string[]
+): string {
+  return sha256Canonical({
+    schema: "vibestudio/build-v2/external-library/v1",
+    source,
+    externals: [...externals].sort(),
+  });
 }
 
 /**
@@ -4247,7 +4259,7 @@ export async function buildNpmLibrary(
   validateSandboxNpmLibrarySpecifier(specifier);
   validateNpmVersion(version);
 
-  const buildKey = npmBuildKey(specifier, version, externals);
+  const buildKey = externalLibraryBuildKey({ kind: "npm", specifier, version }, externals);
 
   // Check store cache
   const cached = await buildStore.getOrHydrate(buildKey);
@@ -4363,7 +4375,7 @@ export async function buildPlatformLibrary(
     throw new Error("App node_modules not configured — cannot build @vibestudio/* packages");
   }
 
-  const buildKey = `platform:${specifier}:${externals.sort().join(",")}`;
+  const buildKey = externalLibraryBuildKey({ kind: "platform", specifier }, externals);
 
   // Check cache
   const cached = await buildStore.getOrHydrate(buildKey);
