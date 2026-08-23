@@ -7,9 +7,6 @@
  * globals consumed by the transport/runtime code.
  */
 
-/** Loader ↔ generated-entry protocol epoch; folded into every panel build key. */
-export const PANEL_ENTRY_PROTOCOL_VERSION = "1";
-
 export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const bootStartedAt = Date.now();
   const reportBoot = (phase, error, failureStage) => {
@@ -187,7 +184,12 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
 
   await new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = new URL("__transport.js", loaderScriptUrl || document.baseURI || location.href).href;
+    const loaderUrl = new URL(loaderScriptUrl || document.baseURI || location.href);
+    const transportUrl = new URL("__transport.js", loaderUrl);
+    // The loader and transport are one content-addressed runtime set. Preserve
+    // the loader's exact version query so both share one immutable identity.
+    transportUrl.search = loaderUrl.search;
+    s.src = transportUrl.href;
     s.onload = resolve;
     s.onerror = reject;
     document.head.appendChild(s);

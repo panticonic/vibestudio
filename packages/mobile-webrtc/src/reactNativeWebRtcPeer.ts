@@ -485,6 +485,13 @@ export class WrappedDataChannel implements RtcDataChannelLike {
     return SCTP_MAX_MESSAGE_SIZE;
   }
 
+  get safeReceiveWindowBytes(): number {
+    // The RN bridge has historically corrupted concurrent queued messages;
+    // advertising zero retains one-message-at-a-time receive pacing without a
+    // platform branch in the shared transport.
+    return 0;
+  }
+
   send(data: Uint8Array): void {
     // Count the write before it leaves, so the next `bufferedAmount` sample
     // includes it. The platform reports the level asynchronously, and a

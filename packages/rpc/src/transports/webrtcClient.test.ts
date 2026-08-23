@@ -293,8 +293,10 @@ class Fabric {
   /** Raw control-channel message sizes as received (fragmentation evidence). */
   readonly rawControlSizes: number[] = [];
   clientControl: FakeChannel | null = null;
+  clientInteractive: FakeChannel | null = null;
   clientBulk: FakeChannel | null = null;
   serverControl: FakeChannel | null = null;
+  serverInteractive: FakeChannel | null = null;
   serverBulk: FakeChannel | null = null;
   currentSignaling: FakeSignaling | null = null;
   createCalls = 0;
@@ -308,6 +310,7 @@ class Fabric {
   private serverDefrag: ControlDefragmenter = createControlDefragmenter();
   private serverSeq = 0;
   private pendingChannels = new Map<number, FakeChannel>();
+  private streamClasses = new Map<number, "interactive" | "bulk">();
 
   constructor(private readonly opts: ServerOpts = {}) {
     this.serverFp = opts.fp ?? "AA:BB:CC";
@@ -349,20 +352,24 @@ class Fabric {
     this.pendingChannels.set(id, server);
     if (id === 0) {
       this.clientControl = client;
-    } else {
+    } else if (id === 1) {
       this.clientBulk = client;
+    } else {
+      this.clientInteractive = client;
     }
     const control = this.pendingChannels.get(0);
     const bulk = this.pendingChannels.get(1);
-    if (control && bulk) {
+    const interactive = this.pendingChannels.get(2);
+    if (control && bulk && interactive) {
       this.pendingChannels.clear();
-      this.attachServer(control, bulk);
+      this.attachServer(control, interactive, bulk);
     }
     return client;
   }
 
-  private attachServer(control: FakeChannel, bulk: FakeChannel): void {
+  private attachServer(control: FakeChannel, interactive: FakeChannel, bulk: FakeChannel): void {
     this.serverControl = control;
+    this.serverInteractive = interactive;
     this.serverBulk = bulk;
     this.serverDefrag = createControlDefragmenter();
     control.onMessage((data) => {
@@ -414,6 +421,10 @@ class Fabric {
         return;
       }
       case "stream-open":
+        this.streamClasses.set(frame.streamId, frame.trafficClass);
+        if (frame.bodyStreamId !== undefined) {
+          this.streamClasses.set(frame.bodyStreamId, frame.trafficClass);
+        }
         this.opts.onStreamOpen?.(frame as StreamOpenFrame, this);
         return;
       default:
@@ -433,9 +444,10 @@ class Fabric {
     const conf = typeof this.opts.hello === "object" ? this.opts.hello : {};
     const hello: SessionHelloFrame = {
       t: "hello",
-      proto: 2,
+      proto: 3,
       contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: 256 * 1024,
+      receiveWindowBytes: 512 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
       ...conf,
@@ -445,7 +457,8 @@ class Fabric {
   }
 
   sendBulk(streamId: number, type: FrameType, payload: Uint8Array, more = false): void {
-    const channel = this.serverBulk;
+    const channel =
+      this.streamClasses.get(streamId) === "bulk" ? this.serverBulk : this.serverInteractive;
     if (!channel || channel.readyState !== "open") return;
     channel.send(encodeBulkMessage(streamId, type, payload, more));
   }
@@ -557,13 +570,14 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("WebRTC transport — pin + hello handshake", () => {
-  it("connects with a roomy control window and drain-paced bulk", async () => {
+  it("connects with separate control, interactive, and bulk windows", async () => {
     const fabric = new Fabric();
     const transport = makeTransport(fabric);
     await transport.connect();
     expect(transport.status()).toBe("connected");
     expect(fabric.clientControl?.bufferedAmountLowThreshold).toBe(256 * 1024);
-    expect(fabric.clientBulk?.bufferedAmountLowThreshold).toBe(0);
+    expect(fabric.clientInteractive?.bufferedAmountLowThreshold).toBe(64 * 1024);
+    expect(fabric.clientBulk?.bufferedAmountLowThreshold).toBe(64 * 1024);
     // Our hello was the FIRST control frame the server saw.
     expect(fabric.frames[0]?.t).toBe("hello");
     await transport.close();
@@ -581,7 +595,8 @@ describe("WebRTC transport — pin + hello handshake", () => {
     const transport = makeTransport(fabric, { chunkSize: 4096, platform: "desktop" });
     await transport.connect();
     const hello = fabric.clientHellos[0]!;
-    expect(hello.proto).toBe(2);
+    expect(hello.proto).toBe(3);
+    expect(hello.receiveWindowBytes).toBe(0);
     expect(hello.maxMsg).toBe(4096);
     expect(hello.platform).toBe("desktop");
     expect(hello.keepalive).toEqual({ intervalMs: 15_000, timeoutMs: 45_000 });
@@ -1371,11 +1386,11 @@ describe("WebRTC transport — session lifecycle", () => {
 });
 
 // ---------------------------------------------------------------------------
-// streams (bulk mux)
+// streams (binary stream mux on interactive/bulk lanes)
 // ---------------------------------------------------------------------------
 
-describe("WebRTC transport — streams over the bulk mux", () => {
-  it("stream() rebuilds a Response from self-describing bulk mux messages", async () => {
+describe("WebRTC transport — streams over the binary mux", () => {
+  it("stream() rebuilds a Response from self-describing interactive messages", async () => {
     const fabric = new Fabric({
       onStreamOpen: (frame, f) => {
         const id = frame.streamId;
@@ -1588,7 +1603,7 @@ describe("WebRTC transport — streams over the bulk mux", () => {
   });
 
   it("limits a constrained association to one 16 KiB bulk message per drain", async () => {
-    const fabric = new Fabric();
+    const fabric = new Fabric({ hello: { receiveWindowBytes: 0 } });
     const transport = makeTransport(fabric);
     await transport.connect();
     const bulk = fabric.clientBulk!;
@@ -1942,10 +1957,10 @@ describe("WebRTC transport — session hardening", () => {
 // ---------------------------------------------------------------------------
 
 describe("WebRTC transport — request-body uploads (§1.6)", () => {
-  /** Decode every bulk message the server end receives (whole-message frames). */
+  /** Decode every interactive upload message the server end receives. */
   function collectServerBulk(fabric: Fabric) {
     const received: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
-    fabric.serverBulk!.onMessage((d) => {
+    fabric.serverInteractive!.onMessage((d) => {
       const decoded = decodeBulkMessage(d);
       received.push({ streamId: decoded.streamId, type: decoded.type, payload: decoded.payload });
     });
@@ -2028,16 +2043,16 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
     await transport.close();
   });
 
-  it("AWAITS sendBulkFrame — a stalled bulk channel parks the body reader (upload backpressure)", async () => {
-    const fabric = new Fabric();
+  it("awaits the interactive scheduler when an ordinary upload is backpressured", async () => {
+    const fabric = new Fabric({ hello: { receiveWindowBytes: 0 } });
     const transport = makeTransport(fabric);
     await transport.connect();
     const session = transport.openSession({ connectionId: "c1", getToken: () => "g" });
     await session.ready!();
 
     // Stall the pipe: no auto-drain, so the scheduler parks after each bounded
-    // bulk message until the native association reports that message drained.
-    const bulk = fabric.clientBulk!;
+    // interactive message until the native association reports it drained.
+    const bulk = fabric.clientInteractive!;
     bulk.autoDrain = false;
 
     let reads = 0;

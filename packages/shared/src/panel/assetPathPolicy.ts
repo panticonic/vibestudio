@@ -95,6 +95,7 @@ export function isPanelReachableGatewayPathname(pathname: string): boolean {
 const PARSE_BASE = "http://panel-gateway.invalid";
 
 const VERSIONED_UNIT_ICON_PATH = /^\/__vibestudio\/unit-icon\?(?:.*&)?v=[0-9a-f]{8,64}(?:&|$)/u;
+const VERSIONED_RUNTIME_HELPER_PATH = /\/(?:__loader|__transport)\.js$/u;
 const PANEL_BUILD_KEY = /^[0-9a-f]{64}$/u;
 const PINNED_ENTRY_REPRESENTATION = /^\/.*\/\?buildKey=[0-9a-f]{64}$/u;
 
@@ -159,6 +160,12 @@ export function panelAssetCacheKey(
   // ahead of a request — which makes prefetching them impossible, because the
   // key is only knowable once the fetch it was meant to avoid has occurred.
   if (PANEL_BUILD_ASSET_PATH.test(representationPath)) return representationPath;
+  if (
+    VERSIONED_RUNTIME_HELPER_PATH.test(representationPath.split("?", 1)[0] ?? "") &&
+    /(?:^|[?&])v=[0-9a-f]{64}(?:&|$)/u.test(representationPath)
+  ) {
+    return representationPath;
+  }
   // A unit icon carrying a `v` that names its content is immutable for the same
   // reason, and its whole point is to be storable — keying it by header digest
   // would split one glyph across every `accept` a client happens to send.

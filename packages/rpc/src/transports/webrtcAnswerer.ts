@@ -63,6 +63,10 @@ import {
   CONTROL_LABEL,
   CONTROL_BUFFER_LOW_THRESHOLD,
   DEFAULT_CHUNK_SIZE,
+  INTERACTIVE_BUFFER_LOW_THRESHOLD,
+  INTERACTIVE_CHANNEL_ID,
+  INTERACTIVE_LABEL,
+  MAX_ASSOCIATION_STREAM_WINDOW,
   MAX_BULK_MESSAGE_SIZE,
 } from "./webrtcPeer.js";
 import {
@@ -90,6 +94,7 @@ import {
   encodeControlFrame,
   isSessionHello,
   type SessionHelloFrame,
+  type SessionStreamTrafficClass,
 } from "../protocol/sessionNegotiation.js";
 
 export type { StreamFrameType } from "../protocol/bulkMux.js";
@@ -156,15 +161,16 @@ export interface WebRtcAnswererPipe {
    * read that outcome -- an unread drop becomes a body the receiver can only
    * discover is short by counting it.
    */
-  writeBulkFrame(
+  writeStreamFrame(
+    trafficClass: SessionStreamTrafficClass,
     streamId: number,
     type: StreamFrameType,
     payload: Uint8Array
   ): Promise<EnqueueOutcome>;
   /** Discard everything still queued for a cancelled stream. */
-  dropBulkStream(streamId: number): void;
-  /** Queued-but-unsent bulk bytes — total, or for one stream (metering). */
-  bulkPendingBytes(streamId?: number): number;
+  dropStream(trafficClass: SessionStreamTrafficClass, streamId: number): void;
+  /** Queued-but-unsent stream bytes — total, or for one class/stream. */
+  streamPendingBytes(trafficClass?: SessionStreamTrafficClass, streamId?: number): number;
   /** Un-drained control bytes (channel buffer + scheduler queues). */
   controlBufferedAmount(): number;
   /** Register the inbound control-frame handler. Frames arrive reassembled
@@ -172,8 +178,13 @@ export interface WebRtcAnswererPipe {
   onControl(handler: (data: Uint8Array) => void): void;
   /** Register the inbound bulk-frame handler (demuxed §1.2 frames). The
    * payload may be a view into the receive buffer — copy to retain. */
-  onBulkFrame(
-    handler: (streamId: number, type: StreamFrameType, payload: Uint8Array) => void
+  onStreamFrame(
+    handler: (
+      trafficClass: SessionStreamTrafficClass,
+      streamId: number,
+      type: StreamFrameType,
+      payload: Uint8Array
+    ) => void
   ): void;
   /** Register a handler fired when the pipe is lost or closed. */
   onDown(handler: (reason: string) => void): () => void;
@@ -244,11 +255,13 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   // --- peer generation ------------------------------------------------------
   let peer: RtcPeerConnectionLike | null = null;
   let control: RtcDataChannelLike | null = null;
+  let interactive: RtcDataChannelLike | null = null;
   let bulk: RtcDataChannelLike | null = null;
   const peerUnsubs: Array<() => void> = [];
   let peerHasRemote = false;
   let appliedRemoteOfferSdp: string | null = null;
   let controlOpen = false;
+  let interactiveOpen = false;
   let bulkOpen = false;
 
   // --- hello negotiation (§1.1) ---------------------------------------------
@@ -261,6 +274,8 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   let controlSequenceEnabled = false;
   /** Monotonic per-pipe control sequence, stamped at send (wire order). */
   let controlSequence = 0;
+  let interactiveSequence = 0;
+  let remoteReceiveWindowBytes = 0;
   let effectiveChunk = DEFAULT_CHUNK_SIZE;
   let keepaliveTimeoutMs: number = LOCAL_KEEPALIVE.timeoutMs;
   /** Hello exchange complete AND both channels open — the pipe is usable. */
@@ -294,30 +309,39 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     },
   });
   const outboundBulkStats = new Map<
-    number,
+    string,
     { dataFrames: number; dataBytes: number; messages: number }
   >();
   let controlHandler: ((data: Uint8Array) => void) | null = null;
-  let bulkFrameHandler:
-    | ((streamId: number, type: StreamFrameType, payload: Uint8Array) => void)
+  let streamFrameHandler:
+    | ((
+        trafficClass: SessionStreamTrafficClass,
+        streamId: number,
+        type: StreamFrameType,
+        payload: Uint8Array
+      ) => void)
     | null = null;
-  const demux = createBulkDemux(
-    (streamId, type, payload) => {
-      bulkFrameHandler?.(streamId, type, payload);
-    },
-    {
-      // A gap means whole messages vanished between SCTP and here. Which streams
-      // they belonged to is unknowable — the ids were in the lost bytes — so the
-      // only honest scope is the pipe. Dropping it fails every affected stream
-      // at once and reconnects, instead of leaving some of them to hang until a
-      // 20s HEAD timeout with nothing logged near the transport.
-      onSequenceGap: (expected, received, missing) => {
-        pipeDown(
-          `bulk sequence gap: ${missing} message(s) lost (expected ${expected}, received ${received})`
-        );
+  const createStreamDemux = (trafficClass: SessionStreamTrafficClass) =>
+    createBulkDemux(
+      (streamId, type, payload) => {
+        streamFrameHandler?.(trafficClass, streamId, type, payload);
       },
-    }
-  );
+      {
+        // A gap means whole messages vanished between SCTP and here. Which streams
+        // they belonged to is unknowable — the ids were in the lost bytes — so the
+        // only honest scope is the pipe. Dropping it fails every affected stream
+        // at once and reconnects, instead of leaving some of them to hang until a
+        // 20s HEAD timeout with nothing logged near the transport.
+        onSequenceGap: (expected, received, missing) => {
+          pipeDown(
+            `${trafficClass} sequence gap: ${missing} message(s) lost ` +
+              `(expected ${expected}, received ${received})`
+          );
+        },
+      }
+    );
+  const interactiveDemux = createStreamDemux("interactive");
+  const bulkDemux = createStreamDemux("bulk");
   const downHandlers = new Set<(reason: string) => void>();
   const candidateTypeListeners = new Set<(type: RtcCandidateType | null) => void>();
   /** Last value handed to the candidate-type feed — de-dupes re-emits so the
@@ -347,19 +371,44 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     stampControlSequence(part, controlSequence);
     controlSequence = (controlSequence + 1) >>> 0;
   };
-  const controlScheduler = createFrameScheduler({
-    getChannel: () => (pipeUp ? control : null),
-    beforeSend: stampControlPart,
-  });
   // Monotonic per-pipe wire sequence, stamped at the moment of send so it
   // reflects wire order rather than encode order. Reset with the pipe.
   let bulkSequence = 0;
-  const bulkScheduler = createFrameScheduler({
-    getChannel: () => (pipeUp ? bulk : null),
-    beforeSend: (part) => {
-      if (!bulkSequenceEnabled) return;
-      stampBulkSequence(part, bulkSequence);
-      bulkSequence = (bulkSequence + 1) >>> 0;
+  const scheduler = createFrameScheduler({
+    lanes: {
+      control: {
+        getChannel: () => (pipeUp ? control : null),
+        weight: 8,
+        beforeSend: stampControlPart,
+      },
+      interactive: {
+        getChannel: () => (pipeUp ? interactive : null),
+        weight: 4,
+        window: {
+          minBytes: 0,
+          initialBytes: INTERACTIVE_BUFFER_LOW_THRESHOLD,
+          maxBytes: () => remoteReceiveWindowBytes,
+        },
+        beforeSend: (part) => {
+          if (!bulkSequenceEnabled) return;
+          stampBulkSequence(part, interactiveSequence);
+          interactiveSequence = (interactiveSequence + 1) >>> 0;
+        },
+      },
+      bulk: {
+        getChannel: () => (pipeUp ? bulk : null),
+        weight: 1,
+        window: {
+          minBytes: 0,
+          initialBytes: BULK_BUFFER_LOW_THRESHOLD,
+          maxBytes: () => remoteReceiveWindowBytes,
+        },
+        beforeSend: (part) => {
+          if (!bulkSequenceEnabled) return;
+          stampBulkSequence(part, bulkSequence);
+          bulkSequence = (bulkSequence + 1) >>> 0;
+        },
+      },
     },
   });
 
@@ -663,9 +712,16 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       negotiated: true,
       id: BULK_CHANNEL_ID,
     });
+    const itr = pc.createDataChannel(INTERACTIVE_LABEL, {
+      ordered: true,
+      negotiated: true,
+      id: INTERACTIVE_CHANNEL_ID,
+    });
     control = ctl;
+    interactive = itr;
     bulk = blk;
     ctl.bufferedAmountLowThreshold = CONTROL_BUFFER_LOW_THRESHOLD;
+    itr.bufferedAmountLowThreshold = INTERACTIVE_BUFFER_LOW_THRESHOLD;
     blk.bufferedAmountLowThreshold = BULK_BUFFER_LOW_THRESHOLD;
 
     let pendingLocalDescription: { type: "offer" | "answer"; sdp: string } | null = null;
@@ -702,13 +758,20 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       ctl.onClose(() => pipeDown("control channel closed")),
       ctl.onError((error) => pipeDown(`control channel error: ${error.message}`)),
       ctl.onMessage((data) => handleControlMessage(data)),
+      itr.onOpen(() => {
+        interactiveOpen = true;
+        maybePipeUp();
+      }),
+      itr.onClose(() => pipeDown("interactive channel closed")),
+      itr.onError((error) => pipeDown(`interactive channel error: ${error.message}`)),
+      itr.onMessage((data) => handleStreamMessage("interactive", data)),
       blk.onOpen(() => {
         bulkOpen = true;
         maybePipeUp();
       }),
       blk.onClose(() => pipeDown("bulk channel closed")),
       blk.onError((error) => pipeDown(`bulk channel error: ${error.message}`)),
-      blk.onMessage((data) => handleBulkMessage(data)),
+      blk.onMessage((data) => handleStreamMessage("bulk", data)),
       pc.onConnectionStateChange((state) => onConnectionState(state)),
       pc.onLocalDescription((desc) => {
         pendingLocalDescription = desc;
@@ -741,6 +804,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     }
     // Some adapters open negotiated channels synchronously.
     if (ctl.readyState === "open") onControlChannelOpen();
+    if (itr.readyState === "open") {
+      interactiveOpen = true;
+      maybePipeUp();
+    }
     if (blk.readyState === "open") {
       bulkOpen = true;
       maybePipeUp();
@@ -762,6 +829,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       proto: SESSION_PROTOCOL_VERSION,
       contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: localMaxMsg,
+      receiveWindowBytes: Math.max(0, channel.safeReceiveWindowBytes ?? 0),
       platform: "server",
       keepalive: { ...LOCAL_KEEPALIVE },
       bulkSeq: true,
@@ -832,7 +900,12 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       pipeDown(`protocol violation: hello maxMsg ${frame.maxMsg}`);
       return;
     }
+    if (!Number.isFinite(frame.receiveWindowBytes) || frame.receiveWindowBytes < 0) {
+      pipeDown(`protocol violation: hello receiveWindowBytes ${frame.receiveWindowBytes}`);
+      return;
+    }
     remoteHello = frame;
+    remoteReceiveWindowBytes = Math.min(frame.receiveWindowBytes, MAX_ASSOCIATION_STREAM_WINDOW);
     // Both ends must be able to read the 9-byte header before either writes it.
     bulkSequenceEnabled = frame.bulkSeq === true;
     controlSequenceEnabled = frame.ctrlSeq === true;
@@ -857,8 +930,20 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
 
   function maybePipeUp(): void {
     if (pipeUp || closed) return;
-    if (!remoteHello || !localHelloSent || !controlOpen || !bulkOpen) return;
+    if (!remoteHello || !localHelloSent || !controlOpen || !interactiveOpen || !bulkOpen) return;
     effectiveChunk = Math.min(localMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
+    if (interactive) {
+      interactive.bufferedAmountLowThreshold = Math.min(
+        INTERACTIVE_BUFFER_LOW_THRESHOLD,
+        remoteReceiveWindowBytes
+      );
+    }
+    if (bulk) {
+      bulk.bufferedAmountLowThreshold = Math.min(
+        BULK_BUFFER_LOW_THRESHOLD,
+        remoteReceiveWindowBytes
+      );
+    }
     keepaliveTimeoutMs = Math.min(
       LOCAL_KEEPALIVE.timeoutMs,
       remoteHello.keepalive?.timeoutMs ?? Number.POSITIVE_INFINITY
@@ -1042,18 +1127,18 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     }
   }
 
-  function handleBulkMessage(message: Uint8Array): void {
+  function handleStreamMessage(trafficClass: SessionStreamTrafficClass, message: Uint8Array): void {
     if (!remoteHello) {
-      pipeDown("protocol violation: bulk message before hello");
+      pipeDown(`protocol violation: ${trafficClass} message before hello`);
       return;
     }
     try {
-      demux.push(message);
+      (trafficClass === "interactive" ? interactiveDemux : bulkDemux).push(message);
     } catch (error) {
       // BulkProtocolViolation — a peer speaking a different dialect fails
       // loud instead of corrupting streams silently (§1.2).
       pipeDown(
-        `bulk protocol violation: ${error instanceof Error ? error.message : String(error)}`
+        `${trafficClass} protocol violation: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -1157,17 +1242,21 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     // A fresh pipe must never reassemble against a dead pipe's fragments or
     // continue a dead pipe's partial HEAD/ERROR accumulations.
     controlCodec.reset();
-    demux.reset();
+    interactiveDemux.reset();
+    bulkDemux.reset();
     outboundBulkStats.clear();
     prePipeUpControlFrames.length = 0;
     prePipeUpControlBytes = 0;
     remoteHello = null;
     bulkSequenceEnabled = false;
     bulkSequence = 0;
+    interactiveSequence = 0;
+    remoteReceiveWindowBytes = 0;
     controlSequenceEnabled = false;
     controlSequence = 0;
     localHelloSent = false;
     controlOpen = false;
+    interactiveOpen = false;
     bulkOpen = false;
     peerHasRemote = false;
     appliedRemoteOfferSdp = null;
@@ -1187,6 +1276,11 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       /* ignore */
     }
     try {
+      interactive?.close();
+    } catch {
+      /* ignore */
+    }
+    try {
       bulk?.close();
     } catch {
       /* ignore */
@@ -1197,6 +1291,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       /* ignore */
     }
     control = null;
+    interactive = null;
     bulk = null;
     peer = null;
   }
@@ -1210,18 +1305,20 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       const parts = controlCodec.frame(data, effectiveChunk);
       // Outcome discarded: the answerer's failure signal is session/pipe
       // teardown, not per-write results (settle-never-rejects).
-      await controlScheduler.enqueue(lane, parts);
+      await scheduler.enqueue("control", lane, parts);
     },
 
-    async writeBulkFrame(
+    async writeStreamFrame(
+      trafficClass: SessionStreamTrafficClass,
       streamId: number,
       type: StreamFrameType,
       payload: Uint8Array
     ): Promise<EnqueueOutcome> {
       const parts = encodeBulkFrameParts(streamId, type, payload);
-      const outcome = await bulkScheduler.enqueue(streamId, parts);
+      const outcome = await scheduler.enqueue(trafficClass, streamId, parts);
       if (outcome !== "flushed") return outcome;
-      const stats = outboundBulkStats.get(streamId) ?? {
+      const statsKey = `${trafficClass}:${streamId}`;
+      const stats = outboundBulkStats.get(statsKey) ?? {
         dataFrames: 0,
         dataBytes: 0,
         messages: 0,
@@ -1233,37 +1330,42 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       }
       if (type === FRAME_END) {
         console.log(
-          `${log} bulk stream sent stream=${streamId} dataFrames=${stats.dataFrames} ` +
+          `${log} ${trafficClass} stream sent stream=${streamId} dataFrames=${stats.dataFrames} ` +
             `dataBytes=${stats.dataBytes} messages=${stats.messages}`
         );
-        outboundBulkStats.delete(streamId);
+        outboundBulkStats.delete(statsKey);
       } else {
-        outboundBulkStats.set(streamId, stats);
+        outboundBulkStats.set(statsKey, stats);
       }
       return outcome;
     },
 
-    dropBulkStream(streamId: number): void {
-      outboundBulkStats.delete(streamId);
-      bulkScheduler.dropKey(streamId);
+    dropStream(trafficClass: SessionStreamTrafficClass, streamId: number): void {
+      outboundBulkStats.delete(`${trafficClass}:${streamId}`);
+      scheduler.dropKey(trafficClass, streamId);
     },
 
-    bulkPendingBytes(streamId?: number): number {
-      return bulkScheduler.pendingBytes(streamId);
+    streamPendingBytes(trafficClass?: SessionStreamTrafficClass, streamId?: number): number {
+      return scheduler.pendingBytes(trafficClass, streamId);
     },
 
     controlBufferedAmount(): number {
-      return (control?.bufferedAmount ?? 0) + controlScheduler.pendingBytes();
+      return (control?.bufferedAmount ?? 0) + scheduler.pendingBytes("control");
     },
 
     onControl(handler: (data: Uint8Array) => void): void {
       controlHandler = handler;
     },
 
-    onBulkFrame(
-      handler: (streamId: number, type: StreamFrameType, payload: Uint8Array) => void
+    onStreamFrame(
+      handler: (
+        trafficClass: SessionStreamTrafficClass,
+        streamId: number,
+        type: StreamFrameType,
+        payload: Uint8Array
+      ) => void
     ): void {
-      bulkFrameHandler = handler;
+      streamFrameHandler = handler;
     },
 
     onDown(handler: (reason: string) => void): () => void {
@@ -1326,8 +1428,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       } catch {
         /* ignore */
       }
-      controlScheduler.close();
-      bulkScheduler.close();
+      scheduler.close();
       pendingDescriptions.length = 0;
       pendingCandidates.length = 0;
     },

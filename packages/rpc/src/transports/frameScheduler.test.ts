@@ -1,420 +1,221 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RtcDataChannelLike, RtcDataChannelState } from "./webrtcPeer.js";
-import { createFrameScheduler } from "./frameScheduler.js";
+import { createFrameScheduler, type FrameTrafficClass } from "./frameScheduler.js";
 
-/**
- * Fake channel with a REAL `bufferedAmount` simulation: tests control drain
- * explicitly (`drain()`), and `trackBuffered` makes every send raise
- * `bufferedAmount` so the pump parks between parts.
- */
 class FakeChannel implements RtcDataChannelLike {
+  readonly label: string;
   readyState: RtcDataChannelState = "open";
   bufferedAmount = 0;
   bufferedAmountLowThreshold = 0;
-  maxMessageSize = 256 * 1024;
+  readonly maxMessageSize = 256 * 1024;
+  readonly safeReceiveWindowBytes = 512 * 1024;
+  readonly sent: number[] = [];
   trackBuffered = false;
-  readonly sent: Uint8Array[] = [];
-  private lowH = new Set<() => void>();
-  private closeH = new Set<() => void>();
-  constructor(readonly label = "bulk") {}
+  private readonly low = new Set<() => void>();
+
+  constructor(label: string) {
+    this.label = label;
+  }
   send(data: Uint8Array): void {
-    if (this.readyState !== "open") throw new Error("send on non-open channel");
-    this.sent.push(data.slice());
+    this.sent.push(data[0] ?? 0);
     if (this.trackBuffered) this.bufferedAmount += data.byteLength;
   }
-  close(): void {
-    if (this.readyState === "closed") return;
-    this.readyState = "closed";
-    for (const h of [...this.closeH]) h();
+  drainTo(bytes: number): void {
+    this.bufferedAmount = bytes;
+    if (bytes <= this.bufferedAmountLowThreshold) {
+      for (const handler of [...this.low]) handler();
+    }
   }
-  /** Simulate the SCTP queue flushing: bufferedAmount → 0, low event fires. */
-  drain(): void {
-    this.bufferedAmount = 0;
-    for (const h of [...this.lowH]) h();
+  close(): void {
+    this.readyState = "closed";
   }
   onOpen(): () => void {
-    return () => {};
+    return () => undefined;
   }
-  onClose(h: () => void): () => void {
-    this.closeH.add(h);
-    return () => this.closeH.delete(h);
+  onClose(): () => void {
+    return () => undefined;
   }
   onError(): () => void {
-    return () => {};
+    return () => undefined;
   }
   onMessage(): () => void {
-    return () => {};
+    return () => undefined;
   }
-  onBufferedAmountLow(h: () => void): () => void {
-    this.lowH.add(h);
-    return () => this.lowH.delete(h);
+  onBufferedAmountLow(handler: () => void): () => void {
+    this.low.add(handler);
+    return () => this.low.delete(handler);
   }
 }
 
-/** Flush the pump: setTimeout(0) lets every pending microtask chain settle. */
-const tick = async (turns = 3): Promise<void> => {
-  for (let i = 0; i < turns; i++) await new Promise((resolve) => setTimeout(resolve, 0));
-};
-
-/** A part tagged [keyChar, seq] so send order is assertable. */
-const part = (key: string, seq: number, size = 2): Uint8Array => {
-  const p = new Uint8Array(size);
-  p[0] = key.charCodeAt(0);
-  p[1] = seq;
-  return p;
-};
-const label = (p: Uint8Array): string => `${String.fromCharCode(p[0]!)}${p[1]}`;
-const numberedPart = (key: number, seq: number): Uint8Array => {
-  const value = new Uint8Array(6);
-  const view = new DataView(value.buffer);
-  view.setUint32(0, key);
-  view.setUint16(4, seq);
+const part = (tag: number, bytes = 1): Uint8Array => {
+  const value = new Uint8Array(bytes);
+  value[0] = tag;
   return value;
 };
-const numberedLabel = (value: Uint8Array): [key: number, seq: number] => {
-  const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
-  return [view.getUint32(0), view.getUint16(4)];
+
+function harness(opts?: {
+  receiveWindow?: number;
+  totalCapBytes?: number;
+  perKeyCapBytes?: number;
+}) {
+  const control = new FakeChannel("control");
+  const interactive = new FakeChannel("interactive");
+  const bulk = new FakeChannel("bulk");
+  let receiveWindow = opts?.receiveWindow ?? 512 * 1024;
+  const scheduler = createFrameScheduler({
+    lanes: {
+      control: { getChannel: () => control, weight: 8 },
+      interactive: {
+        getChannel: () => interactive,
+        weight: 4,
+        window: { minBytes: 0, initialBytes: 64 * 1024, maxBytes: () => receiveWindow },
+      },
+      bulk: {
+        getChannel: () => bulk,
+        weight: 1,
+        window: { minBytes: 0, initialBytes: 64 * 1024, maxBytes: () => receiveWindow },
+      },
+    },
+    totalCapBytes: opts?.totalCapBytes,
+    perKeyCapBytes: opts?.perKeyCapBytes,
+  });
+  return {
+    control,
+    interactive,
+    bulk,
+    scheduler,
+    setReceiveWindow: (v: number) => (receiveWindow = v),
+  };
+}
+
+const tick = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
 };
 
-describe("frame scheduler", () => {
-  it("round-robins across keys at part granularity", async () => {
-    const ch = new FakeChannel();
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const a = s.enqueue("a", [part("a", 0), part("a", 1), part("a", 2), part("a", 3)]);
-    const b = s.enqueue("b", [part("b", 0), part("b", 1), part("b", 2)]);
-    await Promise.all([a, b]);
-    expect(ch.sent.map(label)).toEqual(["a0", "b0", "a1", "b1", "a2", "b2", "a3"]);
-    expect(s.pendingBytes()).toBe(0);
+describe("association-aware frame scheduler", () => {
+  it("uses the 8:4:1 association weights while preserving bulk progress", async () => {
+    const h = harness();
+    const writes: Promise<unknown>[] = [];
+    for (let i = 0; i < 16; i++) writes.push(h.scheduler.enqueue("control", "c", [part(10 + i)]));
+    for (let i = 0; i < 8; i++)
+      writes.push(h.scheduler.enqueue("interactive", "i", [part(40 + i)]));
+    for (let i = 0; i < 2; i++) writes.push(h.scheduler.enqueue("bulk", "b", [part(70 + i)]));
+    await Promise.all(writes);
+    expect(h.control.sent).toHaveLength(16);
+    expect(h.interactive.sent).toHaveLength(8);
+    expect(h.bulk.sent).toEqual([70, 71]);
   });
 
-  it("preserves exact round-robin fairness across ten thousand active streams", async () => {
-    const ch = new FakeChannel();
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const streams = 10_000;
-    const pending: Array<Promise<unknown>> = [];
-    for (let key = 0; key < streams; key++) {
-      pending.push(
-        s.enqueue(key, [numberedPart(key, 0), numberedPart(key, 1), numberedPart(key, 2)])
-      );
+  it("does not let a saturated bulk channel block control or interactive work", async () => {
+    const h = harness({ receiveWindow: 0 });
+    h.bulk.trackBuffered = true;
+    const bulk = h.scheduler.enqueue("bulk", 1, [part(1, 16), part(2, 16), part(3, 16)]);
+    await tick();
+    expect(h.bulk.sent).toEqual([1]);
+    const control = h.scheduler.enqueue("control", "session", [part(9)]);
+    const interactive = h.scheduler.enqueue("interactive", 2, [part(8)]);
+    await Promise.all([control, interactive]);
+    expect(h.control.sent).toEqual([9]);
+    expect(h.interactive.sent).toEqual([8]);
+    expect(h.bulk.sent).toEqual([1]);
+    h.bulk.drainTo(0);
+    await tick();
+    h.bulk.drainTo(0);
+    await bulk;
+    expect(h.bulk.sent).toEqual([1, 2, 3]);
+  });
+
+  it("round-robins keys within one traffic class", async () => {
+    const h = harness();
+    await Promise.all([
+      h.scheduler.enqueue("interactive", "a", [part(1), part(2), part(3)]),
+      h.scheduler.enqueue("interactive", "b", [part(4), part(5), part(6)]),
+    ]);
+    expect(h.interactive.sent).toEqual([1, 4, 2, 5, 3, 6]);
+  });
+
+  it("negotiates drain-to-zero behavior from a zero receive window", async () => {
+    const h = harness({ receiveWindow: 0 });
+    h.interactive.trackBuffered = true;
+    const write = h.scheduler.enqueue("interactive", 1, [part(1, 16), part(2, 16)]);
+    await tick();
+    expect(h.interactive.bufferedAmountLowThreshold).toBe(0);
+    expect(h.interactive.sent).toEqual([1]);
+    h.interactive.drainTo(0);
+    await write;
+    expect(h.interactive.sent).toEqual([1, 2]);
+  });
+
+  it("grows a desktop window after fast drains without exceeding the negotiated cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ receiveWindow: 96 * 1024 });
+      h.bulk.trackBuffered = true;
+      const chunks = Array.from({ length: 9 }, (_, i) => part(i + 1, 16 * 1024));
+      const write = h.scheduler.enqueue("bulk", 1, chunks);
+      await tick();
+      expect(h.bulk.bufferedAmountLowThreshold).toBe(64 * 1024);
+      h.bulk.drainTo(64 * 1024);
+      await tick();
+      expect(h.bulk.bufferedAmountLowThreshold).toBe(80 * 1024);
+      h.bulk.drainTo(80 * 1024);
+      await tick();
+      expect(h.bulk.bufferedAmountLowThreshold).toBe(96 * 1024);
+      h.bulk.drainTo(0);
+      await tick();
+      h.bulk.drainTo(0);
+      await write;
+      expect(h.bulk.bufferedAmountLowThreshold).toBeLessThanOrEqual(96 * 1024);
+    } finally {
+      vi.useRealTimers();
     }
+  });
 
-    await Promise.all(pending);
+  it("drops a cancelled key and admits another key waiting on capacity", async () => {
+    const h = harness({ receiveWindow: 0, totalCapBytes: 16, perKeyCapBytes: 16 });
+    h.bulk.trackBuffered = true;
+    const first = h.scheduler.enqueue("bulk", 1, [part(1, 16), part(2, 16)]);
+    const second = h.scheduler.enqueue("bulk", 2, [part(3, 16)]);
+    await tick();
+    h.scheduler.dropKey("bulk", 1);
+    expect(await first).toBe("dropped");
+    h.bulk.drainTo(0);
+    expect(await second).toBe("flushed");
+  });
 
-    expect(ch.sent).toHaveLength(streams * 3);
-    for (let seq = 0; seq < 3; seq++) {
-      for (let key = 0; key < streams; key++) {
-        expect(numberedLabel(ch.sent[seq * streams + key] as Uint8Array)).toEqual([key, seq]);
-      }
+  it("settles every lane as dropped when the association closes", async () => {
+    const h = harness({ receiveWindow: 0 });
+    h.bulk.trackBuffered = true;
+    const writes = [
+      h.scheduler.enqueue("bulk", 1, [part(1, 16), part(2, 16)]),
+      h.scheduler.enqueue("interactive", 2, [part(2)]),
+    ];
+    await tick();
+    h.scheduler.close();
+    expect(await Promise.all(writes)).toContain("dropped");
+    expect(h.scheduler.pendingBytes()).toBe(0);
+  });
+
+  it("meters bytes by traffic class and stream", async () => {
+    const h = harness({ receiveWindow: 0 });
+    h.bulk.trackBuffered = true;
+    const write = h.scheduler.enqueue("bulk", 7, [part(1, 8), part(2, 8)]);
+    await tick();
+    expect(h.scheduler.pendingBytes("bulk", 7)).toBe(8);
+    expect(h.scheduler.pendingBytes("bulk")).toBe(8);
+    expect(h.scheduler.pendingBytes("interactive")).toBe(0);
+    h.bulk.drainTo(0);
+    await write;
+  });
+
+  it.each<FrameTrafficClass>(["control", "interactive", "bulk"])(
+    "settles %s writes when its channel is unavailable",
+    async (trafficClass) => {
+      const h = harness();
+      const channel = h[trafficClass];
+      channel.close();
+      await expect(h.scheduler.enqueue(trafficClass, "x", [part(1)])).resolves.toBe("dropped");
     }
-  });
-
-  it("drops a key deep in a large rotation without disturbing its neighbors", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const streams = 2_048;
-    const droppedKey = 1_024;
-    const pending: Array<Promise<unknown>> = [];
-    for (let key = 0; key < streams; key++) {
-      pending.push(s.enqueue(key, [numberedPart(key, 0)]));
-    }
-    s.dropKey(droppedKey);
-    ch.drain();
-
-    await Promise.all(pending);
-
-    expect(ch.sent).toHaveLength(streams - 1);
-    expect(ch.sent.map((value) => numberedLabel(value)[0])).toEqual(
-      Array.from({ length: streams }, (_, key) => key).filter((key) => key !== droppedKey)
-    );
-  });
-
-  it("preserves per-key FIFO across multiple enqueues", async () => {
-    const ch = new FakeChannel();
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const first = s.enqueue("a", [part("a", 0), part("a", 1)]);
-    const second = s.enqueue("a", [part("a", 2)]);
-    await Promise.all([first, second]);
-    expect(ch.sent.map(label)).toEqual(["a0", "a1", "a2"]);
-  });
-
-  it("per-key cap blocks a flooding key while another key proceeds", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1; // backpressured: nothing sends until drain()
-    const s = createFrameScheduler({ getChannel: () => ch, perKeyCapBytes: 10 });
-    const done: string[] = [];
-    const a1 = s.enqueue("a", [part("a", 0, 8)]).then(() => done.push("a1"));
-    const a2 = s.enqueue("a", [part("a", 1, 8)]).then(() => done.push("a2"));
-    const b = s.enqueue("b", [part("b", 0, 4)]).then(() => done.push("b"));
-    await tick();
-    expect(s.pendingBytes("a")).toBe(8); // a2 (8+8 > 10) still awaiting capacity
-    expect(s.pendingBytes("b")).toBe(4); // b admitted despite a2 waiting ahead of it
-    expect(done).toEqual([]);
-    ch.drain();
-    await Promise.all([a1, a2, b]);
-    // a2 was admitted only after a1's bytes drained — b went out before it.
-    expect(done).toEqual(["a1", "b", "a2"]);
-    expect(ch.sent.map(label)).toEqual(["a0", "b0", "a1"]);
-  });
-
-  it("does not admit a later same-key waiter ahead of an older per-key-blocked waiter", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch, perKeyCapBytes: 10 });
-    const done: string[] = [];
-    const a1 = s.enqueue("a", [part("a", 0, 8)]).then(() => done.push("a1"));
-    const a2 = s.enqueue("a", [part("a", 1, 8)]).then(() => done.push("a2"));
-    const a3 = s.enqueue("a", [part("a", 2, 2)]).then(() => done.push("a3"));
-    const b = s.enqueue("b", [part("b", 0, 2)]).then(() => done.push("b"));
-
-    await tick();
-    expect(s.pendingBytes("a")).toBe(8);
-    expect(s.pendingBytes("b")).toBe(2);
-    expect(done).toEqual([]);
-
-    ch.drain();
-    await Promise.all([a1, a2, a3, b]);
-    expect(done).toEqual(["a1", "b", "a2", "a3"]);
-    expect(ch.sent.map(label)).toEqual(["a0", "b0", "a1", "a2"]);
-  });
-
-  it("total cap blocks any key until bytes drain", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch, totalCapBytes: 16 });
-    let bAccepted = false;
-    const a = s.enqueue("a", [part("a", 0, 12)]);
-    const b = s.enqueue("b", [part("b", 0, 8)]).then(() => {
-      bAccepted = true;
-    });
-    await tick();
-    expect(s.pendingBytes()).toBe(12); // b (12+8 > 16) not accepted
-    expect(bAccepted).toBe(false);
-    ch.drain();
-    await Promise.all([a, b]);
-    expect(ch.sent.map(label)).toEqual(["a0", "b0"]);
-  });
-
-  it("admits a batch larger than a cap into an empty scope (never wedges)", async () => {
-    const ch = new FakeChannel();
-    const s = createFrameScheduler({ getChannel: () => ch, perKeyCapBytes: 4, totalCapBytes: 8 });
-    await s.enqueue("a", [part("a", 0, 32)]); // 32 > both caps, but the scheduler is empty
-    expect(ch.sent.map(label)).toEqual(["a0"]);
-  });
-
-  it("dropKey settles its enqueues (accepted AND waiting) and skips its parts", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch, perKeyCapBytes: 10 });
-    const a1 = s.enqueue("a", [part("a", 0, 8), part("a", 1, 8)]); // accepted (empty key)
-    const a2 = s.enqueue("a", [part("a", 2, 8)]); // parked on the per-key cap
-    const b = s.enqueue("b", [part("b", 0, 4)]);
-    s.dropKey("a");
-    await Promise.all([a1, a2]); // both settle without a send
-    expect(s.pendingBytes("a")).toBe(0);
-    ch.drain();
-    await b;
-    expect(ch.sent.map(label)).toEqual(["b0"]); // a's parts were discarded
-  });
-
-  it("close settles everything and later enqueues settle without sending", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const a = s.enqueue("a", [part("a", 0)]);
-    const b = s.enqueue("b", [part("b", 0)]);
-    s.close();
-    await Promise.all([a, b]);
-    expect(s.pendingBytes()).toBe(0);
-    await s.enqueue("c", [part("c", 0)]); // settles immediately
-    ch.drain();
-    await tick();
-    expect(ch.sent).toHaveLength(0);
-  });
-
-  it("a channel closing mid-write settles queued work instead of wedging", async () => {
-    const ch = new FakeChannel();
-    ch.trackBuffered = true; // each send backpressures until drain()
-    const s = createFrameScheduler({ getChannel: () => ch });
-    let settled = false;
-    const p = s.enqueue("a", [part("a", 0), part("a", 1), part("a", 2)]).then(() => {
-      settled = true;
-    });
-    await tick();
-    expect(ch.sent.map(label)).toEqual(["a0"]); // parked awaiting drain
-    expect(settled).toBe(false);
-    ch.close(); // awaitDrain resolves on close; pump settles rather than wedging
-    await p;
-    expect(settled).toBe(true);
-    expect(ch.sent.map(label)).toEqual(["a0"]); // remaining parts never sent
-    expect(s.pendingBytes()).toBe(0);
-  });
-
-  it("a null channel settles queued work; the next generation's enqueues send", async () => {
-    let ch: FakeChannel | null = null;
-    const s = createFrameScheduler({ getChannel: () => ch });
-    await s.enqueue("a", [part("a", 0)]); // settles — no channel this generation
-    expect(s.pendingBytes()).toBe(0);
-    ch = new FakeChannel();
-    await s.enqueue("a", [part("a", 1)]);
-    expect(ch.sent.map(label)).toEqual(["a1"]);
-  });
-
-  it("an enqueue's promise resolves only after its LAST part is sent", async () => {
-    const ch = new FakeChannel();
-    ch.trackBuffered = true;
-    const s = createFrameScheduler({ getChannel: () => ch });
-    let resolved = false;
-    const p = s.enqueue("a", [part("a", 0), part("a", 1), part("a", 2)]).then(() => {
-      resolved = true;
-    });
-    await tick();
-    expect(ch.sent).toHaveLength(1);
-    expect(resolved).toBe(false);
-    ch.drain();
-    await tick();
-    expect(ch.sent).toHaveLength(2);
-    expect(resolved).toBe(false);
-    ch.drain();
-    await p;
-    expect(ch.sent).toHaveLength(3);
-    expect(resolved).toBe(true);
-  });
-
-  it("settles 'flushed' once sent and 'dropped' on dropKey/close/closed-scheduler", async () => {
-    const ch = new FakeChannel();
-    const s = createFrameScheduler({ getChannel: () => ch });
-    await expect(s.enqueue("a", [part("a", 0)])).resolves.toBe("flushed");
-    await expect(s.enqueue("a", [])).resolves.toBe("flushed"); // vacuously flushed
-
-    ch.bufferedAmount = 1; // park the pump before any further send
-    const viaDropKey = s.enqueue("b", [part("b", 0)]);
-    s.dropKey("b");
-    await expect(viaDropKey).resolves.toBe("dropped");
-
-    const viaClose = s.enqueue("c", [part("c", 0)]);
-    s.close();
-    await expect(viaClose).resolves.toBe("dropped");
-    await expect(s.enqueue("d", [part("d", 0)])).resolves.toBe("dropped"); // closed scheduler
-    expect(ch.sent.map(label)).toEqual(["a0"]); // only the flushed batch went out
-  });
-
-  it("settles 'dropped' when the channel dies with the batch queued or PARTIALLY sent", async () => {
-    // Never sent: the pump parks on backpressure, then the channel closes.
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const queued = s.enqueue("a", [part("a", 0)]);
-    ch.close();
-    await expect(queued).resolves.toBe("dropped");
-    expect(ch.sent).toHaveLength(0);
-
-    // Partially sent: still 'dropped' — the peer's defragmenter reset discards
-    // the incomplete fragment set on reconnect, so nothing was delivered.
-    const ch2 = new FakeChannel();
-    ch2.trackBuffered = true; // one part per drain
-    const s2 = createFrameScheduler({ getChannel: () => ch2 });
-    const partial = s2.enqueue("a", [part("a", 0), part("a", 1)]);
-    await tick();
-    expect(ch2.sent.map(label)).toEqual(["a0"]); // first part out, second parked
-    ch2.close();
-    await expect(partial).resolves.toBe("dropped");
-  });
-
-  it("never re-sends a refused part (a refused write may already be on the wire)", async () => {
-    // Measured on a device: retrying a refused part delivered exact integer
-    // multiples of a stream's own payload — 3x, 7x, 13x — with nothing missing
-    // anywhere, because libdatachannel buffers a message it could not hand to
-    // SCTP and reports failure anyway. A "failed" send may have been sent.
-    const ch = new FakeChannel();
-    ch.bufferedAmountLowThreshold = 0;
-    let refuseNextSend = true;
-    const realSend = ch.send.bind(ch);
-    ch.send = (data: Uint8Array): void => {
-      if (refuseNextSend) {
-        refuseNextSend = false;
-        ch.bufferedAmount = 4096;
-        // The message goes out despite the throw — the case that produced
-        // duplicates when the part went back on the rotation.
-        realSend(data);
-        throw new Error("send queue full");
-      }
-      realSend(data);
-    };
-
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const refused = s.enqueue("a", [part("a", 0)]);
-    await tick();
-    ch.drain();
-    await tick();
-
-    // Exactly one copy on the wire, and the stream is told it lost the frame
-    // rather than being told nothing and having the bytes arrive twice.
-    expect(ch.sent.map(label)).toEqual(["a0"]);
-    await expect(refused).resolves.toBe("dropped");
-  });
-
-  it("does not discard other keys' work when the send buffer refuses a part", async () => {
-    // The failure this reproduces: several streams in flight, the send buffer
-    // fills, one send throws — and every queued stream loses its body while the
-    // pipe stays up and later frames on those same streams go through.
-    const ch = new FakeChannel();
-    ch.bufferedAmountLowThreshold = 0;
-    let refuseNextSend = false;
-    const realSend = ch.send.bind(ch);
-    ch.send = (data: Uint8Array): void => {
-      if (refuseNextSend) {
-        refuseNextSend = false;
-        // A full SCTP queue: the channel is open, its buffer is above the
-        // low-water mark, and the write is refused.
-        ch.bufferedAmount = 4096;
-        throw new Error("send queue full");
-      }
-      realSend(data);
-    };
-
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const a = s.enqueue("a", [part("a", 0)]);
-    const b = s.enqueue("b", [part("b", 0)]);
-    refuseNextSend = true;
-    await tick();
-    ch.drain();
-    await tick();
-
-    // One refused write costs its own stream and nothing else: b is untouched.
-    // Before this, a single full buffer settled every queued key as dropped,
-    // which is how a burst of concurrent streams lost whole bodies at once.
-    await expect(a).resolves.toBe("dropped");
-    await expect(b).resolves.toBe("flushed");
-    expect(ch.sent.map(label)).toEqual(["b0"]);
-  });
-
-  it("still settles 'dropped' when a send fails with room in the buffer", async () => {
-    // Draining cannot fix a write the channel refuses while its buffer is
-    // empty, so that stays fatal rather than retrying forever.
-    const ch = new FakeChannel();
-    ch.bufferedAmountLowThreshold = 0;
-    ch.send = (): void => {
-      throw new Error("channel is unusable");
-    };
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const queued = s.enqueue("a", [part("a", 0)]);
-    await expect(queued).resolves.toBe("dropped");
-    expect(ch.sent).toHaveLength(0);
-  });
-
-  it("meters pendingBytes per key and in total while parts are queued", async () => {
-    const ch = new FakeChannel();
-    ch.bufferedAmount = 1;
-    const s = createFrameScheduler({ getChannel: () => ch });
-    const a = s.enqueue("a", [part("a", 0, 6), part("a", 1, 6)]);
-    const b = s.enqueue("b", [part("b", 0, 3)]);
-    await tick();
-    expect(s.pendingBytes("a")).toBe(12);
-    expect(s.pendingBytes("b")).toBe(3);
-    expect(s.pendingBytes()).toBe(15);
-    ch.drain();
-    await Promise.all([a, b]);
-    expect(s.pendingBytes()).toBe(0);
-  });
+  );
 });

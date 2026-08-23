@@ -1,7 +1,9 @@
 # WebRTC RPC v2 — Full Redesign Plan
 
-**Status:** Implemented, then superseded for pairing-link encoding by the compact
-v3 carrier documented in `webrtc-rpc-transport.md`. Supersedes the fix-list in
+**Status:** Historical v2 design, implemented and since superseded at the live
+streaming layer by the v3 three-lane QoS and panel-delivery architecture in
+[`architecture/remote-transport-qos.md`](./architecture/remote-transport-qos.md).
+Pairing still uses the compact v3 carrier. This document supersedes the fix-list in
 `webrtc-rpc-remediation-plan.md` (whose Parts 1–2, the validation register and
 findings, remain the evidence base; its incremental Part 3 is replaced by this).
 See "Implementation notes" at the end for deviations landed with the build.

@@ -35,6 +35,7 @@
  */
 
 import * as http from "node:http";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
@@ -49,7 +50,8 @@ import {
   checkPanelGatewayPath,
   panelAssetCacheKey,
 } from "@vibestudio/shared/panel/assetPathPolicy";
-import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
+import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
+import { AssetDiskCache, type FetchedResponse, type VerifiedCacheEntry } from "./assetDiskCache.js";
 
 /** Minimal streaming seam shared by Electron and headless Node hosts. */
 export interface PanelAssetStreamClient {
@@ -57,7 +59,7 @@ export interface PanelAssetStreamClient {
     service: string,
     method: string,
     args?: unknown[],
-    options?: Pick<RpcStreamOptions, "signal" | "headTimeoutMs">
+    options?: Pick<RpcStreamOptions, "signal" | "headTimeoutMs" | "trafficClass">
   ): Promise<Response>;
 }
 
@@ -78,6 +80,27 @@ const log = createDevLogger("PanelAssetFacade");
  */
 const ASSET_CONNECT_BACKSTOP_MS = 60_000;
 const ASSET_STALL_BACKSTOP_MS = 30_000;
+const MAX_PREFETCH_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_PREFETCH_TOTAL_BYTES = 128 * 1024 * 1024;
+const SHA256_INTEGRITY = /^sha256-([0-9a-f]{64})$/u;
+
+interface PrefetchManifestResource {
+  path: string;
+  contentType: string;
+  integrity: string;
+  initial?: boolean;
+  version?: string;
+}
+
+interface PrefetchManifest {
+  artifacts: PrefetchManifestResource[];
+  runtimeHelpers?: PrefetchManifestResource[];
+}
+
+interface PinnedEntry {
+  buildKey: string;
+  sourceRoot: string;
+}
 
 /** Distinguishes a backstop/cancel abort from a generic pipe error (nicer copy). */
 class AssetBackstopError extends Error {
@@ -218,8 +241,20 @@ export async function startPanelAssetFacade(
     connectMs: options.connectBackstopMs ?? ASSET_CONNECT_BACKSTOP_MS,
     stallMs: options.stallBackstopMs ?? ASSET_STALL_BACKSTOP_MS,
   };
+  const prefetchFlights = new Map<string, Promise<void>>();
+  const prefetchedBuilds = new Set<string>();
+  const prefetchLifetime = new AbortController();
   const server = http.createServer((req, res) => {
-    void handleRequest(serverClient, cache, backstops, req, res);
+    void handleRequest(
+      serverClient,
+      cache,
+      prefetchFlights,
+      prefetchedBuilds,
+      prefetchLifetime.signal,
+      backstops,
+      req,
+      res
+    );
   });
 
   const port = await listenWithStablePort(server, portFile);
@@ -227,9 +262,11 @@ export async function startPanelAssetFacade(
   return {
     port,
     close: async () => {
+      prefetchLifetime.abort();
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((err) => (err ? rejectClose(err) : resolveClose()));
       });
+      await Promise.allSettled(prefetchFlights.values());
       await cache?.close();
     },
   };
@@ -293,6 +330,9 @@ function writePersistedPort(portFile: string, port: number): void {
 async function handleRequest(
   serverClient: PanelAssetStreamClient,
   cache: AssetDiskCache | null,
+  prefetchFlights: Map<string, Promise<void>>,
+  prefetchedBuilds: Set<string>,
+  prefetchLifetime: AbortSignal,
   backstops: ResolvedBackstops,
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -325,6 +365,44 @@ async function handleRequest(
   }
   const gatewayPath = decision.target;
 
+  const pinnedEntry = parsePinnedEntry(gatewayPath);
+  if (
+    cache &&
+    pinnedEntry &&
+    !prefetchedBuilds.has(pinnedEntry.buildKey) &&
+    !prefetchFlights.has(pinnedEntry.buildKey)
+  ) {
+    const flight = prefetchInitialPanelAssets(
+      serverClient,
+      cache,
+      backstops,
+      pinnedEntry,
+      prefetchLifetime
+    )
+      .then(() => {
+        prefetchedBuilds.add(pinnedEntry.buildKey);
+      })
+      .catch((error: unknown) => {
+        if (prefetchLifetime.aborted) return;
+        log.warn(
+          `Initial asset prefetch failed for build ${pinnedEntry.buildKey}; ` +
+            `individual immutable requests remain available: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+        );
+      })
+      .finally(() => prefetchFlights.delete(pinnedEntry.buildKey));
+    prefetchFlights.set(pinnedEntry.buildKey, flight);
+  }
+
+  // Subresources requested while the entry document is parsing join the one
+  // build flight. This is the synchronization point that replaces dozens of
+  // independent RPC round trips; a failed flight simply falls through to the
+  // normal per-resource fetch below.
+  const requestBuildKey = buildKeyForRequest(gatewayPath, req.headers.referer);
+  const prefetchFlight = requestBuildKey ? prefetchFlights.get(requestBuildKey) : undefined;
+  if (prefetchFlight && !pinnedEntry) await prefetchFlight;
+
   // Worker routes may be panel-reachable through bridge-tunneled gatewayFetch,
   // but they are dynamic surfaces and never belong on this unauthenticated
   // origin. This mirrors the mobile facade exactly.
@@ -356,6 +434,7 @@ async function handleRequest(
           {
             signal: controller.signal,
             headTimeoutMs: backstops.connectMs,
+            trafficClass: pinnedEntry ? "interactive" : "bulk",
           }
         ),
       controller,
@@ -412,6 +491,265 @@ async function handleRequest(
       );
     }
   }
+}
+
+function parsePinnedEntry(rawPath: string): PinnedEntry | null {
+  const url = new URL(rawPath, "http://panel-facade.invalid");
+  const buildKey = url.searchParams.get("buildKey");
+  if (!buildKey || !/^[0-9a-f]{64}$/u.test(buildKey)) return null;
+  const sourceRoot = url.pathname.endsWith("/")
+    ? url.pathname
+    : url.pathname.endsWith("/index.html")
+      ? url.pathname.slice(0, -"index.html".length)
+      : null;
+  return sourceRoot ? { buildKey, sourceRoot } : null;
+}
+
+function buildKeyForRequest(rawPath: string, referer: string | undefined): string | null {
+  const direct = rawPath.match(/^\/__vibestudio\/panel-build\/([0-9a-f]{64})\//u)?.[1];
+  if (direct) return direct;
+  if (!referer) return null;
+  try {
+    const value = new URL(referer).searchParams.get("buildKey");
+    return value && /^[0-9a-f]{64}$/u.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function prefetchInitialPanelAssets(
+  serverClient: PanelAssetStreamClient,
+  cache: AssetDiskCache,
+  backstops: ResolvedBackstops,
+  entry: PinnedEntry,
+  signal: AbortSignal
+): Promise<void> {
+  const manifestPath = `/__vibestudio/panel-build/${entry.buildKey}/__manifest.json`;
+  const manifestKey = panelAssetCacheKey(manifestPath, {});
+  let manifestBytes = (await cache.get(manifestKey))?.body;
+  let manifest: PrefetchManifest;
+  if (!manifestBytes) {
+    const response = await fetchPrefetchResponse(
+      serverClient,
+      backstops,
+      manifestPath,
+      "interactive",
+      signal
+    );
+    manifestBytes = await readResponseBytes(response, MAX_PREFETCH_MANIFEST_BYTES);
+    // Validate before publication: an older server can answer the panel SPA
+    // catch-all at an unknown path with HTML and a truncated JSON response must
+    // never become the durable inventory for this build.
+    manifest = parsePrefetchManifest(manifestBytes);
+    const digest = createHash("sha256").update(manifestBytes).digest("hex");
+    await cache.putVerifiedBatch([
+      {
+        cacheKey: manifestKey,
+        bytes: manifestBytes,
+        payloadDigest: digest,
+        gzip: false,
+        contentType: "application/json; charset=utf-8",
+        replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
+      },
+    ]);
+  } else {
+    manifest = parsePrefetchManifest(manifestBytes);
+  }
+  const missingArtifacts: Array<{ index: number; resource: PrefetchManifestResource }> = [];
+  for (const [index, resource] of manifest.artifacts.entries()) {
+    if (!resource.initial || !integrityDigest(resource.integrity)) continue;
+    const cacheKey = panelAssetCacheKey(
+      `/__vibestudio/panel-build/${entry.buildKey}/${resource.path}`,
+      {}
+    );
+    if (!(await cache.has(cacheKey))) missingArtifacts.push({ index, resource });
+  }
+  const missingHelpers: Array<{ index: number; resource: PrefetchManifestResource }> = [];
+  for (const [index, resource] of (manifest.runtimeHelpers ?? []).entries()) {
+    if (!resource.initial || !resource.version || !integrityDigest(resource.integrity)) continue;
+    const cacheKey = panelAssetCacheKey(
+      `${entry.sourceRoot}${resource.path}?v=${resource.version}`,
+      {}
+    );
+    if (!(await cache.has(cacheKey))) missingHelpers.push({ index, resource });
+  }
+  if (missingArtifacts.length === 0 && missingHelpers.length === 0) return;
+
+  const query = new URLSearchParams({ enc: "gzip" });
+  if (missingArtifacts.length > 0) {
+    query.set("want", missingArtifacts.map(({ index }) => index).join(","));
+  }
+  if (missingHelpers.length > 0) {
+    query.set("helpers", missingHelpers.map(({ index }) => index).join(","));
+  }
+  const bundlePath = `/__vibestudio/panel-build/${entry.buildKey}/__bundle?${query}`;
+  const response = await fetchPrefetchResponse(serverClient, backstops, bundlePath, "bulk", signal);
+  if (!response.body) throw new Error("panel prefetch bundle has no response body");
+
+  const expected = new Map<
+    string,
+    Array<{ cacheKey: string; resource: PrefetchManifestResource }>
+  >();
+  const addExpected = (cacheKey: string, resource: PrefetchManifestResource): void => {
+    const digest = integrityDigest(resource.integrity)!;
+    const paths = expected.get(digest) ?? [];
+    paths.push({ cacheKey, resource });
+    expected.set(digest, paths);
+  };
+  for (const { resource } of missingArtifacts) {
+    addExpected(
+      panelAssetCacheKey(`/__vibestudio/panel-build/${entry.buildKey}/${resource.path}`, {}),
+      resource
+    );
+  }
+  for (const { resource } of missingHelpers) {
+    addExpected(
+      panelAssetCacheKey(`${entry.sourceRoot}${resource.path}?v=${resource.version}`, {}),
+      resource
+    );
+  }
+
+  const reader = createBlobBundleReader();
+  const received = new Map<string, { payloadDigest: string; bytes: Uint8Array }>();
+  const bodyReader = response.body.getReader();
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await bodyReader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_PREFETCH_TOTAL_BYTES) {
+      await bodyReader.cancel("panel prefetch exceeded aggregate byte cap");
+      throw new Error(`panel prefetch exceeded ${MAX_PREFETCH_TOTAL_BYTES} bytes`);
+    }
+    for (const record of reader.push(value)) {
+      if (expected.has(record.digest)) {
+        received.set(record.digest, {
+          payloadDigest: record.payloadDigest,
+          bytes: record.bytes,
+        });
+      }
+    }
+  }
+  reader.end();
+  for (const digest of expected.keys()) {
+    if (!received.has(digest)) throw new Error(`panel prefetch bundle omitted ${digest}`);
+  }
+
+  const entries: VerifiedCacheEntry[] = [];
+  for (const [digest, targets] of expected) {
+    const record = received.get(digest)!;
+    for (const { cacheKey, resource } of targets) {
+      entries.push({
+        cacheKey,
+        bytes: record.bytes,
+        payloadDigest: record.payloadDigest,
+        gzip: record.payloadDigest !== digest,
+        contentType: resource.contentType,
+        replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
+      });
+    }
+  }
+  await cache.putVerifiedBatch(entries);
+}
+
+async function fetchPrefetchResponse(
+  serverClient: PanelAssetStreamClient,
+  backstops: ResolvedBackstops,
+  path: string,
+  trafficClass: "interactive" | "bulk",
+  signal: AbortSignal
+): Promise<Response> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) controller.abort();
+  let response: Response;
+  try {
+    response = await withConnectBackstop(
+      () =>
+        serverClient.stream(
+          "gateway",
+          "fetch",
+          [{ path, method: "GET", headers: {}, gzip: false }],
+          {
+            signal: controller.signal,
+            headTimeoutMs: backstops.connectMs,
+            trafficClass,
+          }
+        ),
+      controller,
+      path,
+      backstops.connectMs
+    );
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`panel prefetch ${path} returned HTTP ${response.status}`);
+  }
+  return response;
+}
+
+async function readResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel("response exceeded byte cap");
+      throw new Error(`response exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total
+  );
+}
+
+function parsePrefetchManifest(bytes: Uint8Array): PrefetchManifest {
+  const parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown;
+  if (!parsed || typeof parsed !== "object")
+    throw new Error("panel prefetch manifest is not an object");
+  const candidate = parsed as { artifacts?: unknown; runtimeHelpers?: unknown };
+  if (!Array.isArray(candidate.artifacts))
+    throw new Error("panel prefetch manifest has no artifact list");
+  const parseResources = (value: unknown, label: string): PrefetchManifestResource[] => {
+    if (!Array.isArray(value)) throw new Error(`panel prefetch manifest ${label} is not an array`);
+    return value.map((item) => {
+      if (!item || typeof item !== "object")
+        throw new Error(`panel prefetch ${label} entry is invalid`);
+      const resource = item as Partial<PrefetchManifestResource>;
+      if (
+        typeof resource.path !== "string" ||
+        resource.path.startsWith("/") ||
+        resource.path.includes("..") ||
+        typeof resource.contentType !== "string" ||
+        typeof resource.integrity !== "string" ||
+        !integrityDigest(resource.integrity) ||
+        (resource.version !== undefined && !/^[0-9a-f]{64}$/u.test(resource.version))
+      ) {
+        throw new Error(`panel prefetch ${label} entry is malformed`);
+      }
+      return resource as PrefetchManifestResource;
+    });
+  };
+  return {
+    artifacts: parseResources(candidate.artifacts, "artifacts"),
+    runtimeHelpers:
+      candidate.runtimeHelpers === undefined
+        ? []
+        : parseResources(candidate.runtimeHelpers, "runtimeHelpers"),
+  };
+}
+
+function integrityDigest(integrity: string): string | null {
+  return integrity.match(SHA256_INTEGRITY)?.[1] ?? null;
 }
 
 function escapeHtml(value: string): string {

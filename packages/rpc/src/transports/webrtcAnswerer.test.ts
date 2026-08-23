@@ -226,9 +226,10 @@ function sentControlFrames(channel: FakeChannel): Array<Record<string, unknown>>
 function offererHello(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     t: "hello",
-    proto: 2,
+    proto: 3,
     contractVersion: RPC_CONTRACT_VERSION,
     maxMsg: 256 * 1024,
+    receiveWindowBytes: 512 * 1024,
     platform: "desktop",
     keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
     ...over,
@@ -271,7 +272,12 @@ function makeHarness(createSignaling?: () => SignalingClient): Harness {
 async function pairUp(
   h: Harness,
   remoteHelloOver: Record<string, unknown> = {}
-): Promise<{ peer: FakePeer; control: FakeChannel; bulk: FakeChannel }> {
+): Promise<{
+  peer: FakePeer;
+  control: FakeChannel;
+  interactive: FakeChannel;
+  bulk: FakeChannel;
+}> {
   const connecting = h.pipe.connect();
   await tick();
   h.signals.at(-1)!.deliverOffer();
@@ -279,14 +285,16 @@ async function pairUp(
   const peer = h.peers.at(-1)!;
   const control = peer.channels.get(0)!;
   const bulk = peer.channels.get(1)!;
+  const interactive = peer.channels.get(2)!;
   control.open();
+  interactive.open();
   bulk.open();
   peer.fire("connected");
   await tick();
   deliverControl(control, offererHello(remoteHelloOver));
   await tick();
   await connecting;
-  return { peer, control, bulk };
+  return { peer, control, interactive, bulk };
 }
 
 const bytes = (n: number, fill = 7): Uint8Array => new Uint8Array(n).fill(fill);
@@ -297,7 +305,7 @@ afterEach(() => {
 
 // ---------------------------------------------------------------------------
 
-describe("WebRTC answerer pipe (v2)", () => {
+describe("WebRTC answerer pipe (v3)", () => {
   it("arms lazily: signaling joins on connect(), no peer until the first offer", async () => {
     const h = makeHarness();
     void h.pipe.connect().catch(() => {});
@@ -318,22 +326,24 @@ describe("WebRTC answerer pipe (v2)", () => {
 
   it("exchanges hellos (server hello first, direct) and negotiates the chunk", async () => {
     const h = makeHarness();
-    const { peer, control, bulk } = await pairUp(h, { maxMsg: 105 });
+    const { peer, control, interactive, bulk } = await pairUp(h, { maxMsg: 105 });
 
     // Answer went back over signaling during establish.
     expect(h.signals[0]!.sentDescriptions.map((d) => d.type)).toContain("answer");
     // Control can burst; bulk is paced one bounded message per native drain so
     // it cannot monopolize the channels' shared SCTP association.
     expect(control.bufferedAmountLowThreshold).toBe(256 * 1024);
-    expect(bulk.bufferedAmountLowThreshold).toBe(0);
+    expect(interactive.bufferedAmountLowThreshold).toBe(64 * 1024);
+    expect(bulk.bufferedAmountLowThreshold).toBe(64 * 1024);
 
     // Our hello is the FIRST control message, with the §1.1 shape.
     const frames = sentControlFrames(control);
     expect(frames[0]).toEqual({
       t: "hello",
-      proto: 2,
+      proto: 3,
       contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: 256 * 1024,
+      receiveWindowBytes: 0,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
       // Advertised unconditionally; numbering only turns on if the peer
@@ -353,7 +363,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(control.sent.length).toBeGreaterThan(before + 1);
 
     // ...and bulk DATA chunks into ≤105-byte mux messages (100-byte payloads).
-    await h.pipe.writeBulkFrame(3, FRAME_DATA, bytes(250));
+    await h.pipe.writeStreamFrame("bulk", 3, FRAME_DATA, bytes(250));
     const dataMessages = bulk.sent.map((m) => decodeBulkMessage(m));
     expect(dataMessages.map((m) => m.payload.byteLength)).toEqual([100, 100, 50]);
     expect(dataMessages.every((m) => m.streamId === 3 && m.type === FRAME_DATA && !m.more)).toBe(
@@ -368,7 +378,9 @@ describe("WebRTC answerer pipe (v2)", () => {
 
     // Inbound bulk messages demux to onBulkFrame.
     const gotBulk: Array<[number, number, number]> = [];
-    h.pipe.onBulkFrame((sid, type, payload) => gotBulk.push([sid, type, payload.byteLength]));
+    h.pipe.onStreamFrame((trafficClass, sid, type, payload) => {
+      if (trafficClass === "bulk") gotBulk.push([sid, type, payload.byteLength]);
+    });
     bulk.deliver(encodeBulkMessage(9, FRAME_DATA, bytes(4)));
     expect(gotBulk).toEqual([[9, FRAME_DATA, 4]]);
 
@@ -376,9 +388,9 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
-  it("paces outbound bulk frames one at a time for every peer", async () => {
+  it("paces one message at a time when the peer advertises a zero receive window", async () => {
     const h = makeHarness();
-    const { control, bulk } = await pairUp(h, { platform: "mobile" });
+    const { control, bulk } = await pairUp(h, { receiveWindowBytes: 0 });
 
     expect(control.bufferedAmountLowThreshold).toBe(256 * 1024);
     expect(bulk.bufferedAmountLowThreshold).toBe(0);
@@ -387,10 +399,10 @@ describe("WebRTC answerer pipe (v2)", () => {
 
   it("bounds bulk head-of-line delay while control remains writable", async () => {
     const h = makeHarness();
-    const { control, bulk } = await pairUp(h);
+    const { control, bulk } = await pairUp(h, { receiveWindowBytes: 0 });
     bulk.trackBuffered = true;
     let settled = false;
-    const write = h.pipe.writeBulkFrame(14, FRAME_DATA, bytes(40 * 1024)).then(() => {
+    const write = h.pipe.writeStreamFrame("bulk", 14, FRAME_DATA, bytes(40 * 1024)).then(() => {
       settled = true;
     });
 
@@ -436,7 +448,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
-  it("connect() resolves only after hello + both channels (not on ICE connected)", async () => {
+  it("connect() resolves only after hello + all three channels (not on ICE connected)", async () => {
     const h = makeHarness();
     let resolved = false;
     void h.pipe.connect().then(() => {
@@ -448,6 +460,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     const peer = h.peers[0]!;
     const control = peer.channels.get(0)!;
     const bulk = peer.channels.get(1)!;
+    const interactive = peer.channels.get(2)!;
     control.open();
     bulk.open();
     peer.fire("connected"); // the old pipe resolved here — v2 must not
@@ -456,6 +469,9 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(h.pipe.status()).toBe("connecting");
 
     deliverControl(control, offererHello());
+    await tick();
+    expect(resolved).toBe(false);
+    interactive.open();
     await tick();
     expect(resolved).toBe(true);
     expect(h.pipe.status()).toBe("connected");
@@ -475,10 +491,12 @@ describe("WebRTC answerer pipe (v2)", () => {
     const peer = h.peers[0]!;
     const control = peer.channels.get(0)!;
     const bulk = peer.channels.get(1)!;
+    const interactive = peer.channels.get(2)!;
     const got: Array<Record<string, unknown>> = [];
     h.pipe.onControl((data) => got.push(JSON.parse(dec.decode(data)) as Record<string, unknown>));
 
     control.open();
+    interactive.open();
     peer.fire("connected");
     deliverControl(control, offererHello());
     await tick();
@@ -514,7 +532,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
-  it("drops the pipe on hello with proto !== 2", async () => {
+  it("drops the pipe on hello with proto !== 3", async () => {
     const h = makeHarness();
     void h.pipe.connect().catch(() => {});
     await tick();
@@ -524,7 +542,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     peer.channels.get(0)!.open();
     peer.channels.get(1)!.open();
     deliverControl(peer.channels.get(0)!, offererHello({ proto: 1 }));
-    expect(h.downs).toEqual(["protocol violation: hello proto 1 (want 2)"]);
+    expect(h.downs).toEqual(["protocol violation: hello proto 1 (want 3)"]);
     await h.pipe.close();
   });
 
@@ -673,7 +691,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     // Writes after down settle without sending (pipe-down is the signal).
     const sentBefore = control.sent.length;
     await h.pipe.writeControl(bytes(10));
-    await h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(10));
+    await h.pipe.writeStreamFrame("bulk", 1, FRAME_DATA, bytes(10));
     expect(control.sent.length).toBe(sentBefore);
     await h.pipe.close();
 
@@ -716,6 +734,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     const reconnecting = h.pipe.connect();
     peer2.channels.get(0)!.open();
     peer2.channels.get(1)!.open();
+    peer2.channels.get(2)!.open();
     await tick();
     deliverControl(peer2.channels.get(0)!, offererHello());
     await tick();
@@ -742,7 +761,7 @@ describe("WebRTC answerer pipe (v2)", () => {
   it("splits an oversized HEAD across MORE messages that demux back to one frame", async () => {
     const h = makeHarness();
     const { bulk } = await pairUp(h, { maxMsg: 105 }); // budget = 100
-    await h.pipe.writeBulkFrame(5, FRAME_HEAD, bytes(250, 9));
+    await h.pipe.writeStreamFrame("bulk", 5, FRAME_HEAD, bytes(250, 9));
 
     const messages = bulk.sent.map((m) => decodeBulkMessage(m));
     expect(messages.map((m) => [m.type, m.more, m.payload.byteLength])).toEqual([
@@ -764,30 +783,30 @@ describe("WebRTC answerer pipe (v2)", () => {
   it("round-robins bulk sends across streams at message granularity", async () => {
     const h = makeHarness();
     const { bulk } = await pairUp(h, { maxMsg: 105 });
-    const a = h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(250));
-    const b = h.pipe.writeBulkFrame(2, FRAME_DATA, bytes(250));
+    const a = h.pipe.writeStreamFrame("bulk", 1, FRAME_DATA, bytes(250));
+    const b = h.pipe.writeStreamFrame("bulk", 2, FRAME_DATA, bytes(250));
     await Promise.all([a, b]);
     expect(bulk.sent.map((m) => decodeBulkMessage(m).streamId)).toEqual([1, 2, 1, 2, 1, 2]);
     await h.pipe.close();
   });
 
-  it("dropBulkStream discards queued bulk and settles its writers", async () => {
+  it("dropStream discards queued bulk and settles its writers", async () => {
     const h = makeHarness();
     const { bulk } = await pairUp(h, { maxMsg: 105 });
     bulk.bufferedAmount = 300 * 1024; // park the pump
     let settled = false;
-    const write = h.pipe.writeBulkFrame(7, FRAME_DATA, bytes(300)).then(() => {
+    const write = h.pipe.writeStreamFrame("bulk", 7, FRAME_DATA, bytes(300)).then(() => {
       settled = true;
     });
     await tick();
     expect(bulk.sent).toHaveLength(0);
-    expect(h.pipe.bulkPendingBytes(7)).toBe(315); // 3 x (100 payload + 5 header)
-    expect(h.pipe.bulkPendingBytes()).toBe(315);
+    expect(h.pipe.streamPendingBytes("bulk", 7)).toBe(315); // 3 x (100 payload + 5 header)
+    expect(h.pipe.streamPendingBytes()).toBe(315);
 
-    h.pipe.dropBulkStream(7);
+    h.pipe.dropStream("bulk", 7);
     await write;
     expect(settled).toBe(true);
-    expect(h.pipe.bulkPendingBytes(7)).toBe(0);
+    expect(h.pipe.streamPendingBytes("bulk", 7)).toBe(0);
 
     bulk.drain();
     await tick();
@@ -850,6 +869,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     const peer = h.peers[0]!;
     peer.channels.get(0)!.open();
     peer.channels.get(1)!.open();
+    peer.channels.get(2)!.open();
     await tick();
     deliverControl(peer.channels.get(0)!, offererHello());
     await tick();
@@ -897,7 +917,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     await expect(h.pipe.connect()).rejects.toThrow("Answerer pipe closed");
     // Writes on a closed pipe settle silently.
     await h.pipe.writeControl(bytes(3));
-    await h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(3));
+    await h.pipe.writeStreamFrame("bulk", 1, FRAME_DATA, bytes(3));
   });
 
   // --- candidateType surface (§9.8 relay alarm) -----------------------------
@@ -924,7 +944,9 @@ describe("WebRTC answerer pipe (v2)", () => {
     const peer = h.peers.at(-1)!;
     const control = peer.channels.get(0)!;
     const bulk = peer.channels.get(1)!;
+    const interactive = peer.channels.get(2)!;
     control.open();
+    interactive.open();
     bulk.open();
     peer.fire("connected");
     await tick();
@@ -1009,8 +1031,8 @@ describe("WebRTC answerer pipe (v2)", () => {
     const h = makeHarness();
     const { bulk } = await pairUp(h, { bulkSeq: true });
     const before = bulk.sent.length;
-    await h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(4));
-    await h.pipe.writeBulkFrame(2, FRAME_DATA, bytes(4));
+    await h.pipe.writeStreamFrame("bulk", 1, FRAME_DATA, bytes(4));
+    await h.pipe.writeStreamFrame("bulk", 2, FRAME_DATA, bytes(4));
     const sequences = bulk.sent.slice(before).map((m) => decodeBulkMessage(m).sequence);
     // Contiguous and in send order — this is what makes a gap detectable.
     expect(sequences).toEqual([0, 1]);
@@ -1022,7 +1044,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     const h = makeHarness();
     const { bulk } = await pairUp(h);
     const before = bulk.sent.length;
-    await h.pipe.writeBulkFrame(1, FRAME_DATA, bytes(4));
+    await h.pipe.writeStreamFrame("bulk", 1, FRAME_DATA, bytes(4));
     const sent = bulk.sent.slice(before);
     expect(sent.length).toBeGreaterThan(0);
     expect(decodeBulkMessage(sent[0]!).sequence).toBeNull();

@@ -472,31 +472,42 @@ function registerClient(server: RpcServer, client: WsClientState): void {
 /** Let queued promise callbacks (frame pumps, metering settles) run. */
 const flushAsync = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** Fake answerer pipe implementing the v2 AttachablePipe contract. */
+/** Fake answerer pipe implementing the v3 attachable-pipe contract. */
 function createFakePipe() {
   const control: Array<{ frame: SessionControlFrame; lane: string | undefined }> = [];
   const bulk: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
   let controlHandler: ((data: Uint8Array) => void) | null = null;
-  let bulkFrameHandler: ((streamId: number, type: number, payload: Uint8Array) => void) | null =
-    null;
+  let streamFrameHandler:
+    | ((
+        trafficClass: "interactive" | "bulk",
+        streamId: number,
+        type: number,
+        payload: Uint8Array
+      ) => void)
+    | null = null;
   let downHandler: ((reason: string) => void) | null = null;
   const pipe = {
     writeControl: (data: Uint8Array, lane?: string): Promise<void> => {
       control.push({ frame: decodeControlFrame(new TextDecoder().decode(data)), lane });
       return Promise.resolve();
     },
-    writeBulkFrame: (streamId: number, type: number, payload: Uint8Array): Promise<void> => {
+    writeStreamFrame: (
+      _trafficClass: "interactive" | "bulk",
+      streamId: number,
+      type: number,
+      payload: Uint8Array
+    ): Promise<void> => {
       bulk.push({ streamId, type, payload });
       return Promise.resolve();
     },
-    dropBulkStream: vi.fn(),
-    bulkPendingBytes: () => 0,
+    dropStream: vi.fn(),
+    streamPendingBytes: () => 0,
     controlBufferedAmount: () => 0,
     onControl: (handler: (data: Uint8Array) => void): void => {
       controlHandler = handler;
     },
-    onBulkFrame: (handler: (streamId: number, type: number, payload: Uint8Array) => void): void => {
-      bulkFrameHandler = handler;
+    onStreamFrame: (handler: typeof streamFrameHandler): void => {
+      streamFrameHandler = handler;
     },
     onDown: (handler: (reason: string) => void): (() => void) => {
       downHandler = handler;
@@ -513,9 +524,9 @@ function createFakePipe() {
     sendControl: (frame: SessionControlFrame) =>
       controlHandler!(new TextEncoder().encode(encodeControlFrame(frame))),
     emitDown: (reason: string) => downHandler!(reason),
-    hasBulkHandler: () => bulkFrameHandler !== null,
+    hasBulkHandler: () => streamFrameHandler !== null,
     emitBulk: (streamId: number, type: number, payload: Uint8Array) =>
-      bulkFrameHandler!(streamId, type, payload),
+      streamFrameHandler!("bulk", streamId, type, payload),
   };
 }
 
@@ -533,7 +544,7 @@ function unknownSidRpcRequest(sid: string, requestId: string): SessionControlFra
   };
 }
 
-describe("RpcServer attachWebRtcPipe (v2 pipe contract)", () => {
+describe("RpcServer attachWebRtcPipe (v3 pipe contract)", () => {
   it("closes all WebRTC logical sessions when the underlying pipe goes down", () => {
     const { server } = createServer();
     const closeArgs: unknown[][] = [];
@@ -640,6 +651,7 @@ describe("RpcServer attachWebRtcPipe (v2 pipe contract)", () => {
       t: "stream-open",
       sid: "missing",
       streamId: 42,
+      trafficClass: "bulk",
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
         requestId: "stream-1",
@@ -848,12 +860,12 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
           control.push(decodeControlFrame(new TextDecoder().decode(bytes)));
           return Promise.resolve();
         },
-        writeBulkFrame: (streamId, type, payload) => {
+        writeStreamFrame: (_trafficClass, streamId, type, payload) => {
           bulk.push({ streamId, type, payload });
           return Promise.resolve("flushed" as const);
         },
-        dropBulkStream: () => {},
-        bulkPendingBytes: () => 0,
+        dropStream: () => {},
+        streamPendingBytes: () => 0,
       },
       () => {}
     );
@@ -992,12 +1004,12 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
         return Promise.resolve();
       },
       // Never settles — the bulk backlog stays metered.
-      writeBulkFrame: () => new Promise<never>(() => {}),
-      dropBulkStream: () => {},
-      bulkPendingBytes: () => 0,
+      writeStreamFrame: () => new Promise<never>(() => {}),
+      dropStream: () => {},
+      streamPendingBytes: () => 0,
     };
     const shim = new SessionWebSocketShim("s1", pipe, () => {});
-    shim.registerStream("req-1", 7);
+    shim.registerStream("req-1", 7, "bulk");
     // Meter 129 MiB of un-drained bulk without allocating it: the shim only
     // reads byteLength and hands the payload to the (fake) pipe.
     const written = shim.sendStreamFrame("req-1", FRAME_DATA, {
@@ -4988,6 +5000,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: opts.bodyStreamId ?? 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5093,6 +5106,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
         requestId: "no-body",
@@ -5129,6 +5143,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5158,6 +5173,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5174,6 +5190,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 8,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5205,6 +5222,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5260,6 +5278,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
         t: "stream-open",
         sid: "s1",
         streamId: 7,
+        trafficClass: "bulk",
         bodyStreamId: 8,
         envelope: makeEnvelope("panel:c1", "main", "panel", {
           type: "stream-request",
@@ -5293,6 +5312,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5325,6 +5345,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 2,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5359,6 +5380,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 3,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5398,6 +5420,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 7,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",
@@ -5424,6 +5447,7 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
       t: "stream-open",
       sid: "s1",
       streamId: 9,
+      trafficClass: "bulk",
       bodyStreamId: 8,
       envelope: makeEnvelope("panel:c1", "main", "panel", {
         type: "stream-request",

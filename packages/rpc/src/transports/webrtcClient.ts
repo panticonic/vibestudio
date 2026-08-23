@@ -52,6 +52,7 @@ import type {
   EnvelopeRpcTransport,
   RpcConnectionStatus,
   RpcEnvelope,
+  RpcStreamTrafficClass,
   RpcStreamRequest,
 } from "../types.js";
 import {
@@ -100,6 +101,7 @@ import {
   type SessionRoutedFrame,
   type SessionRoutedResponseErrorFrame,
   type SessionRpcFrame,
+  type SessionStreamTrafficClass,
   decodeControlFrame,
   encodeControlFrame,
 } from "../protocol/sessionNegotiation.js";
@@ -123,6 +125,10 @@ import {
   CONTROL_LABEL,
   CONTROL_BUFFER_LOW_THRESHOLD,
   DEFAULT_CHUNK_SIZE,
+  INTERACTIVE_BUFFER_LOW_THRESHOLD,
+  INTERACTIVE_CHANNEL_ID,
+  INTERACTIVE_LABEL,
+  MAX_ASSOCIATION_STREAM_WINDOW,
   MAX_BULK_MESSAGE_SIZE,
 } from "./webrtcPeer.js";
 import type { SignalingClient } from "./webrtcSignaling.js";
@@ -353,9 +359,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
 
   let peer: RtcPeerConnectionLike | null = null;
   let control: RtcDataChannelLike | null = null;
+  let interactive: RtcDataChannelLike | null = null;
   let bulk: RtcDataChannelLike | null = null;
-  let controlScheduler: FrameScheduler | null = null;
-  let bulkScheduler: FrameScheduler | null = null;
+  let scheduler: FrameScheduler | null = null;
   let generation = 0;
   let status: RpcConnectionStatus = "disconnected";
   let connectPromise: Promise<void> | null = null;
@@ -401,6 +407,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   let controlSequence = 0;
   /** Monotonic per-pipe wire sequence, stamped at send (wire order, not encode order). */
   let bulkSequence = 0;
+  let interactiveSequence = 0;
+  let remoteReceiveWindowBytes = 0;
   let helloTimer: ReturnType<typeof setTimeout> | null = null;
   /** What our hello advertised: min(chunkSize option, channel max, 16 KiB floor). */
   let advertisedMaxMsg = DEFAULT_CHUNK_SIZE;
@@ -514,7 +522,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
    * response END/ERROR, pipe-down — so no upload outlives its request. */
   const activeStreams = new Map<
     number,
-    { sid: string; offAbort: () => void; abortUpload?: (error: Error) => void }
+    {
+      sid: string;
+      trafficClass: SessionStreamTrafficClass;
+      offAbort: () => void;
+      abortUpload?: (error: Error) => void;
+    }
   >();
 
   const inboundMux: InboundStreamMux = createInboundStreamMux({
@@ -563,36 +576,39 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   // Bulk channel → self-describing mux messages → per-stream bodies (§1.2).
   // Reset on reconnect (a fresh pipe's continuations never concatenate onto a
   // dead pipe's partial HEAD/ERROR accumulations).
-  const inboundBulkStats = new Map<number, { dataFrames: number; dataBytes: number }>();
-  const bulkDemux = createBulkDemux((streamId, type, payload) => {
-    const stats = inboundBulkStats.get(streamId) ?? { dataFrames: 0, dataBytes: 0 };
-    if (type === FRAME_DATA) {
-      stats.dataFrames += 1;
-      stats.dataBytes += payload.byteLength;
-      inboundBulkStats.set(streamId, stats);
-    } else if (type === FRAME_END) {
-      logWarn(
-        `${log} bulk stream received stream=${streamId} dataFrames=${stats.dataFrames} ` +
-          `dataBytes=${stats.dataBytes}`
-      );
-      inboundBulkStats.delete(streamId);
-    } else if (type === FRAME_ERROR) {
-      inboundBulkStats.delete(streamId);
-    }
-    inboundMux.push(streamId, type, payload);
-    if (type === FRAME_END || type === FRAME_ERROR) settleStream(streamId);
-  }, {
-    // Whole messages went missing between SCTP and here — the exact loss that
-    // used to surface only as a 20s HEAD timeout inside a panel, with nothing
-    // logged near the transport. The lost ids are unrecoverable (they were in
-    // the lost bytes), so the pipe is the only scope that can be failed
-    // honestly; dropping it fails the affected streams at once and reconnects.
-    onSequenceGap: (expected, received, missing) => {
-      onPipeDown(
-        `bulk sequence gap: ${missing} message(s) lost (expected ${expected}, received ${received})`
-      );
-    },
-  });
+  const inboundStreamStats = new Map<string, { dataFrames: number; dataBytes: number }>();
+  const createStreamDemux = (trafficClass: SessionStreamTrafficClass) =>
+    createBulkDemux(
+      (streamId, type, payload) => {
+        const key = `${trafficClass}:${streamId}`;
+        const stats = inboundStreamStats.get(key) ?? { dataFrames: 0, dataBytes: 0 };
+        if (type === FRAME_DATA) {
+          stats.dataFrames += 1;
+          stats.dataBytes += payload.byteLength;
+          inboundStreamStats.set(key, stats);
+        } else if (type === FRAME_END) {
+          logWarn(
+            `${log} ${trafficClass} stream received stream=${streamId} ` +
+              `dataFrames=${stats.dataFrames} dataBytes=${stats.dataBytes}`
+          );
+          inboundStreamStats.delete(key);
+        } else if (type === FRAME_ERROR) {
+          inboundStreamStats.delete(key);
+        }
+        inboundMux.push(streamId, type, payload);
+        if (type === FRAME_END || type === FRAME_ERROR) settleStream(streamId);
+      },
+      {
+        onSequenceGap: (expected, received, missing) => {
+          onPipeDown(
+            `${trafficClass} sequence gap: ${missing} message(s) lost ` +
+              `(expected ${expected}, received ${received})`
+          );
+        },
+      }
+    );
+  const interactiveDemux = createStreamDemux("interactive");
+  const bulkDemux = createStreamDemux("bulk");
 
   // Control-channel framing: fragment large frames on send + reassemble on receive,
   // plus the frame-id counter — bundled in one codec, reset on reconnect. RN corrupts
@@ -666,8 +682,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
    * signal).
    */
   function writeControlFrame(frame: SessionControlFrame): void {
-    const scheduler = controlScheduler;
-    if (!control || control.readyState !== "open" || !scheduler) {
+    const activeScheduler = scheduler;
+    if (!control || control.readyState !== "open" || !activeScheduler) {
       throw errorWithCode("WebRTC control channel not open", PIPE_CLOSED_CODE);
     }
     const bytes = encoder.encode(encodeControlFrame(frame));
@@ -675,7 +691,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     const lane = controlLane(frame);
     // The enqueue settles-never-rejects; its outcome ('flushed' | 'dropped')
     // feeds the §3.4 unflushed-routed-request tracking above.
-    trackRoutedFrame(frame, scheduler.enqueue(lane, parts));
+    trackRoutedFrame(frame, activeScheduler.enqueue("control", lane, parts));
   }
 
   /**
@@ -770,20 +786,30 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     return parts;
   }
 
+  function sendStreamFrame(
+    trafficClass: SessionStreamTrafficClass,
+    streamId: number,
+    type: StreamFrameType,
+    payload: Uint8Array
+  ): Promise<void> {
+    const activeScheduler = scheduler;
+    const channel = trafficClass === "interactive" ? interactive : bulk;
+    if (!channel || channel.readyState !== "open" || !activeScheduler) {
+      throw errorWithCode(`WebRTC ${trafficClass} channel not open`, PIPE_CLOSED_CODE);
+    }
+    // Outcome discarded: bulk-stream failure is signalled by pipe-down/stream
+    // teardown, not per-write results (settle-never-rejects).
+    return activeScheduler
+      .enqueue(trafficClass, streamId, encodeBulkFrameParts(streamId, type, payload))
+      .then(() => undefined);
+  }
+
   function sendBulkFrame(
     streamId: number,
     type: StreamFrameType,
     payload: Uint8Array
   ): Promise<void> {
-    const scheduler = bulkScheduler;
-    if (!bulk || bulk.readyState !== "open" || !scheduler) {
-      throw errorWithCode("WebRTC bulk channel not open", PIPE_CLOSED_CODE);
-    }
-    // Outcome discarded: bulk-stream failure is signalled by pipe-down/stream
-    // teardown, not per-write results (settle-never-rejects).
-    return scheduler
-      .enqueue(streamId, encodeBulkFrameParts(streamId, type, payload))
-      .then(() => undefined);
+    return sendStreamFrame("bulk", streamId, type, payload);
   }
 
   // -- inbound control demux ----------------------------------------------------
@@ -917,7 +943,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
   }
 
-  function handleBulkMessage(data: Uint8Array, forGeneration: number): void {
+  function handleStreamMessage(
+    trafficClass: SessionStreamTrafficClass,
+    data: Uint8Array,
+    forGeneration: number
+  ): void {
     bulkDiag.messages += 1;
     bulkDiag.bytes += data.byteLength;
     if (bulkDiag.messages % BULK_DIAG_EVERY === 0) {
@@ -946,16 +976,16 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return;
     }
     if (!remoteHello) {
-      onPipeDown("protocol violation: bulk message before hello");
+      onPipeDown(`protocol violation: ${trafficClass} message before hello`);
       return;
     }
     try {
-      bulkDemux.push(data);
+      (trafficClass === "interactive" ? interactiveDemux : bulkDemux).push(data);
     } catch (error) {
       // BulkProtocolViolation — a peer speaking a different dialect fails loud
       // instead of corrupting streams silently (§1.2).
       onPipeDown(
-        `bulk protocol violation: ${error instanceof Error ? error.message : String(error)}`
+        `${trafficClass} protocol violation: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -982,7 +1012,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       onPipeDown(`protocol violation: hello maxMsg ${frame.maxMsg}`);
       return;
     }
+    if (!Number.isFinite(frame.receiveWindowBytes) || frame.receiveWindowBytes < 0) {
+      onPipeDown(`protocol violation: hello receiveWindowBytes ${frame.receiveWindowBytes}`);
+      return;
+    }
     remoteHello = frame;
+    remoteReceiveWindowBytes = Math.min(frame.receiveWindowBytes, MAX_ASSOCIATION_STREAM_WINDOW);
     bulkSequenceEnabled = frame.bulkSeq === true;
     controlSequenceEnabled = frame.ctrlSeq === true;
     clearHelloTimer();
@@ -1024,9 +1059,14 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
    */
   function tryComplete(forGeneration: number): void {
     if (forGeneration !== generation || closed || status === "connected") return;
-    if (!peer || !control || !bulk) return;
+    if (!peer || !control || !interactive || !bulk) return;
     if (!tryVerifyPin()) return; // DTLS not settled or FAIL-CLOSED mismatch (bug #3)
-    if (control.readyState !== "open" || bulk.readyState !== "open") return; // wait for channel-open
+    if (
+      control.readyState !== "open" ||
+      interactive.readyState !== "open" ||
+      bulk.readyState !== "open"
+    )
+      return;
     if (!helloSent) {
       // Advertise min(chunkSize option, the channel's REAL maxMessageSize with a
       // 16 KiB floor-default — RN adapters may report 0/undefined, and 16 KiB is
@@ -1038,6 +1078,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         proto: SESSION_PROTOCOL_VERSION,
         contractVersion: RPC_CONTRACT_VERSION,
         maxMsg: advertisedMaxMsg,
+        receiveWindowBytes: Math.max(0, control.safeReceiveWindowBytes ?? 0),
         ...(options.platform ? { platform: options.platform } : {}),
         keepalive: { ...LOCAL_KEEPALIVE },
         bulkSeq: true,
@@ -1055,6 +1096,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     if (!remoteHello) return; // §1.1: connected only after the hello exchange
     clearHelloTimer();
     effectiveChunk = Math.min(advertisedMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
+    interactive.bufferedAmountLowThreshold = Math.min(
+      INTERACTIVE_BUFFER_LOW_THRESHOLD,
+      remoteReceiveWindowBytes
+    );
+    bulk.bufferedAmountLowThreshold = Math.min(BULK_BUFFER_LOW_THRESHOLD, remoteReceiveWindowBytes);
     keepaliveIntervalMs = Math.min(
       LOCAL_KEEPALIVE.intervalMs,
       remoteHello.keepalive?.intervalMs || Number.POSITIVE_INFINITY
@@ -1230,12 +1276,15 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         /* ignore */
       }
     }
-    controlScheduler?.close();
-    bulkScheduler?.close();
-    controlScheduler = null;
-    bulkScheduler = null;
+    scheduler?.close();
+    scheduler = null;
     try {
       control?.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      interactive?.close();
     } catch {
       /* ignore */
     }
@@ -1250,6 +1299,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       /* ignore */
     }
     control = null;
+    interactive = null;
     bulk = null;
     peer = null;
     pinVerified = false;
@@ -1257,6 +1307,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     remoteHello = null;
     bulkSequenceEnabled = false;
     bulkSequence = 0;
+    interactiveSequence = 0;
+    remoteReceiveWindowBytes = 0;
     controlSequenceEnabled = false;
     controlSequence = 0;
     advertisedMaxMsg = DEFAULT_CHUNK_SIZE;
@@ -1264,7 +1316,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // A fresh pipe must not reassemble against the dead pipe's leftovers: drop any
     // half-demuxed bulk continuations and half-reassembled control fragments.
     bulkDemux.reset();
-    inboundBulkStats.clear();
+    interactiveDemux.reset();
+    inboundStreamStats.clear();
     controlCodec.reset();
   }
 
@@ -1362,22 +1415,54 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       negotiated: true,
       id: BULK_CHANNEL_ID,
     });
+    const interactiveChannel = pc.createDataChannel(INTERACTIVE_LABEL, {
+      ordered: true,
+      negotiated: true,
+      id: INTERACTIVE_CHANNEL_ID,
+    });
     control = controlChannel;
+    interactive = interactiveChannel;
     bulk = bulkChannel;
     controlChannel.bufferedAmountLowThreshold = CONTROL_BUFFER_LOW_THRESHOLD;
+    interactiveChannel.bufferedAmountLowThreshold = INTERACTIVE_BUFFER_LOW_THRESHOLD;
     bulkChannel.bufferedAmountLowThreshold = BULK_BUFFER_LOW_THRESHOLD;
-    // One scheduler pair per pipe generation, bound to THESE channels: queued
+    // One association scheduler per pipe generation, bound to THESE channels: queued
     // bytes can never leak into the next generation (teardown settles them).
-    controlScheduler = createFrameScheduler({
-      getChannel: () => controlChannel,
-      beforeSend: stampControlPart,
-    });
-    bulkScheduler = createFrameScheduler({
-      getChannel: () => bulkChannel,
-      beforeSend: (part) => {
-        if (!bulkSequenceEnabled) return;
-        stampBulkSequence(part, bulkSequence);
-        bulkSequence = (bulkSequence + 1) >>> 0;
+    scheduler = createFrameScheduler({
+      lanes: {
+        control: {
+          getChannel: () => controlChannel,
+          weight: 8,
+          beforeSend: stampControlPart,
+        },
+        interactive: {
+          getChannel: () => interactiveChannel,
+          weight: 4,
+          window: {
+            minBytes: 0,
+            initialBytes: INTERACTIVE_BUFFER_LOW_THRESHOLD,
+            maxBytes: () => remoteReceiveWindowBytes,
+          },
+          beforeSend: (part) => {
+            if (!bulkSequenceEnabled) return;
+            stampBulkSequence(part, interactiveSequence);
+            interactiveSequence = (interactiveSequence + 1) >>> 0;
+          },
+        },
+        bulk: {
+          getChannel: () => bulkChannel,
+          weight: 1,
+          window: {
+            minBytes: 0,
+            initialBytes: BULK_BUFFER_LOW_THRESHOLD,
+            maxBytes: () => remoteReceiveWindowBytes,
+          },
+          beforeSend: (part) => {
+            if (!bulkSequenceEnabled) return;
+            stampBulkSequence(part, bulkSequence);
+            bulkSequence = (bulkSequence + 1) >>> 0;
+          },
+        },
       },
     });
 
@@ -1386,8 +1471,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // Channels open just AFTER ICE 'connected'; completion waits for both
       // (writing a frame to a still-'connecting' channel would throw).
       controlChannel.onOpen(() => tryComplete(thisGeneration)),
+      interactiveChannel.onOpen(() => tryComplete(thisGeneration)),
       bulkChannel.onOpen(() => tryComplete(thisGeneration)),
-      bulkChannel.onMessage((d) => handleBulkMessage(d, thisGeneration)),
+      interactiveChannel.onMessage((d) => handleStreamMessage("interactive", d, thisGeneration)),
+      bulkChannel.onMessage((d) => handleStreamMessage("bulk", d, thisGeneration)),
       controlChannel.onClose(() => {
         if (thisGeneration !== generation) return;
         onPipeDown("control channel closed");
@@ -1396,6 +1483,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         if (thisGeneration !== generation) return;
         onPipeDown("bulk channel closed");
       }),
+      interactiveChannel.onClose(() => {
+        if (thisGeneration !== generation) return;
+        onPipeDown("interactive channel closed");
+      }),
       controlChannel.onError((error) => {
         if (thisGeneration !== generation) return;
         onPipeDown(`control channel error: ${error.message}`);
@@ -1403,6 +1494,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       bulkChannel.onError((error) => {
         if (thisGeneration !== generation) return;
         onPipeDown(`bulk channel error: ${error.message}`);
+      }),
+      interactiveChannel.onError((error) => {
+        if (thisGeneration !== generation) return;
+        onPipeDown(`interactive channel error: ${error.message}`);
       })
     );
 
@@ -1614,7 +1709,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     const stream = activeStreams.get(streamId);
     if (!stream) return;
     activeStreams.delete(streamId);
-    inboundBulkStats.delete(streamId);
+    inboundStreamStats.delete(`${stream.trafficClass}:${streamId}`);
     stream.offAbort();
     // The request settled (END/ERROR/abort/cancel): a still-running upload has
     // nothing left to feed — stop it. Completed pumps ignore this (no-op).
@@ -1633,6 +1728,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     sid: string,
     streamId: number,
     bodyStreamId: number,
+    trafficClass: SessionStreamTrafficClass,
     body: ReadableStream<Uint8Array>
   ): { abort: (error: Error) => void } {
     const reader = body.getReader();
@@ -1643,7 +1739,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // Wake a parked read() (cancel resolves it done) and discard the queued
       // unsent backlog so the ERROR frame is not stuck behind megabytes of DATA.
       void reader.cancel(error).catch(() => undefined);
-      bulkScheduler?.dropKey(bodyStreamId);
+      scheduler?.dropKey(trafficClass, bodyStreamId);
     };
     void (async () => {
       let bytesOut = 0;
@@ -1656,11 +1752,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
             bytesOut += value.byteLength;
             // Await = upload backpressure (bounded scheduler). It settles (never
             // rejects) on pipe-down; the abortError check after it catches that.
-            await sendBulkFrame(bodyStreamId, FRAME_DATA, value);
+            await sendStreamFrame(trafficClass, bodyStreamId, FRAME_DATA, value);
             if (abortError) throw abortError;
           }
         }
-        await sendBulkFrame(
+        await sendStreamFrame(
+          trafficClass,
           bodyStreamId,
           FRAME_END,
           encoder.encode(JSON.stringify({ bytesIn: bytesOut }))
@@ -1669,7 +1766,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         const err = error instanceof Error ? error : new Error(String(error));
         // Settle the server's inbound body loudly (it must never hang half-fed).
         try {
-          await sendBulkFrame(
+          await sendStreamFrame(
+            trafficClass,
             bodyStreamId,
             FRAME_ERROR,
             encoder.encode(JSON.stringify({ message: err.message, code: "UPLOAD_ABORTED" }))
@@ -1698,7 +1796,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     sid: string,
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
-    requestBody?: ReadableStream<Uint8Array> | null
+    requestBody?: ReadableStream<Uint8Array> | null,
+    trafficClass: SessionStreamTrafficClass = "interactive"
   ): {
     body: ReadableStream<Uint8Array>;
     onBodyCancel: (reason?: unknown) => void;
@@ -1735,8 +1834,14 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // listener accumulation on shared signals.
       offAbort = () => signal.removeEventListener("abort", onAbort);
     }
-    const entry: { sid: string; offAbort: () => void; abortUpload?: (error: Error) => void } = {
+    const entry: {
+      sid: string;
+      trafficClass: SessionStreamTrafficClass;
+      offAbort: () => void;
+      abortUpload?: (error: Error) => void;
+    } = {
       sid,
+      trafficClass,
       offAbort,
     };
     activeStreams.set(streamId, entry);
@@ -1754,6 +1859,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         t: SESSION_STREAM_OPEN,
         sid,
         streamId,
+        trafficClass,
         ...(bodyStreamId !== undefined ? { bodyStreamId } : {}),
         envelope,
       });
@@ -1764,7 +1870,13 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return { body, onBodyCancel: noopCancel };
     }
     if (requestBody && bodyStreamId !== undefined) {
-      entry.abortUpload = pumpRequestBody(sid, streamId, bodyStreamId, requestBody).abort;
+      entry.abortUpload = pumpRequestBody(
+        sid,
+        streamId,
+        bodyStreamId,
+        trafficClass,
+        requestBody
+      ).abort;
     }
     return {
       body,
@@ -1785,9 +1897,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
     requestBody?: ReadableStream<Uint8Array> | null,
-    headTimeoutMs?: number
+    headTimeoutMs?: number,
+    trafficClass: SessionStreamTrafficClass = "interactive"
   ): Promise<Response> {
-    const started = beginStream(sid, envelope, signal, requestBody);
+    const started = beginStream(sid, envelope, signal, requestBody, trafficClass);
     return decodeFramedResponseToStreaming(started.body, "", signal, {
       onBodyCancel: started.onBodyCancel,
       headTimeoutMs,
@@ -1799,9 +1912,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
     requestBody?: ReadableStream<Uint8Array> | null,
-    headTimeoutMs?: number
+    headTimeoutMs?: number,
+    trafficClass: SessionStreamTrafficClass = "interactive"
   ): Promise<DecodedFramedStream> {
-    const started = beginStream(sid, envelope, signal, requestBody);
+    const started = beginStream(sid, envelope, signal, requestBody, trafficClass);
     return decodeFramedStream(started.body, "", signal, {
       onBodyCancel: started.onBodyCancel,
       headTimeoutMs,
@@ -2158,28 +2272,30 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       envelope: RpcEnvelope,
       signal?: AbortSignal | null,
       body?: ReadableStream<Uint8Array> | null,
-      headTimeoutMs?: number
+      headTimeoutMs?: number,
+      trafficClass: RpcStreamTrafficClass = "interactive"
     ): Promise<Response> {
       await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`stream() requires a stream-request envelope, got ${message.type}`);
       }
-      return openStream(this.sid, envelope, signal, body, headTimeoutMs);
+      return openStream(this.sid, envelope, signal, body, headTimeoutMs, trafficClass);
     }
 
     async streamReadable(
       envelope: RpcEnvelope,
       signal?: AbortSignal | null,
       body?: ReadableStream<Uint8Array> | null,
-      headTimeoutMs?: number
+      headTimeoutMs?: number,
+      trafficClass: RpcStreamTrafficClass = "interactive"
     ): Promise<DecodedFramedStream> {
       await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`streamReadable() requires a stream-request envelope, got ${message.type}`);
       }
-      return openStreamReadable(this.sid, envelope, signal, body, headTimeoutMs);
+      return openStreamReadable(this.sid, envelope, signal, body, headTimeoutMs, trafficClass);
     }
 
     close(): void {

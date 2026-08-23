@@ -25,27 +25,13 @@ import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
 import type { ResolvedUnitIcon } from "./buildV2/index.js";
 import { resolveRequiredAppRoot } from "./appRoot.js";
+import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 
 const log = createDevLogger("PanelHttpServer");
 
 // ---------------------------------------------------------------------------
 // Pre-compiled browser transport + context bootstrap
 // ---------------------------------------------------------------------------
-
-function loadBrowserTransport(): string {
-  const transportPath = path.join(resolveRequiredAppRoot(), "dist", "browserTransport.js");
-  try {
-    return fs.readFileSync(transportPath, "utf-8");
-  } catch (error) {
-    throw new Error(
-      `Browser transport is unavailable at the exact host artifact path ${transportPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
-
-const BROWSER_TRANSPORT_JS = loadBrowserTransport();
 
 function loadBrandAsset(filename: string): Buffer | null {
   const assetPath = path.join(resolveRequiredAppRoot(), "dist", "assets", "brand", filename);
@@ -187,6 +173,7 @@ function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise
 // ---------------------------------------------------------------------------
 
 export class PanelHttpServer {
+  private readonly runtimeHelperSet = getPanelRuntimeHelperSet();
   constructor(private readonly transportDerivativeCache = new TransportDerivativeCache()) {}
 
   /** Serving cache: source/ref -> resolved build (for fast sub-resource serving within a page load) */
@@ -516,7 +503,7 @@ export class PanelHttpServer {
     }
 
     // ── Static runtime helpers ────────────────────────────────────────────
-    if (this.serveRuntimeHelper(pathname, res)) {
+    if (this.serveRuntimeHelper(pathname, url, res)) {
       return;
     }
 
@@ -528,7 +515,7 @@ export class PanelHttpServer {
 
     const parsed = extractSourcePath(pathname);
     if (parsed) {
-      if (this.serveRuntimeHelper(parsed.resource, res)) {
+      if (this.serveRuntimeHelper(parsed.resource, url, res)) {
         return;
       }
       const contextId =
@@ -678,21 +665,24 @@ export class PanelHttpServer {
     return ref ? `${source}@${ref}` : source;
   }
 
-  private serveRuntimeHelper(pathname: string, res: import("http").ServerResponse): boolean {
+  private serveRuntimeHelper(
+    pathname: string,
+    url: URL,
+    res: import("http").ServerResponse
+  ): boolean {
+    const versioned = url.searchParams.get("v") === this.runtimeHelperSet.version;
+    const headers = {
+      "Content-Type": "application/javascript; charset=utf-8",
+      "Cache-Control": versioned ? "public, max-age=31536000, immutable" : "no-store",
+    };
     if (pathname === "/__loader.js") {
-      res.writeHead(200, {
-        "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-store",
-      });
+      res.writeHead(200, headers);
       res.end(PANEL_BOOTSTRAP_SCRIPT);
       return true;
     }
     if (pathname === "/__transport.js") {
-      res.writeHead(200, {
-        "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-store",
-      });
-      res.end(BROWSER_TRANSPORT_JS);
+      res.writeHead(200, headers);
+      res.end(this.runtimeHelperSet.browserTransportJs);
       return true;
     }
     return false;
@@ -958,7 +948,15 @@ export class PanelHttpServer {
         ? { initial: true }
         : {}),
     }));
-    const body = JSON.stringify({ artifacts });
+    const runtimeHelpers = this.runtimeHelperSet.helpers.map((helper) => ({
+      path: helper.path,
+      version: this.runtimeHelperSet.version,
+      contentType: helper.contentType,
+      byteLength: helper.body.byteLength,
+      integrity: `sha256-${helper.integrity}`,
+      initial: true,
+    }));
+    const body = JSON.stringify({ artifacts, runtimeHelpers });
     res.writeHead(200, {
       "content-type": "application/json; charset=utf-8",
       // The inventory is a pure function of an immutable build key, so it is as
@@ -1004,6 +1002,14 @@ export class PanelHttpServer {
       .map((raw) => Number.parseInt(raw, 10))
       .filter((index) => Number.isInteger(index) && index >= 0 && index < build.artifacts.length);
     const unique = [...new Set(wanted)];
+    const wantedHelpers = (query.get("helpers") ?? "")
+      .split(",")
+      .map((raw) => Number.parseInt(raw, 10))
+      .filter(
+        (index) =>
+          Number.isInteger(index) && index >= 0 && index < this.runtimeHelperSet.helpers.length
+      );
+    const uniqueHelpers = [...new Set(wantedHelpers)];
 
     res.writeHead(200, {
       "content-type": "application/octet-stream",
@@ -1040,6 +1046,25 @@ export class PanelHttpServer {
             createHash("sha256").update(encoded).digest("hex")
           )
         : encodeBlobRecord(digest, new Uint8Array(raw));
+      if (!res.write(record)) {
+        await new Promise<void>((resolve) => res.once("drain", () => resolve()));
+      }
+    }
+    for (const index of uniqueHelpers) {
+      const helper = this.runtimeHelperSet.helpers[index]!;
+      const encoded =
+        gzip && helper.body.byteLength >= 1_024
+          ? await new Promise<Buffer>((resolve, reject) => {
+              zlib.gzip(helper.body, (error, value) => (error ? reject(error) : resolve(value)));
+            })
+          : null;
+      const record = encoded
+        ? encodeBlobRecord(
+            helper.integrity,
+            new Uint8Array(encoded),
+            createHash("sha256").update(encoded).digest("hex")
+          )
+        : encodeBlobRecord(helper.integrity, new Uint8Array(helper.body));
       if (!res.write(record)) {
         await new Promise<void>((resolve) => res.once("drain", () => resolve()));
       }

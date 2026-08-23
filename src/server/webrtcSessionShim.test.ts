@@ -35,7 +35,7 @@ function harness() {
       ops.push("control");
       return Promise.resolve();
     },
-    writeBulkFrame: (streamId, type, payload) => {
+    writeStreamFrame: (_trafficClass, streamId, type, payload) => {
       ops.push(`bulk:${type}`);
       return new Promise<EnqueueOutcome>((resolve, reject) => {
         bulk.push({
@@ -47,11 +47,11 @@ function harness() {
         });
       });
     },
-    dropBulkStream: (streamId) => {
+    dropStream: (_trafficClass, streamId) => {
       ops.push("drop");
       dropped.push(streamId);
     },
-    bulkPendingBytes: () => 0,
+    streamPendingBytes: () => 0,
     controlBufferedAmount: () => 0,
   };
   const closedSids: string[] = [];
@@ -205,9 +205,9 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
             resolve,
           });
         }),
-      writeBulkFrame: async () => "flushed" as const,
-      dropBulkStream: () => undefined,
-      bulkPendingBytes: () => 0,
+      writeStreamFrame: async () => "flushed" as const,
+      dropStream: () => undefined,
+      streamPendingBytes: () => 0,
     };
     const closed: number[] = [];
     const shim = new SessionWebSocketShim("s1", pipe, () => undefined);
@@ -260,7 +260,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
 describe("SessionWebSocketShim — bulk stream surface", () => {
   it("meters bulk bytes into bufferedAmount until each write promise settles", async () => {
     const h = harness();
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     const bytes = new Uint8Array(10);
     expect(h.shim.sendStreamFrame("req-1", FRAME_DATA, bytes)).not.toBe(false);
     expect(h.shim.bufferedAmount).toBe(10);
@@ -276,7 +276,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
 
   it("un-meters bulk bytes when the write REJECTS (pipe down mid-stream)", async () => {
     const h = harness();
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     const written = h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(8));
     expect(written).not.toBe(false);
     expect(h.shim.bufferedAmount).toBe(8);
@@ -288,7 +288,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
 
   it("fails the stream instead of claiming bytes a dropped DATA frame never delivered", async () => {
     const h = harness();
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
 
     const body = h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(1000));
     expect(body).not.toBe(false);
@@ -318,7 +318,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
 
   it("sends END normally when every DATA frame reached the channel", async () => {
     const h = harness();
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     const body = h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(10));
     h.bulk[0]!.resolve();
     await body;
@@ -330,7 +330,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
 
   it("sendStreamFrame writes RAW bytes for a registered request and returns the metered promise", async () => {
     const h = harness();
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     const bytes = new TextEncoder().encode("raw-body");
     const written = h.shim.sendStreamFrame("req-1", FRAME_DATA, bytes);
     expect(written).not.toBe(false);
@@ -346,7 +346,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
   it("sendStreamFrame returns false for an unregistered requestId and after END reaps the maps", () => {
     const h = harness();
     expect(h.shim.sendStreamFrame("nope", FRAME_DATA, new Uint8Array(1))).toBe(false);
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     const end = h.shim.sendStreamFrame(
       "req-1",
       FRAME_END,
@@ -360,7 +360,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
 
   it("sendStreamFrame returns false once the session is closed", () => {
     const h = harness();
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     h.shim.remoteClosed(1006, "gone");
     expect(h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(1))).toBe(false);
   });
@@ -377,7 +377,7 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
       h.ops.push("inward");
       inbound.push(JSON.parse((data as Buffer).toString()));
     });
-    h.shim.registerStream("req-1", 77);
+    h.shim.registerStream("req-1", 77, "bulk");
     h.shim.cancelStream(77);
 
     // NO ERROR frame back to the client: it settled its stream locally on
@@ -434,7 +434,7 @@ describe("SessionWebSocketShim — inbound request bodies (§1.6)", () => {
     const { shim, bulk } = harness();
     const { body, ...state } = bodyWithDrop();
     void body;
-    shim.registerStream("req-1", 7);
+    shim.registerStream("req-1", 7, "bulk");
     shim.registerInboundBody("req-1", bodyWithDrop().body, () => {
       state.drops++;
     });
@@ -451,7 +451,7 @@ describe("SessionWebSocketShim — inbound request bodies (§1.6)", () => {
   it("cancelStream drops the body along with the stream maps", () => {
     const { shim } = harness();
     const state = { drops: 0 };
-    shim.registerStream("req-1", 7);
+    shim.registerStream("req-1", 7, "bulk");
     shim.registerInboundBody("req-1", new ReadableStream<Uint8Array>(), () => {
       state.drops++;
     });

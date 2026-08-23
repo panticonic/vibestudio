@@ -777,7 +777,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         envelope,
         options?.signal ?? null,
         options?.body ?? null,
-        options?.headTimeoutMs
+        options?.headTimeoutMs,
+        options?.trafficClass
       );
     }
     if (options?.body) {
@@ -846,7 +847,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       envelope,
       options?.signal ?? null,
       options?.body ?? null,
-      options?.headTimeoutMs
+      options?.headTimeoutMs,
+      options?.trafficClass
     );
   }
 

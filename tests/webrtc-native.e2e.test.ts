@@ -1,17 +1,17 @@
 /**
- * Real-native WebRTC end-to-end test — v2 stack. Wires TWO actual
+ * Real-native WebRTC end-to-end test — v3 stack. Wires TWO actual
  * `node-datachannel` peers (via createNodeDatachannelProvider) through an
- * in-process signaling relay, and runs the full v2 transport + protocol stack
+ * in-process signaling relay, and runs the full v3 transport + protocol stack
  * over REAL DTLS:
  *
  *   createWebRtcTransport (offerer)  ⇄  createWebRtcAnswererPipe (answerer)
  *                                        + RpcServer.attachWebRtcPipe
  *
  * It proves, against the live native module: ICE/DTLS connect, the fingerprint
- * pin (accept on match, FAIL CLOSED on mismatch), the hello preamble (proto=2,
+ * pin (accept on match, FAIL CLOSED on mismatch), the hello preamble (proto=3,
  * negotiated internally by both ends), the session handshake, an RPC
- * round-trip, a bulk stream decoded by the client (writeBulkFrame → stream
- * body), a pipe-level bulk round-trip (sendBulkFrame → onBulkFrame), and the
+ * round-trip, an interactive stream decoded by the client (stream frame → stream
+ * body), a pipe-level bulk round-trip (sendBulkFrame → onStreamFrame), and the
  * §9.8 candidateType surface on both ends. This is the bedrock the wrangler-dev
  * harness builds on (it only swaps the in-process signaling for the real
  * signaling DO).
@@ -200,7 +200,11 @@ function makeServer(databasePath: string): {
 }
 
 function turnIceServersFromEnv(): RtcIceServer[] {
-  const urls = (process.env["VIBESTUDIO_TEST_TURN_URLS"] ?? process.env["VIBESTUDIO_TEST_TURN_URL"] ?? "")
+  const urls = (
+    process.env["VIBESTUDIO_TEST_TURN_URLS"] ??
+    process.env["VIBESTUDIO_TEST_TURN_URL"] ??
+    ""
+  )
     .split(",")
     .map((url) => url.trim())
     .filter(Boolean);
@@ -216,7 +220,7 @@ function turnIceServersFromEnv(): RtcIceServer[] {
   ];
 }
 
-/** Build one v2 pipe pair. `attachServer: false` leaves the answerer's control/
+/** Build one v3 pipe pair. `attachServer: false` leaves the answerer's control/
  * bulk handlers free for raw pipe-level assertions. */
 async function connect(opts: {
   pinnedFp: string;
@@ -242,7 +246,7 @@ async function connect(opts: {
 
   const pipe = createWebRtcAnswererPipe({
     provider: serverProvider,
-    // v2: the pipe owns a supervised signaling rejoin loop and calls this
+    // v3: the pipe owns a supervised signaling rejoin loop and calls this
     // factory on connect() and after every drop. The in-process client never
     // drops, so it is handed out once.
     createSignaling: () => sig.answerer,
@@ -273,7 +277,7 @@ async function connect(opts: {
 
   // Arm the answerer first so it is subscribed before the offer arrives (the
   // in-process buffer also covers any residual race). connect() resolves after
-  // the hello exchange completes on both ends (proto=2, negotiated internally).
+  // the hello exchange completes on both ends (proto=3, negotiated internally).
   const answering = pipe.connect();
   await new Promise((r) => setTimeout(r, 50));
   const connecting = client.connect();
@@ -319,7 +323,7 @@ async function connect(opts: {
   };
 }
 
-describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () => {
+describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v3)", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rtc-e2e-"));
   const cert = ensurePersistentCert({
     identityPemFile: path.join(tmp, "identity.pem"),
@@ -390,7 +394,7 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
     expect(LOOPBACK_CANDIDATE_TYPES).toContain(h.pipeCandidateTypes[0]);
   });
 
-  it("streams a bulk body over the real bulk DataChannel (writeBulkFrame → client stream decode)", async () => {
+  it("streams an interactive response body over its dedicated lane", async () => {
     const h = harnesses[0]!;
     const session = h.client.openSession({
       connectionId: "cli-2",
@@ -418,7 +422,7 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
     expect(h.dispatched).toContainEqual({ service: "demo", method: "stream", args: ["rtc://x"] });
   }, 20_000);
 
-  it("round-trips pipe-level bulk frames under the 16 KiB association bound", async () => {
+  it("round-trips pipe-level bulk frames under the negotiated message bound", async () => {
     // Raw pipe (no RpcServer attached) so the bulk-frame handler is ours.
     const h = await connect({
       pinnedFp: cert.fingerprint,
@@ -434,7 +438,8 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
 
     const chunks: Uint8Array[] = [];
     let sawEnd = false;
-    h.pipe.onBulkFrame((sid, type, bytes) => {
+    h.pipe.onStreamFrame((trafficClass, sid, type, bytes) => {
+      if (trafficClass !== "bulk") return;
       if (sid !== streamId) return;
       if (type === FRAME_DATA) chunks.push(bytes.slice()); // view — copy to retain
       if (type === FRAME_END) sawEnd = true;

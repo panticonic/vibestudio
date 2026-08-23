@@ -1,6 +1,10 @@
 # WebRTC RPC Transport — Implementation Plan
 
-> **Superseded:** for the transport internals (wire protocol, rooms, pairing, mux, reconnect) see [webrtc-rpc-v2-plan.md](./webrtc-rpc-v2-plan.md).
+> **Superseded:** this is the original transport plan. The current streaming,
+> QoS, and panel-delivery decisions are documented in
+> [architecture/remote-transport-qos.md](./architecture/remote-transport-qos.md);
+> [webrtc-rpc-v2-plan.md](./webrtc-rpc-v2-plan.md) remains the historical room,
+> pairing, authentication, and recovery design.
 
 **Status:** Committed plan (supersedes the earlier draft/proposal)
 **Branch:** `claude/webrtc-rpc-transport-2ek0fw`

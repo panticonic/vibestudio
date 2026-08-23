@@ -1,6 +1,9 @@
 # WebRTC RPC Transport — Implementation Log
 
-> **Superseded:** this is the v1 implementation log; the transport was redesigned and rebuilt — see [webrtc-rpc-v2-plan.md](./webrtc-rpc-v2-plan.md).
+> **Superseded:** this is the v1 implementation log. The transport was first
+> redesigned as v2 and now uses the v3 three-lane scheduler and immutable panel
+> delivery contract in
+> [architecture/remote-transport-qos.md](./architecture/remote-transport-qos.md).
 
 Tracks the build of the plan in `docs/webrtc-rpc-transport.md`. This is a
 **big-bang cutover with zero backward-compat** (delete-and-replace, never shim).

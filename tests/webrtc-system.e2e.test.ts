@@ -1,5 +1,5 @@
 /**
- * COMPLETE WebRTC system end-to-end — the v2 multi-client stack, locally, with
+ * COMPLETE WebRTC system end-to-end — the v3 multi-client stack, locally, with
  * Cloudflare's local runtime for signaling:
  *
  *   `wrangler dev apps/signaling`  (real SignalingRoom Durable Object, Miniflare)

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
 
 function streamOf(bytes: Uint8Array | string): ReadableStream<Uint8Array> {
@@ -74,6 +75,43 @@ describe("AssetDiskCache", () => {
       expect(second.asset.contentType).toBe("text/javascript; charset=utf-8");
     }
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a verified bundle atomically and rejects a corrupt batch entirely", async () => {
+    const cache = await newCache();
+    const good = Buffer.from("verified payload");
+    const goodDigest = createHash("sha256").update(good).digest("hex");
+    await expect(
+      cache.putVerifiedBatch([
+        {
+          cacheKey: "/good.js",
+          bytes: good,
+          payloadDigest: goodDigest,
+          gzip: false,
+          contentType: "application/javascript",
+        },
+        {
+          cacheKey: "/corrupt.js",
+          bytes: Buffer.from("wrong"),
+          payloadDigest: "0".repeat(64),
+          gzip: false,
+          contentType: "application/javascript",
+        },
+      ])
+    ).rejects.toThrow("payload digest mismatch");
+    expect(await cache.get("/good.js")).toBeNull();
+    expect(await cache.get("/corrupt.js")).toBeNull();
+
+    await cache.putVerifiedBatch([
+      {
+        cacheKey: "/good.js",
+        bytes: good,
+        payloadDigest: goodDigest,
+        gzip: false,
+        contentType: "application/javascript",
+      },
+    ]);
+    expect((await cache.get("/good.js"))?.body).toEqual(good);
   });
 
   it("streams the first immutable miss before cache population finishes", async () => {
