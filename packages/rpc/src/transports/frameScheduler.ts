@@ -3,8 +3,9 @@
  * send-side scheduler both pipe ends use, for both channels:
  *
  * - bulk: keys are stream ids; parts are complete mux messages
- *   (`protocol/bulkMux.ts`), so one stream's transfer stalls another by at most
- *   one message (~16–256 KB), never one transfer.
+ *   (`protocol/bulkMux.ts`), capped at 16 KiB so one stream's transfer stalls
+ *   another — or latency-sensitive control sharing the SCTP association — by
+ *   at most one small message, never one transfer.
  * - control: keys are session + traffic class; parts are the fragment set of
  *   one control frame (`controlFraming.ts` — fragment sets are keyed by
  *   frameId, so interleaving fragment sets across lanes is legal on the wire).

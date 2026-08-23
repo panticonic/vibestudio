@@ -118,9 +118,12 @@ import type {
 import {
   BULK_CHANNEL_ID,
   BULK_LABEL,
+  BULK_BUFFER_LOW_THRESHOLD,
   CONTROL_CHANNEL_ID,
   CONTROL_LABEL,
+  CONTROL_BUFFER_LOW_THRESHOLD,
   DEFAULT_CHUNK_SIZE,
+  MAX_BULK_MESSAGE_SIZE,
 } from "./webrtcPeer.js";
 import type { SignalingClient } from "./webrtcSignaling.js";
 
@@ -136,8 +139,6 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 const LOCAL_KEEPALIVE = { intervalMs: 15_000, timeoutMs: 45_000 } as const;
 /** Hard ceiling on the negotiated chunk size (§1.1) — mirrors the answerer. */
 const MAX_CHUNK_SIZE = 256 * 1024;
-/** Drain high-water for BOTH channels (§1.3/§1.4 — 256 KiB, symmetric). */
-const BUFFER_HIGH_WATER = 256 * 1024;
 /** The remote hello must arrive within this of our hello going out (§1.1). */
 const HELLO_TIMEOUT_MS = 10_000;
 /** Reestablish backoff — the exact `wsClient` policy. */
@@ -317,7 +318,9 @@ export interface WebRtcTransport {
    * Send one logical bulk frame for `streamId`: mux-encoded (§1.2) and chunked
    * under the negotiated size (DATA payloads split into independent DATA
    * messages; oversized HEAD/ERROR JSON continues via MORE), scheduled
-   * round-robin per stream against the bulk channel's 256 KiB high-water.
+   * round-robin per stream while pacing one bounded bulk message per native
+   * drain so bulk transfers cannot starve control traffic on the shared SCTP
+   * association.
    * Resolves once accepted under the queue caps AND sent; settles (never
    * rejects) on pipe-down — the transport's recovery path is the failure
    * signal. This is the upload seam (§1.6): the `bodyStreamId` request-body
@@ -711,16 +714,17 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
   }
 
-  /** Encode one logical bulk frame into ≤effectiveChunk mux messages (§1.2) —
+  /** Encode one logical bulk frame into bounded mux messages (§1.2) —
    * byte-identical policy to the answerer's `encodeBulkFrameParts`. */
   function encodeBulkFrameParts(
     streamId: number,
     type: StreamFrameType,
     payload: Uint8Array
   ): Uint8Array[] {
+    const messageSize = Math.min(effectiveChunk, MAX_BULK_MESSAGE_SIZE);
     const budget = Math.max(
       1,
-      effectiveChunk - (bulkSequenceEnabled ? BULK_MUX_SEQ_HEADER_BYTES : BULK_MUX_HEADER_BYTES)
+      messageSize - (bulkSequenceEnabled ? BULK_MUX_SEQ_HEADER_BYTES : BULK_MUX_HEADER_BYTES)
     );
     if (payload.byteLength <= budget) {
       return [encodeBulkMessage(streamId, type, payload, false, bulkSequenceEnabled)];
@@ -1360,8 +1364,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     });
     control = controlChannel;
     bulk = bulkChannel;
-    controlChannel.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
-    bulkChannel.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
+    controlChannel.bufferedAmountLowThreshold = CONTROL_BUFFER_LOW_THRESHOLD;
+    bulkChannel.bufferedAmountLowThreshold = BULK_BUFFER_LOW_THRESHOLD;
     // One scheduler pair per pipe generation, bound to THESE channels: queued
     // bytes can never leak into the next generation (teardown settles them).
     controlScheduler = createFrameScheduler({

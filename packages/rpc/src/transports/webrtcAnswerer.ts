@@ -25,9 +25,10 @@
  *   `webrtc-rpc-remediation-plan.md` #2). Both channels' `onClose`/`onError`
  *   → down. Inbound `ping` silence for 2× the negotiated timeout → down.
  * - **Schedulers (§1.3/§1.4).** Control frames fan out over per-lane FIFO
- *   queues, bulk frames over per-stream queues; both drain round-robin at
- *   message granularity through `frameScheduler` against a 256 KiB high-water.
- *   `ping` is answered with a direct `pong` that bypasses the queues.
+ *   queues, bulk frames over per-stream queues. Bulk is capped at 16 KiB and
+ *   paced to an empty channel buffer between messages so it cannot starve
+ *   control on the shared SCTP association. `ping` is answered with a direct
+ *   `pong` that bypasses the queues.
  * - **On down:** notify, tear the peer down, reset codec/demux, settle queued
  *   scheduler work, and return to the lazy-armed state awaiting the next
  *   offer. Signaling stays joined (the rejoin loop guards it).
@@ -57,9 +58,12 @@ import type { SignalingClient } from "./webrtcSignaling.js";
 import {
   BULK_CHANNEL_ID,
   BULK_LABEL,
+  BULK_BUFFER_LOW_THRESHOLD,
   CONTROL_CHANNEL_ID,
   CONTROL_LABEL,
+  CONTROL_BUFFER_LOW_THRESHOLD,
   DEFAULT_CHUNK_SIZE,
+  MAX_BULK_MESSAGE_SIZE,
 } from "./webrtcPeer.js";
 import {
   createControlCodec,
@@ -93,14 +97,6 @@ export type { EnqueueOutcome } from "./frameScheduler.js";
 
 // --- Wire/liveness constants (§1.1, §2.2) -----------------------------------
 
-/** Drain high-water for BOTH channels (§1.3/§1.4 — 256 KiB, symmetric). */
-const BUFFER_HIGH_WATER = 256 * 1024;
-// react-native-webrtc's receive bridge can lose/corrupt a burst of back-to-back
-// 16 KiB binary messages even though SCTP itself is reliable. A mobile peer is
-// therefore paced one bulk message at a time: after each send, the scheduler
-// waits for the channel's buffered amount to drain to zero. Control remains at
-// the normal high-water because its frames are small and latency-sensitive.
-const MOBILE_BULK_LOW_WATER = 0;
 /** Hard ceiling on the negotiated chunk size (§1.1). */
 const MAX_CHUNK_SIZE = 256 * 1024;
 /** Keepalive parameters this end advertises in its hello (§1.1). */
@@ -669,8 +665,8 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     });
     control = ctl;
     bulk = blk;
-    ctl.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
-    blk.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
+    ctl.bufferedAmountLowThreshold = CONTROL_BUFFER_LOW_THRESHOLD;
+    blk.bufferedAmountLowThreshold = BULK_BUFFER_LOW_THRESHOLD;
 
     let pendingLocalDescription: { type: "offer" | "answer"; sdp: string } | null = null;
     let localDescriptionSent = false;
@@ -863,9 +859,6 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     if (pipeUp || closed) return;
     if (!remoteHello || !localHelloSent || !controlOpen || !bulkOpen) return;
     effectiveChunk = Math.min(localMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
-    if (remoteHello.platform === "mobile" && bulk) {
-      bulk.bufferedAmountLowThreshold = MOBILE_BULK_LOW_WATER;
-    }
     keepaliveTimeoutMs = Math.min(
       LOCAL_KEEPALIVE.timeoutMs,
       remoteHello.keepalive?.timeoutMs ?? Number.POSITIVE_INFINITY
@@ -1069,14 +1062,15 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   // Outbound encoding
   // ---------------------------------------------------------------------------
 
-  /** Encode one logical bulk frame into ≤effectiveChunk mux messages (§1.2). */
+  /** Encode one logical bulk frame into bounded mux messages (§1.2). */
   function encodeBulkFrameParts(
     streamId: number,
     type: StreamFrameType,
     payload: Uint8Array
   ): Uint8Array[] {
     const headerBytes = bulkSequenceEnabled ? BULK_MUX_SEQ_HEADER_BYTES : BULK_MUX_HEADER_BYTES;
-    const budget = Math.max(1, effectiveChunk - headerBytes);
+    const messageSize = Math.min(effectiveChunk, MAX_BULK_MESSAGE_SIZE);
+    const budget = Math.max(1, messageSize - headerBytes);
     if (payload.byteLength <= budget) {
       return [encodeBulkMessage(streamId, type, payload, false, bulkSequenceEnabled)];
     }

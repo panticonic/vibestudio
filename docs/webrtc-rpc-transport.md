@@ -155,10 +155,14 @@ so `createRpcClient`/`createHostedRuntime` are unchanged.
 - **Bulk channel** — reliable/ordered SCTP. Asset bytes, blob downloads,
   proxyFetch streams. **Stream IDs in the frame header** multiplex many concurrent
   streams over the single bulk channel — we do _not_ open a channel per stream.
-- Backpressure via `bufferedAmount` + `bufferedAmountLowThreshold`. Chunk under
-  the measured **256 KB** `maxMessageSize` (spike §11). Application-level
-  **keepalive** (data channels have no WS ping; we heartbeat on control and lean
-  on ICE consent freshness).
+- Backpressure uses `bufferedAmount` + `bufferedAmountLowThreshold`, with
+  different policies for the channels sharing the SCTP association. Control
+  keeps a 256 KiB low-water window because its messages are small and
+  latency-sensitive. Bulk messages are capped at 16 KiB and the next message
+  waits for the bulk channel to drain to zero. This bounds the asset bytes that
+  can sit ahead of a panel-session open, tree event, or RPC response on a slow
+  link. Application-level **keepalive** remains on control (data channels have
+  no WS ping; we also lean on ICE consent freshness).
 
 ### Binary stream codec v2 (`protocol/streamCodec.ts`)
 

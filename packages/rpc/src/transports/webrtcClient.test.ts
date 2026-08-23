@@ -557,13 +557,13 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("WebRTC transport — pin + hello handshake", () => {
-  it("connects (pin ok + channels open + hello exchanged) and sets the 256 KiB drain window", async () => {
+  it("connects with a roomy control window and drain-paced bulk", async () => {
     const fabric = new Fabric();
     const transport = makeTransport(fabric);
     await transport.connect();
     expect(transport.status()).toBe("connected");
     expect(fabric.clientControl?.bufferedAmountLowThreshold).toBe(256 * 1024);
-    expect(fabric.clientBulk?.bufferedAmountLowThreshold).toBe(256 * 1024);
+    expect(fabric.clientBulk?.bufferedAmountLowThreshold).toBe(0);
     // Our hello was the FIRST control frame the server saw.
     expect(fabric.frames[0]?.t).toBe("hello");
     await transport.close();
@@ -1586,6 +1586,35 @@ describe("WebRTC transport — streams over the bulk mux", () => {
     }
     await transport.close();
   });
+
+  it("limits a constrained association to one 16 KiB bulk message per drain", async () => {
+    const fabric = new Fabric();
+    const transport = makeTransport(fabric);
+    await transport.connect();
+    const bulk = fabric.clientBulk!;
+    bulk.autoDrain = false;
+    const before = bulk.sent.length;
+    let settled = false;
+    const write = transport.sendBulkFrame(12, FRAME_DATA, new Uint8Array(40 * 1024)).then(() => {
+      settled = true;
+    });
+
+    await flushMicrotasks();
+    expect(bulk.sent.slice(before)).toHaveLength(1);
+    expect(bulk.sent.at(-1)!.byteLength).toBeLessThanOrEqual(16 * 1024);
+    expect(settled).toBe(false);
+
+    bulk.drain();
+    await flushMicrotasks();
+    expect(bulk.sent.slice(before)).toHaveLength(2);
+    expect(settled).toBe(false);
+
+    bulk.drain();
+    await write;
+    expect(bulk.sent.slice(before)).toHaveLength(3);
+    expect(bulk.sent.slice(before).every((message) => message.byteLength <= 16 * 1024)).toBe(true);
+    await transport.close();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2006,8 +2035,8 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
     const session = transport.openSession({ connectionId: "c1", getToken: () => "g" });
     await session.ready!();
 
-    // Stall the pipe: no auto-drain, and prime bufferedAmount over the 256 KiB
-    // high-water so the scheduler's drain await parks after the first send.
+    // Stall the pipe: no auto-drain, so the scheduler parks after each bounded
+    // bulk message until the native association reports that message drained.
     const bulk = fabric.clientBulk!;
     bulk.autoDrain = false;
 
@@ -2030,8 +2059,10 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
     // pump — the reader is NOT pulled again while the channel is stalled.
     expect(stalledReads).toBeLessThanOrEqual(2);
 
-    bulk.drain();
-    await flushMicrotasks(200);
+    for (let i = 0; i < 32 && reads === stalledReads; i++) {
+      bulk.drain();
+      await flushMicrotasks(20);
+    }
     expect(reads).toBeGreaterThan(stalledReads); // drain resumed the pump
     await transport.close();
   });

@@ -29,6 +29,20 @@ export type RtcConnectionState =
 
 export type RtcDataChannelState = "connecting" | "open" | "closing" | "closed";
 
+/**
+ * Flow-control policy for the two channels sharing one SCTP association.
+ *
+ * Control frames are small and latency-sensitive, so they may use the normal
+ * native send window. Bulk traffic is deliberately different: only one small
+ * message may be outstanding at a time. Separate data channels do not imply
+ * separate congestion queues, and a large bulk burst handed to SCTP can
+ * otherwise hold session opens, events, and RPC responses behind asset bytes
+ * for tens of seconds on a constrained link.
+ */
+export const CONTROL_BUFFER_LOW_THRESHOLD = 256 * 1024;
+export const BULK_BUFFER_LOW_THRESHOLD = 0;
+export const MAX_BULK_MESSAGE_SIZE = 16 * 1024;
+
 export interface RtcSessionDescription {
   type: "offer" | "answer";
   sdp: string;

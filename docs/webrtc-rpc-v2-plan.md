@@ -108,16 +108,20 @@ and is why all streams serialize through one FIFO chain. Replaced outright:
 
 One `BulkScheduler` per pipe end, used by server and client alike:
 
-- **Per-stream queues**, round-robin: one message (≤ negotiated chunk) per
-  stream per turn. Cross-stream head-of-line stall is bounded to one message
-  (~16–256 KB), not one transfer.
+- **Per-stream queues**, round-robin: one message (≤ min(negotiated chunk,
+  16 KiB)) per stream per turn. Cross-stream and cross-channel head-of-line
+  delay is bounded to one small bulk message, not one transfer.
 - **Bounded**: per-stream queue cap **2 MiB**; per-pipe cap **32 MiB**.
   `enqueue(streamId, flags, bytes): Promise<void>` resolves when the bytes are
   accepted under both caps — a full queue makes the producer's `await` pause,
   which propagates to the upstream `reader.read()` loop. No unbounded promise
   chains anywhere.
-- Channel writes honor `bufferedAmount` against a **256 KiB** high-water on both
-  ends (the answerer's documented starvation fix, now symmetric).
+- Control writes honor `bufferedAmount` against a **256 KiB** low-water window.
+  Bulk is asymmetric by design: its threshold is zero, so only one bounded
+  message is handed to the native queue before the scheduler waits for drain.
+  The two data channels still share one SCTP association; treating them as
+  independent congestion queues starves panel/session control behind asset
+  transfers on constrained links.
 - The server session shim meters its sessions' queued bulk bytes into
   `bufferedAmount` (`pendingBulkBytes` + `pendingControlBytes`), so the existing
   16/128 MiB `sendToWs` limits finally observe stream traffic.

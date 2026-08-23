@@ -32,11 +32,12 @@ import {
 } from "@vibestudio/rpc/transports/webrtcClient";
 import { createWebRtcAnswererPipe } from "@vibestudio/rpc/transports/webrtcAnswerer";
 import type { DeviceCredential } from "@vibestudio/rpc/transports/pairedConnection";
-import type {
-  RtcCandidateType,
-  RtcIceCandidate,
-  RtcIceServer,
-  RtcSessionDescription,
+import {
+  MAX_BULK_MESSAGE_SIZE,
+  type RtcCandidateType,
+  type RtcIceCandidate,
+  type RtcIceServer,
+  type RtcSessionDescription,
 } from "@vibestudio/rpc/transports/webrtcPeer";
 import type { SignalingClient } from "@vibestudio/rpc/transports/webrtcSignaling";
 import { FRAME_DATA, FRAME_END } from "@vibestudio/rpc/protocol/streamCodec";
@@ -417,7 +418,7 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
     expect(h.dispatched).toContainEqual({ service: "demo", method: "stream", args: ["rtc://x"] });
   }, 20_000);
 
-  it("round-trips pipe-level bulk frames chunked under the negotiated size (sendBulkFrame → onBulkFrame)", async () => {
+  it("round-trips pipe-level bulk frames under the 16 KiB association bound", async () => {
     // Raw pipe (no RpcServer attached) so the bulk-frame handler is ours.
     const h = await connect({
       pinnedFp: cert.fingerprint,
@@ -444,6 +445,9 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () =
     await waitFor(() => sawEnd);
 
     expect(chunks.length).toBeGreaterThanOrEqual(2); // was chunked on the wire
+    expect(Math.max(...chunks.map((chunk) => chunk.byteLength))).toBeLessThan(
+      MAX_BULK_MESSAGE_SIZE
+    );
     const total = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
     let offset = 0;
     for (const c of chunks) {

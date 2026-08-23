@@ -322,9 +322,10 @@ describe("WebRTC answerer pipe (v2)", () => {
 
     // Answer went back over signaling during establish.
     expect(h.signals[0]!.sentDescriptions.map((d) => d.type)).toContain("answer");
-    // 256 KiB drain high-water on both channels (§1.3/§1.4).
+    // Control can burst; bulk is paced one bounded message per native drain so
+    // it cannot monopolize the channels' shared SCTP association.
     expect(control.bufferedAmountLowThreshold).toBe(256 * 1024);
-    expect(bulk.bufferedAmountLowThreshold).toBe(256 * 1024);
+    expect(bulk.bufferedAmountLowThreshold).toBe(0);
 
     // Our hello is the FIRST control message, with the §1.1 shape.
     const frames = sentControlFrames(control);
@@ -375,12 +376,40 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
-  it("paces outbound bulk frames one at a time for a mobile peer", async () => {
+  it("paces outbound bulk frames one at a time for every peer", async () => {
     const h = makeHarness();
     const { control, bulk } = await pairUp(h, { platform: "mobile" });
 
     expect(control.bufferedAmountLowThreshold).toBe(256 * 1024);
     expect(bulk.bufferedAmountLowThreshold).toBe(0);
+    await h.pipe.close();
+  });
+
+  it("bounds bulk head-of-line delay while control remains writable", async () => {
+    const h = makeHarness();
+    const { control, bulk } = await pairUp(h);
+    bulk.trackBuffered = true;
+    let settled = false;
+    const write = h.pipe.writeBulkFrame(14, FRAME_DATA, bytes(40 * 1024)).then(() => {
+      settled = true;
+    });
+
+    await tick();
+    expect(bulk.sent).toHaveLength(1);
+    expect(bulk.sent[0]!.byteLength).toBeLessThanOrEqual(16 * 1024);
+    expect(settled).toBe(false);
+
+    const controlBefore = control.sent.length;
+    await h.pipe.writeControl(bytes(64), "interactive");
+    expect(control.sent.length).toBeGreaterThan(controlBefore);
+
+    bulk.drain();
+    await tick();
+    expect(bulk.sent).toHaveLength(2);
+    bulk.drain();
+    await write;
+    expect(bulk.sent).toHaveLength(3);
+    expect(bulk.sent.every((message) => message.byteLength <= 16 * 1024)).toBe(true);
     await h.pipe.close();
   });
 
