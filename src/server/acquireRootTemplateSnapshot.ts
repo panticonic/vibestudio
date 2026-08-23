@@ -157,6 +157,7 @@ export async function inspectRootTemplateCheckout(input: {
   url: string;
   git: GitClient;
   sink: SnapshotContentSink;
+  validateSnapshot?: (snapshot: ExactGitSnapshot) => Promise<void> | void;
 }): Promise<{
   pin: WorkspaceTemplatePin;
   untrackedPaths: string[];
@@ -187,6 +188,7 @@ export async function inspectRootTemplateCheckout(input: {
     sink: input.sink,
     reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
   });
+  await input.validateSnapshot?.(observed);
   const pin = WorkspaceTemplatePinSchema.parse({
     url: input.url,
     ref: `refs/heads/${status.branch}`,

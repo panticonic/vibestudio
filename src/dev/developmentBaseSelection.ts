@@ -1,8 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import YAML from "yaml";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { GitClient } from "@vibestudio/git";
+import type { ExactGitSnapshot } from "@vibestudio/git";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
+import { WORKSPACE_CONFIG_PATH } from "@vibestudio/workspace/configParser";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { inspectRootTemplateCheckout } from "../server/acquireRootTemplateSnapshot.js";
 import { prepareDevelopmentBaseCheckpoint } from "./developmentBaseCheckpoint.js";
@@ -19,6 +23,31 @@ export interface DevelopmentBaseSelection {
   temporary: boolean;
   changedPaths: readonly string[];
   untrackedPaths: readonly string[];
+}
+
+function assertDevelopmentBaseCompatibility(
+  snapshot: ExactGitSnapshot,
+  sourceCheckout: string
+): void {
+  const manifest = snapshot.readFile(WORKSPACE_CONFIG_PATH);
+  if (!manifest) {
+    throw new Error(
+      `Development Base checkout ${sourceCheckout} has no ${WORKSPACE_CONFIG_PATH}; ` +
+        "select a current Base checkout or launch with --production-base"
+    );
+  }
+  const parsed: unknown = YAML.parse(new TextDecoder().decode(manifest));
+  const systemEpoch =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)["systemEpoch"]
+      : undefined;
+  if (systemEpoch !== WORKSPACE_SYSTEM_EPOCH) {
+    throw new Error(
+      `Development Base checkout ${sourceCheckout} declares systemEpoch ${JSON.stringify(systemEpoch)}, ` +
+        `but this host requires ${WORKSPACE_SYSTEM_EPOCH}. Update that checkout before starting, ` +
+        "or launch with --production-base; recreating a workspace from this checkout would reproduce the mismatch"
+    );
+  }
 }
 
 /**
@@ -63,6 +92,8 @@ export async function resolveDevelopmentBaseSelection(input: {
         return { digest: sha256Hex(bytes), size: bytes.byteLength };
       },
     },
+    validateSnapshot: (snapshot) =>
+      assertDevelopmentBaseCompatibility(snapshot, checkpoint.sourceCheckout),
   });
   return { ...checkpoint, ...inspected };
 }
