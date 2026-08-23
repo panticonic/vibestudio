@@ -196,7 +196,11 @@ export function createHubCredentialRedeemer(
           (ctx.clientLabel ? ` label=${ctx.clientLabel}` : "") +
           (ctx.clientPlatform ? ` platform=${ctx.clientPlatform}` : "")
       );
-      return null;
+      // Preserve the typed rejection for the transport boundary. RpcServer
+      // exposes only an allowlisted, non-secret user message, but collapsing
+      // this to null would turn an already-used one-time link into "Invalid
+      // token" and hide the required recovery action.
+      throw error;
     }
   };
 }

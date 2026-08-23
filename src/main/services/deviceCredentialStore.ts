@@ -54,7 +54,13 @@ export interface DeviceCredentialDocument {
   currentRemoteServerId?: string;
   entries: DeviceCredentialEntries;
 }
-export type DeviceCredentialStore = EncryptedJsonStore<DeviceCredentialDocument>;
+export interface DeviceCredentialStore extends EncryptedJsonStore<DeviceCredentialDocument> {
+  /**
+   * Prove that a freshly issued secret can be committed before the server is
+   * allowed to consume a one-time pairing capability.
+   */
+  preflightPairing(): void;
+}
 
 function isEntry(value: unknown): value is DeviceCredentialEntry {
   const v = value as DeviceCredentialEntry | null | undefined;
@@ -203,17 +209,33 @@ export function createDeviceCredentialStore(deps: {
     parse: parseDeviceCredentialDocument,
     secretDescription: "the paired device refresh credential",
   });
+  const load = (): DeviceCredentialDocument | null => {
+    const document = encryptedStore.load();
+    if (document === null && encryptedStore.exists()) {
+      throw new Error(
+        "Stored device credentials are unreadable or do not match the current canonical schema"
+      );
+    }
+    return document;
+  };
   return {
-    load: () => {
-      const document = encryptedStore.load();
-      if (document === null && encryptedStore.exists()) {
+    load,
+    exists: () => encryptedStore.exists(),
+    preflightPairing: () => {
+      if (!deps.cipher.isAvailable()) {
         throw new Error(
-          "Stored device credentials are unreadable or do not match the current canonical schema"
+          "Cannot pair yet because OS secure storage is unavailable, so Vibestudio cannot safely save the device credential. Start or unlock the desktop keyring, then retry this same pairing link. The pairing link was not used."
         );
       }
-      return document;
+      try {
+        load();
+      } catch (error) {
+        throw new Error(
+          `Cannot pair yet because the saved device credentials at ${deps.filePath} are unreadable or incompatible with this Vibestudio version. Remove that file, then retry this same pairing link. The pairing link was not used.`,
+          { cause: error }
+        );
+      }
     },
-    exists: () => encryptedStore.exists(),
     save: (document) => {
       if (!isDocument(document)) {
         throw new Error("Refusing to persist a non-canonical device credential record");
@@ -249,6 +271,15 @@ function getStore(): DeviceCredentialStore {
 
 export function loadDeviceCredentialByServerId(serverId: string): DeviceCredentialEntry | null {
   return getStore().load()?.entries[serverId] ?? null;
+}
+
+/**
+ * Pairing codes are replay-resistant bearer capabilities. Validate the local
+ * durable sink before presenting one to the server, because redemption cannot
+ * be rolled back after a device credential has been issued.
+ */
+export function preflightDeviceCredentialStoreForPairing(): void {
+  getStore().preflightPairing();
 }
 
 /** The CURRENT remote pairing (the active WebRTC server), if any. */

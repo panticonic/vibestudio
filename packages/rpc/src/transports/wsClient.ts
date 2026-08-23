@@ -508,7 +508,11 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         scheduleAdmissionRetry(socketGeneration, admission.retryAfterMs ?? 1_000);
         return;
       }
-      if (admission.code === "invalid_credential" || admission.code === "admin_credential") {
+      if (
+        admission.code === "invalid_credential" ||
+        admission.code === "admin_credential" ||
+        admission.code === "pairing_invalid_or_expired"
+      ) {
         await handleAuthFailure(token, admission.message, socketGeneration);
         return;
       }

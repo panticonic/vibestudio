@@ -336,6 +336,14 @@ atomically updates its protected ready state, so
 `vibestudio remote deploy pairing local` always shows the current QR/link until
 the first device claims the root account.
 
+Pairing links are one-time bearer capabilities. Consuming a link prevents
+anyone who copied or photographed it from replaying it to add another device.
+The desktop checks its encrypted credential store before contacting the server;
+if that check fails, it says that the link was **not used** and the same link can
+be retried after fixing local storage. Once the server accepts a link, any later
+failure says that the link is used and that a fresh invite is required—never the
+ambiguous “Invalid token.”
+
 ### CLI Flags
 
 | Flag                                 | Description                                              |

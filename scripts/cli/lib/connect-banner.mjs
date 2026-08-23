@@ -36,6 +36,7 @@ export function printConnectBanner({
     console.log(`  QR ${deepLinkLabel}:  ${qrInvite.pairUrl}`);
   }
   console.log(`  Desktop:    vibestudio open ${invite.pairUrl}`);
+  console.log("  One-time:   Pairs one device; accepted links cannot be replayed.");
   console.log();
   qrcode.generate(qrInvite.pairUrl, { small: true });
   console.log(divider);

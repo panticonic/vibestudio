@@ -42,6 +42,7 @@ export interface RpcWebSocketAdmissionSuccess {
 export type RpcWebSocketAdmissionFailureCode =
   | "invalid_credential"
   | "admin_credential"
+  | "pairing_invalid_or_expired"
   | "admission_saturated"
   | "invalid_request"
   | "server_unavailable";
@@ -60,6 +61,7 @@ export type RpcWebSocketAdmissionResponse =
 const FAILURE_CODES = new Set<RpcWebSocketAdmissionFailureCode>([
   "invalid_credential",
   "admin_credential",
+  "pairing_invalid_or_expired",
   "admission_saturated",
   "invalid_request",
   "server_unavailable",

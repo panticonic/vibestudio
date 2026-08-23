@@ -1952,7 +1952,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     onOpenResult(frame: SessionOpenResultFrame): void {
       if (this.sessionClosed) return;
       if (!frame.success) {
-        const error = errorWithCode(frame.error ?? "Session auth failed", "SESSION_AUTH_FAILED");
+        const error = errorWithCode(
+          frame.error ?? "Session auth failed",
+          frame.errorCode ?? "SESSION_AUTH_FAILED"
+        );
         if (frame.terminal) {
           this.terminate(error);
           return;

@@ -141,7 +141,11 @@ import { ConnectionRegistry, type WsClientState } from "./rpcServer/connectionRe
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
-import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import type {
+  DeviceCredential,
+  PairingContext,
+  RpcAuthenticationFailureCode,
+} from "@vibestudio/rpc/protocol/wsProtocol";
 import { WS_STREAM_REQUEST_BODY_CAPABILITY } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
   HttpRpcHandler,
@@ -305,9 +309,24 @@ type RpcCredentialResolution =
   | { ok: true; resolved: ResolvedRpcCredential }
   | {
       ok: false;
-      code: "invalid_credential" | "admin_credential";
+      code: RpcAuthenticationFailureCode;
       message: string;
     };
+
+const USED_OR_EXPIRED_PAIRING_MESSAGE =
+  "This pairing link has already been used or has expired. Pairing links are one-time to prevent replay; request a fresh link from the server or a paired administrator.";
+
+function rejectedCredential(error?: unknown): RpcCredentialResolution {
+  const code = error instanceof Error ? (error as Error & { code?: unknown }).code : undefined;
+  if (code === "PAIRING_CODE_INVALID_OR_EXPIRED") {
+    return {
+      ok: false,
+      code: "pairing_invalid_or_expired",
+      message: USED_OR_EXPIRED_PAIRING_MESSAGE,
+    };
+  }
+  return { ok: false, code: "invalid_credential", message: "Invalid token" };
+}
 
 interface RpcWebSocketAdmissionGrant {
   grant: string;
@@ -1588,7 +1607,7 @@ export class RpcServer {
         subject = paired.subject;
       }
       if (!entry) {
-        return { ok: false, code: "invalid_credential", message: "Invalid token" };
+        return rejectedCredential();
       }
       const resolvedEntry = entry;
       const isValidAtUpgrade = (): boolean => {
@@ -1638,10 +1657,10 @@ export class RpcServer {
         this.deps.redeemPairingCredential(token, { clientLabel, clientPlatform })
       ).then(
         (paired) => finish(paired),
-        () => finish(null)
+        (error) => rejectedCredential(error)
       );
-    } catch {
-      return finish(null);
+    } catch (error) {
+      return rejectedCredential(error);
     }
   }
 
@@ -1680,6 +1699,7 @@ export class RpcServer {
         type: "ws:auth-result",
         success: false,
         error: resolution.message,
+        errorCode: resolution.code,
       };
       ws.send(JSON.stringify(msg));
       ws.close(4006, resolution.message);

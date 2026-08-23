@@ -139,12 +139,33 @@ describe("deviceCredentialStore", () => {
     expect(store.load()).toBeNull();
   });
 
+  it("blocks pairing before redemption when secure storage is unavailable", () => {
+    const { store, filePath } = makeStore(unavailableCipher);
+    expect(() => store.preflightPairing()).toThrow(/cannot pair yet.*secure storage.*not used/is);
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
   it("fails loud when the credential file is corrupt or undecryptable", () => {
     const { store, filePath } = makeStore(xorCipher);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, "not-json{{{");
     expect(() => store.load()).toThrow(/unreadable|canonical schema/u);
     expect(store.exists()).toBe(true);
+  });
+
+  it("blocks pairing before redemption with the exact incompatible credential path", () => {
+    const { store, filePath } = makeStore(xorCipher);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "not-json{{{");
+    expect(() => store.preflightPairing()).toThrow(filePath);
+    expect(() => store.preflightPairing()).toThrow(/retry this same pairing link.*not used/is);
+  });
+
+  it("allows pairing preflight with a missing or canonical credential document", () => {
+    const { store } = makeStore(xorCipher);
+    expect(() => store.preflightPairing()).not.toThrow();
+    store.save(doc([webrtc]));
+    expect(() => store.preflightPairing()).not.toThrow();
   });
 
   it("fails loud for stale document shapes and structurally invalid records", () => {

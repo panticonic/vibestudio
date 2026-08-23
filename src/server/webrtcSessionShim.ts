@@ -423,6 +423,7 @@ export class SessionWebSocketShim {
             sid: this.sid,
             success: false,
             error: msg.error,
+            errorCode: msg.errorCode,
             terminal: true,
           });
         }
