@@ -645,8 +645,8 @@ function canAccessIncomingPanelLocations(webContentsId: number): boolean {
  */
 function dispatchShellSurface(target: ShellSurfaceDescriptor): void {
   switch (target.kind) {
-    case "connection-settings":
-      eventService.emit("open-connection-settings", undefined);
+    case "settings":
+      eventService.emit("open-settings", { section: target.section ?? "connection" });
       return;
     case "workspace-chooser":
       eventService.emit("open-workspace-switcher", undefined);

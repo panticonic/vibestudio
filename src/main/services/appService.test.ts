@@ -115,9 +115,11 @@ describe("createAppService", () => {
     const codeCtx = { caller: createVerifiedCaller("do:onboarding", "do") };
 
     await expect(
-      dispatcher.dispatch(codeCtx, "app", "openShellSurface", ["connection-settings"])
+      dispatcher.dispatch(codeCtx, "app", "openShellSurface", [
+        { kind: "settings", section: "devices" },
+      ])
     ).resolves.toBeUndefined();
-    expect(onOpenShellSurface).toHaveBeenCalledWith({ kind: "connection-settings" });
+    expect(onOpenShellSurface).toHaveBeenCalledWith({ kind: "settings", section: "devices" });
     await expect(
       dispatcher.dispatch(codeCtx, "app", "openShellSurface", ["invented"])
     ).rejects.toThrow();
@@ -201,7 +203,7 @@ describe("createAppService", () => {
       unavailable.handler(
         { caller: createVerifiedCaller("do:onboarding", "do") },
         "openShellSurface",
-        ["connection-settings"]
+        ["settings"]
       )
     ).rejects.toThrow("navigation is unavailable");
     await expect(

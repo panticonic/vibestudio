@@ -24,8 +24,16 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
  * command. Detailed field rules live in `validateShellSurfaceTarget`.
  */
 export const ShellSurfaceTargetSchema = z.union([
-  z.enum(["connection-settings", "workspace-chooser"]),
-  z.object({ kind: z.enum(["connection-settings", "workspace-chooser"]) }).strict(),
+  z.enum(["settings", "workspace-chooser"]),
+  z
+    .object({
+      kind: z.literal("settings"),
+      section: z
+        .enum(["connection", "devices", "profile", "appearance", "apps", "hosts", "templates"])
+        .optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("workspace-chooser") }).strict(),
   z
     .object({
       kind: z.literal("command-agent"),
@@ -46,7 +54,7 @@ export const ShellSurfaceTargetSchema = z.union([
 export type ShellSurfaceTarget = z.infer<typeof ShellSurfaceTargetSchema>;
 
 export const ShellSurfaceKindSchema = z.enum([
-  "connection-settings",
+  "settings",
   "workspace-chooser",
   "command-agent",
   "about",

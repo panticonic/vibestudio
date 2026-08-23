@@ -9,7 +9,7 @@
  *   vibestudio://ask?v=1&panel=<slotId>&mode=quickfire&prompt=…   command agent
  *   vibestudio://about?v=1&page=permissions                        About page
  *   vibestudio://command?v=1&panel=<slotId>&id=<commandId>         panel host command
- *   vibestudio://surface?v=1&kind=connection-settings              management chrome
+ *   vibestudio://surface?v=1&kind=settings&section=devices         management chrome
  *
  * Nothing here grants anything: a prompt only pre-fills the compose box, a
  * command runs only if the named panel still contributes it, and every surface
@@ -30,15 +30,24 @@ export const COMMAND_AGENT_MODES: readonly CommandAgentMode[] = [
   "quickfire",
 ];
 
-export type ManagementSurface = "connection-settings" | "workspace-chooser";
-export const MANAGEMENT_SURFACES: readonly ManagementSurface[] = [
-  "connection-settings",
-  "workspace-chooser",
-];
+export const SETTINGS_SECTIONS = [
+  "connection",
+  "devices",
+  "profile",
+  "appearance",
+  "apps",
+  "hosts",
+  "templates",
+] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+export type ManagementSurface = "settings" | "workspace-chooser";
+export const MANAGEMENT_SURFACES: readonly ManagementSurface[] = ["settings", "workspace-chooser"];
 
 /** The object forms; the two management surfaces may also be passed as bare strings. */
 export type ShellSurfaceDescriptor =
-  | { kind: ManagementSurface }
+  | { kind: "settings"; section?: SettingsSection }
+  | { kind: "workspace-chooser" }
   | {
       kind: "command-agent";
       /** Panel slot id the overlay is about; the focused panel when omitted. */
@@ -53,7 +62,7 @@ export type ShellSurfaceDescriptor =
 export type ShellSurfaceTarget = ManagementSurface | ShellSurfaceDescriptor;
 export type ShellSurfaceKind = ShellSurfaceDescriptor["kind"];
 export const SHELL_SURFACE_KINDS: readonly ShellSurfaceKind[] = [
-  "connection-settings",
+  "settings",
   "workspace-chooser",
   "command-agent",
   "about",
@@ -64,7 +73,7 @@ export type ShellSurfaceCarrier = "scheme" | "https";
 
 /** Link host (scheme) / path (https) per descriptor kind. */
 const LINK_HOSTS: Record<ShellSurfaceKind, string> = {
-  "connection-settings": "surface",
+  settings: "surface",
   "workspace-chooser": "surface",
   "command-agent": "ask",
   about: "about",
@@ -107,7 +116,7 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
     throw new Error(`Unknown shell surface kind "${String(kind)}"`);
   }
   const allowed: Record<ShellSurfaceKind, readonly string[]> = {
-    "connection-settings": ["kind"],
+    settings: ["kind", "section"],
     "workspace-chooser": ["kind"],
     "command-agent": ["kind", "panelId", "mode", "prompt"],
     about: ["kind", "page"],
@@ -119,7 +128,16 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
     }
   }
   switch (kind as ShellSurfaceKind) {
-    case "connection-settings":
+    case "settings": {
+      const section = record["section"];
+      if (section !== undefined && !(SETTINGS_SECTIONS as readonly unknown[]).includes(section)) {
+        throw new Error("Shell settings section is not recognized");
+      }
+      return {
+        kind: "settings",
+        ...(section !== undefined ? { section: section as SettingsSection } : {}),
+      };
+    }
     case "workspace-chooser":
       return { kind: kind as ManagementSurface };
     case "command-agent": {
@@ -171,7 +189,10 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
 function encodeParams(descriptor: ShellSurfaceDescriptor): string {
   const pairs: Array<[string, string]> = [["v", String(SHELL_SURFACE_PROTOCOL_VERSION)]];
   switch (descriptor.kind) {
-    case "connection-settings":
+    case "settings":
+      pairs.push(["kind", descriptor.kind]);
+      if (descriptor.section !== undefined) pairs.push(["section", descriptor.section]);
+      break;
     case "workspace-chooser":
       pairs.push(["kind", descriptor.kind]);
       break;
@@ -282,7 +303,10 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
   let candidate: Record<string, unknown>;
   switch (host) {
     case "surface":
-      candidate = { kind: decoded.get("kind") };
+      candidate = {
+        kind: decoded.get("kind"),
+        ...(decoded.has("section") ? { section: decoded.get("section") } : {}),
+      };
       break;
     case "ask":
       candidate = {
@@ -305,7 +329,7 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
     default:
       return { kind: "unrelated" };
   }
-  const known = new Set(["v", "kind", "panel", "mode", "prompt", "page", "id"]);
+  const known = new Set(["v", "kind", "section", "panel", "mode", "prompt", "page", "id"]);
   for (const key of decoded.keys()) {
     if (!known.has(key))
       return { kind: "error", reason: `Shell surface link contains unknown parameter \`${key}\`` };

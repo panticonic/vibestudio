@@ -35,7 +35,7 @@ describe("shell surface targets", () => {
       },
       { kind: "about", page: "credentials" },
       { kind: "panel-command", panelId: "panel:tree/x", commandId: "tour-next" },
-      { kind: "connection-settings" },
+      { kind: "settings", section: "devices" },
     ] as const;
     for (const target of targets) {
       for (const carrier of ["scheme", "https"] as const) {
@@ -46,6 +46,9 @@ describe("shell surface targets", () => {
     expect(createShellSurfaceLink({ kind: "about", page: "permissions" })).toBe(
       "vibestudio://about?v=1&page=permissions"
     );
+    expect(createShellSurfaceLink({ kind: "settings", section: "devices" })).toBe(
+      "vibestudio://surface?v=1&kind=settings&section=devices"
+    );
   });
 
   it("distinguishes unrelated links from malformed ones", () => {
@@ -53,7 +56,9 @@ describe("shell surface targets", () => {
       kind: "unrelated",
     });
     expect(parseShellSurfaceLink("vibestudio://connect/compact")).toEqual({ kind: "unrelated" });
-    expect(parseShellSurfaceLink("https://vibestudio.app/p#compact")).toEqual({ kind: "unrelated" });
+    expect(parseShellSurfaceLink("https://vibestudio.app/p#compact")).toEqual({
+      kind: "unrelated",
+    });
     expect(parseShellSurfaceLink("vibestudio://about?v=2&page=permissions").kind).toBe("error");
     expect(parseShellSurfaceLink("vibestudio://ask?v=1&prompt=hi&auto=1").kind).toBe("error");
     expect(parseShellSurfaceLink("https://vibestudio.app/about?page=x#v=1").kind).toBe("error");

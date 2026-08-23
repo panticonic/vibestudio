@@ -15,7 +15,7 @@ import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js"
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
 import type { Panel, PanelPlacementHint, PanelRecoverySnapshot } from "./types.js";
 
-import type { CommandAgentMode } from "./shellSurface.js";
+import type { CommandAgentMode, SettingsSection } from "./shellSurface.js";
 
 /** Payload of `open-command-agent`; see `ShellSurfaceTarget`. */
 export interface CommandAgentSurfaceRequest {
@@ -55,7 +55,7 @@ export type EventName =
   | "panel-tree-invalidated"
   | "workspace-presence-changed"
   | "open-workspace-switcher"
-  | "open-connection-settings"
+  | "open-settings"
   | "open-command-palette"
   | "open-command-agent"
   | "run-panel-command"
@@ -275,7 +275,7 @@ export interface EventPayloads {
   "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
-  "open-connection-settings": undefined;
+  "open-settings": { section: SettingsSection };
   /**
    * Open the command overlay over the focused panel. One event for one key: the
    * overlay resumes that panel's agent conversation when it has one and shows
@@ -504,7 +504,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-local-presentation-changed",
   "panel:snapshot",
   "open-workspace-switcher",
-  "open-connection-settings",
+  "open-settings",
   "open-command-palette",
   "open-command-agent",
   "run-panel-command",

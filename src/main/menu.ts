@@ -315,8 +315,8 @@ export function buildHamburgerMenuTemplate(
       click: () => emitMenuEvent("open-workspace-switcher"),
     },
     {
-      label: "Connection & Devices…",
-      click: () => emitMenuEvent("open-connection-settings"),
+      label: "Settings…",
+      click: () => emitMenuEvent("open-settings", { section: "connection" }),
     },
     { type: "separator" },
     {
@@ -508,9 +508,9 @@ export function setupMenu(
         {
           // The connection badge lives in the panel tree, which breadcrumb mode
           // hides — so the menu has to be able to reach these settings too.
-          label: "Connection & Devices…",
+          label: "Settings…",
           click: () => {
-            emitMenuEvent("open-connection-settings");
+            emitMenuEvent("open-settings", { section: "connection" });
           },
         },
         { type: "separator" },
