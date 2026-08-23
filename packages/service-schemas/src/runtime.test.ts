@@ -53,6 +53,12 @@ describe("runtime context-boundary authority", () => {
     expect(() =>
       AgentExecutionTestPolicySpecSchema.parse({
         ...spec,
+        initiatingUserId: "usr_masked-attribution",
+      })
+    ).toThrow();
+    expect(() =>
+      AgentExecutionTestPolicySpecSchema.parse({
+        ...spec,
         authority: [{ ...spec.authority[0], capability: "workspace-service:*" }],
       })
     ).toThrow();

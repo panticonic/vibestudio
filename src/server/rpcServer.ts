@@ -1310,14 +1310,7 @@ export class RpcServer {
     causal: ResolvedCausalInvocation | undefined
   ): VerifiedCaller {
     if (!causal) return caller;
-    const testInitiatorId =
-      caller.testPolicy?.kind === "case" ? caller.testPolicy.case.initiatingUserId : null;
-    const initiatingUser =
-      causal.initiatingUser ??
-      (testInitiatorId
-        ? (this.deps.userSubjectSource?.resolveUserId?.(testInitiatorId) ?? null)
-        : null);
-    return initiatingUser ? { ...caller, subject: initiatingUser } : caller;
+    return causal.initiatingUser ? { ...caller, subject: causal.initiatingUser } : caller;
   }
 
   private resolveExtensionParentCaller(
@@ -4087,12 +4080,14 @@ export class RpcServer {
       const attributedCaller =
         callerKind === "server"
           ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
-          : relayCallerScope?.authorizingCaller.subject
-            ? {
-                ...transportCaller,
-                subject: relayCallerScope.authorizingCaller.subject,
-              }
-            : transportCaller;
+          : transportCaller.subject
+            ? transportCaller
+            : relayCallerScope?.authorizingCaller.subject
+              ? {
+                  ...transportCaller,
+                  subject: relayCallerScope.authorizingCaller.subject,
+                }
+              : transportCaller;
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
@@ -4106,10 +4101,18 @@ export class RpcServer {
         signal: meta?.signal,
       });
       const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
+      const inheritedAuthorizingCaller = relayCallerScope?.authorizingCaller
+        ? attributedCaller.subject
+          ? {
+              ...relayCallerScope.authorizingCaller,
+              subject: attributedCaller.subject,
+            }
+          : relayCallerScope.authorizingCaller
+        : attributedCaller;
       const releaseAuthorityParent = this.beginAuthorityParent(
         targetId,
         authorization,
-        relayCallerScope?.authorizingCaller ?? attributedCaller
+        inheritedAuthorizingCaller
       );
       try {
         const result = await postToDurableObject(

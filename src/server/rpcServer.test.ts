@@ -1629,6 +1629,84 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
+  it("does not replace an exact causal user with an ambient authority subject", async () => {
+    const { server, entityCache } = createServer();
+    const targetId = "do:vibestudio/internal:BrowserVaultDO:causal-user";
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    let inheritedAuthorizingCaller: ReturnType<typeof createVerifiedCaller> | null = null;
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const outbound = JSON.parse(String(init.body));
+      const nonce = outbound.delivery.caller.authorization.nonce as string;
+      inheritedAuthorizingCaller =
+        testServer(server).authorityParentFor(targetId, nonce)?.authorizingCaller ?? null;
+      return new Response(
+        JSON.stringify({
+          from: targetId,
+          target: "main",
+          delivery: { caller: { callerId: targetId, callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: [] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const exactCausalCaller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:agent-1",
+      "do",
+      {
+        callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "ev-agent",
+        executionDigest: "a".repeat(64),
+        requested: [],
+      },
+      null,
+      { userId: "usr_root", handle: "root" }
+    );
+    exactCausalCaller.codeApproved = true;
+    const ambientAuthorityCaller = createVerifiedCaller("server", "server", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+
+    await testServer(server).relayToDO(
+      exactCausalCaller.runtime.id,
+      exactCausalCaller.runtime.kind,
+      targetId,
+      "listImportJobs",
+      [],
+      undefined,
+      {
+        authenticatedCaller: exactCausalCaller,
+        authorizingCaller: ambientAuthorityCaller,
+      }
+    );
+
+    const envelope = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
+    expect(envelope.delivery.caller).toMatchObject({
+      callerId: exactCausalCaller.runtime.id,
+      callerKind: "do",
+      userId: "usr_root",
+      authorization: {
+        context: {
+          authorizingOrigin: {
+            kind: "code",
+            principal: "code:workers/agent-worker@ev-agent",
+          },
+        },
+      },
+    });
+    expect(inheritedAuthorizingCaller).toMatchObject({
+      runtime: { id: "server", kind: "server" },
+      subject: { userId: "usr_root", handle: "root" },
+    });
+  });
+
   it("refreshes a connected agent's self-channel binding before routed DO authority", async () => {
     const request = vi.fn();
     const { server, entityCache } = createServer({

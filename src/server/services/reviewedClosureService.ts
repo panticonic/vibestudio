@@ -36,10 +36,7 @@ function decidedBy(ctx: Parameters<ServiceDefinition["handler"]>[0]): `user:${st
     authorization?.ownerChain.at(-1) ??
     [...(authorization?.initiatorChain ?? [])]
       .reverse()
-      .find((principal) => principal.startsWith("user:")) ??
-    (authorization?.testPolicy?.kind === "case" && authorization.testPolicy.case.initiatingUserId
-      ? `user:${authorization.testPolicy.case.initiatingUserId}`
-      : null);
+      .find((principal) => principal.startsWith("user:"));
   const directUser = ctx.authorizingCaller?.subject?.userId ?? ctx.caller.subject?.userId;
   const userId =
     directUser && directUser !== "system" ? directUser : attributedUser?.slice("user:".length);

@@ -62,7 +62,6 @@ export class AgentExecutionSessionRegistry {
       orchestratorPolicyId: orchestrator.policyId,
       case: Object.freeze({
         testId: spec.testId,
-        initiatingUserId: spec.initiatingUserId,
         agent: Object.freeze({
           ...spec.agent,
           ...(spec.agent.fallback === "disabled"
