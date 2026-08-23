@@ -5,7 +5,9 @@
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
-// shell loads and a panel works.
+// shell loads, a panel works, native desktop event subscriptions respond, and
+// no renderer warning/error or uncaught main-process failure was hidden behind
+// a visually successful frame.
 //
 // The app pairs and connects IN-PROCESS — the chooser no longer relaunches — so
 // the entire flow is observed through a SINGLE Electron launch handle. Cleanup is
@@ -40,6 +42,10 @@ import {
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
+import {
+  formatDesktopDiagnostics,
+  unexpectedDesktopDiagnostics,
+} from "./lib/desktop-smoke-diagnostics.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 
@@ -354,8 +360,100 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
   const child = app.process();
   child.stdout?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stdout));
   child.stderr?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stderr));
+  await installDesktopDiagnostics(app);
   await app.firstWindow({ timeout: launchTimeoutMs });
   return app;
+}
+
+async function installDesktopDiagnostics(app) {
+  await evaluateElectron(
+    app,
+    ({ app: electronApp, webContents }) => {
+      const state = {
+        records: [],
+        attachedIds: new Set(),
+      };
+      globalThis.__desktopPairingSmokeDiagnostics = state;
+
+      const attach = (contents) => {
+        if (contents.isDestroyed() || state.attachedIds.has(contents.id)) return;
+        state.attachedIds.add(contents.id);
+        const base = () => ({
+          url: contents.isDestroyed() ? "" : contents.getURL(),
+          sourceId: "",
+          timestamp: Date.now(),
+        });
+        contents.on("console-message", (event) => {
+          state.records.push({
+            type: "console",
+            level: String(event.level ?? ""),
+            message: String(event.message ?? ""),
+            ...base(),
+            sourceId: String(event.sourceId ?? ""),
+          });
+        });
+        contents.on(
+          "did-fail-load",
+          (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+            state.records.push({
+              type: "did-fail-load",
+              level: "",
+              message: `${errorDescription} (${errorCode}); mainFrame=${String(isMainFrame)}`,
+              ...base(),
+              url: String(validatedURL ?? ""),
+            });
+          }
+        );
+        contents.on("render-process-gone", (_event, details) => {
+          state.records.push({
+            type: "render-process-gone",
+            level: "",
+            message: String(details.reason ?? "unknown"),
+            ...base(),
+          });
+        });
+        contents.on("unresponsive", () => {
+          state.records.push({
+            type: "unresponsive",
+            level: "",
+            message: "Renderer became unresponsive",
+            ...base(),
+          });
+        });
+      };
+
+      for (const contents of webContents.getAllWebContents()) attach(contents);
+      electronApp.on("web-contents-created", (_event, contents) => attach(contents));
+    },
+    undefined,
+    "installing desktop renderer diagnostics"
+  );
+}
+
+async function readDesktopDiagnostics(app) {
+  return evaluateElectron(
+    app,
+    () => {
+      const diagnostics = globalThis.__desktopPairingSmokeDiagnostics;
+      if (!diagnostics) throw new Error("Desktop renderer diagnostics were not installed");
+      return diagnostics.records;
+    },
+    undefined,
+    "reading desktop renderer diagnostics"
+  );
+}
+
+async function readMainProcessErrors(app) {
+  return evaluateElectron(
+    app,
+    () => {
+      const testApi = globalThis.__testApi;
+      if (!testApi?.readMainProcessErrors) throw new Error("Desktop test API is not available");
+      return testApi.readMainProcessErrors();
+    },
+    undefined,
+    "reading the main-process error ledger"
+  );
 }
 
 async function waitForDesktopShell(app, timeoutMs) {
@@ -368,7 +466,7 @@ async function waitForDesktopShell(app, timeoutMs) {
     const errorText = snapshots
       .map((snapshot) => snapshot.text)
       .find((text) =>
-        /\b(Connection error|Launch gate could not|Failed to initialize|Remote server disconnected|Cannot continue|Recovery failed|Vibestudio could not start|Workspace startup is taking longer than expected)\b/i.test(
+        /\b(Connection error|Launch gate could not|Failed to initialize|Remote server disconnected|Cannot continue|Cannot start|Recovery failed|Vibestudio could not start|Workspace startup is taking longer than expected)\b/i.test(
           text
         )
       );
@@ -592,6 +690,98 @@ async function dismissConnectionDialog(app) {
     undefined,
     "dismissing the connection dialog"
   );
+}
+
+async function verifySettingsEvent(app, timeoutMs) {
+  const invoked = await evaluateElectron(
+    app,
+    ({ BrowserWindow, Menu }) => {
+      const findItem = (items) => {
+        for (const item of items) {
+          if (item.label === "Settings…") return item;
+          const nested = item.submenu ? findItem(item.submenu.items) : null;
+          if (nested) return nested;
+        }
+        return null;
+      };
+      const menu = Menu.getApplicationMenu();
+      const item = menu ? findItem(menu.items) : null;
+      if (!item?.click) return false;
+      item.click(item, BrowserWindow.getFocusedWindow() ?? undefined, {
+        triggeredByAccelerator: false,
+      });
+      return true;
+    },
+    undefined,
+    "emitting open-settings through the application menu"
+  );
+  if (!invoked) {
+    throw new Error("Desktop application menu did not expose Settings…");
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const opened = await evaluateElectron(
+      app,
+      async ({ webContents }) => {
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          try {
+            const found = await contents.executeJavaScript(
+              `(() => Array.from(document.querySelectorAll('[role="dialog"]')).some((dialog) => {
+                const text = dialog.textContent ?? "";
+                const connectionTab = dialog.querySelector(
+                  '[role="tab"][aria-label="Connection"][aria-selected="true"], [role="tab"][aria-label="Connection"][data-state="active"]'
+                );
+                return /\\bSettings\\b/.test(text) && connectionTab !== null;
+              }))()`,
+              true
+            );
+            if (found) return true;
+          } catch {
+            // Ignore non-DOM WebContents.
+          }
+        }
+        return false;
+      },
+      undefined,
+      "checking the connection settings event result"
+    );
+    if (opened) {
+      console.log(
+        "[desktop-smoke] Verified the typed open-settings subscription through the application menu"
+      );
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error(
+    "The application menu emitted open-settings for the Connection section, but the hosted shell did not open Settings"
+  );
+}
+
+async function assertCleanDesktopDiagnostics(app) {
+  // Event watches settle asynchronously after the first rendered frame. Give
+  // rejected watches and the main-process rejection ledger one bounded turn to
+  // become observable before declaring the paired desktop healthy.
+  await sleep(500);
+  const [rendererDiagnostics, mainProcessErrors] = await Promise.all([
+    readDesktopDiagnostics(app),
+    readMainProcessErrors(app),
+  ]);
+  const unexpectedRendererDiagnostics = unexpectedDesktopDiagnostics(rendererDiagnostics);
+  if (unexpectedRendererDiagnostics.length > 0) {
+    throw new Error(
+      `Desktop renderers reported unexpected warnings or errors:\n${formatDesktopDiagnostics(
+        unexpectedRendererDiagnostics
+      )}`
+    );
+  }
+  if (mainProcessErrors.length > 0) {
+    throw new Error(
+      `Desktop main process reported uncaught errors: ${JSON.stringify(mainProcessErrors, null, 2)}`
+    );
+  }
 }
 
 async function getHostViewDebugInfo(app) {
@@ -948,6 +1138,8 @@ async function main() {
       electronApp,
       Math.max(1_000, deadlineMs - Date.now())
     );
+    await verifySettingsEvent(electronApp, Math.max(1_000, deadlineMs - Date.now()));
+    await assertCleanDesktopDiagnostics(electronApp);
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);
     if (screenshotPath) {
       console.log(`[desktop-smoke] Post-pair window: ${path.relative(repoRoot, screenshotPath)}`);

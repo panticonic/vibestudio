@@ -15,7 +15,12 @@ import {
   parseSignalingEndpoint,
 } from "./cli/lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
-import { createRemoteServeArgs, waitForRootInvite } from "./cli/lib/smoke-remote-server.mjs";
+import {
+  assertBaseCheckoutBootable,
+  createRemoteServeArgs,
+  resolveDevelopmentBase,
+  waitForRootInvite,
+} from "./cli/lib/smoke-remote-server.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,6 +34,8 @@ function parseArgs(argv) {
     localSignaling: false,
     signalUrl: null,
     timeoutMs: 180_000,
+    productionBase: false,
+    baseCheckout: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -36,6 +43,8 @@ function parseArgs(argv) {
     if (arg === "--help") options.help = true;
     else if (arg === "--local-signaling") options.localSignaling = true;
     else if (arg === "--signal-url") options.signalUrl = argv[++i] ?? "";
+    else if (arg === "--base-checkout") options.baseCheckout = path.resolve(argv[++i] ?? "");
+    else if (arg === "--production-base") options.productionBase = true;
     else if (arg === "--timeout-ms") {
       options.timeoutMs = Number(argv[++i]);
       if (!Number.isInteger(options.timeoutMs) || options.timeoutMs <= 0) {
@@ -63,6 +72,10 @@ Usage:
 Options:
   --signal-url <url>   Use a specific existing signaling service.
   --local-signaling    Start local Wrangler signaling instead of production.
+  --base-checkout <dir>
+                       Use this Base checkout for this run only.
+  --production-base    Use the canonical pinned production Base instead of the
+                       selected development checkout.
   --timeout-ms <ms>    Overall smoke timeout. Defaults to 180000.
   --help               Show this help message.
 `);
@@ -167,18 +180,13 @@ async function runCliJson(args, env, timeoutMs, label) {
     const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : "";
     const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
     const processState = [
-      (typeof error?.code === "string" || typeof error?.code === "number") &&
-        `code=${error.code}`,
+      (typeof error?.code === "string" || typeof error?.code === "number") && `code=${error.code}`,
       typeof error?.signal === "string" && `signal=${error.signal}`,
       error?.killed === true && "killed=true",
     ]
       .filter(Boolean)
       .join(" ");
-    const output = [
-      processState,
-      stdout && `stdout:\n${stdout}`,
-      stderr && `stderr:\n${stderr}`,
-    ]
+    const output = [processState, stdout && `stdout:\n${stdout}`, stderr && `stderr:\n${stderr}`]
       .filter(Boolean)
       .join("\n");
     throw new Error(`${label} failed${output ? `\n${output}` : ""}`, { cause: error });
@@ -259,6 +267,26 @@ async function main() {
       VIBESTUDIO_TEST_MODE: "1",
       XDG_CONFIG_HOME: serverConfig,
     };
+    const developmentBase = await resolveDevelopmentBase({
+      repoRoot,
+      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+      productionBase: options.productionBase,
+      explicitCheckout: options.baseCheckout,
+    });
+    if (developmentBase) {
+      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
+      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+      await assertBaseCheckoutBootable({ repoRoot, checkout: developmentBase.checkout });
+      console.log(
+        `[cli-remote-smoke] Base: ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+      );
+    } else {
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+      console.log("[cli-remote-smoke] Base: canonical pinned production release");
+    }
     if (options.localSignaling || options.signalUrl) {
       serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
     } else {
