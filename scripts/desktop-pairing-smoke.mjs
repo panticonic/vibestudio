@@ -175,7 +175,7 @@ function spawnManaged(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (chunk) =>
     prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)
@@ -191,6 +191,128 @@ function spawnManaged(command, args, options = {}) {
     );
   });
   return child;
+}
+
+async function startEphemeralLinuxSecretService(tempRoot, children) {
+  if (process.platform !== "linux") return { env: {}, electronArgs: [] };
+
+  const home = path.join(tempRoot, "home");
+  const configHome = path.join(tempRoot, "xdg");
+  const dataHome = path.join(tempRoot, "xdg-data");
+  const runtimeDir = path.join(tempRoot, "runtime");
+  const controlDir = path.join(tempRoot, "keyring-control");
+  const busConfig = path.join(tempRoot, "session-bus.conf");
+  const busSocket = path.join(runtimeDir, "session-bus");
+  await Promise.all([
+    fsp.mkdir(home, { recursive: true }),
+    fsp.mkdir(configHome, { recursive: true }),
+    fsp.mkdir(dataHome, { recursive: true }),
+    fsp.mkdir(runtimeDir, { recursive: true, mode: 0o700 }),
+    fsp.mkdir(controlDir, { recursive: true, mode: 0o700 }),
+  ]);
+  await Promise.all([fsp.chmod(runtimeDir, 0o700), fsp.chmod(controlDir, 0o700)]);
+  await fsp.writeFile(
+    busConfig,
+    `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:path=${busSocket}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`,
+    { mode: 0o600 }
+  );
+
+  const serviceEnv = {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: configHome,
+    XDG_DATA_HOME: dataHome,
+    XDG_RUNTIME_DIR: runtimeDir,
+  };
+  const bus = spawn(
+    "dbus-daemon",
+    [`--config-file=${busConfig}`, "--nofork", "--nopidfile", "--print-address=1"],
+    {
+      cwd: repoRoot,
+      env: serviceEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  children.push(bus);
+  bus.stderr?.on("data", (chunk) =>
+    prefixAndWrite("desktop-secret-bus", chunk.toString(), process.stderr)
+  );
+  const busAddress = await new Promise((resolve, reject) => {
+    let buffered = "";
+    const timer = setTimeout(
+      () => reject(new Error("Timed out starting the isolated desktop secret-service bus")),
+      5_000
+    );
+    const finish = (error, address) => {
+      clearTimeout(timer);
+      bus.stdout?.off("data", onData);
+      bus.off("error", onError);
+      bus.off("exit", onExit);
+      if (error) reject(error);
+      else resolve(address);
+    };
+    const onData = (chunk) => {
+      buffered += chunk.toString();
+      const newline = buffered.indexOf("\n");
+      if (newline < 0) return;
+      const address = buffered.slice(0, newline).trim();
+      if (!address) {
+        finish(new Error("The isolated desktop secret-service bus emitted an empty address"));
+        return;
+      }
+      finish(null, address);
+    };
+    const onError = (error) => finish(error);
+    const onExit = (code) =>
+      finish(new Error(`The isolated desktop secret-service bus exited early (code ${code})`));
+    bus.stdout?.on("data", onData);
+    bus.once("error", onError);
+    bus.once("exit", onExit);
+  });
+
+  const keyringEnv = { ...serviceEnv, DBUS_SESSION_BUS_ADDRESS: busAddress };
+  const keyring = spawnManaged(
+    "gnome-keyring-daemon",
+    ["--foreground", "--unlock", "--components=secrets", `--control-directory=${controlDir}`],
+    {
+      cwd: repoRoot,
+      env: keyringEnv,
+      label: "desktop-secret-service",
+      pipeStdin: true,
+    }
+  );
+  children.push(keyring);
+  keyring.stdin?.end(randomUUID());
+  await waitForSpawn(keyring, "gnome-keyring-daemon", ["--foreground", "--unlock"]);
+  await sleep(250);
+  if (keyring.exitCode != null) {
+    throw new Error(`The isolated desktop secret service exited early (code ${keyring.exitCode})`);
+  }
+  console.log("[desktop-smoke] Started an isolated Linux secret service for device credentials");
+  return {
+    env: {
+      HOME: home,
+      XDG_CONFIG_HOME: configHome,
+      XDG_DATA_HOME: dataHome,
+      XDG_RUNTIME_DIR: runtimeDir,
+      DBUS_SESSION_BUS_ADDRESS: busAddress,
+      XDG_CURRENT_DESKTOP: "GNOME",
+    },
+    electronArgs: ["--password-store=gnome-libsecret"],
+  };
 }
 
 function waitForSpawn(child, command, args, timeoutMs = 1_000) {
@@ -320,7 +442,7 @@ function hasElectronDisplay() {
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
-async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
+async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvironment) {
   if (!fs.existsSync(mainPath)) {
     throw new Error(`Electron main entry not found at ${mainPath}. Run pnpm build first.`);
   }
@@ -339,6 +461,7 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
     ELECTRON_DISABLE_SANDBOX: "1",
     HOME: path.join(tempRoot, "home"),
     XDG_CONFIG_HOME: path.join(tempRoot, "xdg"),
+    ...desktopEnvironment.env,
   };
 
   await fsp.mkdir(env.HOME, { recursive: true });
@@ -353,7 +476,13 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
   // pipe (serverSession.connectRemoteViaWebRtc with {room,fp,code,sig}).
   const app = await electron.launch({
     executablePath: electronBinary,
-    args: ["--no-sandbox", `--user-data-dir=${userDataDir}`, mainPath, deepLink],
+    args: [
+      "--no-sandbox",
+      ...desktopEnvironment.electronArgs,
+      `--user-data-dir=${userDataDir}`,
+      mainPath,
+      deepLink,
+    ],
     env,
     timeout: launchTimeoutMs,
   });
@@ -720,34 +849,54 @@ async function verifySettingsEvent(app, timeoutMs) {
   }
 
   const deadline = Date.now() + timeoutMs;
+  let latest = null;
   while (Date.now() < deadline) {
-    const opened = await evaluateElectron(
+    latest = await evaluateElectron(
       app,
       async ({ webContents }) => {
-        for (const contents of webContents.getAllWebContents()) {
-          if (contents.isDestroyed()) continue;
-          try {
-            const found = await contents.executeJavaScript(
-              `(() => Array.from(document.querySelectorAll('[role="dialog"]')).some((dialog) => {
-                const text = dialog.textContent ?? "";
+        const testApi = globalThis.__testApi;
+        const hostedShellUrl = testApi?.getHostViewDebugInfo?.().hostedShellUrl ?? null;
+        if (!hostedShellUrl) return { opened: false, reason: "hosted-shell-unavailable" };
+        const shell = webContents
+          .getAllWebContents()
+          .find((contents) => !contents.isDestroyed() && contents.getURL() === hostedShellUrl);
+        if (!shell) {
+          return { opened: false, reason: "hosted-shell-web-contents-unavailable", hostedShellUrl };
+        }
+        try {
+          return await shell.executeJavaScript(
+            `(() => {
+              const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+              const opened = dialogs.some((dialog) => {
+                const labelledBy = dialog.getAttribute("aria-labelledby");
+                const accessibleName = labelledBy
+                  ? document.getElementById(labelledBy)?.textContent?.trim()
+                  : dialog.getAttribute("aria-label")?.trim();
                 const connectionTab = dialog.querySelector(
                   '[role="tab"][aria-label="Connection"][aria-selected="true"], [role="tab"][aria-label="Connection"][data-state="active"]'
                 );
-                return /\\bSettings\\b/.test(text) && connectionTab !== null;
-              }))()`,
-              true
-            );
-            if (found) return true;
-          } catch {
-            // Ignore non-DOM WebContents.
-          }
+                return accessibleName === "Settings" && connectionTab !== null;
+              });
+              return {
+                opened,
+                hostedShellUrl: location.href,
+                dialogs: dialogs.map((dialog) => (dialog.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 240)),
+              };
+            })()`,
+            true
+          );
+        } catch (error) {
+          return {
+            opened: false,
+            reason: error instanceof Error ? error.message : String(error),
+            hostedShellUrl,
+          };
         }
-        return false;
       },
       undefined,
       "checking the connection settings event result"
     );
-    if (opened) {
+    if (latest.opened) {
       console.log(
         "[desktop-smoke] Verified the typed open-settings subscription through the application menu"
       );
@@ -756,7 +905,7 @@ async function verifySettingsEvent(app, timeoutMs) {
     await sleep(100);
   }
   throw new Error(
-    "The application menu emitted open-settings for the Connection section, but the hosted shell did not open Settings"
+    `The application menu emitted open-settings for the Connection section, but the hosted shell did not open Settings. Last state: ${JSON.stringify(latest)}`
   );
 }
 
@@ -810,118 +959,44 @@ async function getPanelTree(app) {
 
 async function waitForRenderedPanel(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  let latest = [];
+  let latest = null;
   while (Date.now() < deadline) {
     latest = await evaluateElectron(
       app,
-      async ({ webContents }) => {
-        const inspections = [];
-        for (const contents of webContents.getAllWebContents()) {
-          if (contents.isDestroyed()) continue;
-          const url = contents.getURL();
-          if (!url.includes("/panels/")) continue;
-          try {
-            const dom = await contents.executeJavaScript(
-              `(() => {
-                const body = document.body;
-                const text = body?.innerText?.replace(/\\s+/g, " ").trim() ?? "";
-                return {
-                  readyState: document.readyState,
-                  text,
-                  childCount: body?.querySelectorAll("*").length ?? 0,
-                  hasHostChrome: Boolean(
-                    document.querySelector('[data-shell-top-chrome="titlebar"]')
-                      || document.querySelector(".titlebar-breadcrumb-scroll")
-                      || document.querySelector('[aria-label="Menu"]')
-                  ),
-                  hasLaunchGateApproval: Boolean(
-                    document.querySelector('[data-bootstrap-launch-gate="true"]')
-                  ),
-                };
-              })()`,
-              true
-            );
-            if (
-              /\bBuild Failed\b|\bfailed to build\b|Panel failed to start|A panel asset failed to load|The panel bundle could not be loaded|Panel asset bridge error|Workspace server unavailable/i.test(
-                dom.text
-              )
-            ) {
-              inspections.push({
-                url,
-                buildError: dom.text.slice(0, 800),
-              });
-              continue;
-            }
-            if (dom.hasHostChrome || dom.hasLaunchGateApproval || dom.readyState !== "complete") {
-              continue;
-            }
+      async () => {
+        const testApi = globalThis.__testApi;
+        if (!testApi) throw new Error("Desktop test API is not available");
+        const initializationFailure = testApi.readPanelInitializationFailure();
+        if (initializationFailure) return { initializationFailure };
 
-            const image = await Promise.race([
-              contents.capturePage(),
-              new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`panel capture timed out: ${url}`)), 2_000)
-              ),
-            ]);
-            const size = image.getSize();
-            if (size.width < 200 || size.height < 120) continue;
-            const bitmap = image.toBitmap();
-            const step = Math.max(1, Math.floor(Math.min(size.width, size.height) / 180));
-            const buckets = new Map();
-            let sampled = 0;
-            let lumaSum = 0;
-            let lumaSquaredSum = 0;
-            for (let y = 0; y < size.height; y += step) {
-              for (let x = 0; x < size.width; x += step) {
-                const offset = (y * size.width + x) * 4;
-                const b = bitmap[offset] ?? 0;
-                const g = bitmap[offset + 1] ?? 0;
-                const r = bitmap[offset + 2] ?? 0;
-                const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                const bucket = `${r >> 4}:${g >> 4}:${b >> 4}`;
-                buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
-                sampled += 1;
-                lumaSum += luma;
-                lumaSquaredSum += luma * luma;
-              }
-            }
-            const dominant = Math.max(...buckets.values());
-            const meanLuma = lumaSum / sampled;
-            const variance = Math.max(0, lumaSquaredSum / sampled - meanLuma * meanLuma);
-            inspections.push({
-              url,
-              text: dom.text.slice(0, 240),
-              childCount: dom.childCount,
-              width: size.width,
-              height: size.height,
-              uniqueBuckets: buckets.size,
-              dominantRatio: dominant / sampled,
-              lumaStdDev: Math.sqrt(variance),
-            });
-          } catch {
-            // Ignore non-DOM and shutting-down webContents.
-          }
+        const panels = testApi.getPanelTree();
+        const panel = panels.find((entry) => entry.snapshot?.source === "panels/chat") ?? panels[0];
+        if (!panel) return { panel: null };
+        const readiness = await testApi.getPanelReadiness(panel.id);
+        let text = "";
+        if (readiness.terminal && readiness.nativeSlotBound) {
+          text = await testApi.getPanelText(panel.id).catch(() => "");
         }
-        return inspections;
+        return {
+          panel: { id: panel.id, source: panel.snapshot?.source ?? null },
+          readiness,
+          text: text.replace(/\s+/g, " ").trim().slice(0, 240),
+        };
       },
       undefined,
-      "inspecting rendered panels"
+      "reading canonical panel readiness"
     );
 
-    const buildFailure = latest.find((entry) => entry.buildError);
-    if (buildFailure) {
+    if (latest.initializationFailure) {
       throw new Error(
-        `Desktop panel build failed: ${buildFailure.buildError} (${buildFailure.url})`
+        `Desktop panel initialization failed: ${JSON.stringify(latest.initializationFailure)}`
       );
     }
-
-    const rendered = latest.find(
-      (entry) => entry.uniqueBuckets >= 8 && entry.dominantRatio < 0.995 && entry.lumaStdDev >= 3
-    );
-    if (rendered) return rendered;
+    if (latest.readiness?.terminal && latest.readiness.nativeSlotBound) return latest;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(
-    `Timed out waiting for a rendered panel surface. Last candidates: ${JSON.stringify(latest)}`
+    `Timed out waiting for a ready, native-bound panel surface. Last state: ${JSON.stringify(latest)}`
   );
 }
 
@@ -933,7 +1008,12 @@ async function saveScreenshot(app) {
     screenshotDir,
     `desktop-${new Date().toISOString().replace(/[:.]/g, "-")}.png`
   );
-  await page.screenshot({ path: screenshotPath, fullPage: false });
+  await Promise.race([
+    page.screenshot({ path: screenshotPath, fullPage: false }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Desktop smoke screenshot timed out")), 5_000)
+    ),
+  ]);
   return screenshotPath;
 }
 
@@ -993,21 +1073,22 @@ async function main() {
     } catch {
       // ignore — children are still killed below.
     }
+    // Processes are registered in dependency order (session bus, keyring,
+    // signaling, server). Stop and await them in reverse order so a dependent
+    // can finish its own shutdown before its backing service disappears.
     for (const child of children.reverse()) {
       try {
         if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
       } catch {
         // Already gone.
       }
-    }
-    await Promise.all(children.map((child) => waitForChildExit(child)));
-    // Escalate any survivor (server / wrangler) to SIGKILL so nothing lingers.
-    for (const child of children) {
+      await waitForChildExit(child);
       try {
         if (child.exitCode == null) child.kill("SIGKILL");
       } catch {
         // Already gone.
       }
+      await waitForChildExit(child, 2_000);
     }
     try {
       await fsp.unlink(options.readyFile);
@@ -1029,6 +1110,7 @@ async function main() {
       await fsp.unlink(options.readyFile);
     } catch {}
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
+    const desktopEnvironment = await startEphemeralLinuxSecretService(tempRoot, children);
 
     // 1. Production signaling by default. Local Miniflare remains available for
     // offline development, but must be requested explicitly.
@@ -1120,7 +1202,12 @@ async function main() {
     console.log(`[desktop-smoke] WebRTC pairing: room=${parsed.room} fp=${parsed.fp}`);
     console.log(`[desktop-smoke] Deep link: ${deepLink}`);
 
-    electronApp = await launchDesktopApp(deepLink, tempRoot, options.launchTimeoutMs);
+    electronApp = await launchDesktopApp(
+      deepLink,
+      tempRoot,
+      options.launchTimeoutMs,
+      desktopEnvironment
+    );
     const result = await waitForDesktopShell(electronApp, options.launchTimeoutMs);
     const panels = await getPanelTree(electronApp).catch(() => []);
     const dismissedRemotePane = await dismissConnectionDialog(electronApp);
