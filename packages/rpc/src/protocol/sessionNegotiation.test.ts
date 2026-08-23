@@ -121,7 +121,12 @@ describe("session control frame codec", () => {
 
   it("decodes a minimal hello with transport and RPC contract versions", () => {
     const decoded = decodeControlFrame(
-      JSON.stringify({ t: "hello", proto: 2, contractVersion: 2, maxMsg: 16_384 })
+      JSON.stringify({
+        t: "hello",
+        proto: 2,
+        contractVersion: RPC_CONTRACT_VERSION,
+        maxMsg: 16_384,
+      })
     );
     expect(isSessionHello(decoded)).toBe(true);
   });

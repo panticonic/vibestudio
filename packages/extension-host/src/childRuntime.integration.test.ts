@@ -15,6 +15,7 @@ import {
   type RpcRequest,
   type RpcResponse,
 } from "@vibestudio/rpc";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import type {
   WsClientMessage,
   WsServerMessage,
@@ -170,7 +171,7 @@ describe("extension child runtime process", () => {
                   JSON.stringify({
                     type: "ws:auth-result",
                     success: true,
-                    contractVersion: 2,
+                    contractVersion: RPC_CONTRACT_VERSION,
                   } satisfies WsServerMessage)
                 );
                 return;

@@ -4112,7 +4112,7 @@ describe("RpcServer caller identity", () => {
 
     ws.emitMessage({
       type: "ws:auth",
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       token: "pairing-code",
       connectionId: "pairing-conn",
     });
@@ -4146,7 +4146,7 @@ describe("RpcServer caller identity", () => {
 
     ws.emitMessage({
       type: "ws:auth",
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       token: "pairing-code",
       connectionId: "pairing-conn",
     });
@@ -4175,7 +4175,7 @@ describe("RpcServer caller identity", () => {
 
     ws.emitMessage({
       type: "ws:auth",
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       token: "used-pairing-code",
       connectionId: "pairing-conn",
     });
@@ -4208,7 +4208,7 @@ describe("RpcServer caller identity", () => {
 
     ws.emitMessage({
       type: "ws:auth",
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       token,
       connectionId: "failed-admission",
     });

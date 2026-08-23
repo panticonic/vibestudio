@@ -1,4 +1,5 @@
 import type { WsLike } from "@vibestudio/rpc/protocol/wsAdapter";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { describe, expect, it } from "vitest";
 import { createServerWsTransport } from "./serverWsTransport.js";
 
@@ -31,7 +32,7 @@ class FakeSocket implements WsLike {
       data: JSON.stringify({
         success: true,
         type: "ws:auth-result",
-        contractVersion: 2,
+        contractVersion: RPC_CONTRACT_VERSION,
       }),
     });
   }

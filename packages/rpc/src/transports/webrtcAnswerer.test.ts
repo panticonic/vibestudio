@@ -227,7 +227,7 @@ function offererHello(over: Record<string, unknown> = {}): Record<string, unknow
   return {
     t: "hello",
     proto: 2,
-    contractVersion: 2,
+    contractVersion: RPC_CONTRACT_VERSION,
     maxMsg: 256 * 1024,
     platform: "desktop",
     keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -331,7 +331,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(frames[0]).toEqual({
       t: "hello",
       proto: 2,
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -499,8 +499,9 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
-  it("drops the pipe on an RPC contract mismatch", async () => {
+  it("drops a stale desktop pipe before it can open an authenticated session", async () => {
     const h = makeHarness();
+    const staleContractVersion = RPC_CONTRACT_VERSION - 1;
     void h.pipe.connect().catch(() => {});
     await tick();
     h.signals[0]!.deliverOffer();
@@ -508,12 +509,9 @@ describe("WebRTC answerer pipe (v2)", () => {
     const peer = h.peers[0]!;
     peer.channels.get(0)!.open();
     peer.channels.get(1)!.open();
-    deliverControl(
-      peer.channels.get(0)!,
-      offererHello({ contractVersion: RPC_CONTRACT_VERSION + 1 })
-    );
+    deliverControl(peer.channels.get(0)!, offererHello({ contractVersion: staleContractVersion }));
     expect(h.downs).toEqual([
-      `RPC contract mismatch: peer ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`,
+      `RPC contract mismatch: peer ${staleContractVersion} (want ${RPC_CONTRACT_VERSION})`,
     ]);
     await h.pipe.close();
   });

@@ -434,7 +434,7 @@ class Fabric {
     const hello: SessionHelloFrame = {
       t: "hello",
       proto: 2,
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -668,24 +668,28 @@ describe("WebRTC transport — pin + hello handshake", () => {
     await connecting;
   });
 
-  it("terminally rejects connect and ready on an RPC contract mismatch", async () => {
+  it("rejects a stale server before reading or sending a one-time pairing credential", async () => {
     vi.useFakeTimers();
+    const staleContractVersion = RPC_CONTRACT_VERSION - 1;
     const fabric = new Fabric({
-      hello: { contractVersion: RPC_CONTRACT_VERSION + 1 },
+      hello: { contractVersion: staleContractVersion },
     });
     const transport = makeTransport(fabric);
-    const session = transport.openSession({ connectionId: "c1", getToken: () => "g" });
+    const getToken = vi.fn(() => "one-time-pairing-credential");
+    const session = transport.openSession({ connectionId: "c1", getToken });
     const connecting = transport.connect().catch((error) => error);
     const sessionReady = session.ready!().catch((error) => error);
     const failure = await connecting;
 
     expect(failure).toMatchObject({
       code: RPC_CONTRACT_MISMATCH_CODE,
-      message: `RPC contract mismatch: peer ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`,
+      message: `RPC contract mismatch: peer ${staleContractVersion} (want ${RPC_CONTRACT_VERSION})`,
     });
     await expect(sessionReady).resolves.toBe(failure);
     await expect(transport.ready()).rejects.toBe(failure);
     expect(transport.status()).toBe("disconnected");
+    expect(getToken).not.toHaveBeenCalled();
+    expect(fabric.opens).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fabric.createCalls).toBe(1);
@@ -783,7 +787,9 @@ describe("WebRTC transport — control scheduling fairness", () => {
     control.drain();
     await flushMicrotasks(200);
 
-    const delivered = fabric.frames.filter((frame) => frame.t === "rpc" || frame.t === "stream-open");
+    const delivered = fabric.frames.filter(
+      (frame) => frame.t === "rpc" || frame.t === "stream-open"
+    );
     expect(delivered.map((frame) => frame.t)).toEqual(["stream-open", "rpc"]);
 
     await transport.close();

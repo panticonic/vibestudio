@@ -11,6 +11,9 @@ format change. It enforces the clean-cut policy in
   and publication flow.
 - If it changes the ABI or an internal format, has one new exact `systemEpoch`
   been chosen for the complete cut?
+- If independently deployed desktop and server builds must not interoperate,
+  was `RPC_CONTRACT_VERSION` advanced so their WebRTC hello fails before
+  logical-session authentication and pairing-code redemption?
 - Are all affected host, Base, optional-template, registry, and controlled
   workspace owners listed?
 - Has any user-level data worth preserving been identified for explicit product

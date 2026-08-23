@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { envelopeFromMessage, type RpcEnvelope, type RpcResponse } from "@vibestudio/rpc";
 import { FRAME_DATA, FRAME_END, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { createServerClient } from "./serverClient.js";
 
 const cleanup: Array<() => Promise<void> | void> = [];
@@ -109,7 +110,7 @@ async function startRpcHarness() {
             JSON.stringify({
               type: "ws:auth-result",
               success,
-              ...(success ? { contractVersion: 2 } : {}),
+              ...(success ? { contractVersion: RPC_CONTRACT_VERSION } : {}),
               callerId,
               callerKind,
               connectionId: "conn",

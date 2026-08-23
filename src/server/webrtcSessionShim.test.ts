@@ -4,6 +4,7 @@ import {
   decodeControlFrame,
   type SessionControlFrame,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 import type { EnqueueOutcome } from "@vibestudio/rpc/transports/webrtcAnswerer";
@@ -65,7 +66,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     h.shim.on("message", (data) => got.push((data as Buffer).toString()));
     const auth: WsClientMessage = {
       type: "ws:auth",
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       token: "grant",
       connectionId: "c1",
     };
@@ -82,7 +83,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const result: WsServerMessage = {
       type: "ws:auth-result",
       success: true,
-      contractVersion: 2,
+      contractVersion: RPC_CONTRACT_VERSION,
       callerId: "panel:c1",
       callerKind: "panel",
       connectionId: "c1",
@@ -247,7 +248,11 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const handler = (): void => void got.push(1);
     h.shim.on("message", handler);
     h.shim.off("message", handler);
-    h.shim.deliverInbound({ type: "ws:auth", contractVersion: 2, token: "t" });
+    h.shim.deliverInbound({
+      type: "ws:auth",
+      contractVersion: RPC_CONTRACT_VERSION,
+      token: "t",
+    });
     expect(got).toHaveLength(0);
   });
 });

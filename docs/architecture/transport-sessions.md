@@ -117,7 +117,10 @@ selection is discovered and validated at runtime.
 - Use `emitToConnection` for one transport instance.
 - Treat `resubscribe` as stateful and `cold-recover` as edge-triggered.
 - Keep response-owned watches and direct-address reachability independent.
-- Fence incompatible peers with RPC contract version 2; transport byte
-  compatibility does not imply event/service-contract compatibility.
+- Fence incompatible peers with RPC contract version 3; transport byte
+  compatibility does not imply event/service/native-host compatibility. WebRTC
+  peers exact-match this version in the pipe hello before a logical session can
+  send its `open` frame, so an incompatible desktop cannot redeem a one-time
+  pairing credential.
 - Give ordinary streams a body-idle deadline. Long-lived streams must opt out
   explicitly with `bodyIdleTimeoutMs: null`.
