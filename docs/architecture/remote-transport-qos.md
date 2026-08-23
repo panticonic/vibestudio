@@ -71,5 +71,8 @@ The focused transport suite covers lane weighting, per-stream fairness,
 independent backpressure, zero-window runtimes, adaptive windows, negotiation,
 and lane-stable stream routing. Panel server/facade/cache tests cover immutable
 helper identity, manifest selection, one-bundle prefetch, warm zero-fetch hits,
-and all-or-nothing publication. Native WebRTC and isolated managed-instance
-profiles remain the acceptance test for real cold and warm behavior.
+and all-or-nothing publication. The native and full-system WebRTC E2E suites
+verify real DTLS, signaling, pairing, reconnect, and all three lanes. The CLI
+remote and Electron desktop pairing smokes validate the shipped client flows;
+isolated managed-instance profiles remain the acceptance test for real cold and
+warm performance.

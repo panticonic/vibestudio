@@ -170,6 +170,7 @@ pnpm smoke:cloudflare:apex -- --expect-app-links
 Run the real desktop and Android clients through the deployed signaling route:
 
 ```bash
+pnpm test:cli-remote-smoke
 pnpm test:desktop-pairing-smoke
 pnpm smoke:full -- --android-avd NatStack_Test
 ```
@@ -180,6 +181,9 @@ assert that the invite contains `wss://signal.vibestudio.app/`. Android
 emulators attempt normal host/STUN/TURN ICE by default. Add `--require-turn` for
 a relay-readiness pass that fails during preflight when the service is still
 STUN-only. Use `--local-signaling` only for an offline Miniflare/coturn run.
+The desktop harness uses an isolated OS credential store rather than the
+developer's keyring. From a headless Linux shell, install Xvfb, D-Bus, and GNOME
+Keyring, then run `xvfb-run -a pnpm test:desktop-pairing-smoke`.
 
 ## Run A Server
 
@@ -361,8 +365,13 @@ Everything can still run against Cloudflare's local runtime:
 ```bash
 pnpm rebuild node-datachannel
 pnpm test:webrtc-e2e
+pnpm test:cli-remote-smoke -- --local-signaling
+xvfb-run -a pnpm test:desktop-pairing-smoke -- --local-signaling
 ```
 
 `pnpm test:webrtc-e2e` spawns `wrangler dev apps/signaling`, a real answerer,
-and a client. It covers connect, RPC, bulk stream, and the QR-code to
-device-credential pairing flow.
+and a client. It covers protocol-v3 negotiation, the control/interactive/bulk
+lanes, connect, RPC, streaming, and the pairing-to-device-credential lifecycle.
+The CLI and desktop smokes then validate the actual user-facing clients over
+the same local signaling contract; omit `--local-signaling` to exercise the
+deployed signaling service instead.

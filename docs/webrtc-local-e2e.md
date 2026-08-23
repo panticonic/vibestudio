@@ -5,28 +5,31 @@ runs on Cloudflare's local runtime** (`wrangler dev`/Miniflare), the server runs
 as a **real WebRTC answerer**, and a client dials it over a real
 `node-datachannel` DTLS pipe — no public endpoint, no deployment.
 
-## TL;DR — run the automated e2e
+## TL;DR — run the automated coverage
 
 ```bash
 pnpm rebuild node-datachannel   # one-time: build the native N-API binary
 pnpm test:webrtc-e2e            # VIBESTUDIO_RUN_WEBRTC_E2E=1 vitest run tests/webrtc-*.e2e.test.ts
+pnpm test:cli-remote-smoke      # packaged CLI pair + reconnect/status over hosted signaling
+pnpm test:desktop-pairing-smoke # real Electron pair, shell, panel, and desktop-event flow
 ```
 
-Two suites run (both against the v2 stack — hello preamble `proto=2`, ingress
+`test:webrtc-e2e` runs two suites against the v3 stack — hello preamble
+`proto=3`, three negotiated traffic lanes, ingress
 pool, per-invite rooms, the shared `createPairedConnection` bootstrap):
 
 - **`tests/webrtc-native.e2e.test.ts`** — two real `node-datachannel` peers over
   in-process signaling: real DTLS connect, the fingerprint pin (accept on match,
   **fail-closed on mismatch**), the internally-negotiated hello, session
-  handshake, RPC round-trip, a bulk stream decoded by the client
-  (`writeBulkFrame` → stream body), a pipe-level bulk round-trip
-  (`sendBulkFrame` → `onBulkFrame`, chunked under the negotiated size), and the
-  §9.8 `candidateType` surface on both ends.
+  handshake, RPC round-trip, an interactive response stream decoded by the
+  client, a pipe-level bulk round-trip (`sendBulkFrame` → `onStreamFrame`,
+  chunked under the negotiated size), control/interactive/bulk channel
+  readiness, and the §9.8 `candidateType` surface on both ends.
 - **`tests/webrtc-system.e2e.test.ts`** — the whole system, booted the way
   `src/server/index.ts` boots it: it spawns `wrangler dev apps/signaling` (the
   real signaling DO under Miniflare), starts the **WebRTC ingress pool**
   (`startWebRtcIngress`) over the real `RpcServer`, mints invites with
-  **per-invite rooms** (`mintPairingInvite` → real `vibestudio://connect` v=2 deep
+  **per-invite rooms** (`mintPairingInvite` → real `vibestudio://connect` v3 deep
   links), and dials each with `createPairedConnection` (the one shared client
   bootstrap). Scenarios: fresh-device pairing over the pipe (`code` →
   `createPairingRedeemer` → credential on the auth-result `onPaired`) + RPC
@@ -38,6 +41,29 @@ pool, per-invite rooms, the shared `createPairedConnection` bootstrap):
 
 Both complete in a few seconds after `wrangler dev` boots (~3 s, Miniflare).
 They also run nightly in CI (`.github/workflows/webrtc-e2e-nightly.yml`).
+
+The two smoke commands exercise the user-facing binaries above that transport
+contract:
+
+- **`test:cli-remote-smoke`** starts an isolated real server, consumes its root
+  invite through hosted signaling, pairs the CLI, reconnects with the issued
+  device credential, and verifies workspace status.
+- **`test:desktop-pairing-smoke`** starts an isolated real server and Electron
+  client, consumes the root invite, approves the real startup gates, waits for
+  the hosted shell and an actual panel surface, verifies the typed Settings
+  event, and rejects renderer/main-process diagnostics. On Linux the harness
+  uses an isolated D-Bus + libsecret keyring so credential persistence is both
+  secure and independent of the developer's login keyring.
+
+The desktop smoke needs a graphical display. In a headless Linux shell, run:
+
+```bash
+xvfb-run -a pnpm test:desktop-pairing-smoke
+```
+
+That headless route requires `xvfb-run`, `dbus-daemon`, and
+`gnome-keyring-daemon`. The harness owns and deletes its server state, client
+state, session bus, and keyring on both success and failure.
 
 ## The pieces
 
