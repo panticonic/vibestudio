@@ -1162,6 +1162,7 @@ export class PanelPresentationController {
     const sameLeaseWasAlreadyObserved =
       observedConnection?.runtimeEntityId === result.lease.runtimeEntityId &&
       observedConnection.connectionId === result.lease.connectionId;
+    const activeAttempt = this.attemptBySlot.get(panelId);
     this.connectionBySlot.set(panelId, {
       runtimeEntityId: result.lease.runtimeEntityId,
       connectionId: result.lease.connectionId,
@@ -1172,9 +1173,11 @@ export class PanelPresentationController {
       // cleanup would release the live lease and start an acquire/release loop.
       ...(sameLeaseWasAlreadyObserved && observedConnection.ownerToken
         ? { ownerToken: observedConnection.ownerToken }
-        : ownerToken
-          ? { ownerToken }
-          : {}),
+        : activeAttempt?.status === "active"
+          ? { ownerToken: activeAttempt.token }
+          : ownerToken
+            ? { ownerToken }
+            : {}),
     });
     return result.lease.connectionId;
   }
