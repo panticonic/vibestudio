@@ -148,7 +148,7 @@ describe("authority runtime", () => {
     const mission = {
       subject: `mission:msn_system_agent@${"c".repeat(64)}` as const,
       closureDigest: "c".repeat(64),
-      harness: { unit: "workers/system-agent", ev: digest },
+      harness: { unit: "workers/system-agent", ev: digest, ref: `state:${"b".repeat(64)}` },
     };
 
     expect(callerMatchesReviewedClosureHarness(caller, mission)).toBe(true);

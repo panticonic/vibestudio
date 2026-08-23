@@ -24,10 +24,26 @@ describe("missions service agent ergonomics", () => {
     expect(missionsMethods.getRun.description).toContain("exact automation run");
   });
 
+  it("keeps historical pre-ref definitions readable for repair", () => {
+    expect(
+      missionCharterSchema.parse({
+        summary: "Historical timer",
+        harness: { unit: "workers/agent", ev: "a".repeat(64) },
+        execution: {
+          kind: "method",
+          target: { source: "workers/agent", className: "Agent", objectKey: "old" },
+          method: "tick",
+          args: [],
+        },
+        trigger: { kind: "manual" },
+      }).harness.ref
+    ).toBeUndefined();
+  });
+
   it("carries calendar, finite-run, and completion state through the wire contract", () => {
     const charter = missionCharterSchema.parse({
       summary: "Watch the rollout",
-      harness: { unit: "workers/rollout", ev: "a".repeat(64) },
+      harness: { unit: "workers/rollout", ev: "a".repeat(64), ref: `state:${"b".repeat(64)}` },
       execution: {
         kind: "method",
         target: { source: "workers/rollout", className: "RolloutDO", objectKey: "primary" },

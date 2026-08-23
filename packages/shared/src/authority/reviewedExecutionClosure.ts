@@ -13,6 +13,9 @@ export interface CompiledUserlandServiceBinding {
 
 export interface CompiledExecutionExposure {
   serviceMethods: readonly string[];
+  /** Userland services needed by the sealed execution harness itself. Optional
+   * only when reading closures created before this distinction existed. */
+  harnessUserlandServices?: readonly string[];
   userlandServices:
     | { discovery: "live-declarations"; bindings: readonly [] }
     | {
@@ -41,7 +44,7 @@ export interface ReviewedExecutionClosureDependency {
 export interface ReviewedExecutionClosureBody {
   subjectPrefix: string;
   exposure: CompiledExecutionExposure;
-  harness: { unit: string; ev: string };
+  harness: { unit: string; ev: string; ref?: string };
   grants: readonly ReviewedExecutionClosureGrant[];
   grantDependencies: readonly ReviewedExecutionClosureDependency[];
   lineageClasses: readonly string[];
@@ -53,6 +56,55 @@ export interface ReviewedExecutionClosureBody {
     revision: number;
     digest: string;
   };
+}
+
+/** Runtime plumbing used by every durable automation harness. These methods
+ * are part of executing the reviewed target, not tools selected by the action.
+ * Ordinary authority still intersects this exposure with the exact caller's
+ * fixed-code declarations and resource policy. */
+const HARNESS_SERVICE_METHODS = [
+  "workspace-state.alarmClear",
+  "workspace-state.alarmSet",
+  "workspace-state.lifecycleLeaseClear",
+  "workspace-state.lifecycleLeaseUpsert",
+] as const;
+
+/** Host services causally used by the ordinary agent loop itself. They make
+ * the reviewed harness executable; they do not expose authored action tools.
+ * Gated methods here still need a standing grant or ordinary approval. */
+const AGENT_HARNESS_SERVICE_METHODS = [
+  "blobstore.getText",
+  "blobstore.putText",
+  "contextIntegrity.ingest",
+  "credentials.resolveCredential",
+  "eval.cancel",
+  "eval.get",
+  "eval.start",
+] as const;
+
+/** The standard agent conversation harness is the agent plus its durable
+ * channel and the channel's workspace/context provider. These are causal
+ * execution dependencies, independent of tools exposed to the action. */
+const AGENT_HARNESS_USERLAND_SERVICES = [
+  "channel",
+  "gad.workspace",
+  "workspace.state",
+] as const;
+const METHOD_HARNESS_USERLAND_SERVICES = ["workspace.state"] as const;
+
+export function compileMissionHarnessGrants(
+  charter: MissionCharter
+): readonly ReviewedExecutionClosureGrant[] {
+  const names =
+    charter.execution.kind === "agent"
+      ? AGENT_HARNESS_USERLAND_SERVICES
+      : METHOD_HARNESS_USERLAND_SERVICES;
+  return names.map((name) => ({
+    effect: "allow" as const,
+    capability: `workspace-service:${name}`,
+    resource: { kind: "prefix" as const, prefix: "" },
+    tier: "gated" as const,
+  }));
 }
 
 export function reviewedExecutionClosureDigest(body: ReviewedExecutionClosureBody): string {
@@ -73,7 +125,8 @@ export function compileMissionExposure(
 ): CompiledExecutionExposure {
   if (charter.execution.kind === "method") {
     return {
-      serviceMethods: [],
+      serviceMethods: [...HARNESS_SERVICE_METHODS],
+      harnessUserlandServices: [...METHOD_HARNESS_USERLAND_SERVICES],
       userlandServices: { discovery: "bound", bindings: [] },
       network: { mode: "none" },
     };
@@ -81,6 +134,8 @@ export function compileMissionExposure(
   const toolExposure = charter.execution.toolExposure;
   const exactMethods = toolExposure.services.filter((entry) => !entry.endsWith(".*"));
   const serviceMethods = [
+    ...HARNESS_SERVICE_METHODS,
+    ...AGENT_HARNESS_SERVICE_METHODS,
     ...exactMethods,
     ...knownServiceMethods.filter((method) =>
       toolExposure.services.some(
@@ -108,7 +163,12 @@ export function compileMissionExposure(
           origins: [...new Set(toolExposure.declaredOrigins)].sort(compareUtf16CodeUnits),
         } as const)
       : ({ mode: toolExposure.evalNetwork } as { mode: "none" } | { mode: "unrestricted" });
-  return { serviceMethods: uniqueMethods, userlandServices, network };
+  return {
+    serviceMethods: uniqueMethods,
+    harnessUserlandServices: [...AGENT_HARNESS_USERLAND_SERVICES],
+    userlandServices,
+    network,
+  };
 }
 
 export function compiledExposureAllowsService(
@@ -118,7 +178,8 @@ export function compiledExposureAllowsService(
   if (
     (qualifiedMethod === "workers.resolveService" ||
       qualifiedMethod === "workers.resolveDurableObject") &&
-    (exposure.userlandServices.discovery === "live-declarations" ||
+    ((exposure.harnessUserlandServices?.length ?? 0) > 0 ||
+      exposure.userlandServices.discovery === "live-declarations" ||
       exposure.userlandServices.bindings.length > 0)
   ) {
     return true;
@@ -130,6 +191,7 @@ export function compiledExposureAllowsUserlandService(
   exposure: CompiledExecutionExposure,
   input: { name: string; provider: string; providerEv: string }
 ): boolean {
+  if (exposure.harnessUserlandServices?.includes(input.name)) return true;
   if (exposure.userlandServices.discovery === "live-declarations") return true;
   const binding = exposure.userlandServices.bindings.find(
     (candidate) => candidate.name === input.name && candidate.provider === input.provider

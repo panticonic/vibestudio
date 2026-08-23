@@ -3627,7 +3627,7 @@ describe("RpcServer relay behavior", () => {
     const mission = {
       subject: "mission:mission-local-model@closure-1" as const,
       closureDigest: "closure-1",
-      harness: { unit: "workers/agent-worker", ev: "ev-agent" },
+      harness: { unit: "workers/agent-worker", ev: "ev-agent", ref: `state:${"a".repeat(64)}` },
     };
     const contextIntegrity = {
       class: "external" as const,

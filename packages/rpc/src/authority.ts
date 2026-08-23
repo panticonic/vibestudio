@@ -84,7 +84,7 @@ export interface CodeLineageFact {
 export interface SessionReviewedClosureFact {
   subject: AuthorityGrantSubject;
   closureDigest: string;
-  harness: { unit: string; ev: string };
+  harness: { unit: string; ev: string; ref?: string };
 }
 
 export type AgentExecutionMode = "interactive" | "mission" | "test";

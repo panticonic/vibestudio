@@ -44,7 +44,7 @@ function harness() {
       },
       network: { mode: "declared-origins", origins: ["https://api.example.test"] },
     },
-    harness: { unit: "workers/agent", ev: "a".repeat(64) },
+    harness: { unit: "workers/agent", ev: "a".repeat(64), ref: `state:${"b".repeat(64)}` },
     grants: [
       {
         effect: "allow",
@@ -129,8 +129,38 @@ describe("ReviewedClosureRegistry", () => {
       taskRef: "task-1",
       binderId: "builtin:missions",
     });
-    registry.suspend(closure.subject);
+    expect(() => registry.suspend(closure.subject, "another-worker")).toThrowError(
+      /Only the reviewed closure issuer/
+    );
+    registry.suspend(closure.subject, "builtin:missions");
     expect(registry.factForSession("session-1")).toBeNull();
+  });
+
+  it("finishes a bound session idempotently without weakening binder ownership", () => {
+    const { registry, body } = harness();
+    const closureDigest = reviewedExecutionClosureDigest(body);
+    const closure = registry.activate({
+      body,
+      closureDigest,
+      publisher: "builtin:missions",
+      decidedBy: "user:owner",
+    });
+    registry.bindSession({
+      subject: closure.subject,
+      closureDigest,
+      sessionId: "session-finish",
+      taskRef: "task-finish",
+      binderId: "builtin:missions",
+    });
+
+    expect(() => registry.finishSession("session-finish", "builtin:missions", 20)).not.toThrow();
+    expect(() => registry.finishSession("session-finish", "builtin:missions", 21)).not.toThrow();
+    expect(() => registry.finishSession("session-finish", "other-worker", 22)).toThrowError(
+      /Only the session binder/
+    );
+    expect(() => registry.finishSession("unknown-session", "builtin:missions", 23)).toThrowError(
+      /Unknown reviewed closure session/
+    );
   });
 
   it("rejects critical standing grants", () => {

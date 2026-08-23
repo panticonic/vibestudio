@@ -19,8 +19,8 @@ export function createReviewedClosureService(deps: {
           publisher: ctx.caller.runtime.id,
           decidedBy: decidedBy(ctx),
         }),
-      suspend: (_ctx, [subject]) => deps.registry.suspend(subject),
-      retire: (_ctx, [subject]) => deps.registry.retire(subject),
+      suspend: (ctx, [subject]) => deps.registry.suspend(subject, ctx.caller.runtime.id),
+      retire: (ctx, [subject]) => deps.registry.retire(subject, ctx.caller.runtime.id),
       bindSession: (ctx, [input]) =>
         deps.registry.bindSession({ ...input, binderId: ctx.caller.runtime.id }),
       finishSession: (ctx, [input]) =>

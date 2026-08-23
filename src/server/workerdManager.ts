@@ -94,6 +94,18 @@ function workerJavaScriptModules(build: BuildResult): Record<string, string> {
   return modules;
 }
 
+/** Immutable workspace selector for the source that produced a runtime image.
+ * Effective versions identify compiled units; runtime refs identify source
+ * snapshots. Keeping both in worker env prevents callers from conflating the
+ * two hashes when they need to recreate their own execution later. */
+function workerSourceRef(image: RuntimeImageRecord, source: string): string {
+  const root = image.artifact.sourceState.contentRoots.find((entry) => entry.repoPath === source);
+  if (!root) {
+    throw new Error(`Runtime image ${image.id} has no source root for ${source}`);
+  }
+  return root.stateHash;
+}
+
 export class RuntimeImageWarmingError extends Error {
   readonly code = RUNTIME_IMAGE_WARMING_ERROR_CODE;
 }
@@ -1769,6 +1781,7 @@ export class WorkerdManager {
       WORKER_ID: instance.name,
       WORKER_SOURCE: instance.source,
       WORKER_EFFECTIVE_VERSION: instance.effectiveVersion,
+      WORKER_SOURCE_REF: workerSourceRef(image, instance.source),
       CONTEXT_ID: instance.contextId,
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
@@ -1994,6 +2007,7 @@ export class WorkerdManager {
       WORKER_SOURCE: source,
       WORKER_CLASS_NAME: className,
       WORKER_EFFECTIVE_VERSION: image.artifact.sourceState.effectiveVersion,
+      WORKER_SOURCE_REF: workerSourceRef(image, source),
       WORKERD_SESSION_ID: this.sessionId,
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
       GATEWAY_URL: this.deps.getServerUrl(),

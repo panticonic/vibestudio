@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { createNotificationService } from "./notificationService.js";
 
 describe("server notification service", () => {
+  afterEach(() => setWorkspaceAppTrust(null));
   it("issues a caller-attributed id and scopes the notification to the verified account", async () => {
     const eventService = {
       emit: vi.fn(),
@@ -55,6 +57,7 @@ describe("server notification service", () => {
   });
 
   it("accepts user actions only from the shell belonging to the addressed account", async () => {
+    setWorkspaceAppTrust({ chromeApps: ["apps/shell"] });
     const eventService = {
       emit: vi.fn(),
       emitToUser: vi.fn(() => true),
@@ -72,18 +75,48 @@ describe("server notification service", () => {
       userId: "usr_bob",
       handle: "bob",
     });
+    const aliceChrome = createVerifiedCaller(
+      "app:@workspace-apps/shell",
+      "app",
+      {
+        callerId: "app:@workspace-apps/shell",
+        callerKind: "app",
+        repoPath: "apps/shell",
+        effectiveVersion: "a".repeat(64),
+      },
+      null,
+      { userId: "usr_alice", handle: "alice" }
+    );
+    const ordinaryApp = createVerifiedCaller(
+      "app:@workspace-apps/terminal-browser",
+      "app",
+      {
+        callerId: "app:@workspace-apps/terminal-browser",
+        callerKind: "app",
+        repoPath: "apps/terminal-browser",
+        effectiveVersion: "b".repeat(64),
+      },
+      null,
+      { userId: "usr_alice", handle: "alice" }
+    );
     const id = await result.definition.handler({ caller: panel }, "show", [
       { type: "info", title: "Actionable" },
     ]);
 
     await expect(
       result.definition.handler({ caller: panel }, "reportAction", [id, "open"])
-    ).rejects.toThrow("Only a shell");
+    ).rejects.toThrow("Only trusted workspace chrome");
+    await expect(
+      result.definition.handler({ caller: ordinaryApp }, "reportAction", [id, "open"])
+    ).rejects.toThrow("Only trusted workspace chrome");
     await expect(
       result.definition.handler({ caller: bobShell }, "reportAction", [id, "open"])
     ).rejects.toThrow("does not belong to this user");
     await expect(
       result.definition.handler({ caller: aliceShell }, "reportAction", [id, "open"])
+    ).resolves.toBeUndefined();
+    await expect(
+      result.definition.handler({ caller: aliceChrome }, "reportAction", [id, "dismiss"])
     ).resolves.toBeUndefined();
   });
 

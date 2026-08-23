@@ -84,7 +84,15 @@ const missionExecutionSchema = z.discriminatedUnion("kind", [
 export const missionCharterSchema = z
   .object({
     summary: z.string().min(1).max(4_000),
-    harness: z.object({ unit: z.string().min(1).max(512), ev: hex64 }).strict(),
+    harness: z
+      .object({
+        unit: z.string().min(1).max(512),
+        ev: hex64,
+        // Optional on the wire so pre-ref definitions can still be inspected;
+        // the mission domain validator requires it for every launch/revision.
+        ref: z.string().regex(/^state:[0-9a-f]{64}$/u).optional(),
+      })
+      .strict(),
     execution: missionExecutionSchema,
     trigger: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("manual") }).strict(),

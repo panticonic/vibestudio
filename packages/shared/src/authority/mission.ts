@@ -101,7 +101,9 @@ export type MissionTrigger =
 
 export interface MissionCharter {
   summary: string;
-  harness: { unit: string; ev: string };
+  /** `ref` is optional only so historical definitions remain inspectable.
+   * New or revised charters must pass validateMissionCharter and include it. */
+  harness: { unit: string; ev: string; ref?: string };
   execution: MissionExecution;
   trigger: MissionTrigger;
 }
@@ -169,8 +171,16 @@ export function validateMissionCharter(charter: MissionCharter): void {
   if (new TextEncoder().encode(canonicalJson(charter)).byteLength > MAX_CHARTER_BYTES) {
     throw new Error(`Automation charter exceeds ${MAX_CHARTER_BYTES} bytes`);
   }
-  if (!charter.summary.trim() || !charter.harness.unit || !HEX64.test(charter.harness.ev)) {
-    throw new Error("Automation charter requires a summary and an exact harness EV");
+  if (
+    !charter.summary.trim() ||
+    !charter.harness.unit ||
+    !HEX64.test(charter.harness.ev) ||
+    typeof charter.harness.ref !== "string" ||
+    !/^state:[0-9a-f]{64}$/u.test(charter.harness.ref)
+  ) {
+    throw new Error(
+      "Automation charter requires a summary, exact harness EV, and immutable source ref"
+    );
   }
   try {
     normalizeWorkspaceRepoPath(charter.harness.unit);

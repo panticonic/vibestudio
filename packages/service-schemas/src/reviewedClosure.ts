@@ -15,6 +15,8 @@ const bindingSchema = z
 export const compiledExecutionExposureSchema = z
   .object({
     serviceMethods: z.array(z.string().min(1)),
+    // Optional only for historical closures; the compiler always emits it.
+    harnessUserlandServices: z.array(z.string().min(1)).optional(),
     userlandServices: z.discriminatedUnion("discovery", [
       z.object({ discovery: z.literal("live-declarations"), bindings: z.tuple([]) }).strict(),
       z.object({ discovery: z.literal("bound"), bindings: z.array(bindingSchema) }).strict(),
@@ -32,7 +34,13 @@ export const reviewedClosureBodySchema = z
   .object({
     subjectPrefix: z.string().min(1),
     exposure: compiledExecutionExposureSchema,
-    harness: z.object({ unit: z.string().min(1), ev: hex64 }).strict(),
+    harness: z
+      .object({
+        unit: z.string().min(1),
+        ev: hex64,
+        ref: z.string().regex(/^state:[0-9a-f]{64}$/u).optional(),
+      })
+      .strict(),
     grants: z.array(
       z
         .object({
@@ -110,58 +118,36 @@ export const reviewedClosureMethods = defineServiceMethods({
     access: { sensitivity: "admin" },
   },
   suspend: {
-    capability: "reviewed-closure.suspend",
     tier: {
-      tier: "gated",
-      session: "family",
+      tier: "open",
+      session: "codeOnly",
       residency: "grant-authority",
       family: "reviewedClosure.lifecycle",
-      rationale: "Kernel suspension closes session admission and revokes standing allows.",
-    },
-    presentation: {
-      title: "Pause an automated task",
-      action: "pause an automated task",
-      description: "Pause a running automated task. It can be resumed later.",
-      group: "runtime",
-      authorityCategory: { domain: "safety", verb: "manage" },
+      rationale:
+        "The closure issuer closes session admission after the user-authorized mission transition.",
     },
     description: "Suspend one active closure.",
     args: z.tuple([z.string().min(1)]),
     returns: reviewedClosureRecordSchema,
-    authority: { principals: ["host", "code"] },
+    authority: { principals: ["code"] },
     access: { sensitivity: "write" },
   },
   retire: {
-    capability: "reviewed-closure.retire",
     tier: {
-      tier: "critical",
-      session: "family",
+      tier: "open",
+      session: "codeOnly",
       residency: "grant-authority",
       family: "reviewedClosure.lifecycle",
-      rationale: "Kernel retirement permanently revokes the closure and its standing grants.",
-    },
-    presentation: {
-      title: "Stop an automated task permanently",
-      action: "permanently stop an automated task",
-      description: "Permanently stop an automated task and remove its permissions.",
-      group: "runtime",
-      authorityCategory: { domain: "safety", verb: "manage" },
+      rationale:
+        "The closure issuer revokes its closure after the user-authorized mission transition.",
     },
     description: "Permanently retire one closure.",
     args: z.tuple([z.string().min(1)]),
     returns: reviewedClosureRecordSchema,
-    authority: { principals: ["host", "code"] },
+    authority: { principals: ["code"] },
     access: { sensitivity: "destructive" },
   },
   bindSession: {
-    capability: "reviewed-closure.bind-session",
-    presentation: {
-      title: "Use an automated task's permissions",
-      action: "use the permissions granted to an automated task",
-      description: "Connect a running automation to the exact permissions you approved for it.",
-      group: "runtime",
-      authorityCategory: { domain: "safety", verb: "manage" },
-    },
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -184,7 +170,11 @@ export const reviewedClosureMethods = defineServiceMethods({
     returns: z.object({
       subject: z.string(),
       closureDigest: hex64,
-      harness: z.object({ unit: z.string(), ev: hex64 }),
+      harness: z.object({
+        unit: z.string(),
+        ev: hex64,
+        ref: z.string().regex(/^state:[0-9a-f]{64}$/u).optional(),
+      }),
     }),
     authority: { principals: ["code"] },
     access: { sensitivity: "write" },

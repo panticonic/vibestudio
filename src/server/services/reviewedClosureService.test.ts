@@ -11,7 +11,7 @@ const activate = {
       revision: 1,
       digest: "d".repeat(64),
     },
-    harness: { unit: "workers/agent", ev: "a".repeat(64) },
+    harness: { unit: "workers/agent", ev: "a".repeat(64), ref: `state:${"b".repeat(64)}` },
     exposure: {
       serviceMethods: [],
       userlandServices: { discovery: "bound", bindings: [] },
@@ -50,6 +50,27 @@ describe("reviewed closure publisher admission", () => {
         publisher: "do:workers/missions:MissionsDO:workspace-missions",
         body: expect.objectContaining({ issuer: activate.body.issuer }),
       })
+    );
+  });
+
+  it("attributes intrinsic lifecycle transitions to the verified issuer", async () => {
+    const caller = createVerifiedCaller("do:workers/missions:MissionsDO:workspace-missions", "do");
+    const registry = {
+      suspend: vi.fn(() => ({ state: "suspended" })),
+      retire: vi.fn(() => ({ state: "retired" })),
+    };
+    const service = createReviewedClosureService({ registry: registry as never });
+
+    await service.handler({ caller } as never, "suspend", ["mission:daily@digest"]);
+    await service.handler({ caller } as never, "retire", ["mission:daily@digest"]);
+
+    expect(registry.suspend).toHaveBeenCalledWith(
+      "mission:daily@digest",
+      "do:workers/missions:MissionsDO:workspace-missions"
+    );
+    expect(registry.retire).toHaveBeenCalledWith(
+      "mission:daily@digest",
+      "do:workers/missions:MissionsDO:workspace-missions"
     );
   });
 });

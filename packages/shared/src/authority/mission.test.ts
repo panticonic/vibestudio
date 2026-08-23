@@ -4,13 +4,14 @@ import {
   missionClosureDigest,
   missionCompletionResponse,
   missionNextRunAt,
+  validateMissionCharter,
   type MissionCharter,
 } from "./mission.js";
 
 const hex = "a".repeat(64);
 const charter = (): MissionCharter => ({
   summary: "Back up the project",
-  harness: { unit: "workers/system-agent", ev: hex },
+  harness: { unit: "workers/system-agent", ev: hex, ref: `state:${"b".repeat(64)}` },
   execution: {
     kind: "agent",
     target: {
@@ -34,6 +35,12 @@ const charter = (): MissionCharter => ({
 const closure = (value: MissionCharter): string => missionClosureDigest(value, [], []);
 
 describe("automation closure", () => {
+  it("requires an immutable source ref for every new or revised charter", () => {
+    const historical = charter();
+    delete historical.harness.ref;
+    expect(() => validateMissionCharter(historical)).toThrow("immutable source ref");
+  });
+
   it("changes for execution and schedule edits", () => {
     const first = closure(charter());
     expect(closure({ ...charter(), trigger: { kind: "schedule", everyMs: 3_600_000 } })).not.toBe(

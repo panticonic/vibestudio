@@ -149,7 +149,11 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       reviewedClosure: {
         subject: `mission:nightly@${"b".repeat(64)}`,
         closureDigest: "b".repeat(64),
-        harness: { unit: "workers/system-agent", ev: "c".repeat(64) },
+        harness: {
+          unit: "workers/system-agent",
+          ev: "c".repeat(64),
+          ref: `state:${"b".repeat(64)}`,
+        },
       },
     },
     contextIntegrity: {

@@ -13,6 +13,7 @@ import type { NotificationPayload } from "@vibestudio/shared/events";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import type { UserInboxPushRequest } from "@vibestudio/service-schemas/notification";
 import type { PushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
 import type { PushServiceInternal } from "./pushService.js";
@@ -200,8 +201,13 @@ export function createNotificationService(deps: NotificationServiceDeps): {
         internal.dismiss(id, ctx.caller.subject?.userId);
       },
       reportAction: (ctx, [id, actionId]) => {
-        if (ctx.caller.runtime.kind !== "shell") {
-          throw new Error("Only a shell can report a notification action");
+        const runtime = ctx.caller.runtime;
+        const isChrome =
+          runtime.kind === "shell" ||
+          (runtime.kind === "app" &&
+            isAuthorizedChromeAppCaller(runtime.id, ctx.caller.code?.repoPath));
+        if (!isChrome) {
+          throw new Error("Only trusted workspace chrome can report a notification action");
         }
         const targetUserId = ctx.caller.subject?.userId;
         const owner = notificationOwners.get(id);

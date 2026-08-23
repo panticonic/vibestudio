@@ -211,7 +211,7 @@ export const notificationMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Shell-only: report a user action on an addressed notification and resolve its pending waitForAction.",
+      "Chrome-only: report a user action on an addressed notification and resolve its pending waitForAction.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,

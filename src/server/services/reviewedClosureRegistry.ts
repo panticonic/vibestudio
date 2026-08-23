@@ -139,9 +139,17 @@ export class ReviewedClosureRegistry {
     return this.require(subject);
   }
 
-  suspend(subjectInput: string, now = Date.now()): ReviewedClosureRecord {
+  suspend(subjectInput: string, issuer: string, now = Date.now()): ReviewedClosureRecord {
     const subject = authoritySubject(subjectInput);
     const current = this.require(subject);
+    if (current.issuer !== issuer) {
+      throw coded("Only the reviewed closure issuer may suspend it", "EACCES");
+    }
+    return this.suspendRecord(current, now);
+  }
+
+  private suspendRecord(current: ReviewedClosureRecord, now: number): ReviewedClosureRecord {
+    const subject = current.subject;
     if (current.state === "retired") throw coded("Reviewed closure is retired", "EACCES");
     this.revokeSubjectGrants(subject, now);
     this.db
@@ -151,9 +159,12 @@ export class ReviewedClosureRegistry {
     return this.require(subject);
   }
 
-  retire(subjectInput: string, now = Date.now()): ReviewedClosureRecord {
+  retire(subjectInput: string, issuer: string, now = Date.now()): ReviewedClosureRecord {
     const subject = authoritySubject(subjectInput);
-    this.require(subject);
+    const current = this.require(subject);
+    if (current.issuer !== issuer) {
+      throw coded("Only the reviewed closure issuer may retire it", "EACCES");
+    }
     this.revokeSubjectGrants(subject, now);
     this.db
       .prepare("UPDATE reviewed_closures SET state='retired',updated_at=? WHERE subject=?")
@@ -215,14 +226,17 @@ export class ReviewedClosureRegistry {
   }
 
   finishSession(sessionId: string, binderId: string, now = Date.now()): void {
-    const result = this.db
-      .prepare(
-        `UPDATE reviewed_closure_sessions SET finished_at=?
-         WHERE session_id=? AND binder_id=? AND finished_at IS NULL`
-      )
-      .run(now, sessionId, binderId);
-    if (Number(result.changes) !== 1)
-      throw coded("Reviewed closure session is not active", "ENOENT");
+    const existing = this.db
+      .prepare(`SELECT binder_id,finished_at FROM reviewed_closure_sessions WHERE session_id=?`)
+      .get(sessionId) as { binder_id: string; finished_at: number | null } | undefined;
+    if (!existing) throw coded("Unknown reviewed closure session", "ENOENT");
+    if (existing.binder_id !== binderId) {
+      throw coded("Only the session binder may finish a reviewed closure session", "EACCES");
+    }
+    if (existing.finished_at !== null) return;
+    this.db
+      .prepare(`UPDATE reviewed_closure_sessions SET finished_at=? WHERE session_id=?`)
+      .run(now, sessionId);
   }
 
   factForSession(sessionId: string): SessionReviewedClosureFact | null {
@@ -351,7 +365,7 @@ export class ReviewedClosureRegistry {
             canonicalJson(dependency.resource) === canonicalJson(withdrawn.resource)
         )
       ) {
-        this.suspend(closure.subject, now);
+        this.suspendRecord(closure, now);
       }
     }
   }
