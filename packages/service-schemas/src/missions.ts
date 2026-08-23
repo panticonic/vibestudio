@@ -186,7 +186,7 @@ const missionOverviewOptionsSchema = z
   .object({
     limit: z.number().int().min(1).max(50).optional(),
     cursor: missionOverviewCursorSchema.optional(),
-    filter: z.enum(["all", "attention", "active", "paused", "completed", "drafts"]).optional(),
+    filter: z.enum(["all", "attention", "active", "paused", "completed"]).optional(),
     query: z.string().max(200).optional(),
     missionId: z.string().min(1).optional(),
   })
@@ -208,7 +208,6 @@ const missionOverviewSchema = z
         active: z.number().int().nonnegative(),
         running: z.number().int().nonnegative(),
         failedLast24Hours: z.number().int().nonnegative(),
-        awaitingReview: z.number().int().nonnegative(),
         completed: z.number().int().nonnegative(),
       })
       .strict(),
@@ -248,11 +247,10 @@ const createInputSchema = z
 const READERS: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session", "mission", "host"],
 };
-const USER_CODE_HOST: ServiceAuthorityPolicy = { principals: ["user", "code", "host"] };
 const USER_SESSION_CODE_HOST: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session", "host"],
 };
-const AGENT_PROPOSAL: ServiceAuthorityPolicy = {
+const AUTOMATION_AUTHORS: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session", "mission"],
 };
 const HOST_CODE: ServiceAuthorityPolicy = { principals: ["host", "code"] };
@@ -344,43 +342,21 @@ export const missionsMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
     agentFacing: true,
   },
-  proposeDraft: {
+  launch: {
     capability: "missions.edit",
     tier: {
       tier: "open",
       session: "family",
-      residency: "identity",
+      residency: "grant-authority",
       family: "mission.create",
-      rationale: "An inert automation draft grants nothing and schedules nothing",
+      rationale:
+        "A user-driven agent turn launches one exact automation and installs its bounded execution closure",
     },
     description:
-      "Create the inert draft behind the agent-owned automations.propose binding. The binding also institutes it in the originating chat before returning.",
+      "Atomically create and start one automation. Callers retry with the same request id to recover the same running definition.",
     args: z.tuple([createInputSchema]),
     returns: missionRecordSchema,
-    authority: AGENT_PROPOSAL,
-    access: { sensitivity: "write" },
-    agentFacing: false,
-  },
-  createDraft: {
-    capability: "missions.edit",
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "identity",
-      family: "mission.create",
-      rationale: "Human-authored automation drafts remain inert until review",
-    },
-    presentation: {
-      title: "Create an automation draft",
-      action: "create an automation draft",
-      description: "Create a new automated task draft for review before it can run.",
-      group: "runtime",
-      authorityCategory: { domain: "safety", verb: "manage" },
-    },
-    description: "Create an inert automation draft.",
-    args: z.tuple([createInputSchema]),
-    returns: missionRecordSchema,
-    authority: USER_CODE_HOST,
+    authority: AUTOMATION_AUTHORS,
     access: { sensitivity: "write" },
     agentFacing: false,
   },
@@ -391,16 +367,16 @@ export const missionsMethods = defineReceiverServiceMethods({
       session: "family",
       residency: "identity",
       family: "mission.mutate",
-      rationale: "Automation edits lapse the reviewed closure",
+      rationale: "A user edit atomically replaces the running automation closure",
     },
     presentation: {
       title: "Change an automation",
       action: "change an automation",
-      description: "Edit an automated task; changes will need to be reviewed again.",
+      description: "Edit an automated task and apply the new revision immediately.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
-    description: "Edit an automation; behavior changes require review again.",
+    description: "Edit an automation and atomically install the new active revision.",
     args: z.tuple([
       z.string(),
       z
@@ -417,22 +393,6 @@ export const missionsMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
     agentFacing: true,
   },
-  requestReview: {
-    capability: "missions.review",
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "mission.control",
-      rationale: "Opening an inert draft in the approval queue grants nothing by itself",
-    },
-    description: "Review and activate the exact automation closure.",
-    args: z.tuple([z.string()]),
-    returns: missionRecordSchema,
-    authority: USER_CODE_HOST,
-    access: { sensitivity: "admin" },
-    agentFacing: false,
-  },
   runNow: {
     capability: "missions.run",
     tier: {
@@ -440,12 +400,12 @@ export const missionsMethods = defineReceiverServiceMethods({
       session: "family",
       residency: "grant-authority",
       family: "mission.control",
-      rationale: "A manual run executes the already reviewed closure",
+      rationale: "A manual run executes the installed automation closure",
     },
     presentation: {
       title: "Run an automation now",
       action: "run an automation now",
-      description: "Starts one run of an already reviewed automation.",
+      description: "Starts one run of an installed automation.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -507,16 +467,16 @@ export const missionsMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
     agentFacing: false,
   },
-  proposeAuthorityRevision: {
-    capability: "reviewed-closure.propose-revision",
+  pauseForAuthorityDenial: {
+    capability: "reviewed-closure.suspend",
     tier: {
       tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "mission.control",
-      rationale: "Host records an inert revision proposal after a denied operation",
+      rationale: "Host pauses an automation whose installed authority cannot admit a run",
     },
-    description: "Record an inert authority revision proposal.",
+    description: "Pause an automation after a denied operation without changing its authority.",
     args: z.tuple([
       z
         .object({
@@ -542,7 +502,7 @@ function lifecycleMethod(title: string, action: string, capability: string) {
       session: "family" as const,
       residency: "grant-authority" as const,
       family: "mission.control",
-      rationale: `${title} changes scheduling state without changing the reviewed closure`,
+      rationale: `${title} changes scheduling state without changing the installed closure`,
     },
     presentation: {
       title: `${title} an automation`,

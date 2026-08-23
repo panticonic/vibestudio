@@ -1,9 +1,6 @@
 import { z } from "zod";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
-import {
-  defineServiceMethods,
-  fixedPreparedAuthorityRequirement,
-} from "@vibestudio/shared/typedServiceClient";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AuthorityResourceScopeSchema } from "./build.js";
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/u);
@@ -69,6 +66,7 @@ export const reviewedClosureBodySchema = z
   })
   .strict();
 export const reviewedClosureRecordSchema = reviewedClosureBodySchema.extend({
+  subject: z.string().min(1),
   closureDigest: hex64,
   state: z.enum(["active", "suspended", "retired"]),
   activatedAt: z.number().int().nonnegative(),
@@ -78,15 +76,6 @@ export const reviewedClosureActivationSchema = z
   .object({
     body: reviewedClosureBodySchema,
     closureDigest: hex64,
-    presentation: z
-      .object({
-        title: z.string().min(1),
-        description: z.string().min(1),
-        summary: z.string().min(1),
-        detail: z.string().optional(),
-        facts: z.array(z.object({ label: z.string(), value: z.string() }).strict()).optional(),
-      })
-      .strict(),
   })
   .strict();
 
@@ -100,15 +89,14 @@ export const reviewedClosureMethods = defineServiceMethods({
       residency: "grant-authority",
       family: "reviewedClosure.lifecycle",
       rationale:
-        "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants.",
+        "Kernel verifies and installs an exact compiled automation closure and atomically mints its standing grants.",
     },
-    description: "Activate one digest-bound reviewed execution closure.",
+    description: "Install one digest-bound automation execution closure.",
     capability: ACTIVATE,
     presentation: {
       title: "Start an automated task",
-      action: "start an automated task you reviewed",
-      description:
-        "Start running the automated task exactly as you reviewed and approved it.",
+      action: "start an automated task",
+      description: "Install the automated task's exact action, schedule, and authority.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -118,18 +106,6 @@ export const reviewedClosureMethods = defineServiceMethods({
       principals: ["code"],
       requirement: requirementForPrincipals(["code"], ACTIVATE),
       resource: { kind: "argument", index: 0, path: ["closureDigest"], prefix: "closure:" },
-      prepared: {
-        resolver: "reviewedClosure.activate.presentation",
-        leaves: [
-          {
-            capability: ACTIVATE,
-            requirement: fixedPreparedAuthorityRequirement(
-              requirementForPrincipals(["code"], ACTIVATE)
-            ),
-            tier: "gated",
-          },
-        ],
-      },
     },
     access: { sensitivity: "admin" },
   },
@@ -182,8 +158,7 @@ export const reviewedClosureMethods = defineServiceMethods({
     presentation: {
       title: "Use an automated task's permissions",
       action: "use the permissions granted to an automated task",
-      description:
-        "Connect a running automation to the exact permissions you approved for it.",
+      description: "Connect a running automation to the exact permissions you approved for it.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -195,7 +170,7 @@ export const reviewedClosureMethods = defineServiceMethods({
       rationale:
         "Kernel binds an execution session to one active digest-bound closure for hot-path enforcement.",
     },
-    description: "Bind a session to one active reviewed closure.",
+    description: "Bind a session to one active installed closure.",
     args: z.tuple([
       z
         .object({

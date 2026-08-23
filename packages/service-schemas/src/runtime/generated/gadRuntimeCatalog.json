@@ -5444,6 +5444,9 @@
               "updated_at": {
                 "$ref": "#/properties/rows/items/properties/log_id"
               },
+              "initiating_user_id": {
+                "$ref": "#/properties/rows/items/properties/turn_id"
+              },
               "started_events": {
                 "type": "integer",
                 "minimum": 0
@@ -5465,6 +5468,7 @@
               "started_event_id",
               "completed_event_id",
               "updated_at",
+              "initiating_user_id",
               "started_events",
               "terminal_events"
             ],
@@ -6413,6 +6417,9 @@
                   "updated_at": {
                     "$ref": "#/properties/publicationIntegrity/properties/rows/items/anyOf/0/properties/envelopeId"
                   },
+                  "initiating_user_id": {
+                    "$ref": "#/properties/turnState/properties/rows/items/properties/trigger_message_id"
+                  },
                   "started_events": {
                     "$ref": "#/properties/turnState/properties/rows/items/properties/streaming_messages"
                   },
@@ -6433,6 +6440,7 @@
                   "started_event_id",
                   "completed_event_id",
                   "updated_at",
+                  "initiating_user_id",
                   "started_events",
                   "terminal_events"
                 ],

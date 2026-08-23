@@ -70,9 +70,9 @@ function createTestSetup(opts?: {
   entityCache?: EntityCache;
   userSubjectSource?: UserSubjectSource;
   membershipGate?: (subject: UserSubject | undefined) => boolean;
-  verifyExactCausalInvocation?: ConstructorParameters<
+  resolveExactCausalInvocation?: ConstructorParameters<
     typeof RpcServer
-  >[0]["verifyExactCausalInvocation"];
+  >[0]["resolveExactCausalInvocation"];
   redeemPairingCredential?: ConstructorParameters<typeof RpcServer>[0]["redeemPairingCredential"];
 }) {
   const tokenManager = new TokenManager();
@@ -134,7 +134,7 @@ function createTestSetup(opts?: {
     ensureUserlandDoReady: async () => undefined,
     userSubjectSource: opts?.userSubjectSource,
     membershipGate: opts?.membershipGate,
-    verifyExactCausalInvocation: opts?.verifyExactCausalInvocation,
+    resolveExactCausalInvocation: opts?.resolveExactCausalInvocation,
     redeemPairingCredential: opts?.redeemPairingCredential,
   });
 
@@ -471,8 +471,8 @@ describe("RpcServer HTTP POST /rpc", () => {
       await gateway.stop();
       await setup.server.stop();
 
-      const verifyExactCausalInvocation = vi.fn(async () => false);
-      setup = createTestSetup({ verifyExactCausalInvocation });
+      const resolveExactCausalInvocation = vi.fn(async () => null);
+      setup = createTestSetup({ resolveExactCausalInvocation });
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
@@ -509,14 +509,18 @@ describe("RpcServer HTTP POST /rpc", () => {
         errorCode: "EACCES",
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
-      expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+      expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     });
 
-    it("verifies exact trajectory causality without replacing the caller's code origin", async () => {
+    it("attributes exact trajectory causality to its initiating user", async () => {
       await gateway.stop();
       await setup.server.stop();
 
-      setup = createTestSetup({ verifyExactCausalInvocation: vi.fn(async () => true) });
+      setup = createTestSetup({
+        resolveExactCausalInvocation: vi.fn(async () => ({
+          initiatingUser: { userId: "usr_initiator", handle: "initiator" },
+        })),
+      });
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
@@ -549,8 +553,11 @@ describe("RpcServer HTTP POST /rpc", () => {
 
       expect(result.body["error"]).toBeUndefined();
       expect(setup.dispatched.at(-1)?.ctx).toMatchObject({
-        caller: { runtime: { id: "agent:one", kind: "agent" } },
-        authorization: { authorizingOrigin: { kind: "host" } },
+        caller: {
+          runtime: { id: "agent:one", kind: "agent" },
+          subject: { userId: "usr_initiator", handle: "initiator" },
+        },
+        authorization: { authorizingOrigin: { kind: "user" } },
         causalParent,
       });
       expect(setup.dispatched.at(-1)?.ctx.caller.executionSession).toBeUndefined();
@@ -1369,8 +1376,8 @@ describe("RpcServer HTTP POST /rpc", () => {
     it("rejects an absent exact causal invocation before HTTP streaming dispatch", async () => {
       await gateway.stop();
       await setup.server.stop();
-      const verifyExactCausalInvocation = vi.fn(async () => false);
-      setup = createTestSetup({ verifyExactCausalInvocation });
+      const resolveExactCausalInvocation = vi.fn(async () => null);
+      setup = createTestSetup({ resolveExactCausalInvocation });
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
@@ -1416,7 +1423,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         error: expect.stringContaining("does not exist"),
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
-      expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+      expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     });
 
     it("denies a caller-kind not in the credentials service policy", async () => {

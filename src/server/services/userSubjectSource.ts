@@ -71,6 +71,7 @@ export function createUserSubjectSource(deps: {
   };
 
   return {
+    resolveUserId: subjectFor,
     resolve(
       callerId: string,
       callerKind: CallerKind,

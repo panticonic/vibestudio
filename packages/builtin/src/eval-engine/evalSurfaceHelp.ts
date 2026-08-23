@@ -14,13 +14,6 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "describe() → Promise<{ identity, config, channels, tools, turn, effects }>. Await it. " +
       "This is observational and is available in read-only agent evals.",
   },
-  "automations.propose": {
-    description:
-      "propose({ name, summary, action, trigger, conversation?, toolExposure?, " +
-      "declaredLineageClasses?, permissions?, standingRestrictions? }) → inert automation draft. " +
-      "The owning agent supplies its exact source, class, object key, and effective version; do not " +
-      "resolve a build version or construct a target yourself. Await the result. Agent eval only.",
-  },
   "ctx.reportProgress": {
     description:
       "reportProgress(value) records bounded progress for the current deferred eval run. " +

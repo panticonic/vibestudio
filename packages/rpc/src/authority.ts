@@ -124,6 +124,8 @@ export interface AgentExecutionTestAgentPolicy {
 
 export interface AgentExecutionTestCasePolicy {
   testId: string;
+  /** Human account that started the attested system-test run. Attribution only. */
+  initiatingUserId?: string;
   agent: AgentExecutionTestAgentPolicy;
   authority: readonly AgentExecutionTestAuthorityRule[];
   unexpectedPrompts: "fail";
@@ -143,6 +145,7 @@ export type AgentExecutionTestPolicy =
 
 export interface AgentExecutionTestPolicySpec {
   testId: string;
+  initiatingUserId?: string;
   agent: AgentExecutionTestAgentPolicy;
   authority: readonly AgentExecutionTestAuthorityRule[];
   unexpectedPrompts: "fail";

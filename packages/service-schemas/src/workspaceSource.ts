@@ -310,6 +310,8 @@ const InvocationStateRowSchema = TrajectoryInvocationSchema.pick({
   completed_event_id: true,
   updated_at: true,
 }).extend({
+  /** Bare account id of the human whose durable message opened this turn. */
+  initiating_user_id: SqlNullableTextSchema,
   started_events: SqlCountSchema,
   terminal_events: SqlCountSchema,
 });
