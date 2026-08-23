@@ -2168,10 +2168,13 @@ async function main() {
       invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
         acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
       /**
-       * Record that a closure-scoped call wanted authority the closure lacks.
+       * Pause an automation when a closure-scoped call wants authority the
+       * installed closure lacks. The host never edits or widens authority on
+       * the automation's behalf; a later user edit is the only way to install
+       * a broader revision.
        *
        * Best effort by construction: the caller has ALREADY decided to deny, and
-       * this only offers the decision somewhere a person can act on it. Anything
+       * this only stops future ticks and leaves the denial visible. Anything
        * unrecordable is therefore logged, never thrown — throwing here replaced
        * a clean `EMISSIONCHANGE` denial with a raw error, which reached a
        * Durable Object as an uncaught 500 and killed it mid-activation. A
@@ -2183,7 +2186,7 @@ async function main() {
       proposeReviewedClosureRevision: ({ snapshot, tier, resource }) => {
         const unrecordable = (reason: string): void => {
           console.warn(
-            `[ReviewedClosure] ${reason}; the call is denied and no revision was proposed`,
+            `[ReviewedClosure] ${reason}; the call is denied and no automation was paused`,
             {
               subject: snapshot.reviewedClosureSubject,
               capability: snapshot.capability,
@@ -2193,7 +2196,7 @@ async function main() {
           );
         };
         if (snapshot.reviewedClosureSubject === "-") {
-          unrecordable("Authority revision proposal requires a reviewed-closure invocation");
+          unrecordable("Authority-denial pause requires an automation closure invocation");
           return;
         }
         const source = reviewedClosureRegistry.sourceForSession(snapshot.sessionId);
@@ -2208,14 +2211,14 @@ async function main() {
           return;
         }
         void dispatcher
-          .dispatch(ref, "proposeAuthorityRevision", {
+          .dispatch(ref, "pauseForAuthorityDenial", {
             missionId: source.sourceDocument.id,
             capability: snapshot.capability,
             resource,
             tier,
           })
           .catch((error) => {
-            console.error("[ReviewedClosure] Could not record revision proposal:", error);
+            console.error("[ReviewedClosure] Could not pause denied automation:", error);
           });
       },
     };
@@ -4887,11 +4890,11 @@ async function main() {
         // workspace source provider lazily at the first provenance-bearing ingress, then
         // prove the exact invocation node exists before any service or relay
         // can persist the asserted causal edge.
-        verifyExactCausalInvocation: async (parent) => {
+        resolveExactCausalInvocation: async (parent) => {
           const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-          const { createWorkspaceSemanticPort, hasExactCausalInvocation } =
+          const { createWorkspaceSemanticPort, resolveExactCausalInvocation } =
             await import("./workspaceSourceProvider.js");
-          return hasExactCausalInvocation(
+          const fact = await resolveExactCausalInvocation(
             createWorkspaceSemanticPort(doDispatch, {
               source: semanticWorkspaceService.source,
               className: semanticWorkspaceService.className,
@@ -4899,6 +4902,14 @@ async function main() {
             }),
             parent
           );
+          if (!fact) return null;
+          const user = fact.initiatingUserId ? userStore.getUser(fact.initiatingUserId) : null;
+          return {
+            initiatingUser:
+              user && user.revokedAt === undefined
+                ? { userId: user.id, handle: user.handle }
+                : null,
+          };
         },
         runtimeCoordinator: panelRuntimeCoordinator,
         // The child accepts only identities already issued by the hub: returning

@@ -1,63 +1,16 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import {
-  fixedPreparedAuthoritySelection,
-  preparedAuthorityState,
-} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import {
-  reviewedClosureActivationSchema,
-  reviewedClosureMethods,
-} from "@vibestudio/service-schemas/reviewedClosure";
+import { reviewedClosureMethods } from "@vibestudio/service-schemas/reviewedClosure";
 import type { ReviewedClosureRegistry } from "./reviewedClosureRegistry.js";
-
-const ACTIVATE = "reviewed-closure.activate";
 
 export function createReviewedClosureService(deps: {
   registry: ReviewedClosureRegistry;
 }): ServiceDefinition {
   return {
     name: "reviewedClosure",
-    description: "Kernel record for digest-bound reviewed execution authority",
+    description: "Kernel record for digest-bound installed execution authority",
     authority: { principals: ["code"] },
     methods: reviewedClosureMethods,
-    authorityPreparation: {
-      "reviewedClosure.activate.presentation": (ctx, args) => {
-        const input = reviewedClosureActivationSchema.parse(args[0]);
-        requireReviewedWorkspacePublisher(ctx.caller, input.body.issuer);
-        return preparedAuthorityState([
-          fixedPreparedAuthoritySelection({
-            capability: ACTIVATE,
-            resourceKey: `closure:${input.closureDigest}`,
-            tier: "gated",
-            challenge: {
-              title: input.presentation.title,
-              description: input.presentation.description,
-              deniedReason: "The reviewed automation was not activated.",
-              resource: {
-                type: input.body.sourceDocument.kind,
-                label: "Source document",
-                value: input.body.sourceDocument.id,
-              },
-              operation: {
-                kind: "runtime",
-                verb: "activate reviewed automation",
-                object: {
-                  type: "reviewed-closure",
-                  label: "Reviewed automation",
-                  value: input.body.sourceDocument.id,
-                },
-              },
-              substance: {
-                kind: "custom",
-                summary: input.presentation.summary,
-                ...(input.presentation.detail ? { detail: input.presentation.detail } : {}),
-                ...(input.presentation.facts ? { facts: input.presentation.facts } : {}),
-              },
-            },
-          }),
-        ]);
-      },
-    },
     handler: defineServiceHandler("reviewedClosure", reviewedClosureMethods, {
       activate: (ctx, [input]) =>
         deps.registry.activate({
@@ -76,33 +29,22 @@ export function createReviewedClosureService(deps: {
   };
 }
 
-function requireReviewedWorkspacePublisher(
-  caller: Parameters<ServiceDefinition["handler"]>[0]["caller"],
-  issuer: string
-): void {
-  const match = /^do:([^:]+):([^:]+):/u.exec(caller.runtime.id);
-  const source = match?.[1];
-  if (
-    !source ||
-    source === "vibestudio/internal" ||
-    issuer !== caller.runtime.id ||
-    caller.codeApproved !== true ||
-    caller.code?.repoPath !== source ||
-    !caller.code.effectiveVersion
-  ) {
-    throw Object.assign(
-      new Error(
-        "Reviewed closure presentation requires the exact admitted workspace worker identity"
-      ),
-      { code: "EACCES" }
-    );
-  }
-}
-
 function decidedBy(ctx: Parameters<ServiceDefinition["handler"]>[0]): `user:${string}` {
-  const userId = ctx.authorizingCaller?.subject?.userId ?? ctx.caller.subject?.userId;
+  const authorization = ctx.authorization;
+  const attributedUser =
+    authorization?.actingUser ??
+    authorization?.ownerChain.at(-1) ??
+    [...(authorization?.initiatorChain ?? [])]
+      .reverse()
+      .find((principal) => principal.startsWith("user:")) ??
+    (authorization?.testPolicy?.kind === "case" && authorization.testPolicy.case.initiatingUserId
+      ? `user:${authorization.testPolicy.case.initiatingUserId}`
+      : null);
+  const directUser = ctx.authorizingCaller?.subject?.userId ?? ctx.caller.subject?.userId;
+  const userId =
+    directUser && directUser !== "system" ? directUser : attributedUser?.slice("user:".length);
   if (!userId || userId === "system") {
-    throw Object.assign(new Error("Reviewed closure activation requires a human decision"), {
+    throw Object.assign(new Error("Automation installation requires user-attributed intent"), {
       code: "EACCES",
     });
   }

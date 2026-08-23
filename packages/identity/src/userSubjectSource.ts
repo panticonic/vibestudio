@@ -7,6 +7,8 @@ import type { AgentBinding, UserSubject } from "./types.js";
  * this interface and do not own account attribution rules.
  */
 export interface UserSubjectSource {
+  /** Resolve a host-attested account id without treating it as transport authority. */
+  resolveUserId?(userId: string): UserSubject | null;
   resolve(
     callerId: string,
     callerKind: CallerKind,

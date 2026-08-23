@@ -147,6 +147,7 @@ const testPolicySchema = z.discriminatedUnion("kind", [
       case: z
         .object({
           testId: z.string().min(1),
+          initiatingUserId: z.string().min(1).optional(),
           agent: z
             .object({
               model: z.string().min(1),

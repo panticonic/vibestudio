@@ -503,7 +503,7 @@ function authorityGrantDuration(grant: AuthorityGrant): string {
     case "agent":
       return "Until you revoke it, or after 3 months without use";
     case "mission":
-      return "Until the reviewed automation changes, ends, or you revoke it";
+      return "Until the automation changes, ends, or you revoke it";
     case "version":
       return "Until this exact installed version changes or you revoke it";
     default:

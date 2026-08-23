@@ -90,66 +90,6 @@ export interface ChatBinding {
   rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };
 }
 
-/** Agent-owned automation authoring. The owner runtime supplies channel
- * provenance and emits the durable institution event; guest code only
- * supplies the actual automation definition. */
-export interface AgentAutomationProposal {
-  name: string;
-  summary: string;
-  action:
-    | { kind: "prompt"; text: string }
-    | {
-        kind: "eval";
-        code: string;
-        syntax?: "javascript" | "typescript" | "jsx" | "tsx";
-        timeoutMs?: number;
-        reset?: boolean;
-      };
-  trigger:
-    | { kind: "manual" }
-    | {
-        kind: "schedule";
-        everyMs: number;
-        anchorAt?: number;
-        jitterMs?: number;
-        untilAt?: number;
-        maxRuns?: number;
-      }
-    | {
-        kind: "cron";
-        expression: string;
-        timezone: string;
-        untilAt?: number;
-        maxRuns?: number;
-      };
-  conversation?: { mode: "fresh" | "continue" };
-  toolExposure?: {
-    services: string[];
-    userlandServices: Array<{
-      name: string;
-      provider: string;
-      providerEv: string;
-      upgradePolicy: "pinned" | "follow-head";
-    }>;
-    workspaceServiceDiscovery: "bound" | "live-declarations";
-    evalNetwork: "none" | "declared-origins" | "unrestricted";
-    declaredOrigins: string[];
-  };
-  declaredLineageClasses?: Array<
-    "none" | "web" | "email" | "channel-external" | "external"
-  >;
-  permissions?: Array<{
-    capability: string;
-    resource: unknown;
-    tier: "gated" | "critical";
-  }>;
-  standingRestrictions?: Array<{ capability: string; resourceKey: string }>;
-}
-
-export interface AutomationsBinding {
-  propose(input: AgentAutomationProposal): Promise<unknown>;
-}
-
 type CallFn = (target: string, method: string, callArgs: unknown[]) => Promise<unknown>;
 
 /**
@@ -191,20 +131,6 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
     rpc: { call },
   };
   const configure = op("configureAgent");
-  let automationProposalOrdinal = 0;
-  const automations: AutomationsBinding = {
-    propose: (input) => {
-      automationProposalOrdinal += 1;
-      const provenance = args.agentInvocationId
-        ? { invocationId: args.agentInvocationId, ordinal: automationProposalOrdinal }
-        : undefined;
-      return call(agentRef, "chatOp", [
-        channelId,
-        "proposeAutomation",
-        provenance ? [input, provenance] : [input],
-      ]);
-    },
-  };
   const agent = {
     // Observation has its own read-classified receiver method. Routing it
     // through chatOp would make a harmless snapshot inherit that method's
@@ -218,5 +144,5 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
       configure(respondFrom !== undefined ? { respondPolicy, respondFrom } : { respondPolicy }),
     setRespondFrom: (respondFrom: string[]) => configure({ respondFrom }),
   };
-  return { chat, agent, automations };
+  return { chat, agent };
 }

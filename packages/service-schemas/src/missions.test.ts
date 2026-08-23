@@ -7,15 +7,15 @@ import {
 } from "./missions.js";
 
 describe("missions service agent ergonomics", () => {
-  it("exposes safe lifecycle control to sessions while retaining human-only activation", () => {
+  it("exposes immediate launch and lifecycle control to sessions", () => {
     for (const method of ["edit", "runNow", "pause", "resume", "retire"] as const) {
       expect(missionsMethods[method].agentFacing).toBe(true);
       expect(missionsMethods[method].tier.session).toBe("family");
       expect(missionsMethods[method].authority?.principals).toContain("session");
     }
-    expect(missionsMethods.requestReview.agentFacing).toBe(false);
-    expect(missionsMethods.requestReview.tier.session).toBe("codeOnly");
-    expect(missionsMethods.requestReview.authority?.principals).not.toContain("session");
+    expect(missionsMethods.launch.agentFacing).toBe(false);
+    expect(missionsMethods.launch.tier.tier).toBe("open");
+    expect(missionsMethods).not.toHaveProperty("requestReview");
   });
 
   it("provides one addressed read for a transcript tick inspector", () => {

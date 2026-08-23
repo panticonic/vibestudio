@@ -355,7 +355,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
             }
           : null,
       ensureUserlandDoReady: async () => undefined,
-      verifyExactCausalInvocation: async () => true,
+      resolveExactCausalInvocation: async () => ({ initiatingUser: null }),
       ...opts,
     }),
   };
@@ -1462,8 +1462,8 @@ describe("RpcServer relay behavior", () => {
   });
 
   it("verifies and preserves an exact causal parent across WS ingress into a DO relay", async () => {
-    const verifyExactCausalInvocation = vi.fn(async () => true);
-    const { server, entityCache } = createServer({ verifyExactCausalInvocation });
+    const resolveExactCausalInvocation = vi.fn(async () => ({ initiatingUser: null }));
+    const { server, entityCache } = createServer({ resolveExactCausalInvocation });
     const targetId = "do:workers/example:Store:key";
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
@@ -1514,7 +1514,7 @@ describe("RpcServer relay behavior", () => {
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
-    expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     const relayed = JSON.parse(String(init.body)) as { message: { causalParent?: unknown } };
     expect(relayed.message.causalParent).toEqual(causalParent);
@@ -3949,22 +3949,22 @@ describe("RpcServer caller identity", () => {
       ...channelTrajectoryFor(binding.channelId),
       invocationId: "invocation:missing",
     };
-    const unavailable = createServer({ verifyExactCausalInvocation: undefined }).server;
+    const unavailable = createServer({ resolveExactCausalInvocation: undefined }).server;
     await expect(
       testServer(unavailable).resolveCausalParent(caller, { causalParent })
     ).rejects.toThrow(/verification is unavailable/);
 
-    const verifyExactCausalInvocation = vi.fn(async () => false);
-    const missing = createServer({ verifyExactCausalInvocation }).server;
+    const resolveExactCausalInvocation = vi.fn(async () => null);
+    const missing = createServer({ resolveExactCausalInvocation }).server;
     await expect(testServer(missing).resolveCausalParent(caller, { causalParent })).rejects.toThrow(
       /does not exist/
     );
-    expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
   });
 
   it("rejects nonexistent causal parents before unary and streaming service dispatch", async () => {
-    const verifyExactCausalInvocation = vi.fn(async () => false);
-    const { server } = createServer({ verifyExactCausalInvocation });
+    const resolveExactCausalInvocation = vi.fn(async () => null);
+    const { server } = createServer({ resolveExactCausalInvocation });
     const dispatcher = testServer(server).dispatcher;
     dispatcher.getPolicy.mockReturnValue({ allowed: ["do"] });
     dispatcher.getMethodPolicy.mockReturnValue(undefined);
@@ -4021,7 +4021,7 @@ describe("RpcServer caller identity", () => {
         }),
       ])
     );
-    expect(verifyExactCausalInvocation).toHaveBeenCalledTimes(2);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledTimes(2);
   });
 
   function rpcRequest(requestId: string, method: string) {
@@ -4513,10 +4513,10 @@ describe("RpcServer caller identity", () => {
       authorizingCaller: createVerifiedCaller("do:agents/AgentDO:agent-1", "do"),
       causalParent,
     }));
-    const verifyExactCausalInvocation = vi.fn(async () => true);
+    const resolveExactCausalInvocation = vi.fn(async () => ({ initiatingUser: null }));
     const { server } = createServer({
       resolveExtensionInvocation,
-      verifyExactCausalInvocation,
+      resolveExactCausalInvocation,
     });
     const client = createClient("@workspace-extensions/tools");
     client.caller = createVerifiedCaller("@workspace-extensions/tools", "extension");
@@ -4537,7 +4537,7 @@ describe("RpcServer caller identity", () => {
       "@workspace-extensions/tools",
       "request:agent-tool"
     );
-    expect(verifyExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toMatchObject({
       caller: { runtime: { id: "@workspace-extensions/tools", kind: "extension" } },

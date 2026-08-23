@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createReviewedClosureService } from "./reviewedClosureService.js";
 
@@ -24,22 +24,10 @@ const activate = {
     issuer: "do:workers/missions:MissionsDO:workspace-missions",
   },
   closureDigest: "b".repeat(64),
-  presentation: {
-    title: "Activate daily summary",
-    description: "Review this automation.",
-    summary: "Summarize today",
-  },
 };
 
-function prepare(caller: ReturnType<typeof createVerifiedCaller>) {
-  const service = createReviewedClosureService({ registry: {} as never });
-  return service.authorityPreparation?.["reviewedClosure.activate.presentation"]?.({ caller }, [
-    activate,
-  ]);
-}
-
 describe("reviewed closure publisher admission", () => {
-  it("admits the exact reviewed workspace MissionsDO identity", async () => {
+  it("installs directly without preparing an approval surface", async () => {
     const caller = createVerifiedCaller("do:workers/missions:MissionsDO:workspace-missions", "do", {
       callerId: "do:workers/missions:MissionsDO:workspace-missions",
       callerKind: "do",
@@ -49,64 +37,19 @@ describe("reviewed closure publisher admission", () => {
       requested: [],
     });
     caller.codeApproved = true;
-
-    expect(prepare(caller)).toMatchObject({
-      selections: [{ capability: "reviewed-closure.activate" }],
+    const registry = { activate: vi.fn(() => ({ state: "active" })) };
+    const service = createReviewedClosureService({ registry: registry as never });
+    const authorizingCaller = createVerifiedCaller("panel:alice", "panel", null, null, {
+      userId: "alice",
+      handle: "alice",
     });
-  });
-
-  it("rejects builtin identity and mismatched or unreviewed workspace code", async () => {
-    const builtin = createVerifiedCaller(
-      "do:vibestudio/internal:MissionsDO:workspace-missions",
-      "do",
-      {
-        callerId: "do:vibestudio/internal:MissionsDO:workspace-missions",
-        callerKind: "do",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "host",
-        executionDigest: "c".repeat(64),
-        requested: [],
-      }
-    );
-    builtin.codeApproved = true;
-    expect(() => prepare(builtin)).toThrow(
-      "Reviewed closure presentation requires the exact admitted workspace worker identity"
-    );
-
-    const unreviewed = createVerifiedCaller(
-      "do:workers/missions:MissionsDO:workspace-missions",
-      "do",
-      {
-        callerId: "do:workers/missions:MissionsDO:workspace-missions",
-        callerKind: "do",
-        repoPath: "workers/missions",
-        effectiveVersion: "missions-v1",
-        executionDigest: "c".repeat(64),
-        requested: [],
-      }
-    );
-    expect(() => prepare(unreviewed)).toThrow(
-      "Reviewed closure presentation requires the exact admitted workspace worker identity"
-    );
-
-    const mismatched = { ...unreviewed, codeApproved: true as const };
-    mismatched.code = { ...unreviewed.code!, repoPath: "workers/other" };
-    expect(() => prepare(mismatched)).toThrow(
-      "Reviewed closure presentation requires the exact admitted workspace worker identity"
-    );
-
-    const admitted = { ...unreviewed, codeApproved: true as const };
-    expect(() =>
-      createReviewedClosureService({ registry: {} as never }).authorityPreparation?.[
-        "reviewedClosure.activate.presentation"
-      ]?.({ caller: admitted }, [
-        {
-          ...activate,
-          body: { ...activate.body, issuer: "do:workers/other:OtherDO:key" },
-        },
-      ])
-    ).toThrow(
-      "Reviewed closure presentation requires the exact admitted workspace worker identity"
+    expect(service.authorityPreparation).toBeUndefined();
+    await service.handler({ caller, authorizingCaller } as never, "activate", [activate] as never);
+    expect(registry.activate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publisher: "do:workers/missions:MissionsDO:workspace-missions",
+        body: expect.objectContaining({ issuer: activate.body.issuer }),
+      })
     );
   });
 });

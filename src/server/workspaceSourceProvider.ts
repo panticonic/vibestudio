@@ -158,7 +158,12 @@ export interface WorkspaceSemanticPort {
     invocationId: string;
     limit: number;
   }): Promise<{
-    rows: Array<{ log_id?: unknown; head?: unknown; invocation_id?: unknown }>;
+    rows: Array<{
+      log_id?: unknown;
+      head?: unknown;
+      invocation_id?: unknown;
+      initiating_user_id?: unknown;
+    }>;
   }>;
 }
 
@@ -231,20 +236,31 @@ export function createWorkspaceSourceProviderV1(
   };
 }
 
-export async function hasExactCausalInvocation(
+export interface ExactCausalInvocationFact {
+  initiatingUserId: string | null;
+}
+
+export async function resolveExactCausalInvocation(
   caller: Pick<WorkspaceSemanticPort, "inspectInvocationState">,
   parent: RpcCausalParent
-): Promise<boolean> {
+): Promise<ExactCausalInvocationFact | null> {
   const inspection = await caller.inspectInvocationState({
     trajectoryId: parent.logId,
     branchId: parent.head,
     invocationId: parent.invocationId,
     limit: 1,
   });
-  return inspection.rows.some(
+  const row = inspection.rows.find(
     (row) =>
       row.log_id === parent.logId &&
       row.head === parent.head &&
       row.invocation_id === parent.invocationId
   );
+  if (!row) return null;
+  return {
+    initiatingUserId:
+      typeof row.initiating_user_id === "string" && row.initiating_user_id.length > 0
+        ? row.initiating_user_id
+        : null,
+  };
 }

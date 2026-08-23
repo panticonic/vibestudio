@@ -1,5 +1,5 @@
 /**
- * The eval owner bindings (`chat` + `agent` + `automations`): present + forwarding for agent-owned
+ * The eval owner bindings (`chat` + `agent`): present + forwarding for agent-owned
  * eval, ABSENT for non-agent (CLI/panel) eval.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -37,7 +37,6 @@ describe("buildOwnerBindings", () => {
         contextId: string;
         channelId: string;
       };
-      automations: { propose: (input: unknown) => Promise<unknown> };
     };
 
     await b.agent.setModel("openai:gpt-5.3");
@@ -69,13 +68,6 @@ describe("buildOwnerBindings", () => {
     ]);
     expect(b.chat.contextId).toBe("ctx-1");
     expect(b.chat.channelId).toBe("chan-1");
-
-    const proposal = { name: "Daily check" };
-    await b.automations.propose(proposal);
-    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", [
-      "chan-1",
-      "proposeAutomation",
-      [proposal, { invocationId: "invocation-1", ordinal: 1 }],
-    ]);
+    expect(b).not.toHaveProperty("automations");
   });
 });

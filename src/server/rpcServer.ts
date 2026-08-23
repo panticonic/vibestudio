@@ -385,6 +385,12 @@ type ResolvedExtensionInvocation = Pick<ExtensionInvocation, "caller" | "chainCa
   causalParent: RpcCausalParent | null;
 };
 
+interface ResolvedCausalInvocation {
+  parent: RpcCausalParent;
+  /** Host-resolved turn author. This is attribution, never the authorizing principal. */
+  initiatingUser: UserSubject | null;
+}
+
 export interface RpcServerUploadPreopenLimits {
   maxPendingStreams?: number;
   maxBufferedBytes?: number;
@@ -792,7 +798,9 @@ export class RpcServer {
        * canonical trajectory projection. Causal parents fail closed when this
        * dependency is absent, rejects, or reports that the node does not exist.
        */
-      verifyExactCausalInvocation?: (parent: RpcCausalParent) => Promise<boolean>;
+      resolveExactCausalInvocation?: (
+        parent: RpcCausalParent
+      ) => Promise<{ initiatingUser: UserSubject | null } | null>;
       /**
        * Host-level relay boundary composed with RpcServer's invariant transport
        * protections. Direct service dispatch to `main` never reaches this
@@ -1226,6 +1234,13 @@ export class RpcServer {
     caller: VerifiedCaller,
     message: Pick<RpcRequest, "causalParent" | "parentRequestId">
   ): Promise<RpcCausalParent | undefined> {
+    return (await this.resolveCausalInvocation(caller, message))?.parent;
+  }
+
+  private async resolveCausalInvocation(
+    caller: VerifiedCaller,
+    message: Pick<RpcRequest, "causalParent" | "parentRequestId">
+  ): Promise<ResolvedCausalInvocation | undefined> {
     const presented = message.causalParent !== undefined;
     let causalParent = message.causalParent;
     if (!causalParent && caller.runtime.kind === "extension" && message.parentRequestId) {
@@ -1268,26 +1283,41 @@ export class RpcServer {
       }
     }
 
-    const verifier = this.deps.verifyExactCausalInvocation;
-    if (!verifier) {
+    const resolver = this.deps.resolveExactCausalInvocation;
+    if (!resolver) {
       throw createRelayError("Exact causal invocation verification is unavailable", "EACCES");
     }
-    let exists: boolean;
+    let resolved: { initiatingUser: UserSubject | null } | null;
     try {
-      exists = await verifier(causalParent);
+      resolved = await resolver(causalParent);
     } catch (error) {
       throw createRelayError(
         `Exact causal invocation verification failed: ${error instanceof Error ? error.message : String(error)}`,
         "EACCES"
       );
     }
-    if (!exists) {
+    if (!resolved) {
       throw createRelayError(
         `Causal invocation does not exist: ${causalParent.invocationId}`,
         "EACCES"
       );
     }
-    return causalParent;
+    return { parent: causalParent, initiatingUser: resolved.initiatingUser };
+  }
+
+  private callerWithCausalAttribution(
+    caller: VerifiedCaller,
+    causal: ResolvedCausalInvocation | undefined
+  ): VerifiedCaller {
+    if (!causal) return caller;
+    const testInitiatorId =
+      caller.testPolicy?.kind === "case" ? caller.testPolicy.case.initiatingUserId : null;
+    const initiatingUser =
+      causal.initiatingUser ??
+      (testInitiatorId
+        ? (this.deps.userSubjectSource?.resolveUserId?.(testInitiatorId) ?? null)
+        : null);
+    return initiatingUser ? { ...caller, subject: initiatingUser } : caller;
   }
 
   private resolveExtensionParentCaller(
@@ -2360,14 +2390,19 @@ export class RpcServer {
     const abort = new AbortController();
     this.beginInboundRequest(client, request.requestId, abort);
     try {
-      const causalParent = await this.resolveCausalParent(client.caller, request);
-      const ctx = this.serviceContextForRpcMessage(client, request, {
-        ...(request.requestId ? { requestId: request.requestId } : {}),
-        ...(idempotencyKey ? { idempotencyKey } : {}),
-        ...(readOnly ? { readOnly: true } : {}),
-        ...(causalParent ? { causalParent } : {}),
-        signal: abort.signal,
-      });
+      const causal = await this.resolveCausalInvocation(client.caller, request);
+      const ctx = this.serviceContextForRpcMessage(
+        client,
+        request,
+        {
+          ...(request.requestId ? { requestId: request.requestId } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(readOnly ? { readOnly: true } : {}),
+          ...(causal ? { causalParent: causal.parent } : {}),
+          signal: abort.signal,
+        },
+        this.callerWithCausalAttribution(client.caller, causal)
+      );
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
       this.sendToWs(client.ws, {
         type: "ws:rpc",
@@ -3108,13 +3143,14 @@ export class RpcServer {
       ),
       authorityParent
     );
-    const causalParent = await this.resolveCausalParent(verifiedCaller, message);
+    const causal = await this.resolveCausalInvocation(verifiedCaller, message);
+    const causalParent = causal?.parent;
     // A causal parent authenticates invocation lineage; it does not change the
     // authorizing origin. Harness-owned tool and closure calls retain their
     // sealed code identity. EvalDO is marked session-originated when its exact
     // active runtime identity is resolved in verifiedCallerFor().
-    const invocationCaller = verifiedCaller;
-    const authorizingCaller = authorityParent?.authorizingCaller ?? verifiedCaller;
+    const invocationCaller = this.callerWithCausalAttribution(verifiedCaller, causal);
+    const authorizingCaller = authorityParent?.authorizingCaller ?? invocationCaller;
 
     // Direct service dispatch
     if (targetId === "main") {
@@ -3140,7 +3176,7 @@ export class RpcServer {
     // Relay to another target
     const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
     if (!auth.ok) throw createRelayError(auth.reason, "EACCES");
-    const authenticatedCaller = verifiedCaller;
+    const authenticatedCaller = invocationCaller;
     return await this.relayCall(
       callerId,
       callerKind,
