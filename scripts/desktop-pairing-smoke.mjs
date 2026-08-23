@@ -201,6 +201,8 @@ async function startEphemeralLinuxSecretService(tempRoot, children) {
   const dataHome = path.join(tempRoot, "xdg-data");
   const runtimeDir = path.join(tempRoot, "runtime");
   const controlDir = path.join(tempRoot, "keyring-control");
+  const busConfig = path.join(tempRoot, "session-bus.conf");
+  const busSocket = path.join(runtimeDir, "session-bus");
   await Promise.all([
     fsp.mkdir(home, { recursive: true }),
     fsp.mkdir(configHome, { recursive: true }),
@@ -209,6 +211,24 @@ async function startEphemeralLinuxSecretService(tempRoot, children) {
     fsp.mkdir(controlDir, { recursive: true, mode: 0o700 }),
   ]);
   await Promise.all([fsp.chmod(runtimeDir, 0o700), fsp.chmod(controlDir, 0o700)]);
+  await fsp.writeFile(
+    busConfig,
+    `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:path=${busSocket}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`,
+    { mode: 0o600 }
+  );
 
   const serviceEnv = {
     ...process.env,
@@ -217,11 +237,15 @@ async function startEphemeralLinuxSecretService(tempRoot, children) {
     XDG_DATA_HOME: dataHome,
     XDG_RUNTIME_DIR: runtimeDir,
   };
-  const bus = spawn("dbus-daemon", ["--session", "--nofork", "--nopidfile", "--print-address=1"], {
-    cwd: repoRoot,
-    env: serviceEnv,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const bus = spawn(
+    "dbus-daemon",
+    [`--config-file=${busConfig}`, "--nofork", "--nopidfile", "--print-address=1"],
+    {
+      cwd: repoRoot,
+      env: serviceEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
   children.push(bus);
   bus.stderr?.on("data", (chunk) =>
     prefixAndWrite("desktop-secret-bus", chunk.toString(), process.stderr)
