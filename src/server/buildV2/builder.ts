@@ -25,6 +25,7 @@ import { execFile } from "child_process";
 import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
+import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
 import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
@@ -1137,12 +1138,12 @@ function relativeAssetHref(artifactPath: string): string {
 }
 
 function panelLoaderScript(bundleSrc: string): string {
-  return `<script src="./__loader.js" data-bundle-src="${escapeHtml(bundleSrc)}"></script>`;
+  return `<script src="${panelRuntimeHelperHref("__loader.js")}" data-bundle-src="${escapeHtml(bundleSrc)}"></script>`;
 }
 
 function panelPreloadLinks(bundleSrc: string): string {
   return [
-    '<link rel="preload" href="./__transport.js" as="script" />',
+    `<link rel="preload" href="${panelRuntimeHelperHref("__transport.js")}" as="script" />`,
     `<link rel="modulepreload" href="${escapeHtml(bundleSrc)}" />`,
   ].join("\n  ");
 }

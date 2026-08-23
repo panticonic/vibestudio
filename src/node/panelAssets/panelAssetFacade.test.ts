@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+import { createHash } from "node:crypto";
+import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import type { PanelAssetStreamClient } from "./panelAssetFacade.js";
 
@@ -223,13 +225,19 @@ describe("panel asset façade content cache", () => {
   it("shares one immutable entry across runtime context ids for the same build", async () => {
     const buildKey = "a".repeat(64);
     const body = "<!doctype html><script src='./bundle.js'></script>";
-    const stream = vi.fn<GatewayStream>(
-      async () =>
-        new Response(body, {
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      if (descriptor.path.includes("/__manifest.json")) {
+        return new Response(JSON.stringify({ artifacts: [], runtimeHelpers: [] }), {
           status: 200,
-          headers: { "content-type": "text/html; charset=utf-8", "cache-control": IMMUTABLE },
-        })
-    );
+          headers: { "content-type": "application/json", "cache-control": IMMUTABLE },
+        });
+      }
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": IMMUTABLE },
+      });
+    });
     const facade = await startPanelAssetFacade(fakeServerClient(stream), {
       stateDir: tempStateDir(),
     });
@@ -241,7 +249,75 @@ describe("panel asset façade content cache", () => {
         `${root}?contextId=panel-two&ref=state%3Anew&buildKey=${buildKey}`
       );
       expect(await second.text()).toBe(body);
-      expect(stream).toHaveBeenCalledTimes(1);
+      // One entry request plus one immutable inventory; the second context hits
+      // both durable cache entries and opens no pipe stream.
+      expect(stream).toHaveBeenCalledTimes(2);
+    } finally {
+      await facade.close();
+    }
+  });
+
+  it("prefetches initial build artifacts and runtime helpers in one atomic bundle", async () => {
+    const buildKey = "d".repeat(64);
+    const helperVersion = "e".repeat(64);
+    const artifact = "export const boot = true;".repeat(100);
+    const helper = "globalThis.__helperReady = true;".repeat(60);
+    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
+    const helperDigest = createHash("sha256").update(helper).digest("hex");
+    const bundle = Buffer.concat([
+      Buffer.from(encodeBlobRecord(artifactDigest, Buffer.from(artifact))),
+      Buffer.from(encodeBlobRecord(helperDigest, Buffer.from(helper))),
+    ]);
+    const manifest = JSON.stringify({
+      artifacts: [
+        {
+          path: "bundle.js",
+          contentType: "application/javascript; charset=utf-8",
+          integrity: `sha256-${artifactDigest}`,
+          initial: true,
+        },
+      ],
+      runtimeHelpers: [
+        {
+          path: "__loader.js",
+          version: helperVersion,
+          contentType: "application/javascript; charset=utf-8",
+          integrity: `sha256-${helperDigest}`,
+          initial: true,
+        },
+      ],
+    });
+    const seen: string[] = [];
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      seen.push(descriptor.path);
+      if (descriptor.path.endsWith("/__manifest.json")) {
+        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      }
+      if (descriptor.path.includes("/__bundle?")) {
+        return new Response(bundle, { headers: { "content-type": "application/octet-stream" } });
+      }
+      return new Response("<!doctype html>", {
+        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
+      });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    try {
+      const origin = `http://127.0.0.1:${facade.port}`;
+      expect(
+        await (await fetch(`${origin}/panels/chat/?contextId=one&buildKey=${buildKey}`)).text()
+      ).toBe("<!doctype html>");
+      expect(
+        await (await fetch(`${origin}/__vibestudio/panel-build/${buildKey}/bundle.js`)).text()
+      ).toBe(artifact);
+      expect(
+        await (await fetch(`${origin}/panels/chat/__loader.js?v=${helperVersion}`)).text()
+      ).toBe(helper);
+      expect(seen.filter((value) => value.includes("/__bundle?"))).toHaveLength(1);
+      expect(seen).not.toContain(`/__vibestudio/panel-build/${buildKey}/bundle.js`);
+      expect(seen).not.toContain(`/panels/chat/__loader.js?v=${helperVersion}`);
     } finally {
       await facade.close();
     }

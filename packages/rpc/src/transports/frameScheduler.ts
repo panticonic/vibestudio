@@ -1,334 +1,348 @@
 /**
- * Round-robin fair writer with bounded queues (plan §1.3 / §1.4) — the ONE
- * send-side scheduler both pipe ends use, for both channels:
+ * Association-aware writer for every data channel on one WebRTC peer.
  *
- * - bulk: keys are stream ids; parts are complete mux messages
- *   (`protocol/bulkMux.ts`), capped at 16 KiB so one stream's transfer stalls
- *   another — or latency-sensitive control sharing the SCTP association — by
- *   at most one small message, never one transfer.
- * - control: keys are session + traffic class; parts are the fragment set of
- *   one control frame (`controlFraming.ts` — fragment sets are keyed by
- *   frameId, so interleaving fragment sets across lanes is legal on the wire).
- *
- * It replaces the single FIFO write chains (`bulkWriteChain` /
- * `controlWriteChain`): those serialized every stream and session behind one
- * promise chain, unbounded. Here each key gets its own FIFO queue and the pump
- * round-robins ACROSS keys at part granularity.
- *
- * ### Backpressure (both caps, awaited)
- * `enqueue` resolves-to-accept only under a per-key cap (default 2 MiB) and a
- * total cap (default 32 MiB): a full queue makes the producer's `await` pause,
- * which propagates up to its `reader.read()` loop. Waiters are admitted FIFO
- * as bytes drain — strictly FIFO against the *total* cap (a big enqueue is not
- * starved by later small ones), while a waiter blocked only on its own
- * *per-key* cap is skipped so one flooding key never blocks the others. A
- * batch larger than a cap is admitted when its scope is empty (otherwise it
- * could never be accepted at all).
- *
- * ### Failure = settle, never reject
- * Enqueue promises SETTLE (resolve) when the scheduler or key is dropped, or
- * the channel is not open — the transport's pipe-down path is the failure
- * signal, not per-write rejections (writers are deep in stream pumps that must
- * simply stop). On channel-not-open the pump settles ALL queued work and
- * waiters and idles: the transport creates one scheduler per pipe generation
- * and resets/re-creates it on reconnect, so queued bytes never leak across
- * generations; the scheduler keeps accepting enqueues for the next generation.
- *
- * The settled value carries the batch's OUTCOME: `'flushed'` = every part was
- * handed to the channel; `'dropped'` = at least one part never reached the
- * wire (settleAll on pipe-down/close, or dropKey). The distinction lets the
- * transport re-drive never-delivered control frames after a clean reconnect
- * (§3.4 — a partially-sent fragment set counts as dropped too: the peer's
- * defragmenter reset discards it, so nothing was delivered). Failure is still
- * a RESOLUTION, never a rejection.
+ * Separate SCTP streams prevent head-of-line blocking between traffic classes,
+ * but they still share one congestion-controlled association. Giving each
+ * channel an independent pump lets all of them fill that association at once.
+ * This scheduler is the one admission and arbitration point for the association:
+ * control (8 shares) > interactive streams (4) > bulk artifacts (1).
  */
-
 import type { RtcDataChannelLike } from "./webrtcPeer.js";
-import { awaitDrain } from "./channelIo.js";
 
 export const DEFAULT_PER_KEY_CAP_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_TOTAL_CAP_BYTES = 32 * 1024 * 1024;
-
-/** How an enqueue settled: `'flushed'` = every part handed to the channel;
- * `'dropped'` = some part never sent (pipe-down settleAll / dropKey / close). */
+export type FrameTrafficClass = "control" | "interactive" | "bulk";
 export type EnqueueOutcome = "flushed" | "dropped";
 
+export interface FrameLaneConfig {
+  getChannel: () => RtcDataChannelLike | null;
+  weight: number;
+  beforeSend?: (part: Uint8Array) => void;
+  /** Optional AIMD send window, capped by the peer's advertised safe receive window. */
+  window?: {
+    minBytes: number;
+    initialBytes: number;
+    maxBytes: () => number;
+  };
+}
 export interface FrameScheduler {
-  /**
-   * Enqueue the parts (each part = one channel message, already sized under
-   * the negotiated chunk limit) for `key`. Parts of one enqueue keep their
-   * relative order and per-key FIFO holds, but the scheduler round-robins
-   * ACROSS keys at part granularity. Resolves `'flushed'` once every part has
-   * been handed to the channel (after drain), or `'dropped'` once the
-   * scheduler/key is dropped with parts unsent (settle, never reject — the
-   * transport's pipe-down path is the failure signal).
-   */
-  enqueue(key: string | number, parts: Uint8Array[]): Promise<EnqueueOutcome>;
-  /** Discard everything queued for a key (stream cancelled); settles its
-   * enqueue promises, including any still awaiting capacity. */
-  dropKey(key: string | number): void;
-  /** Bytes accepted but not yet written — total, or for one key
-   * (backpressure metering, e.g. the shim's `bufferedAmount` accounting). */
-  pendingBytes(key?: string | number): number;
-  /** Settle everything and stop the pump permanently. */
+  enqueue(
+    trafficClass: FrameTrafficClass,
+    key: string | number,
+    parts: Uint8Array[]
+  ): Promise<EnqueueOutcome>;
+  dropKey(trafficClass: FrameTrafficClass, key: string | number): void;
+  pendingBytes(trafficClass?: FrameTrafficClass, key?: string | number): number;
   close(): void;
 }
 
 type SchedulerKey = string | number;
-
-/** One accepted enqueue: its remaining parts plus its settle callback. */
 interface Batch {
   parts: Uint8Array[];
-  /** Index of the next part to send. */
   next: number;
   resolve: (outcome: EnqueueOutcome) => void;
 }
-
 interface KeyQueue {
-  /** FIFO of accepted enqueues for this key. */
   batches: Batch[];
-  /** Accepted-but-unsent bytes for this key. */
   bytes: number;
 }
-
-/** An enqueue still awaiting capacity (not yet counted in pendingBytes). */
+interface LaneState {
+  config: FrameLaneConfig;
+  queues: Map<SchedulerKey, KeyQueue>;
+  ring: Array<SchedulerKey | undefined>;
+  ringHead: number;
+  blockedChannel: RtcDataChannelLike | null;
+  offLow: (() => void) | null;
+  configuredChannel: RtcDataChannelLike | null;
+  windowBytes: number;
+  blockedAt: number;
+}
 interface Waiter {
+  trafficClass: FrameTrafficClass;
   key: SchedulerKey;
   parts: Uint8Array[];
   bytes: number;
   resolve: (outcome: EnqueueOutcome) => void;
 }
 
+const TRAFFIC_CLASSES: readonly FrameTrafficClass[] = ["control", "interactive", "bulk"];
+const MAX_SENDS_PER_TURN = 128;
+
 export function createFrameScheduler(options: {
-  /** Called fresh each pump iteration — the transport swaps channels across
-   * reconnects; a null/closed channel settles queued work instead of wedging. */
-  getChannel: () => RtcDataChannelLike | null;
+  lanes: Record<FrameTrafficClass, FrameLaneConfig>;
   perKeyCapBytes?: number;
   totalCapBytes?: number;
-  /**
-   * Last touch before a part is handed to the channel, for stamping a wire
-   * sequence.
-   *
-   * It has to happen here rather than at encode time: this scheduler interleaves
-   * streams round-robin, so the order parts are built in is not the order they
-   * reach the wire, and a receiver checking for gaps can only reason about wire
-   * order. Called exactly once per part actually sent.
-   */
-  beforeSend?: (part: Uint8Array) => void;
 }): FrameScheduler {
   const perKeyCap = options.perKeyCapBytes ?? DEFAULT_PER_KEY_CAP_BYTES;
   const totalCap = options.totalCapBytes ?? DEFAULT_TOTAL_CAP_BYTES;
+  const lanes = new Map<FrameTrafficClass, LaneState>();
+  const weightedOrder: FrameTrafficClass[] = [];
+  for (const trafficClass of TRAFFIC_CLASSES) {
+    const config = options.lanes[trafficClass];
+    if (!Number.isInteger(config.weight) || config.weight <= 0) {
+      throw new Error(`Frame scheduler lane ${trafficClass} requires a positive integer weight`);
+    }
+    lanes.set(trafficClass, {
+      config,
+      queues: new Map(),
+      ring: [],
+      ringHead: 0,
+      blockedChannel: null,
+      offLow: null,
+      configuredChannel: null,
+      windowBytes: 0,
+      blockedAt: 0,
+    });
+    for (let i = 0; i < config.weight; i++) weightedOrder.push(trafficClass);
+  }
 
-  const queues = new Map<SchedulerKey, KeyQueue>();
-  /** Round-robin rotation ring of keys with queued parts (each key at most once). */
-  let ring: Array<SchedulerKey | undefined> = [];
-  let ringHead = 0;
-  /** Enqueues awaiting capacity, FIFO. */
+  let scheduleCursor = 0;
   let waiters: Waiter[] = [];
   let totalBytes = 0;
   let closed = false;
+  let pumpScheduled = false;
   let pumping = false;
 
-  const removeFromRing = (key: SchedulerKey): void => {
-    const at = ring.indexOf(key, ringHead);
-    if (at >= 0) ring[at] = undefined;
+  const keyBytes = (trafficClass: FrameTrafficClass, key: SchedulerKey): number =>
+    lanes.get(trafficClass)?.queues.get(key)?.bytes ?? 0;
+  const schedulePump = (): void => {
+    if (closed || pumpScheduled || pumping) return;
+    pumpScheduled = true;
+    queueMicrotask(pump);
   };
-
-  const pushToRing = (key: SchedulerKey): void => {
-    ring.push(key);
+  const compactRing = (lane: LaneState): void => {
+    if (lane.ringHead >= 1_024 && lane.ringHead * 2 >= lane.ring.length) {
+      lane.ring = lane.ring.slice(lane.ringHead);
+      lane.ringHead = 0;
+    }
   };
-
-  /**
-   * Dequeue without Array.shift(), which copies the whole active rotation for
-   * every frame. Tombstones make the rare dropKey removal cheap to consume;
-   * periodic slicing bounds retained slots with amortized O(1) rotation.
-   */
-  const takeFromRing = (): SchedulerKey | undefined => {
+  const takeKey = (lane: LaneState): SchedulerKey | undefined => {
     for (;;) {
-      if (ringHead >= ring.length) {
-        ring = [];
-        ringHead = 0;
+      if (lane.ringHead >= lane.ring.length) {
+        lane.ring = [];
+        lane.ringHead = 0;
         return undefined;
       }
-      const key = ring[ringHead];
-      ring[ringHead] = undefined;
-      ringHead += 1;
-      if (ringHead >= 1_024 && ringHead * 2 >= ring.length) {
-        ring = ring.slice(ringHead);
-        ringHead = 0;
-      }
+      const key = lane.ring[lane.ringHead];
+      lane.ring[lane.ringHead] = undefined;
+      lane.ringHead += 1;
+      compactRing(lane);
       if (key !== undefined) return key;
     }
   };
-
-  /** Settle every accepted batch and every capacity waiter (channel gone /
-   * scheduler closed). Leaves the scheduler empty but usable (unless closed).
-   * Everything still queued here — including a batch with SOME parts sent —
-   * settles `'dropped'`: an incomplete fragment set is discarded by the peer's
-   * defragmenter reset on reconnect, so nothing of it was delivered. */
-  const settleAll = (): void => {
-    const settledQueues = [...queues.values()];
-    const settledWaiters = waiters;
-    queues.clear();
-    ring = [];
-    ringHead = 0;
-    waiters = [];
-    totalBytes = 0;
-    for (const q of settledQueues) for (const batch of q.batches) batch.resolve("dropped");
-    for (const w of settledWaiters) w.resolve("dropped");
+  const removeKeyFromRing = (lane: LaneState, key: SchedulerKey): void => {
+    const at = lane.ring.indexOf(key, lane.ringHead);
+    if (at >= 0) lane.ring[at] = undefined;
   };
-
-  /** Accept a waiter: move its bytes into the accounted queues + ring. */
-  const accept = (w: Waiter): void => {
-    let q = queues.get(w.key);
-    if (!q) {
-      q = { batches: [], bytes: 0 };
-      queues.set(w.key, q);
+  const hasQueuedWork = (lane: LaneState): boolean => lane.queues.size > 0;
+  const clearLowWait = (lane: LaneState): void => {
+    lane.offLow?.();
+    lane.offLow = null;
+    lane.blockedChannel = null;
+  };
+  const configureWindow = (lane: LaneState, channel: RtcDataChannelLike): void => {
+    if (lane.configuredChannel === channel) return;
+    lane.configuredChannel = channel;
+    const policy = lane.config.window;
+    if (!policy) return;
+    const maximum = Math.max(0, policy.maxBytes());
+    lane.windowBytes = Math.min(maximum, Math.max(policy.minBytes, policy.initialBytes));
+    channel.bufferedAmountLowThreshold = lane.windowBytes;
+  };
+  const waitForLow = (lane: LaneState, channel: RtcDataChannelLike): void => {
+    if (lane.blockedChannel === channel && lane.offLow) return;
+    clearLowWait(lane);
+    lane.blockedChannel = channel;
+    lane.blockedAt = Date.now();
+    lane.offLow = channel.onBufferedAmountLow(() => {
+      const blockedFor = Date.now() - lane.blockedAt;
+      const policy = lane.config.window;
+      if (policy) {
+        const maximum = Math.max(0, policy.maxBytes());
+        if (blockedFor < 250) {
+          lane.windowBytes = Math.min(maximum, lane.windowBytes + 16 * 1024);
+        } else if (blockedFor > 1_000) {
+          lane.windowBytes = Math.max(
+            Math.min(policy.minBytes, maximum),
+            Math.floor(lane.windowBytes / 2)
+          );
+        }
+        channel.bufferedAmountLowThreshold = lane.windowBytes;
+      }
+      clearLowWait(lane);
+      schedulePump();
+    });
+    // bufferedamountlow is an edge; close the subscribe/sample race.
+    if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
+      clearLowWait(lane);
+      schedulePump();
     }
-    const hadParts = q.batches.length > 0;
-    q.batches.push({ parts: w.parts, next: 0, resolve: w.resolve });
-    q.bytes += w.bytes;
-    totalBytes += w.bytes;
-    if (!hadParts) pushToRing(w.key);
-    void pump();
   };
-
-  /**
-   * Admit capacity waiters FIFO. Strict FIFO against the total cap; a waiter
-   * blocked only by its per-key cap is skipped so other keys proceed, but later
-   * waiters for that SAME key remain blocked behind it to preserve per-key FIFO.
-   */
+  const settleLane = (lane: LaneState): void => {
+    clearLowWait(lane);
+    const queues = [...lane.queues.values()];
+    lane.queues.clear();
+    lane.ring = [];
+    lane.ringHead = 0;
+    for (const queue of queues) {
+      totalBytes -= queue.bytes;
+      for (const batch of queue.batches) batch.resolve("dropped");
+    }
+  };
+  const settleAll = (): void => {
+    for (const lane of lanes.values()) settleLane(lane);
+    const pending = waiters;
+    waiters = [];
+    for (const waiter of pending) waiter.resolve("dropped");
+    totalBytes = 0;
+  };
+  const accept = (waiter: Waiter): void => {
+    const lane = lanes.get(waiter.trafficClass)!;
+    let queue = lane.queues.get(waiter.key);
+    if (!queue) {
+      queue = { batches: [], bytes: 0 };
+      lane.queues.set(waiter.key, queue);
+    }
+    const wasEmpty = queue.batches.length === 0;
+    queue.batches.push({ parts: waiter.parts, next: 0, resolve: waiter.resolve });
+    queue.bytes += waiter.bytes;
+    totalBytes += waiter.bytes;
+    if (wasEmpty) lane.ring.push(waiter.key);
+    schedulePump();
+  };
   const admitWaiters = (): void => {
-    const blockedKeys = new Set<SchedulerKey>();
+    const blockedKeys = new Set<string>();
     for (let i = 0; i < waiters.length; ) {
-      const w = waiters[i]!;
-      if (blockedKeys.has(w.key)) {
-        i++;
+      const waiter = waiters[i]!;
+      const identity = `${waiter.trafficClass}:${String(waiter.key)}`;
+      if (blockedKeys.has(identity)) {
+        i += 1;
         continue;
       }
-      // Oversized batches are admitted into an empty scope — otherwise they
-      // could never be accepted and the producer would wedge forever.
-      if (totalBytes > 0 && totalBytes + w.bytes > totalCap) return;
-      const keyBytes = queues.get(w.key)?.bytes ?? 0;
-      if (keyBytes > 0 && keyBytes + w.bytes > perKeyCap) {
-        blockedKeys.add(w.key);
-        i++;
+      if (totalBytes > 0 && totalBytes + waiter.bytes > totalCap) return;
+      const pendingForKey = keyBytes(waiter.trafficClass, waiter.key);
+      if (pendingForKey > 0 && pendingForKey + waiter.bytes > perKeyCap) {
+        blockedKeys.add(identity);
+        i += 1;
         continue;
       }
       waiters.splice(i, 1);
-      accept(w);
+      accept(waiter);
     }
   };
-
-  /** Discard everything queued for one key, settling its promises 'dropped'. */
-  const dropKey = (key: SchedulerKey): void => {
-    const q = queues.get(key);
-    if (q) {
-      queues.delete(key);
-      removeFromRing(key);
-      totalBytes -= q.bytes;
-      for (const batch of q.batches) batch.resolve("dropped");
+  const dropKey = (trafficClass: FrameTrafficClass, key: SchedulerKey): void => {
+    const lane = lanes.get(trafficClass)!;
+    const queue = lane.queues.get(key);
+    if (queue) {
+      lane.queues.delete(key);
+      removeKeyFromRing(lane, key);
+      totalBytes -= queue.bytes;
+      for (const batch of queue.batches) batch.resolve("dropped");
     }
-    // Also settle enqueues for this key still awaiting capacity — a producer
-    // parked on a cancelled stream must not wedge.
-    const dropped = waiters.filter((w) => w.key === key);
-    if (dropped.length > 0) waiters = waiters.filter((w) => w.key !== key);
-    for (const w of dropped) w.resolve("dropped");
-    admitWaiters(); // freed capacity may admit other keys' waiters
+    const dropped = waiters.filter(
+      (waiter) => waiter.trafficClass === trafficClass && waiter.key === key
+    );
+    if (dropped.length > 0) {
+      waiters = waiters.filter(
+        (waiter) => waiter.trafficClass !== trafficClass || waiter.key !== key
+      );
+      for (const waiter of dropped) waiter.resolve("dropped");
+    }
+    admitWaiters();
   };
-
-  /**
-   * The single pump loop: one part per iteration, round-robin across keys,
-   * drain-aware. Exits when idle (restarted by the next accept) or when the
-   * channel is unusable (after settling everything).
-   */
-  const pump = async (): Promise<void> => {
-    if (pumping) return;
+  const nextSendable = ():
+    | { trafficClass: FrameTrafficClass; lane: LaneState; channel: RtcDataChannelLike }
+    | undefined => {
+    for (let scanned = 0; scanned < weightedOrder.length; scanned++) {
+      const trafficClass = weightedOrder[scheduleCursor]!;
+      scheduleCursor = (scheduleCursor + 1) % weightedOrder.length;
+      const lane = lanes.get(trafficClass)!;
+      if (!hasQueuedWork(lane)) continue;
+      const channel = lane.config.getChannel();
+      if (!channel || channel.readyState !== "open") {
+        // One dead channel condemns the association generation.
+        settleAll();
+        return undefined;
+      }
+      configureWindow(lane, channel);
+      if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
+        waitForLow(lane, channel);
+        continue;
+      }
+      clearLowWait(lane);
+      return { trafficClass, lane, channel };
+    }
+    return undefined;
+  };
+  const pump = (): void => {
+    pumpScheduled = false;
+    if (closed || pumping) return;
     pumping = true;
+    let sent = 0;
     try {
-      while (!closed) {
-        const key = takeFromRing();
-        if (key === undefined) return; // idle — next accept restarts the pump
-        const q = queues.get(key);
-        if (!q || q.batches.length === 0) continue; // dropped between turns
-        const channel = options.getChannel();
-        if (!channel || channel.readyState !== "open") {
-          settleAll();
-          return;
-        }
-        await awaitDrain(channel);
-        if (closed) return; // close() during the drain already settled everything
-        if (channel.readyState !== "open") {
-          settleAll();
-          return;
-        }
-        // Re-resolve after the await: dropKey() may have discarded this queue.
-        const live = queues.get(key);
-        if (!live || live.batches.length === 0) continue;
-        const batch = live.batches[0]!;
+      while (!closed && sent < MAX_SENDS_PER_TURN) {
+        const selected = nextSendable();
+        if (!selected) return;
+        const key = takeKey(selected.lane);
+        if (key === undefined) continue;
+        const queue = selected.lane.queues.get(key);
+        if (!queue || queue.batches.length === 0) continue;
+        const batch = queue.batches[0]!;
         const part = batch.parts[batch.next]!;
         try {
-          options.beforeSend?.(part);
-          channel.send(part);
+          selected.lane.config.beforeSend?.(part);
+          selected.channel.send(part);
         } catch {
-          // A refused write says nothing about whether the message was sent.
-          // libdatachannel buffers a message it could not hand to SCTP and
-          // reports the failure anyway, so a part that "failed" may already be
-          // on the wire -- re-sending it delivers the same bytes twice, and
-          // under sustained backpressure, many times over. (Measured on a
-          // device: streams received exact integer multiples of their own
-          // payload, 3x to 13x, nothing missing anywhere.)
-          //
-          // So the part is never re-sent. What a throw does bound is the
-          // damage: a dead channel takes everything, while an open one that
-          // refuses one write costs only that write's stream, which then
-          // settles 'dropped' and is reported as a truncated stream rather
-          // than a body silently missing bytes.
-          if (channel.readyState !== "open") {
+          if (selected.channel.readyState !== "open") {
             settleAll();
             return;
           }
-          dropKey(key);
+          dropKey(selected.trafficClass, key);
           continue;
         }
+        sent += 1;
         batch.next += 1;
-        live.bytes -= part.byteLength;
+        queue.bytes -= part.byteLength;
         totalBytes -= part.byteLength;
         if (batch.next >= batch.parts.length) {
-          live.batches.shift();
-          batch.resolve("flushed"); // resolves only after the batch's LAST part is sent
+          queue.batches.shift();
+          batch.resolve("flushed");
         }
-        if (live.batches.length > 0) pushToRing(key);
-        else queues.delete(key);
-        admitWaiters(); // bytes drained — capacity may have opened up
+        if (queue.batches.length > 0) selected.lane.ring.push(key);
+        else selected.lane.queues.delete(key);
+        admitWaiters();
       }
     } finally {
       pumping = false;
+      // A blocked lane is resumed only by its bufferedamountlow edge. Blindly
+      // rescheduling while work remains would spin an endless microtask loop
+      // and starve the very native event/timer that can drain it.
+      if (!closed && sent >= MAX_SENDS_PER_TURN) schedulePump();
     }
   };
 
   return {
-    enqueue(key: SchedulerKey, parts: Uint8Array[]): Promise<EnqueueOutcome> {
-      // Settled schedulers and empty enqueues settle immediately (never reject):
-      // closed = dropped (nothing will ever send); empty = vacuously flushed.
+    enqueue(trafficClass, key, parts) {
       if (closed) return Promise.resolve("dropped");
       if (parts.length === 0) return Promise.resolve("flushed");
-      let bytes = 0;
-      for (const part of parts) bytes += part.byteLength;
+      const bytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
       return new Promise<EnqueueOutcome>((resolve) => {
-        waiters.push({ key, parts, bytes, resolve });
+        waiters.push({ trafficClass, key, parts, bytes, resolve });
         admitWaiters();
       });
     },
-
     dropKey,
-
-    pendingBytes(key?: SchedulerKey): number {
-      if (key === undefined) return totalBytes;
-      return queues.get(key)?.bytes ?? 0;
+    pendingBytes(trafficClass, key) {
+      if (trafficClass === undefined) return totalBytes;
+      const lane = lanes.get(trafficClass)!;
+      if (key === undefined) {
+        let bytes = 0;
+        for (const queue of lane.queues.values()) bytes += queue.bytes;
+        return bytes;
+      }
+      return lane.queues.get(key)?.bytes ?? 0;
     },
-
-    close(): void {
+    close() {
       if (closed) return;
       closed = true;
       settleAll();

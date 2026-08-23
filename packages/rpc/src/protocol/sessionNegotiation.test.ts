@@ -81,6 +81,7 @@ describe("session control frame codec", () => {
       t: "stream-open",
       sid: "s3",
       streamId: 42,
+      trafficClass: "interactive",
       envelope: ENVELOPE,
     };
     const decoded = decodeControlFrame(encodeControlFrame(frame));
@@ -94,6 +95,7 @@ describe("session control frame codec", () => {
       sid: "s3",
       streamId: 42,
       bodyStreamId: 43,
+      trafficClass: "bulk",
       envelope: ENVELOPE,
     };
     const decoded = decodeControlFrame(encodeControlFrame(frame));
@@ -107,6 +109,7 @@ describe("session control frame codec", () => {
       proto: SESSION_PROTOCOL_VERSION,
       contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: 256 * 1024,
+      receiveWindowBytes: 512 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
     };
@@ -114,7 +117,7 @@ describe("session control frame codec", () => {
     expect(decoded).toEqual(frame);
     expect(isSessionHello(decoded)).toBe(true);
     if (isSessionHello(decoded)) {
-      expect(decoded.proto).toBe(2);
+      expect(decoded.proto).toBe(3);
       expect(decoded.keepalive?.timeoutMs).toBe(45_000);
     }
   });
@@ -123,9 +126,10 @@ describe("session control frame codec", () => {
     const decoded = decodeControlFrame(
       JSON.stringify({
         t: "hello",
-        proto: 2,
+        proto: 3,
         contractVersion: RPC_CONTRACT_VERSION,
         maxMsg: 16_384,
+        receiveWindowBytes: 0,
       })
     );
     expect(isSessionHello(decoded)).toBe(true);
@@ -173,9 +177,9 @@ describe("session control frame codec", () => {
   });
 });
 
-describe("v2 protocol constants", () => {
-  it("speaks protocol version 2 (hello preamble + bulk mux)", () => {
-    expect(SESSION_PROTOCOL_VERSION).toBe(2);
+describe("v3 protocol constants", () => {
+  it("speaks protocol version 3 (traffic classes + receive-window negotiation)", () => {
+    expect(SESSION_PROTOCOL_VERSION).toBe(3);
   });
   it("names the self-healing unknown-sid close code (non-terminal 'closed')", () => {
     expect(SESSION_NOT_OPEN_CLOSE_CODE).toBe(4008);

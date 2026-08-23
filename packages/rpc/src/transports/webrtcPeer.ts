@@ -30,17 +30,18 @@ export type RtcConnectionState =
 export type RtcDataChannelState = "connecting" | "open" | "closing" | "closed";
 
 /**
- * Flow-control policy for the two channels sharing one SCTP association.
+ * Flow-control policy for the three channels sharing one SCTP association.
  *
- * Control frames are small and latency-sensitive, so they may use the normal
- * native send window. Bulk traffic is deliberately different: only one small
- * message may be outstanding at a time. Separate data channels do not imply
- * separate congestion queues, and a large bulk burst handed to SCTP can
- * otherwise hold session opens, events, and RPC responses behind asset bytes
- * for tens of seconds on a constrained link.
+ * Control frames are small and latency-sensitive. Interactive and bulk streams
+ * use smaller adaptive native send windows; the association scheduler keeps
+ * their admission and arbitration unified. Separate data channels do not imply
+ * separate congestion control, so an unconstrained artifact burst could still
+ * hold session opens, events, and RPC responses behind asset bytes.
  */
 export const CONTROL_BUFFER_LOW_THRESHOLD = 256 * 1024;
-export const BULK_BUFFER_LOW_THRESHOLD = 0;
+export const INTERACTIVE_BUFFER_LOW_THRESHOLD = 64 * 1024;
+export const BULK_BUFFER_LOW_THRESHOLD = 64 * 1024;
+export const MAX_ASSOCIATION_STREAM_WINDOW = 512 * 1024;
 export const MAX_BULK_MESSAGE_SIZE = 16 * 1024;
 
 export interface RtcSessionDescription {
@@ -61,9 +62,9 @@ export interface RtcIceServer {
 }
 
 /**
- * One reliable/ordered SCTP data channel. The transport opens two: `control`
- * (RPC envelopes + events + session handshake) and `bulk` (binary stream v2
- * frames). Backpressure is driven by `bufferedAmount` + the low-threshold event.
+ * One reliable/ordered SCTP data channel. The transport opens three: `control`
+ * (envelopes and handshake), `interactive` (subscriptions and ordinary stream
+ * bodies), and `bulk` (artifacts/uploads).
  */
 export interface RtcDataChannelLike {
   readonly label: string;
@@ -81,6 +82,11 @@ export interface RtcDataChannelLike {
   bufferedAmountLowThreshold: number;
   /** Measured SCTP max message size (libdatachannel reports 256 KB — plan §11). */
   readonly maxMessageSize: number;
+  /**
+   * Maximum sender-side buffered window this receiver's native bridge can
+   * safely absorb for streaming channels. Zero means one message at a time.
+   */
+  readonly safeReceiveWindowBytes?: number;
   send(data: Uint8Array): void;
   close(): void;
   onOpen(handler: () => void): () => void;
@@ -203,7 +209,7 @@ export function parseSdpFingerprint(sdp: string): string | null {
 }
 
 // --- Wire contract --------------------------------------------------------
-// The offerer and answerer MUST open the two pre-negotiated channels with the
+// The offerer and answerer MUST open the three pre-negotiated channels with the
 // SAME labels + ids (a mismatch silently breaks pairing) and frame under the
 // SAME chunk size. Single source here so the two ends cannot drift.
 
@@ -213,6 +219,9 @@ export const CONTROL_CHANNEL_ID = 0;
 /** Bulk channel (binary stream v2 frames). */
 export const BULK_LABEL = "bulk";
 export const BULK_CHANNEL_ID = 1;
+/** Interactive streaming channel (subscription readiness/replay and RPC bodies). */
+export const INTERACTIVE_LABEL = "interactive";
+export const INTERACTIVE_CHANNEL_ID = 2;
 /** react-native-webrtc corrupts >16 KiB data-channel messages (RFC 8831 §6.6),
  * so both ends chunk/fragment under this. */
 export const DEFAULT_CHUNK_SIZE = 16 * 1024;

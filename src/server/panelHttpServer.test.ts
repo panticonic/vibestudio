@@ -13,6 +13,7 @@ import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
+import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -109,6 +110,7 @@ vi.mock("ws", () => ({
 
 // Must import after mocks
 const { PanelHttpServer } = await import("./panelHttpServer.js");
+const PANEL_RUNTIME_HELPER_SET = getPanelRuntimeHelperSet();
 
 function createMockResponse(): ServerResponse & {
   body?: unknown;
@@ -397,6 +399,14 @@ describe("PanelHttpServer build cache", () => {
         integrity?: string;
         initial?: boolean;
       }[];
+      runtimeHelpers: {
+        path: string;
+        contentType: string;
+        byteLength: number;
+        integrity: string;
+        version: string;
+        initial: boolean;
+      }[];
     }> => {
       const response = await handlePanelRequest(
         serverWithBuild(),
@@ -437,6 +447,38 @@ describe("PanelHttpServer build cache", () => {
         "big.js",
         `shared-style-${digestOf(sharedCss)}.css`,
       ]);
+    });
+
+    it("publishes and bundles the exact content-addressed runtime helper set", async () => {
+      const { runtimeHelpers } = await manifest();
+      expect(runtimeHelpers).toEqual(
+        PANEL_RUNTIME_HELPER_SET.helpers.map((helper) => ({
+          path: helper.path,
+          version: PANEL_RUNTIME_HELPER_SET.version,
+          contentType: helper.contentType,
+          byteLength: helper.body.byteLength,
+          integrity: `sha256-${helper.integrity}`,
+          initial: true,
+        }))
+      );
+
+      const response = await handlePanelRequest(
+        serverWithBuild(),
+        `/__vibestudio/panel-build/${BUILD_KEY}/__bundle?helpers=0,1&enc=gzip`
+      );
+      const reader = createBlobBundleReader();
+      const blobs = reader.push(Buffer.concat(response.chunks ?? []));
+      reader.end();
+      expect(blobs.map((blob) => blob.digest)).toEqual(
+        PANEL_RUNTIME_HELPER_SET.helpers.map((helper) => helper.integrity)
+      );
+      for (const [index, blob] of blobs.entries()) {
+        const body =
+          blob!.payloadDigest === blob!.digest
+            ? Buffer.from(blob!.bytes)
+            : gunzipSync(Buffer.from(blob!.bytes));
+        expect(body).toEqual(PANEL_RUNTIME_HELPER_SET.helpers[index]!.body);
+      }
     });
 
     it("does not read artifact payloads to answer the manifest", async () => {

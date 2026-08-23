@@ -126,6 +126,18 @@ describe("panel asset representation keys", () => {
     expect(bare).toBe(path);
   });
 
+  it("keys versioned runtime helpers independently of forwarded headers", () => {
+    const path = `/panels/chat/__loader.js?v=${"b".repeat(64)}`;
+    expect(panelAssetCacheKey(path, { accept: "*/*", "user-agent": "desktop-a" })).toBe(path);
+    expect(panelAssetCacheKey(path, { accept: "text/javascript", "user-agent": "desktop-b" })).toBe(
+      path
+    );
+    const mutable = "/panels/chat/__loader.js";
+    expect(panelAssetCacheKey(mutable, { accept: "*/*" })).not.toBe(
+      panelAssetCacheKey(mutable, { accept: "text/javascript" })
+    );
+  });
+
   it("still separates non-build paths by forwarded headers", () => {
     // The relaxation is justified only by the build path being content-addressed
     // with bytes that no forwarded header can select; everything else keeps the

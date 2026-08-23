@@ -38,7 +38,7 @@ import type {
 /** v2 = `hello` preamble negotiation (§1.1) + self-describing bulk mux (§1.2).
  * Pre-release: v1 peers are not served — a `hello` with `proto !== 2` is a
  * protocol violation and drops the pipe. */
-export const SESSION_PROTOCOL_VERSION = 2 as const;
+export const SESSION_PROTOCOL_VERSION = 3 as const;
 export { RPC_CONTRACT_VERSION } from "./contractVersion.js";
 
 /** Error code stamped when a logical session drops with calls in flight. */
@@ -178,6 +178,8 @@ export interface SessionStreamOpenFrame {
   sid: string;
   /** Bulk-channel stream id the response body will be tagged with. */
   streamId: number;
+  /** Scheduling class for both response and optional request body. */
+  trafficClass: SessionStreamTrafficClass;
   /**
    * When present, the REQUEST body rides the bulk channel as DATA messages
    * tagged with this stream id (plan §1.6 — uploads stop traveling as base64
@@ -187,6 +189,8 @@ export interface SessionStreamOpenFrame {
   /** envelope.message is an `RpcStreamRequest`. */
   envelope: RpcEnvelope;
 }
+
+export type SessionStreamTrafficClass = "interactive" | "bulk";
 
 export interface SessionStreamCancelFrame {
   t: typeof SESSION_STREAM_CANCEL;
@@ -218,6 +222,8 @@ export interface SessionHelloFrame {
   contractVersion: number;
   /** Sender's usable SCTP message size (RN advertises 16 KiB; node ends 256 KiB). */
   maxMsg: number;
+  /** Safe remote sender window for streaming channels; zero = drain to empty. */
+  receiveWindowBytes: number;
   platform?: "desktop" | "mobile" | "server" | "headless";
   keepalive?: { intervalMs: number; timeoutMs: number };
   /**
@@ -297,13 +303,27 @@ export function decodeControlFrame(data: string): SessionControlFrame {
   // hello is the negotiation preamble — its mandatory numbers must be
   // present and numeric or the peer cannot be negotiated with (fail loud).
   if (tag === SESSION_HELLO) {
-    const hello = parsed as { proto?: unknown; contractVersion?: unknown; maxMsg?: unknown };
+    const hello = parsed as {
+      proto?: unknown;
+      contractVersion?: unknown;
+      maxMsg?: unknown;
+      receiveWindowBytes?: unknown;
+    };
     if (
       typeof hello.proto !== "number" ||
       typeof hello.contractVersion !== "number" ||
-      typeof hello.maxMsg !== "number"
+      typeof hello.maxMsg !== "number" ||
+      typeof hello.receiveWindowBytes !== "number"
     ) {
-      throw new Error("Session control frame 'hello' missing numeric proto/contractVersion/maxMsg");
+      throw new Error(
+        "Session control frame 'hello' missing numeric proto/contractVersion/maxMsg/receiveWindowBytes"
+      );
+    }
+  }
+  if (tag === SESSION_STREAM_OPEN) {
+    const trafficClass = (parsed as { trafficClass?: unknown }).trafficClass;
+    if (trafficClass !== "interactive" && trafficClass !== "bulk") {
+      throw new Error("Session control frame 'stream-open' has invalid trafficClass");
     }
   }
   return parsed as SessionControlFrame;

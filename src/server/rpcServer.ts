@@ -47,6 +47,7 @@ import {
   SESSION_NOT_OPEN_CLOSE_CODE,
   SESSION_OPEN_RESULT,
   type SessionControlFrame,
+  type SessionStreamTrafficClass,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import {
   FRAME_DATA,
@@ -4891,8 +4892,13 @@ export class RpcServer {
   attachWebRtcPipe(
     pipe: PipeChannels & {
       onControl(handler: (data: Uint8Array) => void): void;
-      onBulkFrame(
-        handler: (streamId: number, type: StreamFrameType, payload: Uint8Array) => void
+      onStreamFrame(
+        handler: (
+          trafficClass: SessionStreamTrafficClass,
+          streamId: number,
+          type: StreamFrameType,
+          payload: Uint8Array
+        ) => void
       ): void;
       onDown?(handler: (reason: string) => void): () => void;
     }
@@ -4984,6 +4990,7 @@ export class RpcServer {
     // for that id. Frames for a RETIRED id (body settled — the client kept
     // pumping after teardown/settle) still drop.
     interface InboundBodyEntry {
+      trafficClass: SessionStreamTrafficClass;
       controller: ReadableStreamDefaultController<Uint8Array>;
       /** Bytes enqueued so far — checked against the bytesIn count on END. */
       received: number;
@@ -4998,6 +5005,7 @@ export class RpcServer {
     // are freed, and an open arriving later fails the body loudly — never a
     // silently truncated upload.
     interface PendingBodyBuffer {
+      trafficClass: SessionStreamTrafficClass;
       frames: Array<{ type: StreamFrameType; payload: Uint8Array }>;
       bytes: number;
       timer: ReturnType<typeof setTimeout>;
@@ -5029,12 +5037,23 @@ export class RpcServer {
       retireBodyId(bodyStreamId, error);
     };
     const bufferPreOpenFrame = (
+      trafficClass: SessionStreamTrafficClass,
       streamId: number,
       type: StreamFrameType,
       payload: Uint8Array
     ): void => {
       if (retiredBodyIds.has(streamId)) return; // settled/condemned — drop
       let pending = pendingBodies.get(streamId);
+      if (pending && pending.trafficClass !== trafficClass) {
+        condemnPending(
+          streamId,
+          new Error(
+            `protocol violation: upload stream ${streamId} switched from ` +
+              `${pending.trafficClass} to ${trafficClass}`
+          )
+        );
+        return;
+      }
       if (!pending) {
         if (pendingBodies.size >= this.uploadPreopenLimits.maxPendingStreams) {
           const error = new Error(
@@ -5060,7 +5079,7 @@ export class RpcServer {
           RpcServer.UPLOAD_PREOPEN_TTL_MS
         );
         (timer as { unref?: () => void }).unref?.();
-        pending = { frames: [], bytes: 0, timer };
+        pending = { trafficClass, frames: [], bytes: 0, timer };
         pendingBodies.set(streamId, pending);
       }
       if (type === FRAME_DATA && payload.byteLength === 0) return;
@@ -5100,7 +5119,10 @@ export class RpcServer {
       // buffer, valid only during this callback (see decodeBulkMessage).
       pending.frames.push({ type, payload: payload.slice() });
     };
-    const registerInboundBody = (bodyStreamId: number): ReadableStream<Uint8Array> => {
+    const registerInboundBody = (
+      bodyStreamId: number,
+      trafficClass: SessionStreamTrafficClass
+    ): ReadableStream<Uint8Array> => {
       // A duplicate bodyStreamId is a client protocol bug: fail the old body
       // loudly rather than cross-feeding two requests.
       inboundBodies
@@ -5130,6 +5152,7 @@ export class RpcServer {
         }
       );
       const entry: InboundBodyEntry = {
+        trafficClass,
         controller,
         received: 0,
         settle: (error?: Error) => {
@@ -5164,20 +5187,39 @@ export class RpcServer {
         clearTimeout(pending.timer);
         pendingBodies.delete(bodyStreamId);
         pendingBodyBytes -= pending.bytes;
+        if (pending.trafficClass !== trafficClass) {
+          entry.settle(
+            new Error(
+              `protocol violation: upload stream ${bodyStreamId} arrived on ` +
+                `${pending.trafficClass}, declared ${trafficClass}`
+            )
+          );
+          return body;
+        }
         for (const frame of pending.frames) {
           if (!inboundBodies.has(bodyStreamId)) break;
-          deliverBodyFrame(bodyStreamId, frame.type, frame.payload);
+          deliverBodyFrame(trafficClass, bodyStreamId, frame.type, frame.payload);
         }
       }
       return body;
     };
     const deliverBodyFrame = (
+      trafficClass: SessionStreamTrafficClass,
       streamId: number,
       type: StreamFrameType,
       payload: Uint8Array
     ): void => {
       const entry = inboundBodies.get(streamId);
       if (!entry) return; // settled under a pre-open flush — drop
+      if (entry.trafficClass !== trafficClass) {
+        entry.settle(
+          new Error(
+            `protocol violation: upload stream ${streamId} arrived on ${trafficClass}, ` +
+              `declared ${entry.trafficClass}`
+          )
+        );
+        return;
+      }
       if (type === FRAME_DATA) {
         if (payload.byteLength === 0) return;
         try {
@@ -5279,15 +5321,15 @@ export class RpcServer {
     // pipe. Reset generation-owned state while retaining the subscription.
     pipe.onDown?.((reason) => resetPipe(reason));
 
-    pipe.onBulkFrame((streamId, type, payload) => {
+    pipe.onStreamFrame((trafficClass, streamId, type, payload) => {
       if (this.isShuttingDown()) return;
       if (inboundBodies.has(streamId)) {
-        deliverBodyFrame(streamId, type, payload);
+        deliverBodyFrame(trafficClass, streamId, type, payload);
         return;
       }
       // No registered body: either the frame beat its stream-open across the
       // channel boundary (buffer it) or the id is retired (drop, inside).
-      bufferPreOpenFrame(streamId, type, payload);
+      bufferPreOpenFrame(trafficClass, streamId, type, payload);
     });
 
     pipe.onControl((data) => {
@@ -5381,7 +5423,8 @@ export class RpcServer {
             // payload is the UTF-8 JSON `ErrorFramePayload` the client's
             // decodeFramedStream/parseErrorFrame expects.
             void pipe
-              .writeBulkFrame(
+              .writeStreamFrame(
+                frame.trafficClass,
                 frame.streamId,
                 FRAME_ERROR,
                 encoder.encode(
@@ -5399,7 +5442,7 @@ export class RpcServer {
             return;
           }
           const requestId = (frame.envelope.message as { requestId?: string }).requestId;
-          if (requestId) shim.registerStream(requestId, frame.streamId);
+          if (requestId) shim.registerStream(requestId, frame.streamId, frame.trafficClass);
           // Upload path (plan §1.6): a declared bodyStreamId routes inbound
           // bulk DATA/END/ERROR frames into a per-request body stream the
           // dispatch consumes (shim.takeInboundBody). The client SENDS the
@@ -5409,7 +5452,7 @@ export class RpcServer {
           // flushes them, in order, into the body here.
           if (requestId && typeof frame.bodyStreamId === "number") {
             const bodyStreamId = frame.bodyStreamId;
-            const body = registerInboundBody(bodyStreamId);
+            const body = registerInboundBody(bodyStreamId, frame.trafficClass);
             shim.registerInboundBody(requestId, body, () =>
               inboundBodies
                 .get(bodyStreamId)

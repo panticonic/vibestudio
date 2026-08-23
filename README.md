@@ -83,6 +83,10 @@ npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030
 Remote clients pair over WebRTC; the signaling
 endpoint is only used to rendezvous, not to carry workspace data. See
 [docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
+Each workspace reach uses one peer connection with prioritized control,
+interactive, and bulk lanes; immutable initial panel assets are verified and
+cached through one bundled transfer. See
+[docs/architecture/remote-transport-qos.md](docs/architecture/remote-transport-qos.md).
 The hosted signaling service (`wss://signal.vibestudio.app`) is used by default;
 self-hosting is optional.
 

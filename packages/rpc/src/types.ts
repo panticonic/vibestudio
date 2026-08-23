@@ -339,7 +339,15 @@ export interface RpcStreamOptions {
    * Other transports throw; bodies never silently fall back to base64-in-args.
    */
   body?: ReadableStream<Uint8Array> | null;
+  /**
+   * Transport scheduling intent. Interactive is the default for subscriptions
+   * and ordinary RPC bodies; immutable artifacts and explicit large transfers
+   * opt into bulk. This is QoS only and grants no authority.
+   */
+  trafficClass?: RpcStreamTrafficClass;
 }
+
+export type RpcStreamTrafficClass = "interactive" | "bulk";
 
 export interface RpcCaller {
   call<T = unknown>(
@@ -408,7 +416,8 @@ export interface EnvelopeRpcTransport {
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
     body?: ReadableStream<Uint8Array> | null,
-    headTimeoutMs?: number
+    headTimeoutMs?: number,
+    trafficClass?: RpcStreamTrafficClass
   ): Promise<Response>;
   /**
    * Streaming variant returning the decoded head + raw `ReadableStream<Uint8Array>`
@@ -420,7 +429,8 @@ export interface EnvelopeRpcTransport {
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
     body?: ReadableStream<Uint8Array> | null,
-    headTimeoutMs?: number
+    headTimeoutMs?: number,
+    trafficClass?: RpcStreamTrafficClass
   ): Promise<DecodedFramedStream>;
   /**
    * UPLOAD-ONLY first-class hop for panel shell bridges (plan §1.6). A bridge

@@ -71,6 +71,18 @@ export interface ServedAsset {
   body: Buffer;
 }
 
+export interface VerifiedCacheEntry {
+  cacheKey: string;
+  bytes: Uint8Array;
+  /** SHA-256 of the exact stored bytes (compressed representation when gzip). */
+  payloadDigest: string;
+  status?: number;
+  statusText?: string;
+  gzip: boolean;
+  contentType: string;
+  replayHeaders?: Record<string, string>;
+}
+
 export type ServeOutcome =
   /** Served from disk hit or freshly persisted (buffered). */
   | { kind: "asset"; asset: ServedAsset }
@@ -196,6 +208,75 @@ export class AssetDiskCache {
       this.inflight.delete(cacheKey);
       throw err;
     }
+  }
+
+  /** Read an entry without opening a remote fetch. */
+  async get(cacheKey: string): Promise<ServedAsset | null> {
+    if (!this.ready) throw new Error("AssetDiskCache.init() not called");
+    return this.readByPath(cacheKey);
+  }
+
+  /** Cheap manifest planning probe; verifies both blob and sidecar still exist. */
+  async has(cacheKey: string): Promise<boolean> {
+    if (!this.ready) throw new Error("AssetDiskCache.init() not called");
+    const entry = this.index.get(cacheKey);
+    if (!entry) return false;
+    try {
+      await Promise.all([
+        fsp.access(path.join(this.blobsDir, entry.digest)),
+        fsp.access(path.join(this.metadataDir, `${entry.metadataKey}.json`)),
+      ]);
+      return true;
+    } catch {
+      this.index.delete(cacheKey);
+      return false;
+    }
+  }
+
+  /**
+   * Atomically publish a verified bundle. No index path becomes visible until
+   * every record's payload digest has been checked and every blob/sidecar has
+   * been written, so a corrupt or truncated bundle publishes nothing.
+   */
+  async putVerifiedBatch(entries: readonly VerifiedCacheEntry[]): Promise<void> {
+    if (!this.ready) throw new Error("AssetDiskCache.init() not called");
+    const prepared = entries.map((entry) => {
+      const body = Buffer.from(entry.bytes);
+      if (body.byteLength > this.maxBytes) throw new CachePopulationTooLargeError(this.maxBytes);
+      const actual = createHash("sha256").update(body).digest("hex");
+      if (actual !== entry.payloadDigest) {
+        throw new Error(
+          `cache payload digest mismatch for ${entry.cacheKey}: expected ${entry.payloadDigest}, got ${actual}`
+        );
+      }
+      const metadataKey = createHash("sha256").update(entry.cacheKey).digest("hex");
+      const sidecar: Sidecar = {
+        status: entry.status ?? 200,
+        statusText: entry.statusText ?? "OK",
+        gzip: entry.gzip,
+        contentType: entry.contentType,
+        replayHeaders: entry.replayHeaders ?? {},
+        size: body.byteLength,
+      };
+      return { entry, body, actual, metadataKey, sidecar };
+    });
+    await this.enqueueWrite(async () => {
+      for (const item of prepared) {
+        await this.writeBlobIfAbsent(path.join(this.blobsDir, item.actual), item.body);
+        await this.writeJsonAtomic(
+          path.join(this.metadataDir, `${item.metadataKey}.json`),
+          item.sidecar
+        );
+      }
+      for (const item of prepared) {
+        this.index.set(item.entry.cacheKey, {
+          digest: item.actual,
+          metadataKey: item.metadataKey,
+        });
+      }
+      await this.writeIndex();
+      await this.prune();
+    });
   }
 
   /** Current path→digest index size (test/observability helper). */

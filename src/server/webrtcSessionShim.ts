@@ -33,6 +33,7 @@ import {
   SESSION_ROUTED_RESPONSE_ERROR,
   SESSION_RPC,
   type SessionControlFrame,
+  type SessionStreamTrafficClass,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
@@ -58,23 +59,24 @@ export interface PipeChannels {
    * signal a stream producer must await — and carries whether it reached the
    * channel at all: `'dropped'` means the pipe went down with parts unsent.
    */
-  writeBulkFrame(
+  writeStreamFrame(
+    trafficClass: SessionStreamTrafficClass,
     streamId: number,
     type: StreamFrameType,
     payload: Uint8Array
   ): Promise<EnqueueOutcome>;
   /** Discard any queued-but-unsent bulk frames for one stream (cancellation). */
-  dropBulkStream(streamId: number): void;
-  /** Bulk bytes accepted but not yet sent (whole pipe, or one stream). */
-  bulkPendingBytes(streamId?: number): number;
+  dropStream(trafficClass: SessionStreamTrafficClass, streamId: number): void;
+  /** Stream bytes accepted but not yet sent (whole pipe, or one class/stream). */
+  streamPendingBytes(trafficClass?: SessionStreamTrafficClass, streamId?: number): number;
   /** Whole-pipe control-channel buffered amount (shared across sessions). */
   controlBufferedAmount?(): number;
 }
 
 /** Shared stream-id ⇄ requestId maps so server stream-frames hit the right bulk id. */
 export interface StreamIdMaps {
-  idByRequest: Map<string, number>;
-  requestByStream: Map<number, string>;
+  idByRequest: Map<string, { streamId: number; trafficClass: SessionStreamTrafficClass }>;
+  requestByStream: Map<number, { requestId: string; trafficClass: SessionStreamTrafficClass }>;
 }
 
 const WS_OPEN = 1;
@@ -193,8 +195,9 @@ export class SessionWebSocketShim {
     payload: Uint8Array
   ): Promise<void> | false {
     if (this.state !== WS_OPEN) return false;
-    const streamId = this.streams.idByRequest.get(requestId);
-    if (streamId === undefined) return false;
+    const route = this.streams.idByRequest.get(requestId);
+    if (!route) return false;
+    const { streamId } = route;
 
     // END carries the byte count the SENDER read, so claiming it after part of
     // the body never reached the wire hands the receiver an integrity failure
@@ -272,9 +275,13 @@ export class SessionWebSocketShim {
 
   /** Record a client-allocated stream id (from stream-open) so outbound stream
    * frames can be re-keyed onto the bulk channel. */
-  registerStream(requestId: string, streamId: number): void {
-    this.streams.idByRequest.set(requestId, streamId);
-    this.streams.requestByStream.set(streamId, requestId);
+  registerStream(
+    requestId: string,
+    streamId: number,
+    trafficClass: SessionStreamTrafficClass
+  ): void {
+    this.streams.idByRequest.set(requestId, { streamId, trafficClass });
+    this.streams.requestByStream.set(streamId, { requestId, trafficClass });
   }
 
   /** Whether this request arrived through `stream-open` and owns a bulk id. */
@@ -329,9 +336,10 @@ export class SessionWebSocketShim {
    * next `dropBulkStream` (frameScheduler.dropKey) would discard it unsent.
    */
   cancelStream(streamId: number): void {
-    const requestId = this.streams.requestByStream.get(streamId);
-    if (requestId === undefined) return;
-    this.pipe.dropBulkStream(streamId);
+    const route = this.streams.requestByStream.get(streamId);
+    if (!route) return;
+    const { requestId, trafficClass } = route;
+    this.pipe.dropStream(trafficClass, streamId);
     this.reapStream(requestId, streamId);
     this.deliverInbound({
       type: "ws:rpc",
@@ -389,9 +397,11 @@ export class SessionWebSocketShim {
     type: StreamFrameType,
     payload: Uint8Array
   ): Promise<EnqueueOutcome> {
+    const route = this.streams.requestByStream.get(streamId);
+    if (!route) return Promise.resolve("dropped");
     const size = payload.byteLength;
     this.pendingBulkBytes += size;
-    const written = this.pipe.writeBulkFrame(streamId, type, payload);
+    const written = this.pipe.writeStreamFrame(route.trafficClass, streamId, type, payload);
     const settle = (): void => {
       this.pendingBulkBytes -= size;
     };

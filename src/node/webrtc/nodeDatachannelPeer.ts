@@ -48,7 +48,10 @@ import type {
   RtcPeerConnectionLike,
   RtcSessionDescription,
 } from "@vibestudio/rpc/transports/webrtcPeer";
-import { parseSdpFingerprint } from "@vibestudio/rpc/transports/webrtcPeer";
+import {
+  MAX_ASSOCIATION_STREAM_WINDOW,
+  parseSdpFingerprint,
+} from "@vibestudio/rpc/transports/webrtcPeer";
 import { certFileFingerprint } from "./cert.js";
 
 export { pemFingerprint } from "./cert.js";
@@ -447,6 +450,10 @@ export class WrappedDataChannel implements RtcDataChannelLike {
   get maxMessageSize(): number {
     // libdatachannel reports 262144 (256 KB) — the chunk cap the bulk channel honors.
     return this.dc.maxMessageSize();
+  }
+
+  get safeReceiveWindowBytes(): number {
+    return MAX_ASSOCIATION_STREAM_WINDOW;
   }
 
   send(data: Uint8Array): void {
