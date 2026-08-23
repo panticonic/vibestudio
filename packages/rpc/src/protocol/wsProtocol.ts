@@ -2,6 +2,12 @@ import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
 
+/** Stable machine-readable authentication failures that clients can recover from. */
+export type RpcAuthenticationFailureCode =
+  | "invalid_credential"
+  | "admin_credential"
+  | "pairing_invalid_or_expired";
+
 /** Durable credential issued exactly once when a device pairing code is redeemed. */
 export interface DeviceCredential {
   deviceId: string;
@@ -84,6 +90,7 @@ interface WsAuthResultBase {
   /** Present with a freshly issued credential; never repeated on refresh auth. */
   pairingContext?: PairingContext;
   error?: string;
+  errorCode?: RpcAuthenticationFailureCode;
 }
 
 export interface WsAuthSuccessResultMessage extends WsAuthResultBase {

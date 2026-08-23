@@ -28,7 +28,12 @@
  */
 
 import type { AuthenticatedCaller, CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
-import type { ClientPlatform, DeviceCredential, PairingContext } from "./wsProtocol.js";
+import type {
+  ClientPlatform,
+  DeviceCredential,
+  PairingContext,
+  RpcAuthenticationFailureCode,
+} from "./wsProtocol.js";
 
 /** v2 = `hello` preamble negotiation (§1.1) + self-describing bulk mux (§1.2).
  * Pre-release: v1 peers are not served — a `hello` with `proto !== 2` is a
@@ -107,6 +112,7 @@ export interface SessionOpenResultFrame {
   /** Present with a freshly issued credential; never repeated on refresh auth. */
   pairingContext?: PairingContext;
   error?: string;
+  errorCode?: RpcAuthenticationFailureCode;
   /** Terminal close codes (4090 lease denied, 4001 revoked, …) — do NOT reconnect this session. */
   terminal?: boolean;
 }

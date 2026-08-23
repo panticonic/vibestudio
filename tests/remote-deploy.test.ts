@@ -252,7 +252,7 @@ describe("remote-deploy CLI", () => {
   });
 
   it("prints only a live protected invite from a ready default workspace", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-managed-pairing-"));
     const readyFile = path.join(root, "hub-ready.json");
     const payload = managedReady(managedInvite());
@@ -277,6 +277,9 @@ describe("remote-deploy CLI", () => {
     await expect(showManagedPairing({ readyFile, fetchImpl })).resolves.toMatchObject({
       serverBootId: payload.serverBootId,
     });
+    expect(log).toHaveBeenCalledWith(
+      "  One-time:   Pairs one device; accepted links cannot be replayed."
+    );
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     fs.rmSync(root, { recursive: true, force: true });
   });

@@ -229,6 +229,16 @@ journal; use `vibestudio remote deploy pairing <target>` to display the current
 protected link and QR. Service logs are diagnostic output, not a pairing
 interface.
 
+Single use is replay protection, not an arbitrary timeout: the URL is a bearer
+secret, so a copy must not remain able to add devices after its intended device
+has paired. Desktop pairing therefore preflights OS-backed encrypted credential
+storage before redemption. A preflight error explicitly says **the pairing link
+was not used** and may be retried. A server rejection explicitly says the link
+was already used or expired and directs the user to request a fresh invite.
+If credential persistence fails after acceptance despite the preflight, the
+desktop says that the link is now used instead of suggesting a retry that cannot
+succeed.
+
 The hub control ingress presents a persistent DTLS identity at:
 
 ```text

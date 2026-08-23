@@ -1,6 +1,7 @@
 export type StartupConnectionPhaseId =
   | "start-local-server"
   | "connect-server-and-workspace"
+  | "check-credential-storage"
   | "redeem-pairing-link"
   | "resolve-workspace"
   | "connect-workspace"
@@ -28,6 +29,7 @@ export const RETURNING_REMOTE_STARTUP_CONNECTION_PHASES = [
 ] as const satisfies readonly StartupConnectionPhase[];
 
 export const FRESH_REMOTE_STARTUP_CONNECTION_PHASES = [
+  { id: "check-credential-storage", label: "Check secure credential storage" },
   { id: "redeem-pairing-link", label: "Redeem pairing link" },
   { id: "resolve-workspace", label: "Resolve workspace" },
   { id: "connect-workspace", label: "Connect to workspace" },
@@ -72,6 +74,7 @@ function isStartupConnectionPhaseId(value: unknown): value is StartupConnectionP
   return (
     value === "start-local-server" ||
     value === "connect-server-and-workspace" ||
+    value === "check-credential-storage" ||
     value === "redeem-pairing-link" ||
     value === "resolve-workspace" ||
     value === "connect-workspace" ||

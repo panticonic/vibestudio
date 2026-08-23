@@ -110,6 +110,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
         type: "ws:auth-result",
         success: false,
         error: "Panel runtime is leased by Desktop",
+        errorCode: "pairing_invalid_or_expired",
       } satisfies WsServerMessage)
     );
     expect(h.control[0]!.frame).toMatchObject({
@@ -117,6 +118,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
       success: false,
       terminal: true,
       error: /leased/ as unknown as string,
+      errorCode: "pairing_invalid_or_expired",
     });
   });
 

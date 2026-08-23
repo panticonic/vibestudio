@@ -4163,6 +4163,35 @@ describe("RpcServer caller identity", () => {
     );
   });
 
+  it("reports an already-used or expired pairing link without exposing credential details", async () => {
+    const rejection = Object.assign(new Error("internal pairing lookup detail"), {
+      code: "PAIRING_CODE_INVALID_OR_EXPIRED",
+    });
+    const { server } = createServer({
+      redeemPairingCredential: async () => Promise.reject(rejection),
+    });
+    const ws = createTestWs();
+    testServer(server).handleConnection(ws);
+
+    ws.emitMessage({
+      type: "ws:auth",
+      contractVersion: 2,
+      token: "used-pairing-code",
+      connectionId: "pairing-conn",
+    });
+    await flushAsync();
+
+    const authResults = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)));
+    expect(authResults).toContainEqual({
+      type: "ws:auth-result",
+      success: false,
+      errorCode: "pairing_invalid_or_expired",
+      error:
+        "This pairing link has already been used or has expired. Pairing links are one-time to prevent replay; request a fresh link from the server or a paired administrator.",
+    });
+    expect(JSON.stringify(authResults)).not.toContain("internal pairing lookup detail");
+  });
+
   it("rolls back every admission registry when an asynchronous auth task fails", async () => {
     const { server, tokenManager } = createServer({
       userSubjectSource: {

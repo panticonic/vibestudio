@@ -19,7 +19,11 @@ import type { ReconnectProgress } from "@vibestudio/rpc/transports/webrtcClient"
 import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
-import { saveDeviceCredential, type StoredRemote } from "./services/deviceCredentialStore.js";
+import {
+  preflightDeviceCredentialStoreForPairing,
+  saveDeviceCredential,
+  type StoredRemote,
+} from "./services/deviceCredentialStore.js";
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -541,6 +545,8 @@ async function establishFreshPairSession(
     FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
     args.onStartupProgress
   );
+  phase("check-credential-storage");
+  preflightDeviceCredentialStoreForPairing();
   phase("redeem-pairing-link");
   const controlClient = await connectRemoteViaWebRtc(pairing, {
     // The server assigns the real `shell:<deviceId>` principal when it redeems the
@@ -569,7 +575,7 @@ async function establishFreshPairSession(
           refreshToken: credential.refreshToken,
           rotatedAt: Date.now(),
         };
-        saveDeviceCredential(currentStored);
+        persistFreshDeviceCredential(currentStored);
       }
     },
   });
@@ -604,7 +610,7 @@ async function establishFreshPairSession(
       ...(label ? { label } : {}),
       pairedAt: Date.now(),
     };
-    saveDeviceCredential(currentStored);
+    persistFreshDeviceCredential(currentStored);
     const auth = () => {
       const active = currentStored;
       if (!active) throw new Error("Fresh pairing credential was not committed");
@@ -622,7 +628,7 @@ async function establishFreshPairSession(
           refreshToken: credential.refreshToken,
           rotatedAt: Date.now(),
         };
-        saveDeviceCredential(currentStored);
+        persistFreshDeviceCredential(currentStored);
       },
       onConnectionStatusChanged: args.onConnectionStatusChanged,
       onReconnectProgress: args.onReconnectProgress,
@@ -668,6 +674,18 @@ function storedReach(
     v: reach.v,
     ice: reach.ice,
   };
+}
+
+function persistFreshDeviceCredential(credential: StoredRemote): void {
+  try {
+    saveDeviceCredential(credential);
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `The server accepted the pairing link, but Vibestudio could not save the issued device credential: ${cause} The pairing link is now used; fix local credential storage and request a fresh link.`,
+      { cause: error }
+    );
+  }
 }
 
 /**

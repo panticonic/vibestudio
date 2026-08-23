@@ -660,7 +660,9 @@ describe("transport-specific credential redemption", () => {
     expect(
       result && "deviceCredential" in result ? result.deviceCredential.deviceId : null
     ).toMatch(/^dev_/);
-    await expect(redeem(code, {})).resolves.toBeNull();
+    await expect(redeem(code, {})).rejects.toMatchObject({
+      code: "PAIRING_CODE_INVALID_OR_EXPIRED",
+    });
     expect(deviceAuthStore.listDevices()).toHaveLength(1);
   });
 

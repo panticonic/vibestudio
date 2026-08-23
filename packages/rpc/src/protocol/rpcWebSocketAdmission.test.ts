@@ -58,6 +58,33 @@ describe("RPC WebSocket admission protocol", () => {
     ).rejects.toThrow("returned malformed HTTP 401");
   });
 
+  it("preserves the actionable one-time pairing rejection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: false,
+              code: "pairing_invalid_or_expired",
+              message: "This pairing link has already been used or has expired.",
+            }),
+            { status: 401 }
+          )
+      )
+    );
+
+    await expect(
+      requestRpcWebSocketAdmission("https://server.example/rpc/ws-admission", {
+        credential: "used-pairing-code",
+      })
+    ).resolves.toEqual({
+      ok: false,
+      code: "pairing_invalid_or_expired",
+      message: "This pairing link has already been used or has expired.",
+    });
+  });
+
   it("normalizes an empty optional label to an absent header", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>

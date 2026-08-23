@@ -265,6 +265,10 @@ interface ServerOpts {
   sessionDirty?: boolean;
   deviceCredential?: { deviceId: string; refreshToken: string };
   pairingContext?: { workspaceId: string };
+  openFailure?: {
+    error: string;
+    errorCode: "pairing_invalid_or_expired";
+  };
   /** Reply open-result success to `open` frames (default true). */
   respondToOpen?: boolean;
   /** Reply pong to pings (default true). */
@@ -377,6 +381,16 @@ class Fabric {
     switch (frame.t) {
       case "open":
         if (this.opts.respondToOpen === false) return;
+        if (this.opts.openFailure) {
+          this.sendControl({
+            t: "open-result",
+            sid: frame.sid,
+            success: false,
+            terminal: true,
+            ...this.opts.openFailure,
+          });
+          return;
+        }
         this.sendControl({
           t: "open-result",
           sid: frame.sid,
@@ -1838,6 +1852,24 @@ describe("WebRTC transport — reconnect liveness (bug #2)", () => {
 // ---------------------------------------------------------------------------
 
 describe("WebRTC transport — session hardening", () => {
+  it("preserves an actionable pairing failure code and message", async () => {
+    const fabric = new Fabric({
+      openFailure: {
+        error: "This pairing link has already been used or has expired.",
+        errorCode: "pairing_invalid_or_expired",
+      },
+    });
+    const transport = makeTransport(fabric);
+    await transport.connect();
+    const session = transport.openSession({ getToken: () => "used-pairing-code" });
+
+    await expect(session.ready!()).rejects.toMatchObject({
+      message: "This pairing link has already been used or has expired.",
+      code: "pairing_invalid_or_expired",
+    });
+    await transport.close();
+  });
+
   it("gives two label-only sessions DISTINCT sids so neither silently closes the other (bug #9)", () => {
     const fabric = new Fabric();
     const transport = makeTransport(fabric);

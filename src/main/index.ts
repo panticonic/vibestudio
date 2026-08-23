@@ -25,6 +25,7 @@ import {
   resolveStartupErrorPaths,
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
+import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
 import { cleanupNodeDatachannel } from "../node/webrtc/nodeDatachannelPeer.js";
 import {
   copyPendingNpmUpdateCommand,
@@ -3325,13 +3326,16 @@ app.on("ready", async () => {
     if (!IS_HEADLESS_HOST && applicationWindow.isOpen) {
       const message = error instanceof Error ? error.message : String(error);
       const remoteStartupFailed = remotePairedAtLaunch || pendingRemotePairing !== null;
+      const remoteFailure = remoteStartupFailed
+        ? remoteStartupFailurePresentation(error, pendingRemotePairing !== null)
+        : null;
       bootstrapWorkspaceRpcReady = false;
       bootstrapStartupError = {
         message: remoteStartupFailed
-          ? `Could not connect to the paired server: ${message}`
+          ? remoteFailure!.message
           : `Could not start the workspace: ${message}`,
         detail: remoteStartupFailed
-          ? "The saved pairing was kept unless the server rejected it. Check the server or choose another workspace."
+          ? remoteFailure!.detail
           : "Retry the startup, or choose another server or workspace.",
         ...(bootstrapConnectionKind === "local" && startupMode.kind === "local"
           ? { logPath: getLocalHubLogPath() }
