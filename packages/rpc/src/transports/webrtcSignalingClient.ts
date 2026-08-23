@@ -157,6 +157,57 @@ function decodeMessageData(data: unknown): string | null {
   return null;
 }
 
+/**
+ * Reduce browser, Node `ws`, and React Native websocket failures to the one
+ * diagnostic fact operators can act on. Node's WHATWG implementation puts an
+ * `AggregateError` (including sockets, request internals, listeners, and the
+ * full room URL) on `ErrorEvent.error`; logging that event verbatim turns one
+ * recoverable timeout into hundreds of lines and discloses the room id. The
+ * transport still receives the failure through `onClosed` and retries it; this
+ * formatter only defines the public diagnostic boundary.
+ */
+function networkErrorCode(error: unknown, depth = 0): string | null {
+  if (depth > 3 || error === null || typeof error !== "object") return null;
+  if ("code" in error && typeof (error as { code?: unknown }).code === "string") {
+    const code = (error as { code: string }).code.trim();
+    if (/^[A-Z][A-Z0-9_]{1,63}$/u.test(code)) return code;
+  }
+  if ("cause" in error) {
+    const causeCode = networkErrorCode((error as { cause?: unknown }).cause, depth + 1);
+    if (causeCode) return causeCode;
+  }
+  if (error instanceof AggregateError) {
+    for (const child of error.errors) {
+      const childCode = networkErrorCode(child, depth + 1);
+      if (childCode) return childCode;
+    }
+  }
+  return null;
+}
+
+class SignalingIceServersResponseError extends Error {}
+
+function websocketErrorSummary(event: unknown): string {
+  const nestedError =
+    event !== null && typeof event === "object" && "error" in event
+      ? (event as { error?: unknown }).error
+      : event;
+  const nestedCode = networkErrorCode(nestedError);
+  if (nestedCode) return nestedCode;
+  if (nestedError !== null && typeof nestedError === "object") {
+    const message =
+      "message" in nestedError && typeof (nestedError as { message?: unknown }).message === "string"
+        ? (nestedError as { message: string }).message.trim()
+        : "";
+    if (message) return message;
+  }
+  if (event !== null && typeof event === "object" && "message" in event) {
+    const message = (event as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  return "unknown network error";
+}
+
 export function createSignalingClient(options: SignalingClientOptions): SignalingClient {
   const { room, sig, role } = options;
   const log = options.logPrefix ?? "[signaling-client]";
@@ -184,6 +235,7 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
 
   let closed = false;
   let closeReason: string | undefined;
+  let lastSocketError: string | undefined;
 
   // Out-of-band keepalive state. The DO auto-responds to `{"t":"ping"}` with a
   // pong even while hibernated, so a live socket always answers within the
@@ -269,12 +321,22 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
     // transport's expected teardown exception only obscures real signaling
     // failures during ordered shutdown.
     if (closed && closeReason === "client-closed") return;
-    console.warn(`${log} websocket error`, ev);
-    if (!opened) rejectOpen(new Error("Signaling websocket failed before open"));
+    lastSocketError = websocketErrorSummary(ev);
+    console.warn(
+      `${log} websocket ${opened ? "transport error" : "connection failed before open"}: ${lastSocketError}`
+    );
+    if (!opened) {
+      rejectOpen(new Error(`Signaling websocket failed before open: ${lastSocketError}`));
+    }
   });
 
   ws.addEventListener("close", (ev) => {
-    const reason = closeReason ?? ev?.reason ?? `code ${ev?.code ?? "?"}`;
+    const peerReason = typeof ev?.reason === "string" ? ev.reason.trim() : "";
+    const reason =
+      closeReason ??
+      (peerReason ||
+        (lastSocketError ? `signaling websocket error: ${lastSocketError}` : null) ||
+        `code ${ev?.code ?? "?"}`);
     if (!opened) rejectOpen(new Error(`Signaling websocket closed before open: ${reason}`));
     fireClosed(reason);
   });
@@ -423,11 +485,15 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
         });
         if (!res.ok) {
           const detail = await res.text().catch(() => "");
-          throw new Error(`Signaling ice-servers ${res.status}: ${detail}`.trim());
+          throw new SignalingIceServersResponseError(
+            `Signaling ice-servers ${res.status}: ${detail}`.trim()
+          );
         }
         const body = (await res.json()) as IceServersResponse;
         if (!body || !Array.isArray(body.iceServers)) {
-          throw new Error("Signaling ice-servers response missing iceServers[]");
+          throw new SignalingIceServersResponseError(
+            "Signaling ice-servers response missing iceServers[]"
+          );
         }
         return body.iceServers;
       } catch (error) {
@@ -436,7 +502,9 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
             `Signaling ice-servers fetch timed out after ${ICE_SERVERS_FETCH_TIMEOUT_MS}ms`
           );
         }
-        throw error;
+        if (error instanceof SignalingIceServersResponseError) throw error;
+        const code = networkErrorCode(error);
+        throw new Error(`Signaling ice-servers request failed${code ? `: ${code}` : ""}`);
       } finally {
         clearTimeout(timer);
       }

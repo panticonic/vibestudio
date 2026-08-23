@@ -989,9 +989,11 @@ describe("AppHost", () => {
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
 
     await expect(host.ensureElectronReady()).resolves.toMatchObject({
-      ready: false,
+      ready: true,
       source: "apps/shell",
       appId: "@workspace-apps/shell",
+      buildKey: "app-key",
+      artifactRoute: "/_a/app-key/index.html",
     });
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -1074,7 +1076,7 @@ describe("AppHost", () => {
     );
   });
 
-  it("reports a prepared Electron shell as not ready until generic activation", async () => {
+  it("reports an approved, prepared Electron shell as serveable before generic activation", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
 
@@ -1082,17 +1084,14 @@ describe("AppHost", () => {
     const readiness = await host.ensureElectronReady();
 
     expect(readiness).toMatchObject({
-      ready: false,
+      ready: true,
       source: "apps/shell",
       appId: "@workspace-apps/shell",
-    });
-    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
-    await host.activateRelease("@workspace-apps/shell");
-    await expect(host.ensureElectronReady()).resolves.toMatchObject({
-      ready: true,
       buildKey: "app-key",
       artifactRoute: "/_a/app-key/index.html",
     });
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
+    expect(host.registry.get("@workspace-apps/shell")?.status).toBe("available");
   });
 
   it("advertises Electron shell artifacts as gateway routes", async () => {

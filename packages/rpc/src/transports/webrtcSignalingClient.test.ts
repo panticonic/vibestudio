@@ -328,6 +328,35 @@ describe("createSignalingClient", () => {
     client.close();
   });
 
+  it("reports a bounded ice-servers network error without exposing the room URL", async () => {
+    const hub = new FakeSignalingHub();
+    const cause = Object.assign(new Error("connect ETIMEDOUT 192.0.2.1:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(cause, {
+          requestUrl: "https://sig.test/room/secret-room-id/ice-servers",
+        }),
+      });
+    }) as unknown as typeof fetch;
+    const client = createSignalingClient({
+      room: "secret-room-id",
+      role: "offerer",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl,
+    });
+
+    const failure = await client.fetchIceServers!().catch((error) => error);
+    expect(failure).toMatchObject({
+      message: "Signaling ice-servers request failed: ETIMEDOUT",
+    });
+    expect(JSON.stringify(failure)).not.toContain("secret-room-id");
+    expect(JSON.stringify(failure)).not.toContain("192.0.2.1");
+    client.close();
+  });
+
   it("aborts a HUNG ice-servers fetch after the deadline so the pipeline can't wedge (bug #5)", async () => {
     vi.useFakeTimers();
     const hub = new FakeSignalingHub();
@@ -498,6 +527,38 @@ describe("createSignalingClient", () => {
     );
 
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reports a concise pre-open network failure without dumping the ErrorEvent or room URL", async () => {
+    const { WS, instances } = controllableWsCtor();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = createSignalingClient({
+      room: "secret-room-id",
+      sig: "https://sig.test",
+      role: "offerer",
+      WebSocketImpl: WS,
+      fetchImpl: okIceFetch([]),
+    });
+    const closedReasons: Array<string | undefined> = [];
+    client.onClosed((reason) => closedReasons.push(reason));
+
+    const aggregate = new AggregateError(
+      [Object.assign(new Error("connect ETIMEDOUT 192.0.2.1:443"), { code: "ETIMEDOUT" })],
+      "",
+      { cause: "wss://sig.test/room/secret-room-id?role=offerer" }
+    );
+    Object.assign(aggregate, { code: "ETIMEDOUT" });
+    instances[0]!.fireError(aggregate);
+    instances[0]!.close();
+    await flush();
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      "[signaling-client] websocket connection failed before open: ETIMEDOUT"
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-room-id");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("192.0.2.1");
+    expect(closedReasons).toEqual(["signaling websocket error: ETIMEDOUT"]);
   });
 
   it("pings on the keepalive interval and stays open while pongs arrive", () => {

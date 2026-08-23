@@ -1350,7 +1350,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       .find(
         (item) =>
           item.target === "electron" &&
-          item.status === "running" &&
+          isCapabilityActiveStatus(item.status) &&
           normalizeRepoPath(item.source.repo) === normalizeRepoPath(candidate.source) &&
           item.activeBundleKey
       );
@@ -1363,7 +1363,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         ready: false,
         source: candidate.source,
         appId: candidate.name,
-        reason: "Selected Electron app does not have an active HTML build",
+        reason: "Selected Electron app does not have a prepared HTML build",
         details: [`${candidate.source}: ${candidate.status}`],
       };
     }
