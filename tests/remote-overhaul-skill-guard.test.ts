@@ -43,7 +43,9 @@ describe("remote/mobile overhaul skill coverage", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
-    expect(pkg.scripts?.["smoke:full"]).toBe("node scripts/full-system-smoke.mjs");
+    expect(pkg.scripts?.["smoke:full"]).toBe(
+      "node --import tsx scripts/full-system-smoke.mjs"
+    );
     expect(fs.existsSync(path.join(process.cwd(), "scripts/full-system-smoke.mjs"))).toBe(true);
   });
 
