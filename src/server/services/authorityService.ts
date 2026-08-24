@@ -109,7 +109,13 @@ export function createAuthorityService(deps: {
           deps.acquisitions.requestForTarget({
             targetSubject,
             authorityPlanDigest: input.authorityPlanDigest,
-            operationKey: `${leaf.service}.${leaf.method}:${leaf.capabilityDefinitionDigest}`,
+            operationKey: canonicalJson({
+              service: leaf.service,
+              method: leaf.method,
+              capability: leaf.capability,
+              capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
+              resource: leaf.resource,
+            }),
             capability: leaf.capability,
             capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
             resource: leaf.resource,
@@ -157,7 +163,13 @@ export function createAuthorityService(deps: {
           deps.acquisitions.requestForTarget({
             targetSubject,
             authorityPlanDigest: input.authorityPlanDigest,
-            operationKey: `${leaf.service}.${leaf.method}:${leaf.capabilityDefinitionDigest}`,
+            operationKey: canonicalJson({
+              service: leaf.service,
+              method: leaf.method,
+              capability: leaf.capability,
+              capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
+              resource: leaf.resource,
+            }),
             capability: leaf.capability,
             capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
             resource: leaf.resource,

@@ -507,6 +507,9 @@ export type ClientConfigApprovalResult =
 export type FieldInputApprovalResult = ClientConfigApprovalResult;
 interface QueueWaiter {
   resolve: (decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision) => void;
+  resolveWithProvenance: (
+    resolution: ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
+  ) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -560,7 +563,13 @@ export interface ApprovalQueue {
   discardPreparation?(dedupKey: string): void;
   request(req: UnitInstallReviewQueueRequest): Promise<UnitInstallReviewQueueDecision>;
   request(req: AuthorityApprovalQueueRequest): Promise<AuthorityApprovalQueueDecision>;
-  requestWithHandle?(req: DecisionApprovalQueueRequest): ApprovalQueueRequestHandle;
+  requestWithHandle?<Request extends DecisionApprovalQueueRequest>(
+    req: Request
+  ): ApprovalQueueRequestHandle<
+    Request extends UnitInstallReviewQueueRequest
+      ? UnitInstallReviewQueueDecision
+      : AuthorityApprovalQueueDecision
+  >;
   requestBrowserPermission?(
     req: BrowserPermissionApprovalQueueRequest
   ): Promise<BrowserPermissionApprovalDecision>;
@@ -639,6 +648,13 @@ export interface ApprovalQueueRequestHandle<
 > {
   approvalId: string;
   decision: Promise<Decision>;
+  resolution: Promise<ApprovalQueueResolution<Decision>>;
+}
+
+export interface ApprovalQueueResolution<Decision extends string = ApprovalQueueDecision> {
+  decision: Decision;
+  /** Host-verified human resolver. Absent only for lifecycle/system settlement. */
+  resolver?: ApprovalResolver;
 }
 
 export interface ApprovalQueueWithListeners extends ApprovalQueue {
@@ -1392,6 +1408,7 @@ export function createApprovalQueue(deps: {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
       }
       waiter.resolve("deny");
+      waiter.resolveWithProvenance({ decision: "deny" });
     }
     entry.waiters.clear();
   }
@@ -1414,7 +1431,8 @@ export function createApprovalQueue(deps: {
 
   function settleDecisionEntry(
     entry: QueueEntry,
-    decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision
+    decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision,
+    resolver?: ApprovalResolver
   ): void {
     removeEntry(entry);
     for (const waiter of entry.waiters.values()) {
@@ -1422,6 +1440,7 @@ export function createApprovalQueue(deps: {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
       }
       waiter.resolve(decision);
+      waiter.resolveWithProvenance({ decision, ...(resolver ? { resolver } : {}) });
     }
     entry.waiters.clear();
     for (const waiter of entry.fieldInputWaiters.values()) {
@@ -1447,12 +1466,16 @@ export function createApprovalQueue(deps: {
   function enqueueDecisionWithHandle(req: BrowserPermissionApprovalQueueRequest): {
     approvalId: string;
     decision: Promise<BrowserPermissionApprovalDecision>;
+    resolution: Promise<ApprovalQueueResolution<BrowserPermissionApprovalDecision>>;
   };
   function enqueueDecisionWithHandle(
     req: DecisionApprovalQueueRequest | BrowserPermissionApprovalQueueRequest
   ): {
     approvalId: string;
     decision: Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>;
+    resolution: Promise<
+      ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
+    >;
   } {
     if (
       "credentialId" in req &&
@@ -1517,45 +1540,65 @@ export function createApprovalQueue(deps: {
         throw error;
       }
     }
+    let resolveDecision!: (
+      decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision
+    ) => void;
+    let resolveWithProvenance!: (
+      resolution: ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
+    ) => void;
     const decision = new Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>(
       (resolve) => {
-        const waiterId = bound.nextWaiterId++;
-        const waiter: QueueWaiter = { resolve, signal: req.signal };
-
-        if (req.signal) {
-          const onAbort = () => {
-            const e = entriesById.get(bound.approval.approvalId);
-            if (!e) {
-              resolve("deny");
-              return;
-            }
-            if (e.settlement) return;
-            e.waiters.delete(waiterId);
-            if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
-              if (e.approval.kind === "unit-install-review") {
-                closeLandingChannel(e.approval.approvalId);
-              }
-              removeEntry(e);
-              emitPendingChanged();
-            }
-            resolve("deny");
-          };
-          waiter.onAbort = onAbort;
-          if (req.signal.aborted) {
-            queueMicrotask(onAbort);
-          } else {
-            req.signal.addEventListener("abort", onAbort, { once: true });
-          }
-        }
-
-        bound.waiters.set(waiterId, waiter);
-
-        if (newEntry) {
-          emitPendingChanged();
-        }
+        resolveDecision = resolve;
       }
     );
-    return { approvalId: bound.approval.approvalId, decision };
+    const resolution = new Promise<
+      ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
+    >((resolve) => {
+      resolveWithProvenance = resolve;
+    });
+    {
+      const waiterId = bound.nextWaiterId++;
+      const waiter: QueueWaiter = {
+        resolve: resolveDecision,
+        resolveWithProvenance,
+        signal: req.signal,
+      };
+
+      if (req.signal) {
+        const onAbort = () => {
+          const e = entriesById.get(bound.approval.approvalId);
+          if (!e) {
+            resolveDecision("deny");
+            resolveWithProvenance({ decision: "deny" });
+            return;
+          }
+          if (e.settlement) return;
+          e.waiters.delete(waiterId);
+          if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
+            if (e.approval.kind === "unit-install-review") {
+              closeLandingChannel(e.approval.approvalId);
+            }
+            removeEntry(e);
+            emitPendingChanged();
+          }
+          resolveDecision("deny");
+          resolveWithProvenance({ decision: "deny" });
+        };
+        waiter.onAbort = onAbort;
+        if (req.signal.aborted) {
+          queueMicrotask(onAbort);
+        } else {
+          req.signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+
+      bound.waiters.set(waiterId, waiter);
+
+      if (newEntry) {
+        emitPendingChanged();
+      }
+    }
+    return { approvalId: bound.approval.approvalId, decision, resolution };
   }
 
   function requestDecision(
@@ -1816,7 +1859,7 @@ export function createApprovalQueue(deps: {
           grantScopeStored: granted === "dismiss" ? null : grantScopeFor(granted),
           resolver,
         },
-        (e) => settleDecisionEntry(e, granted)
+        (e) => settleDecisionEntry(e, granted, resolver)
       );
     },
 
@@ -1851,7 +1894,7 @@ export function createApprovalQueue(deps: {
         await settle(
           entry,
           { decision: "dismiss", granted: false, grantScopeStored: null, resolver },
-          (current) => settleDecisionEntry(current, "dismiss")
+          (current) => settleDecisionEntry(current, "dismiss", resolver)
         );
         const subject = installResultSubject(approval);
         return {
@@ -1916,7 +1959,7 @@ export function createApprovalQueue(deps: {
         // an authority-scope question. Version admission is recorded above and
         // in installReviewSelections; callers receive the semantic outcome and
         // decide how their own protected operation is authorized.
-        (current) => settleDecisionEntry(current, "accepted")
+        (current) => settleDecisionEntry(current, "accepted", resolver)
       );
 
       // The decision is recorded; the operation that lands these parts runs
@@ -2018,6 +2061,7 @@ export function createApprovalQueue(deps: {
             waiter.signal.removeEventListener("abort", waiter.onAbort);
           }
           waiter.resolve("deny");
+          waiter.resolveWithProvenance({ decision: "deny" });
         }
         entry.waiters.clear();
         for (const waiter of entry.fieldInputWaiters.values()) {

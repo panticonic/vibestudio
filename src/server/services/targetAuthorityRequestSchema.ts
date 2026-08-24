@@ -1,7 +1,7 @@
 import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 export const TARGET_AUTHORITY_REQUEST_SCHEMA: CanonicalSqliteSchema = {
-  version: 4,
+  version: 5,
   objects: [
     {
       type: "table",
@@ -22,7 +22,6 @@ export const TARGET_AUTHORITY_REQUEST_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE TABLE target_authority_requests (
         request_id TEXT PRIMARY KEY,
         target_subject TEXT NOT NULL,
-        authority_plan_digest TEXT NOT NULL,
         operation_key TEXT NOT NULL,
         capability TEXT NOT NULL,
         resource_json TEXT NOT NULL,
@@ -34,13 +33,28 @@ export const TARGET_AUTHORITY_REQUEST_SCHEMA: CanonicalSqliteSchema = {
         created_at INTEGER NOT NULL,
         settled_at INTEGER,
         grant_id TEXT,
-        UNIQUE(target_subject, authority_plan_digest, operation_key)
+        UNIQUE(target_subject, operation_key)
+      )`,
+    },
+    {
+      type: "table",
+      name: "target_authority_request_plans",
+      sql: `CREATE TABLE target_authority_request_plans (
+        request_id TEXT NOT NULL,
+        authority_plan_digest TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (request_id, authority_plan_digest)
       )`,
     },
     {
       type: "index",
       name: "target_authority_requests_state",
       sql: "CREATE INDEX target_authority_requests_state ON target_authority_requests(state, created_at)",
+    },
+    {
+      type: "index",
+      name: "target_authority_request_plans_plan",
+      sql: "CREATE INDEX target_authority_request_plans_plan ON target_authority_request_plans(authority_plan_digest, request_id)",
     },
   ],
 };

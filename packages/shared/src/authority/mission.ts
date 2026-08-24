@@ -191,6 +191,28 @@ export interface MissionRunRecord {
   effectFailures?: MissionRunEffectFailure[];
 }
 
+/** Durable executor evidence used by the mission coordinator after an
+ * ambiguous dispatch or a lost terminal callback. The receiver owns this
+ * fact; elapsed time is never evidence that a turn did or did not run. */
+export type AutomationExecutorRunStatus =
+  | { state: "not-found" }
+  | {
+      state: "running";
+      channelId: string;
+      turnId: string;
+      waiting: boolean;
+    }
+  | {
+      state: "terminal";
+      channelId: string;
+      turnId: string;
+      outcome: Exclude<MissionRunOutcome, "skipped">;
+      finalMessage?: string;
+      completionResponse?: string;
+      failure?: MissionRunFailure;
+      effectFailures?: MissionRunEffectFailure[];
+    };
+
 const HEX64 = /^[0-9a-f]{64}$/u;
 const MIN_SCHEDULE_INTERVAL_MS = 60_000;
 const MAX_CHARTER_BYTES = 128 * 1_024;

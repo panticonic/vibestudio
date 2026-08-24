@@ -89,4 +89,39 @@ describe("TargetAuthorityRequestStore", () => {
     expect(store.retireSubject(subject, 40)).toEqual({ cancelledRequests: 0 });
     store.close();
   });
+
+  it("associates one semantic request with every plan that references it", () => {
+    const store = new TargetAuthorityRequestStore({ statePath: statePath() });
+    const subject = `task:${"a".repeat(64)}` as const;
+    const firstPlan = "b".repeat(64);
+    const secondPlan = "d".repeat(64);
+    const common = {
+      targetSubject: subject,
+      operationKey: "notification.showToUser:owner",
+      capability: "notification.show",
+      capabilityDefinitionDigest: "c".repeat(64),
+      resource: { kind: "exact" as const, key: "user:alice" },
+      tier: "gated" as const,
+      sourceUser: "user:alice" as const,
+      review: {
+        action: "show a notification",
+        domain: "people" as const,
+        verb: "act" as const,
+        declaredBy: "host:notification.showToUser",
+      },
+    };
+
+    const first = store.ensure({ ...common, authorityPlanDigest: firstPlan }, 10);
+    const second = store.ensure({ ...common, authorityPlanDigest: secondPlan }, 20);
+
+    expect(second.requestId).toBe(first.requestId);
+    expect(store.pending()).toHaveLength(1);
+    expect(store.forPlan(subject, firstPlan)).toEqual([
+      expect.objectContaining({ requestId: first.requestId, authorityPlanDigest: firstPlan }),
+    ]);
+    expect(store.forPlan(subject, secondPlan)).toEqual([
+      expect.objectContaining({ requestId: first.requestId, authorityPlanDigest: secondPlan }),
+    ]);
+    store.close();
+  });
 });

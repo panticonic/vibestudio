@@ -1106,7 +1106,7 @@ describe("approvalQueue", () => {
     it("resolving with a resolver snapshots resolvedBy, emits resolved before removal, and records provenance", async () => {
       const recordProvenance = vi.fn();
       const { queue, emit } = createQueue({ recordProvenance });
-      const promise = queue.request(capabilityRequest("usr_req"));
+      const handle = queue.requestWithHandle!(capabilityRequest("usr_req"));
       const approvalId = queue.listPending()[0]!.approvalId;
 
       await queue.resolve(approvalId, "version", {
@@ -1114,7 +1114,15 @@ describe("approvalQueue", () => {
         via: "shell",
         deviceId: "dev-1",
       });
-      await expect(promise).resolves.toBe("version");
+      await expect(handle.decision).resolves.toBe("version");
+      await expect(handle.resolution).resolves.toMatchObject({
+        decision: "version",
+        resolver: {
+          subject: { userId: "usr_2", handle: "alice" },
+          via: "shell",
+          deviceId: "dev-1",
+        },
+      });
 
       // §6: the live `resolved` event carries `resolvedBy` — proving the snapshot
       // was taken while the entry still existed (the delete-before-emit fix).

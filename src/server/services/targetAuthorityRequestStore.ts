@@ -33,11 +33,10 @@ export class TargetAuthorityRequestStore {
     now = Date.now()
   ): DurableTargetAuthorityRequest {
     const requestId = createHash("sha256")
-      .update("target-authority-request-v1\0")
+      .update("target-authority-request-v2\0")
       .update(
         canonicalJson({
           targetSubject: input.targetSubject,
-          authorityPlanDigest: input.authorityPlanDigest,
           operationKey: input.operationKey,
         })
       )
@@ -45,13 +44,12 @@ export class TargetAuthorityRequestStore {
     this.db
       .prepare(
         `INSERT INTO target_authority_requests
-      (request_id,target_subject,authority_plan_digest,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,review_json,created_at)
-      VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?) ON CONFLICT(target_subject,authority_plan_digest,operation_key) DO NOTHING`
+      (request_id,target_subject,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,review_json,created_at)
+      VALUES (?,?,?,?,?,?,'pending',?,?,?,?) ON CONFLICT(target_subject,operation_key) DO NOTHING`
       )
       .run(
         requestId,
         input.targetSubject,
-        input.authorityPlanDigest,
         input.operationKey,
         input.capability,
         canonicalJson(input.resource),
@@ -61,10 +59,16 @@ export class TargetAuthorityRequestStore {
         canonicalJson(input.review),
         now
       );
+    this.db
+      .prepare(
+        `INSERT INTO target_authority_request_plans
+         (request_id,authority_plan_digest,created_at) VALUES (?,?,?)
+         ON CONFLICT(request_id,authority_plan_digest) DO NOTHING`
+      )
+      .run(requestId, input.authorityPlanDigest, now);
     const request = this.require(requestId);
     if (
       request.targetSubject !== input.targetSubject ||
-      request.authorityPlanDigest !== input.authorityPlanDigest ||
       request.operationKey !== input.operationKey ||
       request.capability !== input.capability ||
       request.capabilityDefinitionDigest !== input.capabilityDefinitionDigest ||
@@ -172,7 +176,12 @@ export class TargetAuthorityRequestStore {
     return (
       this.db
         .prepare(
-          "SELECT * FROM target_authority_requests WHERE state='pending' ORDER BY created_at, request_id"
+          `SELECT requests.*, MIN(links.authority_plan_digest) AS authority_plan_digest
+           FROM target_authority_requests AS requests
+           JOIN target_authority_request_plans AS links USING (request_id)
+           WHERE requests.state='pending'
+           GROUP BY requests.request_id
+           ORDER BY requests.created_at, requests.request_id`
         )
         .all() as Record<string, unknown>[]
     ).map(row);
@@ -185,18 +194,59 @@ export class TargetAuthorityRequestStore {
     return (
       this.db
         .prepare(
-          "SELECT * FROM target_authority_requests WHERE target_subject=? AND authority_plan_digest=? ORDER BY created_at, request_id"
+          `SELECT requests.*, links.authority_plan_digest
+           FROM target_authority_requests AS requests
+           JOIN target_authority_request_plans AS links USING (request_id)
+           WHERE requests.target_subject=? AND links.authority_plan_digest=?
+           ORDER BY requests.created_at, requests.request_id`
         )
         .all(subject, authorityPlanDigest) as Record<string, unknown>[]
     ).map(row);
   }
 
-  private require(requestId: string): DurableTargetAuthorityRequest {
+  pendingForInvocation(input: {
+    targetSubject: AuthorityGrantSubject;
+    capability: string;
+    capabilityDefinitionDigest: string;
+    resource: ResourceScope;
+  }): DurableTargetAuthorityRequest | null {
     const value = this.db
-      .prepare("SELECT * FROM target_authority_requests WHERE request_id=?")
+      .prepare(
+        `SELECT requests.*, links.authority_plan_digest
+         FROM target_authority_requests AS requests
+         JOIN target_authority_request_plans AS links USING (request_id)
+         WHERE requests.target_subject=? AND requests.capability=?
+           AND requests.capability_definition_digest=? AND requests.resource_json=?
+           AND requests.state='pending'
+         ORDER BY requests.created_at, requests.request_id, links.authority_plan_digest
+         LIMIT 1`
+      )
+      .get(
+        input.targetSubject,
+        input.capability,
+        input.capabilityDefinitionDigest,
+        canonicalJson(input.resource)
+      ) as Record<string, unknown> | undefined;
+    return value ? row(value) : null;
+  }
+
+  get(requestId: string): DurableTargetAuthorityRequest | null {
+    const value = this.db
+      .prepare(
+        `SELECT requests.*, links.authority_plan_digest
+         FROM target_authority_requests AS requests
+         JOIN target_authority_request_plans AS links USING (request_id)
+         WHERE requests.request_id=?
+         ORDER BY links.authority_plan_digest LIMIT 1`
+      )
       .get(requestId) as Record<string, unknown> | undefined;
+    return value ? row(value) : null;
+  }
+
+  private require(requestId: string): DurableTargetAuthorityRequest {
+    const value = this.get(requestId);
     if (!value) throw new Error(`Target authority request ${requestId} was not persisted`);
-    return row(value);
+    return value;
   }
   close(): void {
     this.db.close();

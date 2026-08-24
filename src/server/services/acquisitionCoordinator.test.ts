@@ -65,9 +65,20 @@ describe("AcquisitionCoordinator", () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-acq-task-target-"));
     const grantStore = new CapabilityGrantStore({ statePath });
     const targetRequests = new TargetAuthorityRequestStore({ statePath });
-    const request = vi.fn(async () => "task" as const);
+    const requestWithHandle = vi.fn((input) => ({
+      approvalId: "approval:task",
+      decision: Promise.resolve("task" as const),
+      resolution: Promise.resolve({
+        decision: "task" as const,
+        resolver: {
+          subject: { userId: "bob", handle: "bob" },
+          via: "shell" as const,
+        },
+      }),
+      input,
+    }));
     const coordinator = new AcquisitionCoordinator({
-      approvalQueue: { request } as never,
+      approvalQueue: { requestWithHandle } as never,
       grantStore,
       targetRequests,
     });
@@ -97,14 +108,18 @@ describe("AcquisitionCoordinator", () => {
         expect.objectContaining({ requestId: durable.requestId, state: "granted" }),
       ]);
     });
-    expect(request).toHaveBeenCalledWith(
+    expect(requestWithHandle).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["task", "deny"],
         title: "Allow an agent task action",
       })
     );
     expect(grantStore.grantsForSubjects([targetSubject], "notification.show")).toEqual([
-      expect.objectContaining({ subject: targetSubject, scope: "task" }),
+      expect.objectContaining({
+        subject: targetSubject,
+        scope: "task",
+        issuedBy: "user:bob",
+      }),
     ]);
     targetRequests.close();
     grantStore.close();
@@ -152,6 +167,132 @@ describe("AcquisitionCoordinator", () => {
         scope: "task",
       }),
     ]);
+    targetRequests.close();
+    grantStore.close();
+  });
+
+  it("joins a matching runtime invocation to the durable subject request", async () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-acq-target-join-"));
+    const grantStore = new CapabilityGrantStore({ statePath });
+    const targetRequests = new TargetAuthorityRequestStore({ statePath });
+    let decide!: (decision: "task") => void;
+    const request = vi.fn(
+      () =>
+        new Promise<"task">((resolve) => {
+          decide = resolve;
+        })
+    );
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+      targetRequests,
+    });
+    const targetSubject = `task:${"e".repeat(64)}` as const;
+    const authorityPlanDigest = "f".repeat(64);
+    coordinator.requestForTarget({
+      targetSubject,
+      authorityPlanDigest,
+      operationKey: "gateway.fetch:example",
+      capability: "service:gateway.fetch",
+      capabilityDefinitionDigest: "-",
+      resource: { kind: "exact", key: "https://example.com" },
+      tier: "gated",
+      sourceUser: "user:alice",
+      renderedAction: "read example.com",
+      review: {
+        action: "read example.com",
+        domain: "web",
+        verb: "see",
+        declaredBy: "test:gateway.fetch",
+      },
+    });
+    const snap = {
+      ...snapshot(),
+      taskAuthority: targetSubject,
+    };
+    const waiting = coordinator.requestAndWait({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller: createVerifiedCaller("agent:runtime", "agent", null, {
+        agentId: "agent",
+        entityId: "entity",
+        contextId: "context",
+        channelId: "channel",
+      }),
+      renderedAction: "read example.com",
+      resource: { kind: "exact", key: "https://example.com" },
+      presentation: reviewedPresentation(),
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    decide("task");
+    await expect(waiting).resolves.toMatchObject({
+      state: "decided",
+      decision: "task",
+      info: { pending: false },
+    });
+    expect(grantStore.grantsForSubjects([targetSubject], snap.capability)).toHaveLength(1);
+    targetRequests.close();
+    grantStore.close();
+  });
+
+  it("cannot mint a late grant after the target subject is retired", async () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-acq-retired-target-"));
+    const grantStore = new CapabilityGrantStore({ statePath });
+    const targetRequests = new TargetAuthorityRequestStore({ statePath });
+    let decide!: (decision: "mission") => void;
+    const cancelForCaller = vi.fn();
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: {
+        request: vi.fn(
+          () =>
+            new Promise<"mission">((resolve) => {
+              decide = resolve;
+            })
+        ),
+        cancelForCaller,
+      } as never,
+      grantStore,
+      targetRequests,
+    });
+    const targetSubject = `mission:nightly@${"a".repeat(64)}` as const;
+    const authorityPlanDigest = "b".repeat(64);
+    coordinator.registerTargetSubject(
+      targetSubject,
+      authorityPlanDigest,
+      "user:alice",
+      "do:missions"
+    );
+    const request = coordinator.requestForTarget({
+      targetSubject,
+      authorityPlanDigest,
+      operationKey: "notification.showToUser:owner",
+      capability: "notification.show",
+      capabilityDefinitionDigest: "c".repeat(64),
+      resource: { kind: "exact", key: "user:alice" },
+      tier: "gated",
+      sourceUser: "user:alice",
+      renderedAction: "show a notification",
+      review: {
+        action: "show a notification",
+        domain: "people",
+        verb: "act",
+        declaredBy: "host:notification.showToUser",
+      },
+    });
+
+    expect(coordinator.retireTargetSubject(targetSubject)).toEqual({
+      cancelledRequests: 1,
+    });
+    decide("mission");
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(targetRequests.get(request.requestId)?.state).toBe("cancelled");
+    });
+    expect(cancelForCaller).toHaveBeenCalledTimes(1);
+    expect(grantStore.grantsForSubjects([targetSubject], "notification.show")).toEqual([]);
     targetRequests.close();
     grantStore.close();
   });
