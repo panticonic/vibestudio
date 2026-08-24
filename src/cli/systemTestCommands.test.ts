@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { transformSync } from "esbuild";
 import {
@@ -11,8 +8,6 @@ import {
   systemTestDoctorRecovery,
   systemTestCoordinatorScopeKey,
   systemTestRunCode,
-  loadRetainedSystemTestTrajectory,
-  retainSystemTestTrajectoryArtifacts,
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
 import { AuthError } from "./output.js";
@@ -638,37 +633,5 @@ describe("system-test persisted diagnostic paging", () => {
     expect(code).toContain("scope[pageKey] = JSON.stringify(value, null, 2)");
     expect(code).not.toContain("$lastLargeReturn");
     expect(code).toContain("source.slice(0, 1024)");
-  });
-});
-
-describe("system-test retained trajectories", () => {
-  it("persists bounded and full failed-test evidence for post-mortem lookup", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "system-test-trajectory-"));
-    const runId = "st_retained_trajectory";
-    try {
-      retainSystemTestTrajectoryArtifacts(
-        runId,
-        "probe/test",
-        {
-          bounded: { name: "probe/test", summary: true },
-          full: { name: "probe/test", conversation: [{ text: "evidence" }] },
-        },
-        root
-      );
-
-      expect(loadRetainedSystemTestTrajectory(runId, "probe/test", false, root)).toEqual({
-        name: "probe/test",
-        summary: true,
-      });
-      expect(loadRetainedSystemTestTrajectory(runId, "probe/test", true, root)).toEqual({
-        name: "probe/test",
-        conversation: [{ text: "evidence" }],
-      });
-      expect(fs.statSync(path.join(root, "trajectory-probe_test-full.json")).mode & 0o777).toBe(
-        0o600
-      );
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
   });
 });

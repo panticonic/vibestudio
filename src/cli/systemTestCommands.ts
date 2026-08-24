@@ -691,18 +691,6 @@ function failedSummary(value: unknown): boolean {
   );
 }
 
-function failedTestNamesFromSummary(value: unknown): string[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  const summary = value as Record<string, unknown>;
-  return [
-    ...new Set(
-      [summary["failedTests"], summary["testsWithUnexpectedToolFailures"]]
-        .flatMap((entry) => (Array.isArray(entry) ? entry : []))
-        .filter((entry): entry is string => typeof entry === "string")
-    ),
-  ];
-}
-
 function printRun(value: unknown, json: boolean, artifact?: string): void {
   printResult(value, {
     json,
@@ -1188,74 +1176,10 @@ async function retainRunDiagnostics(
     if (!result.success) return;
     const packet = await expandTruncatedReturn(scope, stored, result.returnValue);
     writeSystemTestArtifact(stored.runId, "inspect", packet, stored.artifactDir);
-    for (const testName of failedTestNamesFromSummary(summary)) {
-      const trajectoryExpression = `({ bounded: systemTestTrajectory(record, ${JSON.stringify(testName)}, { full: false }), full: systemTestTrajectory(record, ${JSON.stringify(testName)}, { full: true }) })`;
-      const trajectoryResult = await evalExecutorFor(scope)({
-        ...startRouting(scope, stored),
-        runId: randomUUID(),
-        source: {
-          kind: "inline",
-          code: readCode(stored.runId, trajectoryExpression),
-          syntax: "typescript",
-        },
-        timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
-      });
-      if (!trajectoryResult.success) continue;
-      const trajectories = await expandTruncatedReturn(
-        scope,
-        stored,
-        trajectoryResult.returnValue,
-        (start, end, pageKey) =>
-          readCode(
-            stored.runId,
-            systemTestJsonPageExpression(trajectoryExpression, start, end, pageKey)
-          )
-      );
-      retainSystemTestTrajectoryArtifacts(stored.runId, testName, trajectories, stored.artifactDir);
-    }
   } catch {
     // Best effort: a run that cannot be inspected here is still reportable, and
     // failing the run over its own post-mortem would be worse than the gap.
   }
-}
-
-function trajectoryArtifactName(testName: string, full: boolean): string {
-  return `trajectory-${safeName(testName)}${full ? "-full" : ""}`;
-}
-
-export function retainSystemTestTrajectoryArtifacts(
-  runId: string,
-  testName: string,
-  value: unknown,
-  artifactDir?: string
-): void {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const trajectories = value as Record<string, unknown>;
-  if (trajectories["bounded"] !== undefined) {
-    writeSystemTestArtifact(
-      runId,
-      trajectoryArtifactName(testName, false),
-      trajectories["bounded"],
-      artifactDir
-    );
-  }
-  if (trajectories["full"] !== undefined) {
-    writeSystemTestArtifact(
-      runId,
-      trajectoryArtifactName(testName, true),
-      trajectories["full"],
-      artifactDir
-    );
-  }
-}
-
-export function loadRetainedSystemTestTrajectory(
-  runId: string,
-  testName: string,
-  full: boolean,
-  artifactDir?: string
-): unknown | null {
-  return loadSystemTestArtifact(runId, trajectoryArtifactName(testName, full), artifactDir);
 }
 
 /**
@@ -1276,7 +1200,9 @@ function retainedInspection(
   const stored = loadSystemTestRun(runId);
   const dir = storedArtifactDir(runId, stored);
   const value = loadSystemTestArtifact(runId, "inspect", dir);
-  return value === null ? null : { value, artifact: path.join(dir, "inspect.json") };
+  return value === null
+    ? null
+    : { value, artifact: path.join(systemTestArtifactDir(runId, dir), "inspect.json") };
 }
 
 async function inspect(inv: ParsedInvocation): Promise<number> {
@@ -1341,28 +1267,6 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
     if (!testName)
       throw new UsageError("usage: vibestudio system-test trajectory RUN_ID TEST_NAME");
     const full = inv.flags["full"] === true;
-    const requestedRunId = requireRunId(inv);
-    const retainedRun = loadSystemTestRun(requestedRunId);
-    const retained = loadRetainedSystemTestTrajectory(
-      requestedRunId,
-      testName,
-      full,
-      retainedRun?.artifactDir
-    );
-    if (retained !== null) {
-      const artifact = path.join(
-        storedArtifactDir(requestedRunId, retainedRun),
-        `${trajectoryArtifactName(testName, full)}.json`
-      );
-      printResult(retained, {
-        json,
-        human: () => {
-          console.log(JSON.stringify(retained, null, 2));
-          console.log(`retained: ${artifact}`);
-        },
-      });
-      return 0;
-    }
     const trajectoryExpression = `systemTestTrajectory(record, ${JSON.stringify(testName)}, { full: ${full ? "true" : "false"} })`;
     const { runId, stored, value } = await readPersisted(
       inv,
@@ -1388,7 +1292,7 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
     );
     const artifact = writeSystemTestArtifact(
       runId,
-      trajectoryArtifactName(testName, full),
+      `trajectory-${safeName(testName)}${full ? "-full" : ""}`,
       value,
       requestedArtifactDir(inv, runId, stored)
     );
