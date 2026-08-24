@@ -22,6 +22,7 @@ import {
   resolveEntryPoint,
 } from "./builder.js";
 import { getAdapter } from "./adapters/index.js";
+import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 
 describe("generatePanelEntry", () => {
   it.each(["react", "svelte", "vanilla"] as const)(
@@ -271,9 +272,13 @@ describe("injectHtmlTransforms", () => {
     expect(html).toContain("<title>Agentic Chat</title>");
     expect(html).toContain('<link rel="stylesheet" href="./bundle.css" />');
     expect(html).toContain('<base href="./">');
-    expect(html).toContain('<link rel="preload" href="./__transport.js" as="script" />');
+    expect(html).toContain(
+      `<link rel="preload" href="${panelRuntimeHelperHref("__transport.js")}" as="script" />`
+    );
     expect(html).toContain('<link rel="modulepreload" href="./bundle.js" />');
-    expect(html).toContain('<script src="./__loader.js" data-bundle-src="./bundle.js"></script>');
+    expect(html).toContain(
+      `<script src="${panelRuntimeHelperHref("__loader.js")}" data-bundle-src="./bundle.js"></script>`
+    );
   });
 
   it("does not duplicate an existing bundle stylesheet", () => {
@@ -300,7 +305,7 @@ describe("injectHtmlTransforms", () => {
     expect(html).toContain('href="./bundle-XYZ789.css"');
     expect(html).toContain('<link rel="modulepreload" href="./bundle-ABC123.js" />');
     expect(html).toContain(
-      '<script src="./__loader.js" data-bundle-src="./bundle-ABC123.js"></script>'
+      `<script src="${panelRuntimeHelperHref("__loader.js")}" data-bundle-src="./bundle-ABC123.js"></script>`
     );
     expect(html).not.toContain('href="./bundle.css"');
   });

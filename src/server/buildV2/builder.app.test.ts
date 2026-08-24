@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { setBuildExecutionIdentityContext } from "./buildStore.js";
@@ -538,7 +539,7 @@ describe("buildUnit app builds", () => {
 
     expect(primaryPath).toMatch(/^bundle-[A-Za-z0-9]+\.js$/u);
     expect(html).toContain(
-      `<script src="./__loader.js" data-bundle-src="./${primaryPath}"></script>`
+      `<script src="${panelRuntimeHelperHref("__loader.js")}" data-bundle-src="./${primaryPath}"></script>`
     );
     expect(html).not.toContain('data-bundle-src="./bundle.js"');
     expect(html).not.toContain('src="./bundle.js"');

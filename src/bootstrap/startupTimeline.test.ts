@@ -35,6 +35,7 @@ describe("startup timeline", () => {
     );
 
     expect(connectionTimeline(progress, "failed").map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "check-credential-storage", state: "complete" },
       { id: "redeem-pairing-link", state: "complete" },
       { id: "resolve-workspace", state: "failed" },
       { id: "connect-workspace", state: "pending" },
