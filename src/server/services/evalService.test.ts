@@ -92,6 +92,11 @@ function createHarness(
     kernelLeaseError?: Error;
     systemTestHarness?: boolean;
     executeRunPending?: boolean;
+    terminalDuringStart?: boolean;
+    recoverUnresponsiveSandbox?: Parameters<
+      typeof createEvalService
+    >[0]["recoverUnresponsiveSandbox"];
+    livenessProbeMs?: number;
     getRunSequence?: Array<{
       status: "pending" | "running" | "cancelling" | "done" | "cancelled" | "unknown";
       gate?: Promise<void>;
@@ -170,6 +175,11 @@ function createHarness(
           throw new AmbiguousDoDispatchError("simulated lost startRun acknowledgement");
         }
         if (rejectedStartRun && options.retryStartGate) await options.retryStartGate;
+        if (options.terminalDuringStart) {
+          eventSinkTerminal.get(
+            String((args[0] as { eventSinkNonce?: string }).eventSinkNonce)
+          )?.();
+        }
         return {
           runId: (args[0] as { runId: string }).runId,
           runDigest: "d".repeat(64),
@@ -305,6 +315,10 @@ function createHarness(
       shutdown = callback;
     },
     ...(options.systemTestHarness ? { isSystemTestHarness: () => true } : {}),
+    ...(options.recoverUnresponsiveSandbox
+      ? { recoverUnresponsiveSandbox: options.recoverUnresponsiveSandbox }
+      : {}),
+    ...(options.livenessProbeMs ? { livenessProbeMs: options.livenessProbeMs } : {}),
     kernelLeases: {
       touch: vi.fn(async () => {
         if (options.kernelLeaseError) throw options.kernelLeaseError;
@@ -1249,6 +1263,38 @@ function createHeldFailHarness(opts: {
 }
 
 describe("createEvalService — explicit timeout process watchdog", () => {
+  it("does not arm supervision after a terminal event races the start acknowledgement", async () => {
+    const recoverUnresponsiveSandbox = vi.fn(async () => {});
+    const { service, calls } = createHarness(
+      { "do:workers/agent-worker:AiChatWorker:fast": "ctx_agent" },
+      {
+        terminalDuringStart: true,
+        recoverUnresponsiveSandbox,
+        livenessProbeMs: 2,
+      }
+    );
+
+    await service.handler(
+      activeInvocationContext(
+        authenticatedCaller("do:workers/agent-worker:AiChatWorker:fast", "do")
+      ),
+      "start",
+      [
+        inlineEvalStart({
+          scopeKey: "chan_1",
+          code: "return 1;",
+          runId: "inv-terminal-during-start",
+          timeoutMs: 5,
+          resultReceiver: { kind: "caller" },
+        }),
+      ]
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(calls.some((call) => call.method === "getRun")).toBe(false);
+    expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
+  });
+
   it("accepts a cooperative timeout without invoking process recovery", async () => {
     const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
       contextId: "ctx_agent",

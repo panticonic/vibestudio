@@ -1014,6 +1014,7 @@ export function createEvalService(deps: {
         }
         const timeoutMs = assembledArgs["timeoutMs"];
         if (
+          !admissionClosed &&
           typeof timeoutMs === "number" &&
           deps.recoverUnresponsiveSandbox &&
           !runSupervisions.has(activeKey)
