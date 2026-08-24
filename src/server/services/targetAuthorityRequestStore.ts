@@ -36,7 +36,7 @@ export class TargetAuthorityRequestStore {
       .update(
         canonicalJson({
           targetSubject: input.targetSubject,
-          operationPolicyDigest: input.operationPolicyDigest,
+          authorityPlanDigest: input.authorityPlanDigest,
           operationKey: input.operationKey,
         })
       )
@@ -44,13 +44,13 @@ export class TargetAuthorityRequestStore {
     this.db
       .prepare(
         `INSERT INTO target_authority_requests
-      (request_id,target_subject,operation_policy_digest,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,created_at)
-      VALUES (?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(target_subject,operation_policy_digest,operation_key) DO NOTHING`
+      (request_id,target_subject,authority_plan_digest,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,created_at)
+      VALUES (?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(target_subject,authority_plan_digest,operation_key) DO NOTHING`
       )
       .run(
         requestId,
         input.targetSubject,
-        input.operationPolicyDigest,
+        input.authorityPlanDigest,
         input.operationKey,
         input.capability,
         canonicalJson(input.resource),
@@ -62,7 +62,7 @@ export class TargetAuthorityRequestStore {
     const request = this.require(requestId);
     if (
       request.targetSubject !== input.targetSubject ||
-      request.operationPolicyDigest !== input.operationPolicyDigest ||
+      request.authorityPlanDigest !== input.authorityPlanDigest ||
       request.operationKey !== input.operationKey ||
       request.capability !== input.capability ||
       request.capabilityDefinitionDigest !== input.capabilityDefinitionDigest ||
@@ -77,43 +77,49 @@ export class TargetAuthorityRequestStore {
 
   registerSubject(
     subject: AuthorityGrantSubject,
-    policyDigest: string,
+    authorityPlanDigest: string,
     ownerUser: `user:${string}`,
+    controllerRuntimeId: string,
     now = Date.now()
   ): void {
     this.db
       .prepare(
         `INSERT INTO authority_subjects
-      (target_subject,operation_policy_digest,owner_user,state,created_at)
-      VALUES (?,?,?,'active',?)
+      (target_subject,authority_plan_digest,owner_user,controller_runtime_id,state,created_at)
+      VALUES (?,?,?,?,'active',?)
       ON CONFLICT(target_subject) DO NOTHING`
       )
-      .run(subject, policyDigest, ownerUser, now);
+      .run(subject, authorityPlanDigest, ownerUser, controllerRuntimeId, now);
     const registered = this.subject(subject);
     if (
       !registered ||
-      registered.policyDigest !== policyDigest ||
+      registered.authorityPlanDigest !== authorityPlanDigest ||
       registered.ownerUser !== ownerUser ||
+      registered.controllerRuntimeId !== controllerRuntimeId ||
       registered.state !== "active"
     ) {
       throw new Error(
-        `Authority subject ${subject} was replayed with different ownership or policy`
+        `Authority subject ${subject} was replayed with different ownership, controller, or policy`
       );
     }
   }
 
-  subject(
-    subject: AuthorityGrantSubject
-  ): { policyDigest: string; ownerUser: `user:${string}`; state: "active" | "retired" } | null {
+  subject(subject: AuthorityGrantSubject): {
+    authorityPlanDigest: string;
+    ownerUser: `user:${string}`;
+    controllerRuntimeId: string;
+    state: "active" | "retired";
+  } | null {
     const row = this.db
       .prepare(
-        "SELECT operation_policy_digest,owner_user,state FROM authority_subjects WHERE target_subject=?"
+        "SELECT authority_plan_digest,owner_user,controller_runtime_id,state FROM authority_subjects WHERE target_subject=?"
       )
       .get(subject) as Record<string, unknown> | undefined;
     return row
       ? {
-          policyDigest: String(row["operation_policy_digest"]),
+          authorityPlanDigest: String(row["authority_plan_digest"]),
           ownerUser: String(row["owner_user"]) as `user:${string}`,
+          controllerRuntimeId: String(row["controller_runtime_id"]),
           state: String(row["state"]) as "active" | "retired",
         }
       : null;
@@ -169,13 +175,16 @@ export class TargetAuthorityRequestStore {
     ).map(row);
   }
 
-  forPolicy(subject: AuthorityGrantSubject, policyDigest: string): DurableTargetAuthorityRequest[] {
+  forPlan(
+    subject: AuthorityGrantSubject,
+    authorityPlanDigest: string
+  ): DurableTargetAuthorityRequest[] {
     return (
       this.db
         .prepare(
-          "SELECT * FROM target_authority_requests WHERE target_subject=? AND operation_policy_digest=? ORDER BY created_at, request_id"
+          "SELECT * FROM target_authority_requests WHERE target_subject=? AND authority_plan_digest=? ORDER BY created_at, request_id"
         )
-        .all(subject, policyDigest) as Record<string, unknown>[]
+        .all(subject, authorityPlanDigest) as Record<string, unknown>[]
     ).map(row);
   }
 
@@ -196,7 +205,7 @@ function row(value: Record<string, unknown>): DurableTargetAuthorityRequest {
     v: 1,
     requestId: String(value["request_id"]),
     targetSubject: String(value["target_subject"]) as AuthorityGrantSubject,
-    operationPolicyDigest: String(value["operation_policy_digest"]),
+    authorityPlanDigest: String(value["authority_plan_digest"]),
     operationKey: String(value["operation_key"]),
     capability: String(value["capability"]),
     resource: JSON.parse(String(value["resource_json"])) as ResourceScope,

@@ -42,7 +42,7 @@ import type {
   AcquisitionInfo,
   AuthorityPreflightLeaf,
   AuthorityPreflightResult,
-  CompiledOperationPolicyLeaf,
+  CompiledAuthorityPlanLeaf,
   InvocationSnapshot,
   ResourceScope,
 } from "@vibestudio/rpc";
@@ -818,7 +818,6 @@ export class ServiceDispatcher {
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
-        operationPolicyDenied?: boolean;
       }
     | Promise<{
         context: AuthorizationContext;
@@ -829,7 +828,6 @@ export class ServiceDispatcher {
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
-        operationPolicyDenied?: boolean;
       }>;
 
   setAuthorityResolver(
@@ -855,7 +853,6 @@ export class ServiceDispatcher {
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
-          operationPolicyDenied?: boolean;
         }
       | Promise<{
           context: AuthorizationContext;
@@ -866,7 +863,6 @@ export class ServiceDispatcher {
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
-          operationPolicyDenied?: boolean;
         }>
   ): void {
     this.authorityResolver = resolver;
@@ -1772,15 +1768,7 @@ export class ServiceDispatcher {
         invocationDigest: snapshotDigest,
         providerExecutionDigest: snapshot.providerExecutionDigest,
       });
-      const decision =
-        resolved.operationPolicyDenied === true
-          ? {
-              allowed: false as const,
-              code: "operation-policy-denied" as const,
-              reason: "This operation is outside the active mission charter",
-              requirement,
-            }
-          : evaluated;
+      const decision = evaluated;
       if (decision.allowed) {
         if (reviewedTier !== "open") {
           await this.observeAuthority(resolved.context, "authority-decided", {
@@ -1859,15 +1847,6 @@ export class ServiceDispatcher {
             resourceKey,
             tier: reviewedTier,
           });
-      if (decision.code === "operation-policy-denied") {
-        throw new ServiceAccessError(
-          service,
-          method,
-          `The operation is outside the active automation policy${formatAccessHint(methodDef)}`,
-          "EOPERATIONPOLICY",
-          { denied: true, authorityFailure }
-        );
-      }
       if (acquirable) {
         const tier = reviewedTier as "gated" | "critical";
         const renderedAction =
@@ -2095,12 +2074,12 @@ export class ServiceDispatcher {
    * operation. Dynamic prepared methods cannot be guessed at launch and must
    * be represented by a receiver-defined bounded operation instead.
    */
-  compileOperationLeaf(input: {
+  compileAuthorityPlanLeaf(input: {
     service: string;
     method: string;
     args: readonly unknown[];
     use: "action" | "conditional";
-  }): CompiledOperationPolicyLeaf {
+  }): CompiledAuthorityPlanLeaf {
     const serviceDef = this.definitions.get(input.service);
     const methodDef = serviceDef?.methods[input.method];
     const tier = this.methodTiers.get(`${input.service}.${input.method}`)?.tier;

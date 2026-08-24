@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "censusDigest": "sha256:63c0b90b39687bdfb36292aa1e53da60aeb2a62ca104e43b8bcfd30f438c4331",
+  "censusDigest": "sha256:eb844421979f4fc53ceddfa0f26b3f64dce885d34641e27b89753c4b1d5db24e",
   "decisions": {
-    "host:authority.compileOperationPolicy": {
-      "review": "host-compiled-content-addressed-operation-policy",
-      "change": "Accepts only semantic service operations from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable verified artifact. Callers cannot author capability names, tiers, grants, or policy bodies."
+    "host:authority.compileAuthorityPlan": {
+      "review": "host-compiled-content-addressed-authority-plan",
+      "change": "Accepts only semantic service-operation hints from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable launch-time acquisition plan. The plan is not a runtime allowlist or parallel authorization mechanism; callers cannot author capability names, tiers, grants, or executable policy."
     },
     "host:authority.acquireForTarget": {
       "review": "owner-attributed-durable-target-acquisition",

@@ -257,11 +257,14 @@ export class AgentExecutionSessionRegistry {
     return fact;
   }
 
-  finishExecution(authoritySessionId: string): boolean {
+  finishExecution(authoritySessionId: string, controllerRuntimeId: string): boolean {
     const fact = [...this.byAdmissionKey.values()].find(
       (candidate) => candidate.authoritySessionId === authoritySessionId
     );
     if (!fact) return false;
+    if (fact.controllerRuntimeId !== controllerRuntimeId) {
+      throw new Error("Only the admission controller can finish this execution");
+    }
     if (fact.executor.kind === "eval")
       return this.close(fact.executor.runtimeId, fact.executor.evalRunId);
     this.removeGeneric(fact);
@@ -362,6 +365,38 @@ export class AgentExecutionSessionRegistry {
         return null;
       }
       return candidate.executor.runtimeId === runtimeId ? candidate : null;
+    }
+    return null;
+  }
+
+  /**
+   * Resolve the single controller-to-executor edge that starts an admitted
+   * execution. This is deliberately distinct from resolveInvocation(): the
+   * controller is dispatching the work, not borrowing the executor's
+   * authority for its own RPC call.
+   */
+  resolveDispatch(
+    controllerRuntimeId: string,
+    executorRuntimeId: string,
+    method: string,
+    nonce: string
+  ): ExecutionAdmissionFact | null {
+    const candidate = this.byNonce.get(nonce);
+    if (!candidate || candidate.expiresAt <= Date.now()) {
+      if (candidate && candidate.executor.kind !== "eval") this.removeGeneric(candidate);
+      return null;
+    }
+    if (
+      candidate.controllerRuntimeId !== controllerRuntimeId ||
+      candidate.executor.runtimeId !== executorRuntimeId
+    ) {
+      return null;
+    }
+    if (candidate.executor.kind === "method") {
+      return candidate.executor.method === method ? candidate : null;
+    }
+    if (candidate.executor.kind === "agent-turn") {
+      return method === "runAutomationTurn" || method === "runAutomationEval" ? candidate : null;
     }
     return null;
   }
@@ -505,6 +540,7 @@ function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boo
   const { eventSinkNonce: _inputSink, ...inputEval } = input.executor;
   return (
     fact.mode === input.mode &&
+    fact.controllerRuntimeId === input.controllerRuntimeId &&
     fact.ownerUser === input.ownerUser &&
     fact.workspaceId === input.workspaceId &&
     fact.contextId === input.contextId &&
@@ -517,7 +553,7 @@ function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boo
     JSON.stringify(fact.causalParent) === JSON.stringify(input.causalParent) &&
     JSON.stringify(fact.parent) === JSON.stringify(input.parent) &&
     JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
-    fact.operationPolicyDigest === input.operationPolicyDigest &&
+    fact.authorityPlanDigest === input.authorityPlanDigest &&
     JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)
   );
 }
@@ -531,6 +567,7 @@ function sameGenericAdmission(
 ): boolean {
   return (
     fact.admissionKey === input.admissionKey &&
+    fact.controllerRuntimeId === input.controllerRuntimeId &&
     fact.mode === input.mode &&
     fact.ownerUser === input.ownerUser &&
     fact.workspaceId === input.workspaceId &&
@@ -539,7 +576,7 @@ function sameGenericAdmission(
     JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
     JSON.stringify(fact.executionImage) === JSON.stringify(input.executionImage) &&
     JSON.stringify(fact.executor) === JSON.stringify(input.executor) &&
-    fact.operationPolicyDigest === input.operationPolicyDigest
+    fact.authorityPlanDigest === input.authorityPlanDigest
   );
 }
 
@@ -562,7 +599,7 @@ function trustUnitDrift(fact: ExecutionAdmissionFact, input: AdmissionInput): st
   changed("executionImage", fact.executionImage, input.executionImage);
   changed("attachedHost", fact.attachedHost ?? null, input.attachedHost ?? null);
   changed("mission", fact.mission ?? null, input.mission ?? null);
-  changed("operationPolicyDigest", fact.operationPolicyDigest, input.operationPolicyDigest);
+  changed("authorityPlanDigest", fact.authorityPlanDigest, input.authorityPlanDigest);
   changed("testPolicy", fact.testPolicy ?? null, input.testPolicy ?? null);
   return drift;
 }

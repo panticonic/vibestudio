@@ -707,6 +707,7 @@ export function createEvalService(deps: {
       taskAuthorityPrincipal({ workspaceId: deps.workspaceId, ownerUser, taskRef });
     const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
+        controllerRuntimeId: ctx.caller.runtime.id,
         mode: mission ? "mission" : testPolicy ? "test" : "interactive",
         ownerUser,
         workspaceId: deps.workspaceId,
@@ -736,8 +737,8 @@ export function createEvalService(deps: {
           eventSinkNonce,
         },
         ...(mission ? { mission } : {}),
-        ...(parentAdmission?.operationPolicyDigest
-          ? { operationPolicyDigest: parentAdmission.operationPolicyDigest }
+        ...(parentAdmission?.authorityPlanDigest
+          ? { authorityPlanDigest: parentAdmission.authorityPlanDigest }
           : {}),
         parent: parentAdmission
           ? { authoritySessionId: parentAdmission.authoritySessionId, nonce: parentAdmission.nonce }

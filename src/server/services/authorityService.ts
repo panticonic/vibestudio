@@ -3,7 +3,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { authorityMethods } from "@vibestudio/service-schemas/authority";
 import type { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
-import type { OperationPolicyStore } from "./operationPolicyStore.js";
+import type { AuthorityPlanStore } from "./authorityPlanStore.js";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
@@ -16,7 +16,7 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 export function createAuthorityService(deps: {
   dispatcher: ServiceDispatcher;
   acquisitions: AcquisitionCoordinator;
-  operationPolicies?: OperationPolicyStore;
+  authorityPlans?: AuthorityPlanStore;
   executionAdmissions?: AgentExecutionSessionRegistry;
   grants?: CapabilityGrantStore;
   workspaceId?: string;
@@ -37,13 +37,10 @@ export function createAuthorityService(deps: {
       },
       preflight: (ctx, [input]) =>
         deps.dispatcher.preflightAuthority(ctx, input.service, input.method, input.args),
-      compileOperationPolicy: (_ctx, [input]) => {
-        const operationPolicies = requireDependency(
-          deps.operationPolicies,
-          "Operation policy compilation"
-        );
+      compileAuthorityPlan: (_ctx, [input]) => {
+        const authorityPlans = requireDependency(deps.authorityPlans, "Authority plan compilation");
         const leaves = input.operations.map((operation) =>
-          deps.dispatcher.compileOperationLeaf({
+          deps.dispatcher.compileAuthorityPlanLeaf({
             ...operation,
             args: operation.args ?? [],
           })
@@ -60,7 +57,7 @@ export function createAuthorityService(deps: {
             )
           )
           .digest("hex");
-        const artifact = operationPolicies.publish({
+        const artifact = authorityPlans.publish({
           catalogDigest,
           executionImageDigest: input.executionImageDigest,
           leaves,
@@ -68,25 +65,39 @@ export function createAuthorityService(deps: {
         return {
           schemaVersion: 1,
           digest: artifact.bodyDigest,
-          artifactRef: `policy:${artifact.bodyDigest}` as const,
+          artifactRef: `authority-plan:${artifact.bodyDigest}` as const,
           compilerVersion: artifact.compilerVersion,
           catalogDigest: artifact.catalogDigest,
         };
       },
       acquireForTarget: (ctx, [input]) => {
-        const operationPolicies = requireDependency(
-          deps.operationPolicies,
+        const authorityPlans = requireDependency(
+          deps.authorityPlans,
           "Target authority acquisition"
         );
-        const artifact = operationPolicies.get(input.operationPolicyDigest);
-        if (!artifact) throw new Error(`Unknown operation policy ${input.operationPolicyDigest}`);
-        const sourceUser = attributedUser(ctx);
+        const artifact = authorityPlans.get(input.authorityPlanDigest);
+        if (!artifact) throw new Error(`Unknown authority plan ${input.authorityPlanDigest}`);
         const targetSubject = input.targetSubject as `mission:${string}@${string}`;
-        deps.acquisitions.registerTargetSubject(
-          targetSubject,
-          input.operationPolicyDigest,
-          sourceUser
-        );
+        const registered = deps.acquisitions.targetSubject(targetSubject);
+        const sourceUser = registered?.ownerUser ?? attributedUser(ctx);
+        if (registered) {
+          if (
+            registered.state !== "active" ||
+            registered.authorityPlanDigest !== input.authorityPlanDigest ||
+            registered.controllerRuntimeId !== ctx.caller.runtime.id
+          ) {
+            throw new Error(
+              `Authority subject ${targetSubject} was replayed by a different controller or with a different policy or lifecycle`
+            );
+          }
+        } else {
+          deps.acquisitions.registerTargetSubject(
+            targetSubject,
+            input.authorityPlanDigest,
+            sourceUser,
+            ctx.caller.runtime.id
+          );
+        }
         for (const leaf of artifact.leaves) {
           if (
             leaf.tier === "open" ||
@@ -97,7 +108,7 @@ export function createAuthorityService(deps: {
           }
           deps.acquisitions.requestForTarget({
             targetSubject,
-            operationPolicyDigest: input.operationPolicyDigest,
+            authorityPlanDigest: input.authorityPlanDigest,
             operationKey: `${leaf.service}.${leaf.method}:${leaf.capabilityDefinitionDigest}`,
             capability: leaf.capability,
             capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
@@ -109,7 +120,7 @@ export function createAuthorityService(deps: {
         }
         const requests = deps.acquisitions.targetRequestsFor(
           targetSubject,
-          input.operationPolicyDigest
+          input.authorityPlanDigest
         );
         return {
           requestIds: requests
@@ -124,7 +135,7 @@ export function createAuthorityService(deps: {
         };
       },
       admitExecution: (ctx, [input]) => {
-        const operationPolicies = requireDependency(deps.operationPolicies, "Execution admission");
+        const authorityPlans = requireDependency(deps.authorityPlans, "Execution admission");
         const executionAdmissions = requireDependency(
           deps.executionAdmissions,
           "Execution admission"
@@ -139,10 +150,12 @@ export function createAuthorityService(deps: {
         const registered = deps.acquisitions.targetSubject(missionSubject);
         if (!registered || registered.state !== "active")
           throw new Error(`Unknown active authority subject ${input.mission.subject}`);
-        if (registered.policyDigest !== input.operationPolicyDigest)
+        if (registered.controllerRuntimeId !== ctx.caller.runtime.id)
+          throw new Error("Execution admission was requested by a different mission controller");
+        if (registered.authorityPlanDigest !== input.authorityPlanDigest)
           throw new Error("Execution policy does not match the registered mission subject");
-        const artifact = operationPolicies.get(input.operationPolicyDigest);
-        if (!artifact) throw new Error(`Unknown operation policy ${input.operationPolicyDigest}`);
+        const artifact = authorityPlans.get(input.authorityPlanDigest);
+        if (!artifact) throw new Error(`Unknown authority plan ${input.authorityPlanDigest}`);
         const imageDigest = createHash("sha256")
           .update("mission-execution-image-v1\0")
           .update(
@@ -155,7 +168,7 @@ export function createAuthorityService(deps: {
           )
           .digest("hex");
         if (artifact.executionImageDigest !== imageDigest)
-          throw new Error("Execution image does not match the compiled operation policy");
+          throw new Error("Execution image does not match the compiled authority plan");
         const resident = resolveCodeIdentity(input.executor.runtimeId);
         if (
           !resident ||
@@ -178,6 +191,7 @@ export function createAuthorityService(deps: {
           taskRef: input.taskRef,
         });
         const fact = executionAdmissions.admitExecution({
+          controllerRuntimeId: ctx.caller.runtime.id,
           admissionKey: input.admissionKey,
           mode: "mission",
           ownerUser: registered.ownerUser,
@@ -194,7 +208,7 @@ export function createAuthorityService(deps: {
           taskRef: input.taskRef,
           taskAuthority,
           mission,
-          operationPolicyDigest: input.operationPolicyDigest,
+          authorityPlanDigest: input.authorityPlanDigest,
           executionImage: {
             principal: codePrincipal(resident),
             repoPath: resident.repoPath,
@@ -214,9 +228,10 @@ export function createAuthorityService(deps: {
         });
         return { authoritySessionId: fact.authoritySessionId, nonce: fact.nonce };
       },
-      finishExecution: (_ctx, [input]) => {
+      finishExecution: (ctx, [input]) => {
         requireDependency(deps.executionAdmissions, "Execution admission").finishExecution(
-          input.authoritySessionId
+          input.authoritySessionId,
+          ctx.caller.runtime.id
         );
       },
       retireTarget: (ctx, [input]) => {
@@ -225,7 +240,10 @@ export function createAuthorityService(deps: {
         const subject = input.targetSubject as `mission:${string}@${string}`;
         const registered = deps.acquisitions.targetSubject(subject);
         if (!registered) throw new Error(`Unknown authority subject ${subject}`);
-        if (registered.ownerUser !== attributedUser(ctx)) {
+        if (
+          registered.controllerRuntimeId !== ctx.caller.runtime.id &&
+          registered.ownerUser !== attributedUser(ctx)
+        ) {
           throw Object.assign(
             new Error("Only the attributed owner can retire this authority subject"),
             { code: "EACCES" }

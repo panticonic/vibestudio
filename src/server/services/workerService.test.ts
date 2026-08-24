@@ -208,14 +208,8 @@ function browserDataExtensionCaller() {
 describe("workerService workspace service resolution", () => {
   it("resolves workspace source exclusively from the workspace manifest", async () => {
     const deps = createDeps();
-    const assertUserlandServiceExposure = vi.fn(async () => {});
     const dispatcher = createTestServiceDispatcher();
-    dispatcher.registerService(
-      createWorkerService({
-        ...(deps as object),
-        assertUserlandServiceExposure,
-      } as never)
-    );
+    dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
     await expect(
@@ -229,19 +223,12 @@ describe("workerService workspace service resolution", () => {
       objectKey: "workspace",
       targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
     });
-    expect(assertUserlandServiceExposure).toHaveBeenCalledWith(expect.anything(), {
-      name: "gad.workspace",
-      provider: "workers/workspace-source",
-      providerEv: expect.any(String),
-    });
   });
 
-  it("binds dynamic workspace-service approval to the provider's exact EV", async () => {
+  it("resolves a dynamic workspace service through its exact context declarations", async () => {
     const deps = createDeps();
-    const assertUserlandServiceExposure = vi.fn(async () => {});
     const service = createWorkerService({
       ...(deps as object),
-      assertUserlandServiceExposure,
       buildSystem: { ...deps.buildSystem, getEffectiveVersion: () => "ev-example-store" },
     } as never);
     const dispatcher = createTestServiceDispatcher();
@@ -250,11 +237,6 @@ describe("workerService workspace service resolution", () => {
 
     await dispatcher.dispatch(panelCtx, "workers", "resolveService", ["example.store.v1", "chat"]);
 
-    expect(assertUserlandServiceExposure).toHaveBeenCalledWith(expect.anything(), {
-      name: "channel",
-      provider: "workers/example-store",
-      providerEv: "ev-example-store",
-    });
     await expect(
       service.authorityPreparation?.["workers.resolveService.workspace-service"]?.(panelCtx, [
         "example.store.v1",
@@ -279,10 +261,7 @@ describe("workerService workspace service resolution", () => {
 
   it("asks about a workspace service in the provider's user-facing words", async () => {
     const deps = createDeps();
-    const service = createWorkerService({
-      ...(deps as object),
-      assertUserlandServiceExposure: vi.fn(async () => {}),
-    } as never);
+    const service = createWorkerService(deps as never);
     const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();

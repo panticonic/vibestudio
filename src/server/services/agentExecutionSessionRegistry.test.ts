@@ -6,6 +6,7 @@ function admission(
   runId = "run:one"
 ): Parameters<AgentExecutionSessionRegistry["admit"]>[0] {
   return {
+    controllerRuntimeId: "agent:controller",
     admissionKey: `${runtimeId}:${runId}`,
     mode: "interactive" as const,
     ownerUser: "user:alice" as const,
@@ -342,6 +343,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
       const registry = new AgentExecutionSessionRegistry();
       const runtimeId = `do:workers/automation:${kind}:one`;
       const fact = registry.admitExecution({
+        controllerRuntimeId: "do:workers/missions:MissionsDO:workspace",
         admissionKey: `mission:one:${kind}`,
         mode: "mission",
         ownerUser: "user:alice",
@@ -376,7 +378,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
                 service: "workers/automation",
                 method: "run",
               },
-        operationPolicyDigest: "b".repeat(64),
+        authorityPlanDigest: "b".repeat(64),
         mission: {
           subject: `mission:one@${"c".repeat(64)}`,
           missionId: "one",
@@ -388,9 +390,24 @@ describe("AgentExecutionSessionRegistry admission", () => {
       });
 
       expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBe(fact);
+      const dispatchMethod = kind === "agent-turn" ? "runAutomationTurn" : "run";
+      expect(
+        registry.resolveDispatch(fact.controllerRuntimeId, runtimeId, dispatchMethod, fact.nonce)
+      ).toBe(fact);
+      expect(
+        registry.resolveDispatch("do:unrelated:Worker:one", runtimeId, dispatchMethod, fact.nonce)
+      ).toBeNull();
+      expect(
+        registry.resolveDispatch(fact.controllerRuntimeId, runtimeId, "unrelated", fact.nonce)
+      ).toBeNull();
+      expect(() =>
+        registry.finishExecution(fact.authoritySessionId, "do:unrelated:Worker:one")
+      ).toThrow(/admission controller/);
+      expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBe(fact);
       expect(
         registry.admitExecution({
           admissionKey: fact.admissionKey,
+          controllerRuntimeId: fact.controllerRuntimeId,
           mode: fact.mode,
           ownerUser: fact.ownerUser,
           workspaceId: fact.workspaceId,
@@ -400,15 +417,19 @@ describe("AgentExecutionSessionRegistry admission", () => {
           taskAuthority: fact.taskAuthority!,
           executionImage: fact.executionImage,
           executor: fact.executor,
-          operationPolicyDigest: fact.operationPolicyDigest,
+          authorityPlanDigest: fact.authorityPlanDigest,
           mission: fact.mission,
           parent: fact.parent,
           causalParent: fact.causalParent,
         })
       ).toBe(fact);
-      expect(registry.finishExecution(fact.authoritySessionId)).toBe(true);
+      expect(registry.finishExecution(fact.authoritySessionId, fact.controllerRuntimeId)).toBe(
+        true
+      );
       expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBeNull();
-      expect(registry.finishExecution(fact.authoritySessionId)).toBe(false);
+      expect(registry.finishExecution(fact.authoritySessionId, fact.controllerRuntimeId)).toBe(
+        false
+      );
     }
   );
 });

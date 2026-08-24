@@ -21,7 +21,7 @@ export interface CapabilityScope {
   resource: ResourceScope;
 }
 
-export interface CompiledOperationPolicyLeaf extends CapabilityScope {
+export interface CompiledAuthorityPlanLeaf extends CapabilityScope {
   service: string;
   method: string;
   tier: "open" | "gated" | "critical";
@@ -31,12 +31,12 @@ export interface CompiledOperationPolicyLeaf extends CapabilityScope {
   use: "action" | "conditional";
 }
 
-export interface CompiledOperationPolicyArtifact {
+export interface CompiledAuthorityPlanArtifact {
   schemaVersion: 1;
   compilerVersion: string;
   catalogDigest: string;
   executionImageDigest: string;
-  leaves: readonly CompiledOperationPolicyLeaf[];
+  leaves: readonly CompiledAuthorityPlanLeaf[];
   bodyDigest: string;
   createdAt: number;
 }
@@ -45,7 +45,7 @@ export interface TargetAuthorityRequest {
   v: 1;
   requestId: string;
   targetSubject: AuthorityGrantSubject;
-  operationPolicyDigest: string;
+  authorityPlanDigest: string;
   operationKey: string;
   capability: string;
   resource: ResourceScope;
@@ -219,6 +219,8 @@ export interface ExecutionAdmissionFact {
   authoritySessionId: string;
   authoritySessionVersion: number;
   admissionKey: string;
+  /** Authenticated runtime that owns admission replay and terminal closure. */
+  controllerRuntimeId: string;
   mode: AgentExecutionMode;
   ownerUser: `user:${string}`;
   workspaceId: string;
@@ -233,7 +235,7 @@ export interface ExecutionAdmissionFact {
   taskAuthority?: TaskGrantPrincipal;
   executionImage: ExecutionImageFact;
   executor: ExecutionAdmissionExecutor;
-  operationPolicyDigest?: string;
+  authorityPlanDigest?: string;
   mission?: {
     subject: `mission:${string}@${string}`;
     missionId: string;
@@ -374,7 +376,6 @@ export interface AuthorizationDecision {
   code:
     | "allowed"
     | "approval-required"
-    | "operation-policy-denied"
     | "user-denied"
     | "receiver-rejected"
     | "fixed-code-not-requested"
@@ -469,7 +470,6 @@ export type AuthorityFailureReasonCode =
 
 export type AuthorityRemediationKind =
   | "request-user-approval"
-  | "edit-mission"
   | "update-installed-code-manifest"
   | "declare-rpc-receiver"
   | "use-admitted-principal"

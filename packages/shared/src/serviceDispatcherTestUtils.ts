@@ -40,6 +40,7 @@ export function createTestExecutionSession(input: {
     authoritySessionId: `test:${input.runtimeId}`,
     authoritySessionVersion: 1,
     admissionKey: `test:${input.runtimeId}`,
+    controllerRuntimeId: "agent:test-controller",
     mode: input.mode ?? "test",
     ownerUser: "user:test",
     workspaceId: "test",

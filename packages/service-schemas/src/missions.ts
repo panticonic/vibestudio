@@ -5,7 +5,7 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/u);
 const missionSubject = z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u);
 const stateRef = z.string().regex(/^state:[0-9a-f]{64}$/u) as z.ZodType<`state:${string}`>;
-const policyRef = z.string().regex(/^policy:[0-9a-f]{64}$/u) as z.ZodType<`policy:${string}`>;
+const authorityPlanRef = z.string().regex(/^authority-plan:[0-9a-f]{64}$/u) as z.ZodType<`authority-plan:${string}`>;
 
 const executionImageSchema = z
   .object({
@@ -26,11 +26,11 @@ const operationIntentSchema = z
   })
   .strict();
 
-const operationPolicyReferenceSchema = z
+const authorityPlanReferenceSchema = z
   .object({
     schemaVersion: z.literal(1),
     digest: hex64,
-    artifactRef: policyRef,
+    artifactRef: authorityPlanRef,
     compilerVersion: z.string().min(1).max(128),
     catalogDigest: hex64,
   })
@@ -125,7 +125,7 @@ export const missionRecordSchema = z
     name: z.string().min(1),
     revision: z.number().int().positive(),
     charter: missionCharterSchema,
-    operationPolicy: operationPolicyReferenceSchema,
+    authorityPlan: authorityPlanReferenceSchema,
     owner: z.object({ userId: z.string().min(1), deviceId: z.string().min(1).optional() }).strict(),
     state: z.enum(["active", "paused", "completed", "retired"]),
     revisionDigest: hex64,
@@ -171,7 +171,6 @@ export const missionRunRecordSchema = z
       "executor-preparing",
       "dispatching",
       "executing",
-      "waiting-authority",
       "terminal",
     ]),
     outcome: z.enum(["succeeded", "failed", "skipped", "interrupted", "cancelled"]).optional(),
@@ -179,7 +178,6 @@ export const missionRunRecordSchema = z
     runNumber: z.number().int().positive().optional(),
     finishedAt: z.number().int().nonnegative().optional(),
     authoritySessionId: z.string().min(1).optional(),
-    acquisitionId: z.string().min(1).optional(),
     channelId: z.string().min(1).optional(),
     contextId: z.string().min(1).optional(),
     executorId: z.string().min(1).optional(),

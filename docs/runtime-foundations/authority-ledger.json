@@ -6839,10 +6839,10 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:authority.compileOperationPolicy",
+      "id": "host:authority.compileAuthorityPlan",
       "rpcPlane": "host-service",
       "owner": "authority",
-      "method": "compileOperationPolicy",
+      "method": "compileAuthorityPlan",
       "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
@@ -6850,7 +6850,7 @@
       "reviewRationale": "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows.",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:authority.compileOperationPolicy"
+        "key": "service:authority.compileAuthorityPlan"
       },
       "authorityPrincipals": [
         "code"
@@ -6874,12 +6874,12 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "allOf(capability(code,service:authority.compileOperationPolicy),workspace-member)",
+      "r3aRequirement": "allOf(capability(code,service:authority.compileAuthorityPlan),workspace-member)",
       "r3b": {
-        "review": "host-compiled-content-addressed-operation-policy",
-        "change": "Accepts only semantic service operations from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable verified artifact. Callers cannot author capability names, tiers, grants, or policy bodies."
+        "review": "host-compiled-content-addressed-authority-plan",
+        "change": "Accepts only semantic service-operation hints from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable launch-time acquisition plan. The plan is not a runtime allowlist or parallel authorization mechanism; callers cannot author capability names, tiers, grants, or executable policy."
       },
-      "capability": "service:authority.compileOperationPolicy",
+      "capability": "service:authority.compileAuthorityPlan",
       "parityAssertion": "generated-census:host-authority"
     },
     {

@@ -911,8 +911,8 @@ async function main() {
   const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
-  const { OperationPolicyStore } = await import("./services/operationPolicyStore.js");
-  const operationPolicyStore = new OperationPolicyStore({ statePath });
+  const { AuthorityPlanStore } = await import("./services/authorityPlanStore.js");
+  const authorityPlanStore = new AuthorityPlanStore({ statePath });
   const { TargetAuthorityRequestStore } = await import("./services/targetAuthorityRequestStore.js");
   const targetAuthorityRequests = new TargetAuthorityRequestStore({ statePath });
   const { UserlandResourceHandleStore } = await import("./services/userlandResourceHandleStore.js");
@@ -943,54 +943,40 @@ async function main() {
   // resolver as soon as all of its
   // durable policy inputs exist; ordinary RPC dispatch remains fenced by
   // markInitialized() after every service has registered.
-  dispatcher.setAuthorityResolver(
-    ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
-      const sessionId = caller.executionSession?.authoritySessionId ?? caller.runtime.id;
-      const sessionOrigin = caller.executionSession !== undefined;
-      const operationPolicyDigest = caller.executionSession?.operationPolicyDigest;
-      const executor = caller.executionSession?.executor;
-      const admittedRootMethod =
-        executor?.kind === "method" &&
-        executor.runtimeId === caller.runtime.id &&
-        executor.service === service &&
-        executor.method === method;
-      const operationPolicyDenied =
-        operationPolicyDigest && !admittedRootMethod
-          ? !operationPolicyStore.permits(operationPolicyDigest, service, method, resourceKey)
-          : false;
-      const conduitBlessed = Boolean(
-        caller.code?.executionDigest &&
-        conduitBlessingStore.isBlessed(caller.code) &&
-        caller.executionSession &&
-        caller.executionSession.executionImage.executionDigest === caller.code.executionDigest &&
-        caller.executionSession.executionImage.principal === codePrincipal(caller.code)
-      );
-      return {
-        ...authorizeVerifiedCaller(caller, {
-          workspaceId,
-          workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
-          workspaceRole: workspaceRoleResolver(caller.subject),
-          sessionId,
-          audience: `service:${service}`,
-          capability,
-          resourceKey,
-          tier,
-          contextIntegrity: joinContextIntegrity(
-            sessionOrigin && caller.agentBinding
-              ? contextIntegrityStore.effectiveFact({
-                  sessionId,
-                  attested: ctx.authorization?.contextIntegrity,
-                  conduitBlessed,
-                })
-              : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-            ctx.inheritedContextIntegrity ?? null
-          ) ?? { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-          grantStore: capabilityGrantStore,
-        }),
-        ...(operationPolicyDenied ? { operationPolicyDenied: true } : {}),
-      };
-    }
-  );
+  dispatcher.setAuthorityResolver(({ ctx, caller, service, capability, resourceKey, tier }) => {
+    const sessionId = caller.executionSession?.authoritySessionId ?? caller.runtime.id;
+    const sessionOrigin = caller.executionSession !== undefined;
+    const conduitBlessed = Boolean(
+      caller.code?.executionDigest &&
+      conduitBlessingStore.isBlessed(caller.code) &&
+      caller.executionSession &&
+      caller.executionSession.executionImage.executionDigest === caller.code.executionDigest &&
+      caller.executionSession.executionImage.principal === codePrincipal(caller.code)
+    );
+    return {
+      ...authorizeVerifiedCaller(caller, {
+        workspaceId,
+        workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+        workspaceRole: workspaceRoleResolver(caller.subject),
+        sessionId,
+        audience: `service:${service}`,
+        capability,
+        resourceKey,
+        tier,
+        contextIntegrity: joinContextIntegrity(
+          sessionOrigin && caller.agentBinding
+            ? contextIntegrityStore.effectiveFact({
+                sessionId,
+                attested: ctx.authorization?.contextIntegrity,
+                conduitBlessed,
+              })
+            : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+          ctx.inheritedContextIntegrity ?? null
+        ) ?? { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+        grantStore: capabilityGrantStore,
+      }),
+    };
+  });
   let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
   let presentationDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
   let workspacePresentationRevision = 0;
@@ -1335,12 +1321,10 @@ async function main() {
         classification: "external",
       });
     },
-    assertMissionNetworkExposure: (caller, targetUrl) => {
-      const policy = caller.executionSession?.operationPolicyDigest;
-      return policy
-        ? operationPolicyStore.permits(policy, "fetch", "request", targetUrl.origin)
-        : false;
-    },
+    // Every admitted mission uses manual redirect handling. The ordinary
+    // credential/network authority path decides each concrete origin; the
+    // launch-time operation plan must never become a second deny-only gate.
+    assertMissionNetworkExposure: (caller) => caller.executionSession?.mode === "mission",
   });
   let panelRuntimeCoordinatorForCleanup:
     | import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator
@@ -3291,7 +3275,7 @@ async function main() {
       createAuthorityService({
         dispatcher,
         acquisitions: acquisitionCoordinator,
-        operationPolicies: operationPolicyStore,
+        authorityPlans: authorityPlanStore,
         executionAdmissions: agentExecutionSessions,
         grants: capabilityGrantStore,
         workspaceId,
@@ -4538,6 +4522,13 @@ async function main() {
         },
         executionSessionForRuntime: (runtimeId, nonce) =>
           agentExecutionSessions.resolveInvocation(runtimeId, nonce),
+        executionSessionForDispatch: (controllerRuntimeId, executorRuntimeId, method, nonce) =>
+          agentExecutionSessions.resolveDispatch(
+            controllerRuntimeId,
+            executorRuntimeId,
+            method,
+            nonce
+          ),
         testPolicyForContext: (contextId) => agentExecutionSessions.testPolicyForContext(contextId),
         taskAuthorityForRuntime: (runtimeId) =>
           taskAuthorities.resolveRuntime(runtimeId, entityCache),
@@ -5620,14 +5611,6 @@ async function main() {
             const stateHash = await workspaceVcs.resolveContextState(contextId);
             const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
             return buildWorkspaceDeclarations(config);
-          },
-          assertUserlandServiceExposure: (ctx, service) => {
-            const policy = ctx.caller.executionSession?.operationPolicyDigest;
-            if (policy && !operationPolicyStore.permitsService(policy, service.name)) {
-              throw Object.assign(new Error(`Operation policy does not expose ${service.name}`), {
-                code: "EMISSIONSCOPE",
-              });
-            }
           },
           activateDurableObject: ({
             source,
@@ -7274,7 +7257,7 @@ async function main() {
       console.error("[Server] Resource handle store shutdown error:", error);
     }
     try {
-      operationPolicyStore.close();
+      authorityPlanStore.close();
       targetAuthorityRequests.close();
     } catch (error) {
       console.error("[Server] Authority artifact store shutdown error:", error);

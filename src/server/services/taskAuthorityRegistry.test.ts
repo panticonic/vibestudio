@@ -9,6 +9,7 @@ function execution(runtimeId: string, taskAuthority: `task:${string}`): Executio
     authoritySessionId: `authority:${runtimeId}`,
     authoritySessionVersion: 1,
     admissionKey: `task:${runtimeId}`,
+    controllerRuntimeId: "agent:task-controller",
     mode: "interactive",
     ownerUser: "user:alice",
     workspaceId: "workspace:one",

@@ -14,7 +14,7 @@ describe("TargetAuthorityRequestStore", () => {
     const subject = `mission:nightly@${"a".repeat(64)}` as const;
     const input = {
       targetSubject: subject,
-      operationPolicyDigest: "b".repeat(64),
+      authorityPlanDigest: "b".repeat(64),
       operationKey: `notification.showToUser:${"c".repeat(64)}`,
       capability: "notification.show",
       capabilityDefinitionDigest: "c".repeat(64),
@@ -23,24 +23,31 @@ describe("TargetAuthorityRequestStore", () => {
       sourceUser: "user:alice" as const,
     };
     const firstStore = new TargetAuthorityRequestStore({ statePath: root });
-    firstStore.registerSubject(subject, input.operationPolicyDigest, input.sourceUser, 10);
-    expect(() => firstStore.registerSubject(subject, "d".repeat(64), input.sourceUser, 11)).toThrow(
-      /different ownership or policy/
+    firstStore.registerSubject(
+      subject,
+      input.authorityPlanDigest,
+      input.sourceUser,
+      "do:missions",
+      10
     );
+    expect(() =>
+      firstStore.registerSubject(subject, "d".repeat(64), input.sourceUser, "do:missions", 11)
+    ).toThrow(/different ownership, controller, or policy/);
     const first = firstStore.ensure(input, 20);
     firstStore.close();
 
     const reopened = new TargetAuthorityRequestStore({ statePath: root });
     expect(reopened.subject(subject)).toEqual({
-      policyDigest: input.operationPolicyDigest,
+      authorityPlanDigest: input.authorityPlanDigest,
       ownerUser: input.sourceUser,
+      controllerRuntimeId: "do:missions",
       state: "active",
     });
     expect(reopened.ensure(input, 30)).toEqual(first);
     expect(reopened.pending()).toEqual([first]);
     reopened.settle(first.requestId, "granted", "grant:one", 40);
     expect(reopened.pending()).toEqual([]);
-    expect(reopened.forPolicy(subject, input.operationPolicyDigest)).toEqual([
+    expect(reopened.forPlan(subject, input.authorityPlanDigest)).toEqual([
       { ...first, state: "granted", settledAt: 40, grantId: "grant:one" },
     ]);
     reopened.close();
@@ -50,11 +57,11 @@ describe("TargetAuthorityRequestStore", () => {
     const store = new TargetAuthorityRequestStore({ statePath: statePath() });
     const subject = `mission:timer@${"a".repeat(64)}` as const;
     const policy = "b".repeat(64);
-    store.registerSubject(subject, policy, "user:alice", 10);
+    store.registerSubject(subject, policy, "user:alice", "do:missions", 10);
     store.ensure(
       {
         targetSubject: subject,
-        operationPolicyDigest: policy,
+        authorityPlanDigest: policy,
         operationKey: "notification.showToUser:leaf",
         capability: "notification.show",
         capabilityDefinitionDigest: "c".repeat(64),

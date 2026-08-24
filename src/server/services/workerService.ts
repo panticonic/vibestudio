@@ -132,10 +132,6 @@ export function createWorkerService(deps: {
     operationId: string,
     intent: string
   ) => Promise<{ operationId: string }>;
-  assertUserlandServiceExposure?: (
-    ctx: ServiceContext,
-    input: { name: string; provider: string; providerEv: string }
-  ) => void | Promise<void>;
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
   const resolvedDurableObjectKey = (
@@ -348,13 +344,6 @@ export function createWorkerService(deps: {
           objectKey == null ? null : String(objectKey)
         );
         const { service } = scoped;
-        if (service.origin === "workspace") {
-          await deps.assertUserlandServiceExposure?.(ctx, {
-            name: service.name,
-            provider: service.source,
-            providerEv: await exactProviderEv(scoped, service.source),
-          });
-        }
         const capability = `workspace-service:${service.name}`;
         const serviceTitle = service.title?.trim() || humanizeServiceName(service.name);
         const resourceKey =
@@ -408,16 +397,6 @@ export function createWorkerService(deps: {
         );
         const scoped = await resolveDurableObjectForCaller(ctx, String(source), String(className));
         const targetId = `do:${String(source)}:${String(className)}:${resolvedObjectKey}`;
-        for (const authority of scoped.authority) {
-          if (!authority.capability.startsWith("workspace-service:")) continue;
-          if (source !== INTERNAL_DO_SOURCE) {
-            await deps.assertUserlandServiceExposure?.(ctx, {
-              name: authority.capability.slice("workspace-service:".length),
-              provider: String(source),
-              providerEv: await exactProviderEv(scoped, String(source)),
-            });
-          }
-        }
         return {
           selections: scoped.authority.map(({ capability, principals }) =>
             selectedPreparedAuthoritySelection({
@@ -688,19 +667,6 @@ export function createWorkerService(deps: {
       ...scoped,
       authority: durableObjectAuthority(scoped.decls, source, className),
     };
-  }
-
-  async function exactProviderEv(scoped: ScopedDeclarations, source: string): Promise<string> {
-    if (scoped.scope === "main") {
-      const ev = buildSystem.getEffectiveVersion(source);
-      if (!ev) throw new Error(`No effective version for workspace service provider ${source}`);
-      return ev;
-    }
-    const resolved = await buildSystem.resolveBuildUnit(source, scoped.buildRef);
-    if (!resolved) {
-      throw new Error(`No exact context build for workspace service provider ${source}`);
-    }
-    return resolved.effectiveVersion;
   }
 }
 

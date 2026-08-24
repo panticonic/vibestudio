@@ -849,6 +849,7 @@ describe("createEvalService", () => {
     const casePolicy = executionSessions.testPolicyForContext("ctx:case");
     if (!casePolicy) throw new Error("Expected inherited case policy");
     const child = executionSessions.admit({
+      controllerRuntimeId: "agent:test-controller",
       mode: "test",
       ownerUser: "user:usr_test",
       workspaceId: "ws_1",

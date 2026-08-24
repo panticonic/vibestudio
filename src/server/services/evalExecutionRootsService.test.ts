@@ -47,6 +47,7 @@ function execution(): ExecutionAdmissionFact {
     authoritySessionId: "authority:one",
     authoritySessionVersion: 1,
     admissionKey: "eval:one",
+    controllerRuntimeId: "agent:one",
     mode: "interactive",
     ownerUser: "user:one",
     workspaceId: "workspace:one",

@@ -8,7 +8,7 @@ import {
 } from "./cronSchedule.js";
 
 export const MISSION_SCHEMA_VERSION = 2 as const;
-export const MISSION_POLICY_SCHEMA_VERSION = 1 as const;
+export const MISSION_AUTHORITY_PLAN_SCHEMA_VERSION = 1 as const;
 export const MISSION_COMPLETION_PROTOCOL = "automation-completion.v1" as const;
 
 export type MissionState = "active" | "paused" | "completed" | "retired";
@@ -34,10 +34,10 @@ export interface MissionOperationIntent {
   use: "action" | "conditional";
 }
 
-export interface MissionOperationPolicyReference {
-  schemaVersion: typeof MISSION_POLICY_SCHEMA_VERSION;
+export interface MissionAuthorityPlanReference {
+  schemaVersion: typeof MISSION_AUTHORITY_PLAN_SCHEMA_VERSION;
   digest: string;
-  artifactRef: `policy:${string}`;
+  artifactRef: `authority-plan:${string}`;
   compilerVersion: string;
   catalogDigest: string;
 }
@@ -105,7 +105,7 @@ export interface MissionRecord {
   name: string;
   revision: number;
   charter: MissionCharter;
-  operationPolicy: MissionOperationPolicyReference;
+  authorityPlan: MissionAuthorityPlanReference;
   owner: { userId: string; deviceId?: string };
   state: MissionState;
   revisionDigest: string;
@@ -129,7 +129,6 @@ export type MissionRunPhase =
   | "executor-preparing"
   | "dispatching"
   | "executing"
-  | "waiting-authority"
   | "terminal";
 
 export type MissionRunOutcome = "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
@@ -140,7 +139,6 @@ export interface MissionRunFailure {
   message: string;
   retry: "automatic" | "manual" | "none";
   invocationId?: string;
-  acquisitionId?: string;
   executorId?: string;
   causalEventRef?: string;
   detailsRef?: string;
@@ -314,15 +312,15 @@ export function missionCompletionResponse(value: unknown): MissionCompletionResp
 
 export function missionRevisionDigest(
   charter: MissionCharter,
-  operationPolicyDigest: string
+  authorityPlanDigest: string
 ): string {
   validateMissionCharter(charter);
-  if (!HEX64.test(operationPolicyDigest)) {
-    throw new Error("Automation revision requires an exact operation-policy digest");
+  if (!HEX64.test(authorityPlanDigest)) {
+    throw new Error("Automation revision requires an exact authority-plan digest");
   }
   return createHash("sha256")
     .update("automation-revision-v2\0", "utf8")
-    .update(canonicalJson({ charter, operationPolicyDigest }), "utf8")
+    .update(canonicalJson({ charter, authorityPlanDigest }), "utf8")
     .digest("hex");
 }
 

@@ -39,10 +39,10 @@ describe("missions v2 contract", () => {
         maxRuns: 12,
       },
     });
-    const operationPolicy = {
+    const authorityPlan = {
       schemaVersion: 1,
       digest: hex,
-      artifactRef: `policy:${hex}`,
+      artifactRef: `authority-plan:${hex}`,
       compilerVersion: "1",
       catalogDigest: hex,
     };
@@ -53,7 +53,7 @@ describe("missions v2 contract", () => {
         name: "Rollout watcher",
         revision: 1,
         charter,
-        operationPolicy,
+        authorityPlan,
         owner: { userId: "alice" },
         state: "active",
         revisionDigest: hex,

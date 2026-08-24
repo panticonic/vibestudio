@@ -704,7 +704,7 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "authority.compileOperationPolicy": {
+  "authority.compileAuthorityPlan": {
     tier: {
       tier: "open",
       session: "codeOnly",

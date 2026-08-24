@@ -44,7 +44,7 @@ export function stateLayout(statePath: string) {
     authority: {
       root: authority,
       grantsDb: path.join(authority, "grants.db"),
-      operationPoliciesDb: path.join(authority, "operation-policies.db"),
+      authorityPlansDb: path.join(authority, "authority-plans.db"),
       targetRequestsDb: path.join(authority, "target-requests.db"),
       resourceHandlesDb: path.join(authority, "resource-handles.db"),
       conduitBlessingsFile: path.join(authority, "conduit-blessings.json"),

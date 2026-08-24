@@ -85,15 +85,6 @@ export function authorityFailureForDecision(
           message: "Request user approval, then retry the exact invocation.",
         },
       };
-    case "operation-policy-denied":
-      return {
-        ...common,
-        remediation: {
-          kind: "edit-mission",
-          message:
-            "This operation is outside the active automation policy. Edit the automation before retrying it.",
-        },
-      };
     case "fixed-code-not-requested":
       return {
         ...common,

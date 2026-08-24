@@ -41,7 +41,7 @@ lookup or an automation-specific grant issuer:
 ```text
 launch_automation
   -> persist launch intent and immutable preparing revision
-  -> compile and publish exact host policy artifact
+  -> compile and publish exact host authority-plan artifact
   -> activate the acknowledged revision
   -> ordinary authority acquisition may issue mission grants
 
@@ -126,7 +126,7 @@ subsystems. It does not fork their contracts.
 | Caller authentication and user attribution          | host identity and `AuthorizationContext`                    | Require one canonical host-normalized `actingUser` for user-delegated mutations           |
 | Grants, tiers, acquisition, approval, re-evaluation | `docs/authority-acquisition-spec.md` and authority services | Add durable target-subject requests for mission principals; retain invocation rendezvous  |
 | Execution admission and causal execution            | execution-session registry, agent loop, EvalDO, method host | Generalize the EvalDO-specific fact into one executor-discriminated parent/child contract |
-| Tool and service structural reach                   | ordinary agent tool registry and eval authority manifest    | Compile an automation operation policy into these existing bounds                         |
+| Tool and service structural reach                   | immutable code manifest, ordinary agent tools, and eval manifest | Reuse these bounds unchanged; an authority plan never acts as a second allowlist       |
 | Runtime/code identity                               | runtime entity graph and sealed build authority manifest    | Stamp an exact execution image; derive infrastructure from sealed runtime facts           |
 | Conversation state and transcript                   | channel service and agent loop                              | Reuse channels only for history/routing; never as an authority key                        |
 | Definitions, schedules, revisions, run ledger       | MissionsDO                                                  | Remain the single durable automation/workflow owner                                       |
@@ -158,7 +158,7 @@ The digest uses an explicit domain/schema version and canonical JSON over:
 - executable action (prompt, eval source, or method and arguments);
 - fresh/continue conversation behavior, excluding concrete per-run IDs;
 - trigger, cadence, timezone, jitter, and completion policy;
-- compiled operation-policy digest;
+- compiled authority-plan digest;
 - context/data-flow constraints that affect authority.
 
 Display name, non-executed summary copy, owner/device provenance, lifecycle
@@ -196,7 +196,7 @@ interface ExecutionAdmissionFact {
     revisionDigest: string;
   };
   executionImage: ExecutionImage;
-  operationPolicyDigest: string;
+  authorityPlanDigest: string;
   executor: ExecutorBinding;
   leaseOwner: { runtimeId: string; executorKind: ExecutorBinding["kind"] };
   parent: { authoritySessionId: string; nonce: string } | null;
@@ -293,7 +293,7 @@ Lower-level method automation validates an explicitly selected exact image.
 `ref` is required in the current schema. Historical definitions without one
 are migrated or archived; optionality must not remain in the live type.
 
-### 4.5 Operation policy
+### 4.5 Authority plan
 
 Replace separate model-authored `toolExposure` and `permissions` projections
 with one semantic operation declaration. Its exact API should reuse the
@@ -309,42 +309,50 @@ interface AutomationOperationIntent {
 }
 ```
 
-The host-owned compiler resolves each intent against live, sealed method
-metadata and produces an immutable operation policy containing:
+The host-owned compiler resolves each declared intent against live, sealed
+receiver metadata and produces an immutable authority plan containing:
 
-- exact structurally exposed methods or agent tools;
-- receiver capability and resource derivation;
+- exact service/method identity for each declared acquisition hint;
+- receiver-derived capability and resource;
 - tier and mission-grant eligibility;
-- network origin bounds;
 - resolved userland provider identities where relevant;
 - the canonical digest consumed by execution admission;
 - authority acquisition requests for eligible standing grants.
+
+This plan is not a runtime allowlist, tool-exposure list, network ceiling, or
+second authorization decision. The immutable execution image and its ordinary
+code manifest define structural reach. Agent tools and eval manifests keep
+their existing exposure/attenuation semantics. Every concrete service call is
+still evaluated by the ordinary authority subsystem. An omitted operation
+therefore misses only launch-time pre-acquisition: the running call creates or
+joins the ordinary approval acquisition instead of failing as an undeclared
+automation operation.
 
 Action userland providers are resolved and pinned to exact provider identity and
 build in the revision. Active automations do not use `follow-head`, live
 workspace-service discovery, or unresolved service names for action reach. A
 provider update is a behavior change and produces a new authority digest.
 
-Network reach and expected external-data lineage are derived from the declared
-operations and receiver/provider metadata. If a prompt action needs a semantic
-source not mechanically derivable, it declares that source through a small
-public intent vocabulary; it does not author internal `lineageClasses`,
-`evalNetwork`, or host capability fields directly.
+Network reach and external-data lineage remain properties of the ordinary
+runtime call, receiver/provider metadata, and execution manifest. The model
+does not author internal `lineageClasses`, `evalNetwork`, host capability
+fields, or an automation-specific substitute.
 
 The agent does not type capability names or tiers. The compiler rejects an
 unknown method, an underivable resource, an unresolved provider, a global
 wildcard, or a permission request that is broader than the declared operation.
 
-Prompt actions with genuinely dynamic tool choice declare a bounded policy
-envelope. Inline eval and method actions should normally declare exact
-operations. The inspector renders the compiled policy, not the model's prose
-alone.
+Prompt actions with dynamic tool choice may omit operations or declare only the
+predictable calls worth pre-acquiring. Inline eval and method actions should
+normally declare exact predictable operations. The inspector labels these as
+pre-acquisition hints and renders the compiled authority plan alongside the
+executable definition; it must not imply that the list bounds runtime behavior.
 
-#### 4.5.1 Canonical policy artifact
+#### 4.5.1 Canonical authority-plan artifact
 
 The digest is not self-authenticating and MissionsDO is not the authoritative
 owner of the compiled body. The host authority/runtime layer owns a generic,
-durable, content-addressed operation-policy artifact store. It is writable only
+durable, content-addressed authority-plan artifact store. It is writable only
 through the in-process host compiler boundary, never by MissionsDO or another
 userland RPC caller. Before a revision can become admissible, the host compiler
 writes an immutable artifact keyed by its canonical digest containing:
@@ -352,17 +360,16 @@ writes an immutable artifact keyed by its canonical digest containing:
 - policy schema and canonicalization version;
 - compiler version;
 - capability/method/tool catalog digest and resolved provider/build identities;
-- the complete canonical operation-policy body; and
+- the complete canonical authority-plan body; and
 - compiler provenance sufficient for the host to recognize the artifact as its
   own output.
 
 Admission receives only the digest/reference and resolves the body from this
 trusted host-owned store; successful lookup proves that the host compiler
-accepted that exact body. If an artifact crosses a trust/storage boundary, the
-reference additionally carries a host-verifiable compiler receipt. Admission
-never trusts a policy body supplied by MissionsDO and never recompiles an old
-revision against current catalogs. Compiler/catalog changes that alter meaning
-require an explicit new artifact and revision/migration.
+accepted those exact pre-acquisition leaves for the revision and execution
+image. This binds revision and acquisition provenance; it does not authorize or
+deny a runtime operation. Admission never trusts a plan body supplied by
+MissionsDO and never recompiles an old revision against current catalogs.
 
 Artifact publication is content-addressed and idempotent. MissionsDO retains
 semantic operation intents and the acknowledged artifact reference in the
@@ -407,7 +414,7 @@ The authority service gains or formalizes one generic operation:
 authority.acquireForSubject({
   subject: missionSubject,
   sourceExecution: currentExecutionProof,
-  operationPolicyDigest,
+  authorityPlanDigest,
   scope: "mission",
 });
 ```
@@ -428,7 +435,7 @@ sufficient to settle the acquisition.
 `sourceExecution` is a live, expiring authorization to create the request; it
 is consumed at initiation and is never stored as the future proof of consent.
 The authority subsystem freezes and validates the target subject, compiled
-policy artifact, derived capability/resource leaf, allowed decisions, owner,
+authority-plan artifact, derived capability/resource leaf, allowed decisions, owner,
 and workspace while that proof is live.
 
 The current acquisition contract cannot satisfy this operation unchanged. Its
@@ -440,11 +447,11 @@ target-subject request record owned by the authority subsystem:
 interface DurableAuthorityRequest {
   v: 1;
   requestId: string;
-  requestKey: string; // digest(target subject + policy artifact + operation leaf)
+  requestKey: string; // digest(target subject + authority-plan artifact + operation leaf)
   targetSubject: `mission:${string}@${string}`;
   targetLifecycle: { kind: "mission-revision"; missionId: string; revision: number };
-  operationPolicyArtifactRef: string;
-  operationPolicyDigest: string;
+  authorityPlanArtifactRef: string;
+  authorityPlanDigest: string;
   operationLeafDigest: string;
   capability: string;
   resource: ResourceScope;
@@ -469,7 +476,7 @@ outbox/projection. Recreating the presentation after process loss uses the
 stable request key and cannot create a second semantic request or card.
 
 Settlement authenticates the deciding user and validates the frozen request
-against the still-existing target subject and canonical policy artifact; it
+against the still-existing target subject and canonical authority-plan artifact; it
 does not depend on the launch runtime remaining alive. Approval mints the
 ordinary grant and records its decision provenance before marking the request
 allowed. Denial is durable. Retirement or supersession closes unresolved
@@ -506,7 +513,7 @@ step. Launch also submits the compiled standing-authority acquisition batch.
 
 There is no `automation.setup`, proposal card, or second chat approval.
 
-Seeded product automations use this same principal, operation-policy, and run
+Seeded product automations use this same principal, authority-plan, and run
 admission model. Their standing grants, if any, come from explicit signed
 product policy provenance rather than fabricated user attribution. “Seeded” is
 definition provenance, not a second authority or execution mode.
@@ -516,7 +523,8 @@ definition provenance, not a second authority or execution mode.
 For a service call inside an admitted automation run:
 
 1. Verify the caller and execution-session attestation.
-2. Verify that the operation is inside the compiled operation policy.
+2. Apply the ordinary structural exposure and attenuation rules of the exact
+   execution image, agent tool registry, or eval manifest.
 3. Evaluate ordinary subjects, including the exact mission and task subjects.
 4. If a matching mission grant exists, execute.
 5. If a gated grant is missing, create or join the ordinary acquisition and
@@ -533,17 +541,18 @@ The approval surface may offer, when policy permits:
 Critical authority is exact-invocation/session scoped and is never offered as
 standing automation authority.
 
-### D4. Structural policy cannot be widened by approval
+### D4. Structural reach remains an ordinary runtime property
 
 Missing authority and missing structural reach are different conditions.
 
-- A missing grant inside the operation policy is acquirable.
-- An operation outside the policy is rejected as an automation-definition
-  mismatch. Approval cannot silently modify the definition.
+- A missing grant is acquirable whether or not launch predicted the operation.
+- A method absent from the execution image's code manifest, agent tool surface,
+  or eval attenuation remains structurally unreachable. Approval cannot widen
+  those ordinary bounds.
+- An extra authority-plan leaf grants nothing. An omitted leaf denies nothing.
 
-Because operation policy and standing-authority planning come from one source,
-the common “exposed but forgot the permission row” mismatch disappears. Dynamic
-prompt actions still need a deliberately bounded policy.
+This removes the automation-only “exposed but forgot the permission row” state
+without weakening the existing runtime boundaries.
 
 ### D5. Revocation is ordinary and immediately effective
 
@@ -575,7 +584,7 @@ run. The host validates:
 - the authenticated issuer is the canonical automation workflow owner;
 - the request is a host-authenticated admission statement from the owner that
   already validated the active revision in its durable transaction;
-- the revision digest and operation-policy digest match;
+- the revision digest and authority-plan digest match;
 - the execution image is exact and resolvable;
 - the code/runtime relationship is valid;
 - the owner and workspace are consistent.
@@ -602,7 +611,7 @@ creates an `eval` child variant of `ExecutionAdmissionFact` carrying the same
 mission and task facts plus a new exact eval run identity.
 
 Eval arguments cannot select `mode: mission`, a mission subject, task
-authority, owner user, or operation policy. Any supplied copies are rejected.
+authority, owner user, or authority plan. Any supplied copies are rejected.
 
 Downstream eval calls use the existing dispatcher, authority evaluator,
 acquisition coordinator, context-integrity constraints, and run manifest.
@@ -636,7 +645,8 @@ subjects authorize those calls.
 
 Remove the rule that method automations must have `permissions: []` because
 they use unrelated installed code authority. There will be no `permissions`
-field, and both action kinds use the compiled operation policy.
+field, and both action kinds use the same ordinary authority evaluator. Their
+authority plans only drive launch-time pre-acquisition.
 
 ### D10. Existing agent and eval machinery remains canonical
 
@@ -661,58 +671,60 @@ MissionsDO owns:
 - current automation records;
 - immutable revisions;
 - schedules and occurrence admission;
-- semantic operation intents and acknowledged operation-policy references;
+- semantic operation intents and acknowledged authority-plan references;
 - run workflow phases;
 - run results and failure projections;
 - idempotency records;
-- the outbox of remote effects it must reconcile.
+- durable phase/effect intent for remote calls it must reconcile.
 
-The host policy store owns canonical compiled policy artifacts. The authority
+The host authority-plan store owns canonical compiled authority-plan artifacts. The authority
 store owns durable target-subject requests, decisions, and grants. The runtime
 registry owns live execution admissions. MissionsDO owns references and
 workflow effects, never copies that become competing sources of truth.
-Cross-owner operations are sagas driven by the MissionsDO outbox, never claimed
-to be one SQLite transaction.
+Cross-owner operations are sagas driven by a durable command row, run phase, or
+explicit lifecycle-effect row as appropriate; a separate generic outbox table
+is not required when the phase row itself is the complete replayable intent.
+They are never claimed to be one SQLite transaction.
 
 ### D12. Commit intent before remote effects
 
 Launch order:
 
-1. Validate and compile the definition in memory without external mutation.
-2. In one MissionsDO transaction, allocate `missionId`, store immutable revision
-   1 as internally preparing, store the launch idempotency key, and add
-   deterministic policy-publication, activation, projection, and authority
-   outbox effects.
-3. Publish/recover the content-addressed policy artifact idempotently and record
-   its host acknowledgement.
-4. Point the mission at revision 1 and make it admissible only after the exact
-   policy reference is acknowledged.
-5. Publish/recover the institution projection idempotently.
-6. Submit standing-authority acquisitions idempotently.
-7. Reconcile until every required effect is acknowledged or durably failed.
+1. Validate the definition without external mutation.
+2. In one MissionsDO transaction, allocate `missionId` and persist the launch
+   command identity plus exact intent in `preparing` state.
+3. Compile/publish the content-addressed authority-plan artifact idempotently.
+4. In one MissionsDO transaction, store revision 1 with the acknowledged plan
+   reference, make it active/admissible, and settle the launch command.
+5. Submit or join standing-authority acquisitions idempotently from the durable
+   revision.
+6. Let the launching agent's ordinary durable effect journal publish the
+   institution transcript event with a mission-derived idempotency key.
 
-No host policy artifact, grant, or runtime resource may be created before the
+No host authority-plan artifact, grant, or runtime resource may be created before the
 durable intent row that names and recovers it. A content-addressed artifact may
 be safely replayed; an orphan is collected under the policy-store retention
 rules rather than treated as an active revision.
 
-The native tool does not report successful institution until the idempotent chat
-projection is acknowledged. If projection delivery fails after the definition
-commit, retry resolves the same mission and re-drives the same event rather than
-creating another definition.
+The native tool does not report successful institution until its idempotent chat
+event is acknowledged. Transcript ownership remains with the agent journal, not
+MissionsDO. If delivery fails after the definition commit, retry resolves the
+same mission and re-drives the same event rather than creating another
+definition.
 
 ### D13. Revisions use prepare, switch, retire
 
-Editing creates a new immutable revision and compiled operation-policy digest.
+Editing creates a new immutable revision and compiled authority-plan digest.
 The workflow is:
 
 ```text
-revision prepared locally
-  -> policy artifact publication and acquisition effects recorded
-  -> exact policy artifact acknowledged by host
+edit command intent prepared locally
+  -> authority-plan artifact published idempotently
+  -> exact authority-plan artifact acknowledged by host
   -> active revision pointer switched in one local transaction
   -> previous subject becomes unreachable from new admission
-  -> previous grants/auxiliary projections retired asynchronously
+  -> new acquisition is submitted/joined from the durable revision
+  -> old runs are closed and previous grants retired asynchronously
 ```
 
 Never suspend or revoke the old active revision before the new revision is
@@ -722,7 +734,7 @@ database pointer to an unusable authority state.
 
 Pending capability acquisition does not make the immutable revision invalid.
 It is visible as pending authority and run-time calls may join its durable
-target-subject request. A missing/unacknowledged policy artifact does make the
+target-subject request. A missing/unacknowledged authority-plan artifact does make the
 revision inadmissible; it is an internal preparation/effect failure, not
 permission state.
 
@@ -762,15 +774,13 @@ type RunPhase =
   | "executor-preparing"
   | "dispatching"
   | "executing"
-  | "waiting-authority"
   | "terminal";
 
 type RunOutcome = "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
 ```
 
-The exact storage may combine these into a discriminated union. It must not
-represent `waiting-authority` as generic running, and a terminal row must carry
-exactly one outcome.
+The exact storage may combine these into a discriminated union. A terminal row
+must carry exactly one outcome.
 
 ### 8.3 Replayable effects
 
@@ -786,8 +796,12 @@ Each remote step has a deterministic effect identity and durable acknowledgement
 - finish execution admission;
 - publish terminal or attention notification.
 
-Effects must be individually idempotent at their receiver. The workflow may
-retry an ambiguous effect; it may not infer success from elapsed time.
+Effects must be individually idempotent at their receiver. The run phase is the
+durable effect intent and advances only after the receiver acknowledges the
+stable key. The workflow may retry an ambiguous effect; it may not infer
+success from elapsed time. A recovered execution admission may have a new live
+session ID, which must replace the stale closure coordinate in the run row
+before redispatch.
 
 ### 8.4 Recovery
 
@@ -809,23 +823,22 @@ process died between awaits.
 
 ### 8.5 Waiting for authority
 
-When acquisition parks a call, the execution owner emits a durable phase
-transition containing the acquisition ID and exact invocation reference.
-MissionsDO projects the run as `waiting-authority`; the inspector links to the
-ordinary approval surface.
+When acquisition parks a concrete call, the ordinary agent/eval execution
+journal owns the invocation and acquisition reference. The mission run remains
+`executing`; MissionsDO must not copy an `acquisitionId` or synthesize a second
+authority lifecycle. The inspector follows the run's exact channel/executor
+link to show the ordinary approval state and action.
 
-Approval resumes the existing call when the runtime remains live. If the
-runtime was interrupted, the run records that interruption honestly. The
-durable target-subject request and eventual grant/denial survive the runtime and
-host process, so an explicit subsequent run joins or replays the same semantic
-decision without duplicating the question. The live invocation waiter itself is
-not misrepresented as durable.
+Approval resumes the existing call when its execution remains live. If it was
+interrupted, the run records that interruption honestly. The durable
+target-subject request and eventual grant/denial survive process loss, so a
+subsequent run joins the same semantic request without duplicating the question.
 
 ### 8.6 Non-overlap and schedules
 
 Retain one active nonterminal run per mission. A due occurrence during an
-active run creates a visible `skipped` terminal occurrence. Waiting for
-authority counts as active and therefore does not create overlapping work.
+active run creates a visible `skipped` terminal occurrence. A call parked for
+authority remains part of its active executing run and does not overlap.
 
 Advance the schedule in the same transaction that admits the deterministic
 occurrence. Preserve existing interval, cron, timezone, jitter, `untilAt`,
@@ -873,7 +886,7 @@ automation. It is never an approval card.
 The pill and Automations panel show:
 
 - active definition and exact revision;
-- action and compiled operation policy;
+- action and compiled authority plan;
 - standing grants, pending acquisitions, and durable denials;
 - cadence, timezone, end policy, and next occurrence;
 - fresh/continue conversation behavior;
@@ -1052,12 +1065,12 @@ row points to one active revision. A revision contains:
 - conversation policy;
 - trigger and completion policy;
 - semantic operation intents;
-- compiled operation-policy digest/reference, schema/compiler version, and
+- compiled authority-plan digest/reference, schema/compiler version, and
   acknowledged host artifact coordinate;
 - declared context/lineage policy;
 - revision digest.
 
-Do not store model-authored grants or canonical compiled policy bodies inside
+Do not store model-authored grants or canonical compiled authority plan bodies inside
 the revision. Store grant and durable acquisition references as authority
 projections keyed by mission subject; the host stores and authenticates the
 compiled artifact body.
@@ -1188,7 +1201,7 @@ Before changing schemas, record counts of:
 - missions by state and schema version;
 - active revisions with and without immutable source refs;
 - mission-scoped grants and denials;
-- compiled policy digests/bodies and the catalog/compiler versions that produced
+- compiled authority-plan digests/bodies and the catalog/compiler versions that produced
   them;
 - active reviewed closures and unfinished closure sessions;
 - nonterminal mission runs;
@@ -1238,13 +1251,13 @@ For every migrated mission, while v2 admission remains fenced:
 
 1. compile operation intents from stored action/tool declarations only where
    exact and mechanically derivable;
-2. publish and acknowledge the canonical host policy artifact, then prepare the
+2. publish and acknowledge the canonical host authority-plan artifact, then prepare the
    v2 revision reference;
 3. after §13.3 proves old sessions terminal, revoke the old closure grants once
    and retire unresolved old requests/closure state;
 4. create durable ordinary authority requests for eligible standing operations
    of migrated active missions;
-5. enable v2 admission only when its revision and policy artifact are exact;
+5. enable v2 admission only when its revision and authority-plan artifact are exact;
 6. leave the mission inspectable and allow ordinary run-time fallback while a
    new request is pending.
 
@@ -1290,7 +1303,7 @@ one running system.
    authenticated runtime/object binding, idempotent admission key, causal child
    derivation, renewal owner, and terminal closure. Specify the migration of
    `AgentExecutionSessionFact`, not an automation side transport.
-4. Define the versioned revision and canonical operation-policy artifact
+4. Define the versioned revision and canonical authority-plan artifact
    schemas, host store ownership, compiler/catalog provenance, lookup,
    retention, and garbage collection.
 5. Specify the admission-fence -> terminalize sessions -> revoke legacy
@@ -1300,7 +1313,7 @@ one running system.
 
 Exit evidence:
 
-- one canonical schema for each new record, executor path, and policy artifact;
+- one canonical schema for each new record, executor path, and authority-plan artifact;
 - no unresolved question about principal selection, grant provenance, or run
   identity, lease ownership, request recovery, or policy lookup;
 - deletion inventory mapped to concrete files and generated artifacts.
@@ -1408,9 +1421,10 @@ Required acceptance scenarios:
    first tick and the tick produces its durable result.
 2. Gated operation approved “always for this automation”; later ticks settle
    from the exact mission grant.
-3. Gated operation omitted from standing acquisition but inside operation
-   policy; the tick becomes waiting-authority, approval resumes it, and the UI
-   never reports a generic hang.
+3. Gated operation omitted from the authority plan; the concrete runtime call
+   creates ordinary acquisition, the execution journal shows the parked
+   invocation while the mission remains executing, approval resumes it, and
+   the UI never reports a generic hang.
 4. Critical operation requests exact approval on every distinct invocation.
 5. Denial reaches eval/agent as a typed error and produces a structured run
    outcome without corrupting the schedule.
@@ -1441,7 +1455,7 @@ Required acceptance scenarios:
     authority through the standard path.
 19. Migration fences old admission, terminalizes every old session, and only
     then revokes legacy grants/removes closure rows.
-20. Admission after host restart resolves the exact stored policy artifact; a
+20. Admission after host restart resolves the exact stored authority-plan artifact; a
     missing, forged, or current-catalog-recompiled body is rejected.
 
 ### Phase 6 — Coordinated multi-repository publication
@@ -1468,8 +1482,8 @@ complete from a local commit or push response alone.
 
 ### Pure/unit
 
-- canonical revision and operation-policy digests;
-- operation-policy artifact provenance, catalog/compiler version pinning,
+- canonical revision and authority-plan digests;
+- authority-plan artifact provenance, catalog/compiler version pinning,
   lookup, retention roots, and garbage collection;
 - mission principal construction and version separation;
 - operation intent -> method metadata -> capability/resource compilation;
@@ -1524,7 +1538,7 @@ an admitted old execution remains live.
 
 - institution and run event idempotency;
 - collapsed cards make no reads;
-- waiting-authority action opens the exact acquisition;
+- a parked invocation opens its exact ordinary authority acquisition;
 - inspector distinguishes action operations, standing grants, pending
   authority, and infrastructure identity without jargon;
 - no transient start notification;
@@ -1551,14 +1565,14 @@ Add tests or static checks that fail if:
   decision reference;
 - a pending mission acquisition depends on the originating runtime remaining
   live or creates a second request/card after restart;
-- admission accepts a policy body from MissionsDO, recompiles an old revision
+- admission accepts an authority-plan body from MissionsDO, recompiles an old revision
   against current catalogs, or cannot resolve the canonical host artifact;
 - an agent/eval child can supply its own mission or task subject;
 - an agent-turn, eval, or method invocation can use an admission without an
   authenticated executor-kind binding or can renew another executor's lease;
 - a current revision omits an immutable source ref or schema version;
 - a critical grant is issued to a mission subject;
-- a global service wildcard enters an operation policy;
+- a global service wildcard enters an authority plan;
 - infrastructure dependency lists are duplicated in the automation compiler;
 - a nonterminal run lacks a recoverable phase/effect identity;
 - launch/edit performs an external mutation before durable intent;

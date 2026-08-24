@@ -109,6 +109,7 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       authoritySessionId: "authority-session:s1",
       authoritySessionVersion: 1,
       admissionKey: "session:s1",
+      controllerRuntimeId: "agent:session-owner",
       mode: "interactive",
       ownerUser: user,
       workspaceId: "ws-1",

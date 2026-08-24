@@ -75,7 +75,6 @@ const leafSchema = z
       .object({
         reasonCode: z.enum([
           "approval-required",
-          "operation-policy-denied",
           "user-denied",
           "receiver-rejected",
           "fixed-code-not-requested",
@@ -93,7 +92,6 @@ const leafSchema = z
           .object({
             kind: z.enum([
               "request-user-approval",
-              "edit-mission",
               "update-installed-code-manifest",
               "declare-rpc-receiver",
               "use-admitted-principal",
@@ -178,7 +176,7 @@ export const authorityMethods = defineServiceMethods({
     authority: EVERY_ORIGIN,
     access: { sensitivity: "read" },
   },
-  compileOperationPolicy: {
+  compileAuthorityPlan: {
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -187,7 +185,7 @@ export const authorityMethods = defineServiceMethods({
       rationale:
         "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows.",
     },
-    description: "Compile and publish one immutable content-addressed operation policy.",
+    description: "Compile and publish one immutable content-addressed authority plan.",
     args: z.tuple([
       z
         .object({
@@ -211,7 +209,7 @@ export const authorityMethods = defineServiceMethods({
       .object({
         schemaVersion: z.literal(1),
         digest: z.string().regex(/^[0-9a-f]{64}$/u),
-        artifactRef: z.string().regex(/^policy:[0-9a-f]{64}$/u),
+        artifactRef: z.string().regex(/^authority-plan:[0-9a-f]{64}$/u),
         compilerVersion: z.string(),
         catalogDigest: z.string().regex(/^[0-9a-f]{64}$/u),
       })
@@ -234,7 +232,7 @@ export const authorityMethods = defineServiceMethods({
       z
         .object({
           targetSubject: z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u),
-          operationPolicyDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+          authorityPlanDigest: z.string().regex(/^[0-9a-f]{64}$/u),
         })
         .strict(),
     ]),
@@ -280,7 +278,7 @@ export const authorityMethods = defineServiceMethods({
               className: z.string().min(1),
             })
             .strict(),
-          operationPolicyDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+          authorityPlanDigest: z.string().regex(/^[0-9a-f]{64}$/u),
           executor: z.discriminatedUnion("kind", [
             z
               .object({

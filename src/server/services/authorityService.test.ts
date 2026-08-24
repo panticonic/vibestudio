@@ -25,7 +25,7 @@ describe("authorityService", () => {
     });
   });
 
-  it("retires owner-attributed authority only after live executions close", async () => {
+  it("lets the durable controller retire authority only after live executions close", async () => {
     const subject = `mission:timer@${"a".repeat(64)}` as const;
     const hasLiveMissionSubject = vi.fn(() => true);
     const retireTargetSubject = vi.fn(() => ({ cancelledRequests: 2 }));
@@ -34,8 +34,9 @@ describe("authorityService", () => {
       dispatcher: {} as never,
       acquisitions: {
         targetSubject: () => ({
-          policyDigest: "b".repeat(64),
+          authorityPlanDigest: "b".repeat(64),
           ownerUser: "user:alice",
+          controllerRuntimeId: "do:missions",
           state: "active",
         }),
         retireTargetSubject,
@@ -45,7 +46,6 @@ describe("authorityService", () => {
     });
     const context = {
       caller: createVerifiedCaller("do:missions", "do"),
-      authorization: { actingUser: "user:alice", ownerChain: ["user:alice"] },
     } as never;
     await expect(
       service.handler(context, "retireTarget", [{ targetSubject: subject }])
@@ -63,10 +63,11 @@ describe("authorityService", () => {
     const service = createAuthorityService({
       dispatcher: {} as never,
       acquisitions: {
+        targetSubject: () => null,
         registerTargetSubject,
         targetRequestsFor: () => [],
       } as never,
-      operationPolicies: {
+      authorityPlans: {
         get: () => ({ leaves: [] }),
       } as never,
     });
@@ -80,9 +81,143 @@ describe("authorityService", () => {
     const subject = `mission:timer@${"a".repeat(64)}` as const;
     await expect(
       service.handler(context, "acquireForTarget", [
-        { targetSubject: subject, operationPolicyDigest: "b".repeat(64) },
+        { targetSubject: subject, authorityPlanDigest: "b".repeat(64) },
       ])
     ).resolves.toEqual({ requestIds: [], grantIds: [], denialIds: [] });
-    expect(registerTargetSubject).toHaveBeenCalledWith(subject, "b".repeat(64), "user:alice");
+    expect(registerTargetSubject).toHaveBeenCalledWith(
+      subject,
+      "b".repeat(64),
+      "user:alice",
+      "do:workers/missions:MissionsDO:workspace"
+    );
+  });
+
+  it("replays acquisition from the durable target owner after the launching execution ends", async () => {
+    const subject = `mission:timer@${"a".repeat(64)}` as const;
+    const requestForTarget = vi.fn();
+    const registerTargetSubject = vi.fn();
+    const service = createAuthorityService({
+      dispatcher: {} as never,
+      acquisitions: {
+        targetSubject: () => ({
+          authorityPlanDigest: "b".repeat(64),
+          ownerUser: "user:alice",
+          controllerRuntimeId: "do:workers/missions:MissionsDO:workspace",
+          state: "active",
+        }),
+        registerTargetSubject,
+        requestForTarget,
+        targetRequestsFor: () => [],
+      } as never,
+      authorityPlans: {
+        get: () => ({
+          leaves: [
+            {
+              service: "accounts",
+              method: "connect",
+              capability: "accounts.connect",
+              capabilityDefinitionDigest: "c".repeat(64),
+              resource: { kind: "exact", key: "provider:example" },
+              tier: "gated",
+            },
+          ],
+        }),
+      } as never,
+    });
+
+    await expect(
+      service.handler(
+        {
+          caller: createVerifiedCaller(
+            "do:workers/missions:MissionsDO:workspace",
+            "do",
+            undefined,
+            null,
+            { userId: "system", handle: "system" }
+          ),
+        } as never,
+        "acquireForTarget",
+        [{ targetSubject: subject, authorityPlanDigest: "b".repeat(64) }]
+      )
+    ).resolves.toEqual({ requestIds: [], grantIds: [], denialIds: [] });
+    expect(registerTargetSubject).not.toHaveBeenCalled();
+    expect(requestForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ targetSubject: subject, sourceUser: "user:alice" })
+    );
+  });
+
+  it("rejects target replay from code other than the registered controller", async () => {
+    const service = createAuthorityService({
+      dispatcher: {} as never,
+      acquisitions: {
+        targetSubject: () => ({
+          authorityPlanDigest: "b".repeat(64),
+          ownerUser: "user:alice",
+          controllerRuntimeId: "do:workers/missions:MissionsDO:workspace",
+          state: "active",
+        }),
+        targetRequestsFor: () => [],
+      } as never,
+      authorityPlans: { get: () => ({ leaves: [] }) } as never,
+    });
+    const subject = `mission:timer@${"a".repeat(64)}` as const;
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("do:unrelated:Worker:one", "do") } as never,
+        "acquireForTarget",
+        [{ targetSubject: subject, authorityPlanDigest: "b".repeat(64) }]
+      )
+    ).rejects.toThrow(/different controller/);
+  });
+
+  it("rejects execution admission from code other than the registered controller", async () => {
+    const service = createAuthorityService({
+      dispatcher: {} as never,
+      acquisitions: {
+        targetSubject: () => ({
+          authorityPlanDigest: "b".repeat(64),
+          ownerUser: "user:alice",
+          controllerRuntimeId: "do:workers/missions:MissionsDO:workspace",
+          state: "active",
+        }),
+      } as never,
+      authorityPlans: {} as never,
+      executionAdmissions: {} as never,
+      workspaceId: "workspace:one",
+      resolveCodeIdentity: () => null,
+    });
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("do:unrelated:Worker:one", "do") } as never,
+        "admitExecution",
+        [
+          {
+            admissionKey: "mission:timer:run:one",
+            contextId: "context:one",
+            taskRef: "run:one",
+            mission: {
+              subject: `mission:timer@${"a".repeat(64)}`,
+              missionId: "timer",
+              revision: 1,
+              revisionDigest: "a".repeat(64),
+            },
+            executionImage: {
+              source: "workers/agent-worker",
+              ref: `state:${"c".repeat(64)}`,
+              effectiveVersion: "d".repeat(64),
+              className: "AiChatWorker",
+            },
+            authorityPlanDigest: "b".repeat(64),
+            executor: {
+              kind: "agent-turn",
+              runtimeId: "do:workers/agent-worker:AiChatWorker:timer",
+              entityId: "do:workers/agent-worker:AiChatWorker:timer",
+              channelId: "channel:one",
+              turnId: "run:one",
+            },
+          },
+        ]
+      )
+    ).rejects.toThrow(/different mission controller/);
   });
 });

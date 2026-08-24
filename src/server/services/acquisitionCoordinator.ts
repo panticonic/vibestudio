@@ -116,7 +116,7 @@ export class AcquisitionCoordinator {
 
   requestForTarget(input: {
     targetSubject: import("@vibestudio/rpc").AuthorityGrantSubject;
-    operationPolicyDigest: string;
+    authorityPlanDigest: string;
     operationKey: string;
     capability: string;
     capabilityDefinitionDigest: string;
@@ -140,17 +140,23 @@ export class AcquisitionCoordinator {
 
   targetRequestsFor(
     subject: import("@vibestudio/rpc").AuthorityGrantSubject,
-    policyDigest: string
+    authorityPlanDigest: string
   ): DurableTargetAuthorityRequest[] {
-    return this.requireTargetRequests().forPolicy(subject, policyDigest);
+    return this.requireTargetRequests().forPlan(subject, authorityPlanDigest);
   }
 
   registerTargetSubject(
     subject: import("@vibestudio/rpc").AuthorityGrantSubject,
-    policyDigest: string,
-    ownerUser: `user:${string}`
+    authorityPlanDigest: string,
+    ownerUser: `user:${string}`,
+    controllerRuntimeId: string
   ): void {
-    this.requireTargetRequests().registerSubject(subject, policyDigest, ownerUser);
+    this.requireTargetRequests().registerSubject(
+      subject,
+      authorityPlanDigest,
+      ownerUser,
+      controllerRuntimeId
+    );
   }
 
   targetSubject(subject: import("@vibestudio/rpc").AuthorityGrantSubject) {
@@ -190,7 +196,7 @@ export class AcquisitionCoordinator {
       resourceKey:
         request.resource.kind === "exact" ? request.resource.key : canonicalJson(request.resource),
       argsDigest: request.operationKey,
-      preparedStateDigest: request.operationPolicyDigest,
+      preparedStateDigest: request.authorityPlanDigest,
       callerPrincipal: `session:${sessionId}`,
       sessionId,
       taskRef: request.requestId,

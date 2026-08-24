@@ -601,6 +601,13 @@ export class RpcServer {
         runtimeId: string,
         nonce: string
       ) => import("@vibestudio/rpc").ExecutionAdmissionFact | null;
+      /** Validate the exact controller -> executor invocation that starts a generic execution. */
+      executionSessionForDispatch?: (
+        controllerRuntimeId: string,
+        executorRuntimeId: string,
+        method: string,
+        nonce: string
+      ) => import("@vibestudio/rpc").ExecutionAdmissionFact | null;
       /** Canonical unattended-test policy inherited by reviewed runtimes in a test context. */
       testPolicyForContext?: (
         contextId: string
@@ -3121,6 +3128,22 @@ export class RpcServer {
       callerId,
       (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
     );
+    const executionSessionNonce = (message as InternalRpcRequest | InternalRpcStreamRequest)
+      .executionSessionNonce;
+    // A generic mission admission first travels on the exact controller ->
+    // executor dispatch edge. The controller keeps its own identity and
+    // authority; only later calls made by the executor are attributed to the
+    // admitted execution. Treating the dispatch as an executor effect made
+    // every real scheduled agent fail before its turn could start.
+    const executionDispatch =
+      executionSessionNonce && targetId !== "main"
+        ? (this.deps.executionSessionForDispatch?.(
+            callerId,
+            targetId,
+            method,
+            executionSessionNonce
+          ) ?? null)
+        : null;
     const verifiedCaller = this.callerWithAuthorityParent(
       this.verifiedCallerFor(
         callerId,
@@ -3128,7 +3151,7 @@ export class RpcServer {
         agentBinding,
         undefined,
         authorityParent?.testPolicy,
-        (message as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
+        executionDispatch ? undefined : executionSessionNonce
       ),
       authorityParent
     );

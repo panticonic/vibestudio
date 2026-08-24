@@ -3,4 +3,4 @@
  * rejected and the pre-release workspace must be recreated from the promoted
  * external Base; the host carries no source or persistence compatibility path.
  */
-export const WORKSPACE_SYSTEM_EPOCH = 61 as const;
+export const WORKSPACE_SYSTEM_EPOCH = 62 as const;

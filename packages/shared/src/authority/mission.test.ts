@@ -37,7 +37,7 @@ describe("automation revision", () => {
     expect(() => validateMissionCharter(value)).toThrow("exact immutable execution image");
   });
 
-  it("closes over executable behavior and compiled operation policy", () => {
+  it("closes over executable behavior and compiled authority plan", () => {
     const first = missionRevisionDigest(charter(), hex);
     expect(
       missionRevisionDigest(

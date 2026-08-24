@@ -59,6 +59,7 @@ const executionSession = {
   authoritySessionId: "authority-session-1",
   authoritySessionVersion: 1,
   admissionKey: "test:run-1",
+  controllerRuntimeId: "agent:test-controller",
   workspaceId: "workspace-1",
   contextId: activeEntity.contextId,
   mode: "test",
