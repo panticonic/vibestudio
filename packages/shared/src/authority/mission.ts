@@ -7,7 +7,7 @@ import {
   cronNextOccurrence,
 } from "./cronSchedule.js";
 
-export const MISSION_SCHEMA_VERSION = 2 as const;
+export const MISSION_SCHEMA_VERSION = 3 as const;
 export const MISSION_AUTHORITY_PLAN_SCHEMA_VERSION = 1 as const;
 export const MISSION_COMPLETION_PROTOCOL = "automation-completion.v1" as const;
 
@@ -64,7 +64,14 @@ export type MissionExecution =
       kind: "agent";
       image: MissionExecutionImage;
       action: MissionAgentAction;
-      conversation: { mode: "continue"; channelId: string; contextId: string } | { mode: "fresh" };
+      conversation:
+        | {
+            mode: "continue";
+            channelId: string;
+            contextId: string;
+            executorId: string;
+          }
+        | { mode: "fresh" };
       operations: readonly MissionOperationIntent[];
     };
 
@@ -106,7 +113,7 @@ export interface MissionRecord {
   revision: number;
   charter: MissionCharter;
   authorityPlan: MissionAuthorityPlanReference;
-  owner: { userId: string; deviceId?: string };
+  owner: { userId: string };
   state: MissionState;
   revisionDigest: string;
   authority: MissionAuthorityProjection;
@@ -218,9 +225,11 @@ function validateExecution(execution: MissionExecution): void {
     }
     if (
       execution.conversation.mode === "continue" &&
-      (!execution.conversation.channelId || !execution.conversation.contextId)
+      (!execution.conversation.channelId ||
+        !execution.conversation.contextId ||
+        !execution.conversation.executorId)
     ) {
-      throw new Error("A continuing agent automation requires a channel and context");
+      throw new Error("A continuing agent automation requires a channel, context, and executor");
     }
   }
   const seen = new Set<string>();

@@ -72,6 +72,7 @@ const executionSchema = z.discriminatedUnion("kind", [
             mode: z.literal("continue"),
             channelId: z.string().min(1),
             contextId: z.string().min(1),
+            executorId: z.string().min(1),
           })
           .strict(),
         z.object({ mode: z.literal("fresh") }).strict(),
@@ -122,13 +123,13 @@ const authorityProjectionSchema = z
 
 export const missionRecordSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     missionId: z.string().min(1),
     name: z.string().min(1),
     revision: z.number().int().positive(),
     charter: missionCharterSchema,
     authorityPlan: authorityPlanReferenceSchema,
-    owner: z.object({ userId: z.string().min(1), deviceId: z.string().min(1).optional() }).strict(),
+    owner: z.object({ userId: z.string().min(1) }).strict(),
     state: z.enum(["active", "paused", "completed", "retired"]),
     revisionDigest: hex64,
     authority: authorityProjectionSchema,

@@ -15,7 +15,7 @@ const image = {
   objectKey: "primary",
 };
 
-describe("missions v2 contract", () => {
+describe("missions v3 contract", () => {
   it("launches immediately and has no review endpoint", () => {
     expect(missionsMethods.launch.tier.tier).toBe("open");
     expect(missionsMethods).not.toHaveProperty("requestReview");
@@ -48,7 +48,7 @@ describe("missions v2 contract", () => {
     };
     expect(
       missionRecordSchema.parse({
-        schemaVersion: 2,
+        schemaVersion: 3,
         missionId: "rollout",
         name: "Rollout watcher",
         revision: 1,
