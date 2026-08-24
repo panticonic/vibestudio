@@ -306,24 +306,49 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       }
       return error instanceof Error ? error.name + ": " + error.message : String(error);
     };
+    const isRuntimeRestartingFailure = (error) => {
+      if (!error || typeof error !== "object") return false;
+      if (error.code === "runtime_restarting" || error.errorCode === "runtime_restarting") {
+        return true;
+      }
+      if (error instanceof AggregateError) {
+        return [...error.errors].some(isRuntimeRestartingFailure);
+      }
+      return error.cause ? isRuntimeRestartingFailure(error.cause) : false;
+    };
+    const afterRuntimeReady = async (operation) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        try {
+          return await operation();
+        } catch (error) {
+          if (!isRuntimeRestartingFailure(error) || Date.now() >= deadline) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+    };
     const retireDriver = async () => {
       if (!driver || driverRetired) return;
-      await services.runtime.retireEntity({ id: driver.id });
+      await afterRuntimeReady(() => services.runtime.retireEntity({ id: driver.id }));
       driverRetired = true;
     };
     const releaseDriverResources = async () => {
       if (!driver || driverResourcesReleased) return;
       try {
         if (!driverResultReleased) {
-          await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
+          await afterRuntimeReady(() =>
+            rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey])
+          );
           driverResultReleased = true;
         }
         await retireDriver();
         if (driverContextId && !driverContextDestroyed) {
-          await services.runtime.destroyContext({
-            contextId: driverContextId,
-            recursive: true,
-          });
+          await afterRuntimeReady(() =>
+            services.runtime.destroyContext({
+              contextId: driverContextId,
+              recursive: true,
+            })
+          );
           driverContextDestroyed = true;
         }
         driverResourcesReleased = true;

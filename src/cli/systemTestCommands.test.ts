@@ -425,10 +425,11 @@ describe("system-test durable driver lifecycle", () => {
     expect(code).toContain("let driverResultReleased = false");
     expect(code).toContain("let driverContextDestroyed = false");
     expect(code).toContain("await services.runtime.createContext({})");
-    expect(code).toContain("await services.runtime.destroyContext({");
+    expect(code).toContain("services.runtime.destroyContext({");
     expect(code).toContain("contextId: driverContextId");
     expect(code).toContain('snapshot?.status === "cancelling"');
-    expect(code.indexOf("await services.runtime.retireEntity")).toBeLessThan(
+    expect(code).toContain("services.runtime.retireEntity({ id: driver.id })");
+    expect(code.indexOf("services.runtime.retireEntity")).toBeLessThan(
       code.indexOf("driverRetired = true")
     );
     const cancellationStart = code.indexOf("ctx.onCancel(async () => {");
@@ -445,9 +446,9 @@ describe("system-test durable driver lifecycle", () => {
       code.indexOf("await retireDriver()")
     );
     expect(code.indexOf("await retireDriver()")).toBeLessThan(
-      code.indexOf("await services.runtime.destroyContext")
+      code.indexOf("services.runtime.destroyContext")
     );
-    expect(code.indexOf("await services.runtime.destroyContext")).toBeLessThan(
+    expect(code.indexOf("services.runtime.destroyContext")).toBeLessThan(
       code.indexOf("driverResourcesReleased = true")
     );
     expect(code.indexOf("driverRetired = true")).toBeLessThan(
@@ -551,6 +552,71 @@ describe("system-test durable driver lifecycle", () => {
       retirementAttempts: 1,
       destructionAttempts: 2,
     });
+  });
+
+  it("waits through a typed runtime generation transition during cleanup", async () => {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+      ...args: string[]
+    ) => (...args: unknown[]) => Promise<unknown>;
+    const generated = systemTestRunCode("st_runtime_transition", {
+      names: ["probe"],
+      all: false,
+      concurrency: 1,
+    });
+    const source = transformSync(`async function __generatedRun() {\n${generated}\n}`, {
+      format: "esm",
+      target: "es2022",
+      loader: "ts",
+    }).code;
+    const execute = new AsyncFunction(
+      "services",
+      "rpc",
+      "ctx",
+      "scope",
+      `${source}\nreturn __generatedRun();`
+    );
+    let releaseAttempts = 0;
+    const driver = { id: "do:driver", targetId: "do:driver" };
+    const services = {
+      runtime: {
+        createContext: async () => ({ contextId: "ctx:driver" }),
+        createEntity: async () => driver,
+        retireEntity: async () => undefined,
+        destroyContext: async () => undefined,
+      },
+    };
+    const rpc = {
+      call: async (_target: string, method: string) => {
+        if (method === "startSystemTestRun") return undefined;
+        if (method === "getSystemTestRunSnapshot") {
+          return { status: "done", result: { success: true } };
+        }
+        if (method === "getSystemTestRunResult") {
+          return { summary: { runId: "st_runtime_transition", passed: 1 } };
+        }
+        if (method === "releaseSystemTestRunResult") {
+          releaseAttempts += 1;
+          if (releaseAttempts < 3) {
+            throw Object.assign(new Error("runtime generation transition in flight"), {
+              code: "runtime_restarting",
+            });
+          }
+          return { released: true };
+        }
+        throw new Error(`unexpected RPC ${method}`);
+      },
+    };
+    const ctx = {
+      contextId: "ctx:test",
+      reportProgress: () => undefined,
+      onCancel: () => undefined,
+    };
+
+    await expect(execute(services, rpc, ctx, {})).resolves.toEqual({
+      runId: "st_runtime_transition",
+      passed: 1,
+    });
+    expect(releaseAttempts).toBe(3);
   });
 });
 
