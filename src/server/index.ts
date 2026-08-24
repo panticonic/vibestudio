@@ -2578,7 +2578,7 @@ async function main() {
       });
     },
     async stop(instance: import("./services/postReadyBuildWarmup.js").PostReadyBuildWarmup) {
-      instance.cancel();
+      await instance.stop();
     },
   });
 

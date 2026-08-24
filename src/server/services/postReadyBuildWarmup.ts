@@ -15,7 +15,7 @@ const COMMAND_AGENT_SOURCE = "workers/agent-worker";
 
 export interface PostReadyBuildWarmup {
   start(options?: { includeEvalLibraries?: boolean }): Promise<void>;
-  cancel(): void;
+  stop(): Promise<void>;
 }
 
 interface PostReadyBuildWarmupDeps {
@@ -94,8 +94,9 @@ export function createPostReadyBuildWarmup(deps: PostReadyBuildWarmupDeps): Post
       flight ??= run(options?.includeEvalLibraries === true);
       return flight;
     },
-    cancel() {
+    async stop() {
       cancelled = true;
+      await flight;
     },
   };
 }

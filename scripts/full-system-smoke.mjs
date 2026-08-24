@@ -20,6 +20,10 @@ import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
+import {
+  assertBaseCheckoutBootable,
+  resolveDevelopmentBase,
+} from "./cli/lib/smoke-remote-server.mjs";
 import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -328,6 +332,23 @@ async function runMultiUserPhase(options, resultsDir) {
 
   let signaling = null;
   try {
+    const developmentBase = await resolveDevelopmentBase({
+      repoRoot,
+      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+      productionBase: false,
+      explicitCheckout: null,
+    });
+    if (!developmentBase) {
+      throw new Error("The source full-system smoke requires a configured development Base checkout");
+    }
+    env.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
+    env.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
+    delete env.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+    await assertBaseCheckoutBootable({ repoRoot, checkout: developmentBase.checkout });
+    console.log(
+      `[${phase}] Base: ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+    );
+
     if (!fs.existsSync(wranglerBin)) {
       throw new Error("Wrangler is not installed; run pnpm install before the full smoke");
     }
@@ -687,8 +708,17 @@ async function runMultiUserPhase(options, resultsDir) {
         const bobRoute = await routeWorkspace(bob, visibleWorkspaceId);
         const bobSecondRoute = await routeWorkspace(bobSecondDevice, visibleWorkspaceId);
         expect(
-          aliceRoute.status === 200 && bobRoute.status === 200 && bobSecondRoute.status === 200,
-          "both members and both Bob devices must route"
+          aliceRoute.status === 200 &&
+            typeof aliceRoute.payload?.serverUrl === "string" &&
+            bobRoute.status === 200 &&
+            typeof bobRoute.payload?.serverUrl === "string" &&
+            bobSecondRoute.status === 200 &&
+            typeof bobSecondRoute.payload?.serverUrl === "string",
+          `both members and both Bob devices must route: ${JSON.stringify({
+            alice: aliceRoute.payload,
+            bob: bobRoute.payload,
+            bobSecond: bobSecondRoute.payload,
+          })}`
         );
         expect(
           aliceRoute.payload.serverUrl === bobRoute.payload.serverUrl,

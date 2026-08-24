@@ -60,11 +60,37 @@ describe("post-ready build warmup", () => {
     });
 
     const running = warmup.start({ includeEvalLibraries: true });
-    warmup.cancel();
+    const stopping = warmup.stop();
     launcher.resolve();
-    await running;
+    await Promise.all([running, stopping]);
 
     expect(getBuild).not.toHaveBeenCalled();
+  });
+
+  it("does not finish stopping while the admitted speculative build is active", async () => {
+    const launcher = deferred();
+    const warmup = createPostReadyBuildWarmup({
+      buildSystem: {
+        bindRuntimeImage: vi.fn(async () => {
+          await launcher.promise;
+          return {} as never;
+        }),
+        getBuild: vi.fn(async () => ({}) as never),
+      },
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    void warmup.start();
+    let stopped = false;
+    const stopping = warmup.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    launcher.resolve();
+    await stopping;
+    expect(stopped).toBe(true);
   });
 
   it("keeps the bounded queue moving when one speculative build fails", async () => {
