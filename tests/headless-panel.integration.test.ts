@@ -23,6 +23,10 @@ import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approv
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import type { PanelSlotObservation } from "@vibestudio/shared/panel/observation";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
+import {
+  developmentBaseSelectionEnv,
+  resolveDevelopmentBaseSelection,
+} from "../src/dev/developmentBaseSelection.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -80,8 +84,12 @@ afterEach(async () => {
   await shellConnection?.close();
   shellConnection = null;
   if (fixtureServer) {
-    await new Promise<void>((resolve) => fixtureServer?.close(() => resolve()));
+    const server = fixtureServer;
     fixtureServer = null;
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
   }
   if (serverProc && serverProc.exitCode === null) {
     serverProc.kill("SIGTERM");
@@ -98,13 +106,17 @@ afterEach(async () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     tempRoot = null;
   }
-});
+}, 20_000);
 
 maybeDescribe("headless browser panel integration", () => {
   it("opens a browser panel from a worker principal and drives it through the real headless host", async () => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-headless-panel-"));
     const readyFile = path.join(tempRoot, "ready.json");
     const fixture = await startFixtureServer();
+    const developmentBase = await resolveDevelopmentBaseSelection({
+      repoRoot: process.cwd(),
+      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+    });
 
     serverProc = spawn(
       process.execPath,
@@ -121,6 +133,7 @@ maybeDescribe("headless browser panel integration", () => {
           VIBESTUDIO_CHROMIUM_PATH: chromium.executablePath(),
           VIBESTUDIO_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
           VIBESTUDIO_HEADLESS_IDLE_EXIT_MS: "1000",
+          ...(developmentBase ? developmentBaseSelectionEnv(developmentBase) : {}),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }

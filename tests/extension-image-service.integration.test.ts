@@ -4,8 +4,10 @@ import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { envelopeFromMessage } from "@vibestudio/rpc";
-import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
-import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
+import {
+  developmentBaseSelectionEnv,
+  resolveDevelopmentBaseSelection,
+} from "../src/dev/developmentBaseSelection.js";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -41,9 +43,13 @@ afterEach(async () => {
 });
 
 maybeDescribe("image-service extension server smoke", () => {
-  it("approves declared extensions then invokes image-service through the server RPC surface", async () => {
+  it("builds the declared extension then invokes it through the server RPC surface", async () => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-server-smoke-"));
     const readyFile = path.join(tempRoot, "ready.json");
+    const developmentBase = await resolveDevelopmentBaseSelection({
+      repoRoot: process.cwd(),
+      checkpointTarget: path.join(tempRoot, "base-checkpoint"),
+    });
     proc = spawn(
       process.execPath,
       [serverPath, "--ephemeral", "--serve-panels", "--ready-file", readyFile],
@@ -54,6 +60,7 @@ maybeDescribe("image-service extension server smoke", () => {
           NODE_ENV: "development",
           HOME: tempRoot,
           XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
+          ...(developmentBase ? developmentBaseSelectionEnv(developmentBase) : {}),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
@@ -73,29 +80,10 @@ maybeDescribe("image-service extension server smoke", () => {
       const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
       const shellToken = await issueShellToken(ready);
 
-      // Extensions are declared in meta/vibestudio.yml; the startup reconcile raises
-      // one joint approval. Approve it as the shell would, then wait for the
-      // onInvoke image service to have an active build.
-      const approvalIds = await approveInstallReviewsUntilExtensionAvailable(
-        ready,
-        shellToken,
-        "@workspace-extensions/image-service"
-      );
-      const provenance = await rpc<Array<{ approvalId: string; workspaceId: string }>>(
-        ready,
-        shellToken,
-        "governance.list",
-        [{ filter: { recordKind: "approval" } }]
-      );
-      expect(approvalIds.length).toBeGreaterThan(0);
-      for (const approvalId of approvalIds) {
-        expect(provenance).toContainEqual(
-          expect.objectContaining({
-            approvalId,
-            workspaceId: ready.workspaces[0]!.workspaceId,
-          })
-        );
-      }
+      // The exact Base snapshot is the product seed, so its declared extension is
+      // admitted directly. Wait for the source artifact rather than fabricating a
+      // user approval for a product-owned declaration.
+      await waitForExtensionBuild(ready, shellToken, "@workspace-extensions/image-service");
 
       await expect(
         rpc(ready, shellToken, "extensions.invoke", [
@@ -111,16 +99,15 @@ maybeDescribe("image-service extension server smoke", () => {
         { cause: error }
       );
     }
-  }, 240_000);
+  }, 360_000);
 });
 
-async function approveInstallReviewsUntilExtensionAvailable(
+async function waitForExtensionBuild(
   ready: ReadyPayload,
   shellToken: string,
   name: string
-): Promise<string[]> {
-  const deadline = Date.now() + 120_000;
-  const resolvedApprovalIds: string[] = [];
+): Promise<void> {
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
       ready,
@@ -129,33 +116,11 @@ async function approveInstallReviewsUntilExtensionAvailable(
       []
     );
     const extension = extensions.find((entry) => entry.name === name);
-    if (extension?.status === "available" || extension?.status === "ready") {
-      return resolvedApprovalIds;
-    }
+    if (extension?.status === "ready") return;
     if (extension?.status === "error") throw new Error(`${name} failed: ${extension.lastError}`);
-
-    const pending = await rpc<PendingUnitInstallReviewApproval[]>(
-      ready,
-      shellToken,
-      "shellApproval.listPending",
-      []
-    );
-    for (const approval of pending.filter(
-      (candidate) => candidate.kind === "unit-install-review"
-    )) {
-      if (resolvedApprovalIds.includes(approval.approvalId)) continue;
-      await rpc(
-        ready,
-        shellToken,
-        "shellApproval.resolveInstallReview",
-        [approval.approvalId, defaultAcceptance(approval.mode, approval.parts)],
-        { timeoutMs: 180_000 }
-      );
-      resolvedApprovalIds.push(approval.approvalId);
-    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`${name} never acquired an active build`);
+  throw new Error(`${name} never acquired a ready build`);
 }
 
 async function waitForExtensionRunning(
