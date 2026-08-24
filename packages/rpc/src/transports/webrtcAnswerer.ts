@@ -1238,7 +1238,12 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     clearHelloTimeout();
     clearGraceTimer();
     stopLivenessTimer();
-    pipeUp = false; // schedulers' getChannel now yields null → queued work settles
+    pipeUp = false;
+    // Queued frames were admitted for this exact SCTP association. Explicitly
+    // settle them at the generation boundary: relying on a later pump to notice
+    // getChannel() is null can leave a backpressured lane parked indefinitely,
+    // then flush its stale frames onto the replacement peer when that peer opens.
+    scheduler.reset();
     // A fresh pipe must never reassemble against a dead pipe's fragments or
     // continue a dead pipe's partial HEAD/ERROR accumulations.
     controlCodec.reset();

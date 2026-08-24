@@ -197,6 +197,23 @@ describe("association-aware frame scheduler", () => {
     expect(h.scheduler.pendingBytes()).toBe(0);
   });
 
+  it("drops one association generation while remaining usable by its replacement", async () => {
+    const h = harness({ receiveWindow: 0 });
+    h.bulk.trackBuffered = true;
+    const stale = h.scheduler.enqueue("bulk", 1, [part(1, 16), part(2, 16)]);
+    await tick();
+    expect(h.bulk.sent).toEqual([1]);
+
+    h.scheduler.reset();
+    expect(await stale).toBe("dropped");
+    expect(h.scheduler.pendingBytes()).toBe(0);
+
+    h.bulk.trackBuffered = false;
+    h.bulk.bufferedAmount = 0;
+    await expect(h.scheduler.enqueue("bulk", 2, [part(3)])).resolves.toBe("flushed");
+    expect(h.bulk.sent).toEqual([1, 3]);
+  });
+
   it("meters bytes by traffic class and stream", async () => {
     const h = harness({ receiveWindow: 0 });
     h.bulk.trackBuffered = true;

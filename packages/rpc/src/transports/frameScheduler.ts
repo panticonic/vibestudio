@@ -33,6 +33,12 @@ export interface FrameScheduler {
   ): Promise<EnqueueOutcome>;
   dropKey(trafficClass: FrameTrafficClass, key: string | number): void;
   pendingBytes(trafficClass?: FrameTrafficClass, key?: string | number): number;
+  /**
+   * End the current association generation without closing the scheduler.
+   * Queued frames belong to the channels on which they were admitted and must
+   * never cross onto a replacement peer.
+   */
+  reset(): void;
   close(): void;
 }
 
@@ -341,6 +347,16 @@ export function createFrameScheduler(options: {
         return bytes;
       }
       return lane.queues.get(key)?.bytes ?? 0;
+    },
+    reset() {
+      if (closed) return;
+      settleAll();
+      scheduleCursor = 0;
+      for (const lane of lanes.values()) {
+        lane.configuredChannel = null;
+        lane.windowBytes = 0;
+        lane.blockedAt = 0;
+      }
     },
     close() {
       if (closed) return;

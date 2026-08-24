@@ -716,11 +716,21 @@ describe("WebRTC answerer pipe (v3)", () => {
     await tick();
     expect(peer1.candidates).toEqual(["c1"]);
 
+    // Leave a control frame parked behind the old association's backpressure.
+    // A generation boundary must settle it; it must not resume on peer2.
+    const oldControl = peer1.channels.get(0)!;
+    oldControl.trackBuffered = true;
+    const staleWrite = h.pipe.writeControl(bytes(300_000), "stale-session");
+    await tick();
+    expect(oldControl.sent.length).toBeGreaterThan(1); // hello + first fragment
+
     // A new offer (same device re-established) plus a candidate racing in
     // behind it — the candidate must land on the NEW peer, after its offer.
     h.signals[0]!.deliverOffer("offer-sdp-2");
     h.signals[0]!.deliverCandidate("c2");
     await tick();
+
+    await staleWrite;
 
     expect(h.downs).toEqual(["re-pairing offer"]);
     expect(h.peers).toHaveLength(2);
@@ -740,6 +750,18 @@ describe("WebRTC answerer pipe (v3)", () => {
     await tick();
     await reconnecting;
     expect(h.pipe.status()).toBe("connected");
+
+    // A logical session immediately re-opens after every replacement pipe.
+    // Its server-bound open-result must reach the replacement control channel.
+    const openResult = enc.encode(
+      JSON.stringify({ t: "open-result", sid: "mobile-shell", success: true })
+    );
+    await h.pipe.writeControl(openResult, "mobile-shell");
+    expect(sentControlFrames(peer2.channels.get(0)!)).toContainEqual({
+      t: "open-result",
+      sid: "mobile-shell",
+      success: true,
+    });
     await h.pipe.close();
   });
 
