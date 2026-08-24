@@ -68,16 +68,31 @@ class ProvisioningActivity : Activity() {
          */
         fun pairingApprovalDigest(pairUrl: String): String? {
             val uri = runCatching { Uri.parse(pairUrl) }.getOrNull() ?: return null
-            if (uri.scheme?.lowercase() != "vibestudio" || uri.host?.lowercase() != "connect") {
-                return null
-            }
-            val names = listOf("room", "fp", "code", "sig", "v", "ice")
-            val values = names.map { name -> uri.getQueryParameter(name) ?: return null }
-            val material = values.joinToString(separator = "") { value -> "${value.length}:$value" }
+            val compactPayload = when {
+                uri.scheme?.lowercase() == "vibestudio" &&
+                    uri.host?.lowercase() == "connect" &&
+                    uri.query == null &&
+                    uri.fragment == null &&
+                    uri.pathSegments.size == 1 -> uri.pathSegments.single()
+                uri.scheme?.lowercase() == "https" &&
+                    uri.host?.lowercase() == "vibestudio.app" &&
+                    uri.path == "/p" &&
+                    uri.query == null -> uri.fragment
+                else -> null
+            } ?: return null
+            // The compact payload is the canonical pairing material shared by
+            // the app and host. Keep native USB approval carrier-independent:
+            // the same payload may arrive as vibestudio://connect/<payload> or
+            // https://vibestudio.app/p#<payload>. The JS parser remains the
+            // single authority for decoding and validating its binary grammar.
+            if (!COMPACT_PAYLOAD.matches(compactPayload)) return null
             return Base64.encodeToString(
-                MessageDigest.getInstance("SHA-256").digest(material.toByteArray(Charsets.UTF_8)),
+                MessageDigest.getInstance("SHA-256")
+                    .digest(compactPayload.toByteArray(Charsets.US_ASCII)),
                 Base64.NO_WRAP,
             )
         }
+
+        private val COMPACT_PAYLOAD = Regex("^[A-Za-z0-9_-]+$")
     }
 }
