@@ -183,6 +183,10 @@ const workspaceRpcMethodDocSchema = z
       })
       .strict()
       .optional(),
+    execution: z
+      .object({ harness: z.literal("attested-system-test") })
+      .strict()
+      .optional(),
     inputContractDigest: z.string(),
     producesHandle: z
       .object({

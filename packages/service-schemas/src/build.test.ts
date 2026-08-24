@@ -192,6 +192,32 @@ describe("build method effects", () => {
     ).toBe(true);
   });
 
+  it("accepts receiver execution contracts in the sealed workspace RPC catalog", () => {
+    expect(
+      buildMetadataSchema.safeParse({
+        kind: "worker",
+        name: "worker:test",
+        buildKey: digest,
+        sourcePath: "workers/test",
+        ev: "ev:test",
+        sourceStateHash: digest,
+        sourcemap: false,
+        workspaceRpcCatalog: [
+          {
+            className: "TestWorker",
+            name: "runTest",
+            signature: "runTest(): Promise<void>",
+            effect: { kind: "open" },
+            execution: { harness: "attested-system-test" },
+            inputContractDigest: digest,
+          },
+        ],
+        details: { kind: "generic" },
+        builtAt: new Date(0).toISOString(),
+      }).success,
+    ).toBe(true);
+  });
+
   it("accepts the complete artifact manifest emitted by the build store", () => {
     expect(
       buildResultSchema.safeParse({
