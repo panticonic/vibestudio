@@ -124,6 +124,7 @@ export class AcquisitionCoordinator {
     tier: "gated" | "critical";
     sourceUser: `user:${string}`;
     renderedAction: string;
+    review: DurableTargetAuthorityRequest["review"];
   }): DurableTargetAuthorityRequest {
     const store = this.requireTargetRequests();
     const durable = store.ensure(input);
@@ -134,7 +135,7 @@ export class AcquisitionCoordinator {
   resumeTargetRequests(): void {
     if (!this.deps.targetRequests) return;
     for (const request of this.deps.targetRequests.pending()) {
-      this.presentTargetRequest(request, request.capability);
+      this.presentTargetRequest(request, request.review.action);
     }
   }
 
@@ -177,6 +178,17 @@ export class AcquisitionCoordinator {
     request: DurableTargetAuthorityRequest,
     renderedAction: string
   ): void {
+    const missionSubject = request.targetSubject.startsWith("mission:")
+      ? (request.targetSubject as `mission:${string}@${string}`)
+      : null;
+    const taskAuthority = request.targetSubject.startsWith("task:")
+      ? (request.targetSubject as import("@vibestudio/rpc").TaskGrantPrincipal)
+      : null;
+    if (!missionSubject && !taskAuthority) {
+      throw new Error(
+        `Durable authority target ${request.targetSubject} is neither a mission nor a task`
+      );
+    }
     const runtimeId = `authority-target:${request.requestId}`;
     const sessionId = `target:${request.requestId}`;
     const userId = request.sourceUser.slice("user:".length);
@@ -200,9 +212,10 @@ export class AcquisitionCoordinator {
       callerPrincipal: `session:${sessionId}`,
       sessionId,
       taskRef: request.requestId,
+      ...(taskAuthority ? { taskAuthority } : {}),
       lineageClasses: ["none"],
-      executionMode: "mission",
-      missionSubject: request.targetSubject as `mission:${string}@${string}`,
+      executionMode: missionSubject ? "mission" : "interactive",
+      missionSubject: missionSubject ?? "-",
       snippetDigest: "-",
       codeLineage: { class: "unknown", chain: [] },
       contextLineage: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
@@ -217,10 +230,17 @@ export class AcquisitionCoordinator {
       renderedAction,
       resource: request.resource,
       presentation: {
-        title: "Allow an automation action",
-        description: "Grant this exact operation to the installed automation revision.",
-        deniedReason: "The automation cannot perform this operation without your approval.",
-        allowedDecisions: request.tier === "critical" ? ["once", "deny"] : ["mission", "deny"],
+        title: missionSubject ? "Allow an automation action" : "Allow an agent task action",
+        description: missionSubject
+          ? "Grant this exact operation to the installed automation revision."
+          : "Grant this exact operation to the current agent task.",
+        deniedReason: missionSubject
+          ? "The automation cannot perform this operation without your approval."
+          : "The agent task cannot perform this operation without your approval.",
+        allowedDecisions:
+          request.tier === "critical"
+            ? ["once", "deny"]
+            : [missionSubject ? "mission" : "task", "deny"],
         dedupKey: request.requestId,
         resource: {
           type: request.resource.kind,
@@ -235,12 +255,17 @@ export class AcquisitionCoordinator {
           verb: "allow",
           object: { type: "automation-operation", label: "Operation", value: renderedAction },
         },
+        authorityVocabulary: {
+          domain: request.review.domain,
+          verb: request.review.verb,
+          declaredBy: request.review.declaredBy,
+        },
       },
     };
     void this.requestAndWait(input)
       .then((outcome) => {
         const state =
-          outcome.decision === "mission"
+          outcome.decision === (missionSubject ? "mission" : "task")
             ? "granted"
             : outcome.decision === "deny"
               ? "denied"
@@ -816,20 +841,39 @@ export class AcquisitionCoordinator {
         : { capabilityDefinitionDigest: input.snapshot.capabilityDefinitionDigest };
     if (decision === "deny") {
       if (input.tier === "critical") return;
+      const durableTargetSubject =
+        input.snapshot.service === "authority" && input.snapshot.method === "acquireForTarget"
+          ? input.snapshot.missionSubject !== "-"
+            ? input.snapshot.missionSubject
+            : (input.snapshot.taskAuthority ?? null)
+          : null;
+      const durableMissionSubject = durableTargetSubject?.startsWith("mission:")
+        ? (durableTargetSubject as `mission:${string}@${string}`)
+        : null;
       this.deps.grantStore.issue({
         effect: "deny",
         capability: input.snapshot.capability,
         resource: input.resource,
-        subject: input.snapshot.callerPrincipal,
-        constraints: {
-          ...(input.snapshot.missionSubject === "-"
-            ? { sessionId: input.snapshot.sessionId }
-            : { missionSubject: input.snapshot.missionSubject }),
-          lineageAtConsent: [],
-        },
+        subject: durableTargetSubject ?? input.snapshot.callerPrincipal,
+        constraints: durableTargetSubject
+          ? {
+              ...(durableMissionSubject ? { missionSubject: durableMissionSubject } : {}),
+              lineageAtConsent: [],
+            }
+          : {
+              ...(input.snapshot.missionSubject === "-"
+                ? { sessionId: input.snapshot.sessionId }
+                : { missionSubject: input.snapshot.missionSubject }),
+              lineageAtConsent: [],
+            },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
         ...capabilityDefinition,
+        ...(durableMissionSubject
+          ? { scope: "mission" as const }
+          : durableTargetSubject?.startsWith("task:")
+            ? { scope: "task" as const }
+            : {}),
       });
       return;
     }

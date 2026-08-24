@@ -13,16 +13,23 @@ may remain there, but it must no longer be described as the implementation spec.
 
 ## 1. Decisive outcome
 
-An automation is:
+An automation is a durable, inspectable definition and schedule that delivers
+work to an ordinary executor. It is not inherently an authority principal.
 
-1. a durable, inspectable definition and schedule;
-2. one content-addressed standing-authority principal; and
-3. a sequence of ordinary, host-admitted executions.
+Authority follows the executor shape:
+
+1. a continuing agent automation is an ordinary wake-up of the existing agent
+   and uses that agent task's ordinary authority;
+2. a fresh agent automation is executed for a content-addressed mission
+   principal whose grants are inherited by its dedicated agent execution; and
+3. a non-agentic method or eval automation is executed directly for that same
+   kind of mission principal until the finite execution terminates.
 
 It is not its own capability system, approval system, agent harness, eval path,
 conversation type, or session model.
 
-The complete authority-bearing identity of one active automation revision is:
+The authority-bearing identity of an isolated fresh-agent or non-agentic
+automation revision is:
 
 ```text
 mission:<missionId>@<revisionDigest>
@@ -30,25 +37,26 @@ mission:<missionId>@<revisionDigest>
 
 Standing grants are issued to that principal by the ordinary authority
 acquisition system. At a tick, the host admits one exact execution of that
-principal. The admitted execution may use the existing agent and EvalDO paths;
-those runtimes do not receive copied grants. Their verified execution-session
-facts cause the evaluator to consult the mission principal for the duration of
-that exact run.
+principal. A continuing automation does not perform this admission: its tick is
+ordinary input to the already-bound agent, and tools or child eval inherit the
+agent task authority exactly as they do after user input. This prevents a
+schedule from overlaying a second authority identity onto a mixed conversation.
 
 The implementation is complete only when this sequence works without a channel
 lookup or an automation-specific grant issuer:
 
 ```text
 launch_automation
-  -> persist launch intent and immutable preparing revision
-  -> compile and publish exact host authority-plan artifact
-  -> activate the acknowledged revision
-  -> ordinary authority acquisition may issue mission grants
+  -> select continuing-agent or isolated-mission execution
+  -> compile predictable operations into pre-acquisition requests
+  -> acquire for the existing agent task or mission principal
+  -> persist and activate the acknowledged revision
 
 scheduled occurrence
-  -> persist one run and one durable workflow
-  -> host admits runId for mission:<id>@<digest>
-  -> ordinary agent turn
+  -> persist one non-overlapping run and one durable workflow
+  -> continuing: enqueue an ordinary turn for the existing agent
+  -> isolated: host admits runId for mission:<id>@<digest>
+  -> ordinary agent turn, method, or eval execution
   -> ordinary child EvalDO admission, if requested
   -> ordinary service dispatcher and grant evaluator
   -> ordinary approval fallback, if a grant is missing
@@ -121,22 +129,22 @@ concepts obscure the active invariants and preserve invalid states.
 This plan owns automation composition and the deltas needed in the existing
 subsystems. It does not fork their contracts.
 
-| Concern                                             | Owning subsystem/document                                   | Automation delta                                                                          |
-| --------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Caller authentication and user attribution          | host identity and `AuthorizationContext`                    | Require one canonical host-normalized `actingUser` for user-delegated mutations           |
-| Grants, tiers, acquisition, approval, re-evaluation | `docs/authority-acquisition-spec.md` and authority services | Add durable target-subject requests for mission principals; retain invocation rendezvous  |
-| Execution admission and causal execution            | execution-session registry, agent loop, EvalDO, method host | Generalize the EvalDO-specific fact into one executor-discriminated parent/child contract |
-| Tool and service structural reach                   | immutable code manifest, ordinary agent tools, and eval manifest | Reuse these bounds unchanged; an authority plan never acts as a second allowlist       |
-| Runtime/code identity                               | runtime entity graph and sealed build authority manifest    | Stamp an exact execution image; derive infrastructure from sealed runtime facts           |
-| Conversation state and transcript                   | channel service and agent loop                              | Reuse channels only for history/routing; never as an authority key                        |
-| Definitions, schedules, revisions, run ledger       | MissionsDO                                                  | Remain the single durable automation/workflow owner                                       |
-| Trusted approval and inspector surfaces             | shell approval UI and Automations panel/cards               | Present capability approvals and durable automation state, never a generic launch review  |
+| Concern                                             | Owning subsystem/document                                        | Automation delta                                                                                      |
+| --------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Caller authentication and user attribution          | host identity and `AuthorizationContext`                         | Require one canonical host-normalized `actingUser` for user-delegated mutations                       |
+| Grants, tiers, acquisition, approval, re-evaluation | `docs/authority-acquisition-spec.md` and authority services      | Pre-acquire for an existing agent task or an isolated mission principal; retain invocation rendezvous |
+| Execution admission and causal execution            | execution-session registry, agent loop, EvalDO, method host      | Generalize the EvalDO-specific fact into one executor-discriminated parent/child contract             |
+| Tool and service structural reach                   | immutable code manifest, ordinary agent tools, and eval manifest | Reuse these bounds unchanged; an authority plan never acts as a second allowlist                      |
+| Runtime/code identity                               | runtime entity graph and sealed build authority manifest         | Stamp an exact execution image; derive infrastructure from sealed runtime facts                       |
+| Conversation state and transcript                   | channel service and agent loop                                   | Reuse channels only for history/routing; never as an authority key                                    |
+| Definitions, schedules, revisions, run ledger       | MissionsDO                                                       | Remain the single durable automation/workflow owner                                                   |
+| Trusted approval and inspector surfaces             | shell approval UI and Automations panel/cards                    | Present capability approvals and durable automation state, never a generic launch review              |
 
 ## 4. Target concepts
 
-### 4.1 Automation principal
+### 4.1 Authority subject selection
 
-Every behaviorally distinct automation revision has exactly one
+Only an isolated fresh-agent or non-agentic automation revision has its own
 standing-authority subject:
 
 ```text
@@ -149,8 +157,14 @@ mission:<missionId>@<revisionDigest>
   lapse when behavior changes.
 - Display name, timestamps, current UI selection, run counters, and lifecycle
   state are not digest inputs.
-- No agent, channel, provider, or harness receives a duplicate of the mission's
-  standing grants.
+- Its fresh agent, child eval, or method executor inherits those grants through
+  ordinary verified parent execution; grants are not copied to a channel,
+  provider, or code image.
+
+A continuing automation stores the exact existing executor/context/channel for
+routing and inspection, but has no mission grant subject. Launch pre-acquisition
+targets the existing agent task authority. Retiring that schedule does not
+revoke grants from the shared agent task.
 
 The digest uses an explicit domain/schema version and canonical JSON over:
 
@@ -168,9 +182,11 @@ retaining the same authority digest and mission principal.
 
 ### 4.2 Generic execution admission
 
-One automation tick receives one host-minted execution admission. This is a
-generic execution relationship fact with a mission mode, not a new capability
-token. The current `AgentExecutionSessionFact` is not yet that primitive: it
+One isolated automation run receives one host-minted execution admission. This
+is a generic execution relationship fact with a mission mode, not a new
+capability token. A continuing-agent tick receives no mission admission; its
+durable prompt enters the ordinary existing agent loop. The current
+`AgentExecutionSessionFact` is not yet the isolated-execution primitive: it
 requires an EvalDO `runtimeId`, `runId`, and authority manifest and its registry
 is indexed and renewed by that eval runtime. Phase 0 must replace/normalize it,
 not pretend that the current shape can directly admit agent turns and methods.
@@ -290,8 +306,8 @@ The native `launch_automation` tool stamps the current agent's image from its
 verified runtime environment. The model never supplies these coordinates.
 Lower-level method automation validates an explicitly selected exact image.
 
-`ref` is required in the current schema. Historical definitions without one
-are migrated or archived; optionality must not remain in the live type.
+`ref` is required in the current schema. Pre-release definitions without one
+are discarded at the explicit state reset; optionality must not remain in the live type.
 
 ### 4.5 Authority plan
 
@@ -342,11 +358,15 @@ The agent does not type capability names or tiers. The compiler rejects an
 unknown method, an underivable resource, an unresolved provider, a global
 wildcard, or a permission request that is broader than the declared operation.
 
-Prompt actions with dynamic tool choice may omit operations or declare only the
-predictable calls worth pre-acquiring. Inline eval and method actions should
-normally declare exact predictable operations. The inspector labels these as
-pre-acquisition hints and renders the compiled authority plan alongside the
-executable definition; it must not imply that the list bounds runtime behavior.
+The launching agent must identify every external operation reasonably
+predictable from the task, including operations a future prompt action is
+expected to choose, so unattended execution does not discover foreseeable
+authority gaps. Inline eval and method actions normally declare their exact
+predictable operations. The inspector labels these as pre-acquisition planning,
+renders granted/pending/denied results for the selected authority subject, and
+does not imply that the list bounds runtime behavior. An omitted operation
+falls back to the ordinary visible approval path and leaves the run observably
+waiting; it never becomes an automation-specific denial.
 
 #### 4.5.1 Canonical authority-plan artifact
 
@@ -404,15 +424,16 @@ not lower its tier.
 
 ### D1. Only the authority subsystem issues standing grants
 
-MissionsDO may request authority acquisition for a target mission subject. It
-must not call `CapabilityGrantStore.issue`, nor send raw grants to another
-service that does so on the basis of attribution.
+Launch may request authority acquisition for either the existing continuing
+agent task or an isolated mission subject. MissionsDO must not call
+`CapabilityGrantStore.issue`, nor send raw grants to another service that does
+so on the basis of attribution.
 
 The authority service gains or formalizes one generic operation:
 
 ```ts
 authority.acquireForSubject({
-  subject: missionSubject,
+  subject: missionSubjectOrCurrentTask,
   sourceExecution: currentExecutionProof,
   authorityPlanDigest,
   scope: "mission",
@@ -448,20 +469,22 @@ interface DurableAuthorityRequest {
   v: 1;
   requestId: string;
   requestKey: string; // digest(target subject + authority-plan artifact + operation leaf)
-  targetSubject: `mission:${string}@${string}`;
-  targetLifecycle: { kind: "mission-revision"; missionId: string; revision: number };
+  targetSubject: `mission:${string}@${string}` | `task:${string}`;
+  targetLifecycle:
+    | { kind: "mission-revision"; missionId: string; revision: number }
+    | { kind: "agent-task"; taskAuthority: `task:${string}` };
   authorityPlanArtifactRef: string;
   authorityPlanDigest: string;
   operationLeafDigest: string;
   capability: string;
   resource: ResourceScope;
-  allowedScopes: readonly ("run" | "mission")[];
+  allowedScopes: readonly ("task" | "mission")[];
   ownerUser: `user:${string}`;
   workspaceId: string;
   state: "pending" | "settled" | "closed";
   decision?: {
     effect: "allow" | "deny" | "dismiss";
-    scope?: "run" | "mission";
+    scope?: "task" | "mission";
     grantSubject?: `task:${string}` | `mission:${string}@${string}`;
     decisionRef: string;
   };
@@ -487,13 +510,11 @@ generic target-request join/observe form authorized by the current execution
 admission, while its existing exact-runtime form remains appropriate for
 invocation-scoped rendezvous.
 
-A launch-time request has no run subject, so it offers mission-scope allow,
-deny, or dismissal only. Once a live run joins, policy may additionally offer an
-allow for that exact task subject. A run-only choice settles that waiter and
-closes the standing request without minting mission authority; a future run may
-therefore ask again. A mission-scope choice settles every matching waiter and is
-replayed through the durable mission grant/denial. Critical requests never use
-this standing-request form.
+A fresh launch-time request offers mission-scope allow, deny, or dismissal. A
+continuing launch request targets the existing task principal and offers task
+scope, deny, or dismissal. There is no mission-to-task scope conversion and no
+automation-specific run grant. Critical requests never use this standing-request
+form.
 
 ### D2. Launch is immediate; capability approval is not an automation review
 
@@ -600,15 +621,16 @@ runtime heartbeat. Root admission, causal child derivation, renewal, and
 terminal closure are methods of the same registry and protocol. Parent closure
 prevents new children and terminalizes any child that cannot complete
 independently. This contract must exist before agent-turn, eval, and direct
-method execution are migrated; no executor may carry mission authority in an
+method execution are converted; no executor may carry mission authority in an
 ad-hoc payload while waiting for it.
 
 ### D7. Child eval admission comes from the verified parent execution
 
-When an admitted scheduled agent calls `eval.start`, EvalService reads the
-parent execution session from the authenticated caller/causal RPC context. It
-creates an `eval` child variant of `ExecutionAdmissionFact` carrying the same
-mission and task facts plus a new exact eval run identity.
+When an agent calls `eval.start`, EvalService reads the verified parent from the
+authenticated caller/causal RPC context. A continuing turn produces an ordinary
+child of the existing agent task authority. An isolated scheduled agent
+produces an `eval` child carrying the same mission and task facts plus a new
+exact eval run identity.
 
 Eval arguments cannot select `mode: mission`, a mission subject, task
 authority, owner user, or authority plan. Any supplied copies are rejected.
@@ -632,16 +654,16 @@ It is removed from:
 - task authority derivation;
 - mission execution mode selection.
 
-Two sequential continuing ticks use two run admissions over one channel.
-An interactive turn concurrent with a scheduled tick has its own execution
-session and no mission subject.
+Two sequential continuing ticks are ordinary turns of the same existing agent
+task over one channel. They never install a mission subject on that channel.
 
-### D9. Method and agent automations use one authority model
+### D9. Every executor uses the ordinary authority model
 
-A method automation is not exempt from mission semantics. It executes exact
-code under the same run admission and mission principal as an agent action.
-The sealed code manifest constrains what the method may call; the mission/task
-subjects authorize those calls.
+A method or inline-eval automation executes exact code under an isolated run
+admission and mission principal. A fresh agent is another executor for that
+same principal. A continuing agent already has an ordinary task principal and
+does not receive an overlay. In every case the sealed code manifest constrains
+what code may call and the ordinary evaluator decides each concrete call.
 
 Remove the rule that method automations must have `permissions: []` because
 they use unrelated installed code authority. There will be no `permissions`
@@ -837,8 +859,13 @@ subsequent run joins the same semantic request without duplicating the question.
 ### 8.6 Non-overlap and schedules
 
 Retain one active nonterminal run per mission. A due occurrence during an
-active run creates a visible `skipped` terminal occurrence. A call parked for
-authority remains part of its active executing run and does not overlap.
+active run creates a visible `skipped` terminal occurrence and one persistent,
+actionable user notification keyed by the blocking run. Repeated blocked ticks
+remain in history but coalesce into that one inbox item. A call parked for
+authority or genuine background work remains part of its active executing run
+and does not overlap. A turn that reports `already_handled`, `not_addressed`, or
+`no_foreground_work` is terminal; only a concrete outstanding background
+dependency may keep it suspended.
 
 Advance the schedule in the same transaction that admits the deterministic
 occurrence. Preserve existing interval, cron, timezone, jitter, `untilAt`,
@@ -941,7 +968,7 @@ raw grant rows, or manual runtime identity discovery.
 The behavior change crosses automation, authority acquisition, execution
 inheritance, eval, and notifications. Updating only `skills/automations` would
 leave mutually inconsistent agent instructions. Treat workspace skill docs as a
-versioned product contract and migrate them in the same coordinated Base/host
+versioned product contract and update them in the same coordinated Base/host
 release as the schemas they describe.
 
 Before implementation, resolve the exact configured Base checkout and inventory
@@ -1162,7 +1189,7 @@ copy unbounded or secret-bearing trajectories into the mission database.
 
 ## 12. Deletion inventory
 
-Delete, rather than preserve behind compatibility flags, after migration:
+Delete, rather than preserve behind compatibility flags, at cutover:
 
 ### Host
 
@@ -1227,113 +1254,34 @@ owners are:
 | Agent integration    | `packages/agentic-do/src/agent-vessel.ts` in Base                                                                             | semantic launch schema, scheduled execution admission propagation, durable wait/terminal projection                   |
 | Inspector            | `about/automations`, agentic automation cards/events                                                                          | new definition, authority, phase, failure, and controls model                                                         |
 | Workspace skills     | D19 Base/host corpus inventory, canonical API generators, and contract tests                                                  | coordinated operation, authority, inheritance, pause, inspector, and notification semantics                           |
-| Optional templates   | template registry, Google Workspace, News, Examples, Spectrolite, and newly promoted templates                                | audit/migrate prompts, operation metadata, recurring work, skills, manifests, tests, and promoted snapshots           |
+| Optional templates   | template registry, Google Workspace, News, Examples, Spectrolite, and newly promoted templates                                | audit/update prompts, operation metadata, recurring work, skills, manifests, tests, and promoted snapshots            |
 | Notification trust   | notification service/action reporting and shell bar                                                                           | canonical trusted-chrome relationship and durable attention behavior                                                  |
 
 Generated authority catalogs and matrices are outputs of these source
 declarations. Never edit them as the source of the redesign.
 
-## 13. Migration
+## 13. Pre-release cutover
 
-The migration is one cutover, not a dual execution path.
+There is no compatibility or state migration. This subsystem is pre-release:
+the implementation deletes the old protocol, old tables, and old authority
+paths. Existing development mission, authority-plan, target-request, and grant
+stores must be backed up if diagnostically useful and then explicitly deleted
+by the developer before running the new build. Startup remains fail-closed on a
+non-canonical store; it must never silently delete or reinterpret authority.
 
-### 13.1 Preflight inventory
-
-Before changing schemas, record counts of:
-
-- missions by state and schema version;
-- active revisions with and without immutable source refs;
-- mission-scoped grants and denials;
-- compiled authority-plan digests/bodies and the catalog/compiler versions that produced
-  them;
-- active reviewed closures and unfinished closure sessions;
-- nonterminal mission runs;
-- pending acquisitions associated with mission executions.
-
-The inventory is diagnostic output, not a permanent compatibility API.
-
-### 13.2 Definition migration
-
-- Definitions with exact source refs are converted to the new revision schema
-  and receive a recomputed revision digest.
-- `active`, `paused`, `completed`, and `retired` retain their semantic state.
-- Historical `draft` and `needs-reapproval` definitions become `paused`; they
-  do not silently start.
-- Definitions lacking an exact source ref cannot become live v2 revisions.
-  Archive their historical record for display/audit and leave a clear recreation
-  notice; do not keep `ref?` in the new core type.
-- Existing channel/context values remain conversation configuration only.
-- Device ID, when retained, is creation/audit provenance rather than an
-  authority owner or visibility key. The owning user remains canonical across
-  devices.
-
-### 13.3 Admission fence and run migration
-
-Cutover ordering must preserve the authority needed by every still-live
-execution:
-
-1. Atomically fence creation of new old-protocol mission admissions while
-   keeping their existing execution sessions and grants valid.
-2. Transform terminal history into the new terminal outcome shape.
-3. Mark every nonterminal old channel-bound run `interrupted:migration`, request
-   executor cancellation, and finish its reviewed-closure/execution session
-   idempotently.
-4. Verify that no live execution remains admitted under an old mission subject.
-5. Preserve channel/context links solely as history.
-
-Do not revoke a grant or remove closure state before step 4. Migration does not
-rely on revocation to stop new work; the admission fence does that explicitly.
-
-### 13.4 Definition, policy, and authority migration
-
-Existing mission grants were issued through the attribution-based closure path
-and therefore do not have the required acquisition provenance. Do not silently
-translate them into new standing grants.
-
-For every migrated mission, while v2 admission remains fenced:
-
-1. compile operation intents from stored action/tool declarations only where
-   exact and mechanically derivable;
-2. publish and acknowledge the canonical host authority-plan artifact, then prepare the
-   v2 revision reference;
-3. after §13.3 proves old sessions terminal, revoke the old closure grants once
-   and retire unresolved old requests/closure state;
-4. create durable ordinary authority requests for eligible standing operations
-   of migrated active missions;
-5. enable v2 admission only when its revision and authority-plan artifact are exact;
-6. leave the mission inspectable and allow ordinary run-time fallback while a
-   new request is pending.
-
-Where an old declaration cannot identify an exact operation/resource, omit the
-standing request and surface that fact. Do not infer a wider scope. Paused
-missions retain their paused lifecycle through migration, but legacy grants are
-still retired because their provenance and subject model changed; resuming
-later uses the migrated revision's ordinary authority state.
-
-### 13.5 Store removal
-
-After old admissions are fenced, all old sessions are terminal, legacy grants
-were revoked once, and new policy references are acknowledged:
-
-- assert that the reviewed-closure registry has no live mission records, then
-  remove its terminal migration rows;
-- assert that no legacy mission grants remain rather than issuing a second
-  semantic revocation;
-- drop the channel binding table;
-- remove obsolete mission columns/tables in the next canonical DO schema;
-- delete migration code after the supported migration window, according to the
-  repository's normal schema-migration policy.
+This is a real schema cutover, not a version-only invalidation. In particular,
+durable target requests now persist receiver-reviewed operation semantics, and
+old target-request rows do not contain those trusted facts. No conversion shim,
+dual reader, or automatic cleanup is permitted.
 
 ## 14. Implementation phases
 
 Each phase is an architectural vertical slice. Do not ship a flag selecting old
 versus new authority semantics.
 
-Host and Base changes use one incremented execution/admission protocol version
-and ship as a coordinated workspace release. The upgraded host migrates durable
-state before accepting the new Base automation calls and rejects an old
-channel-bound mission admission explicitly. Do not maintain both semantics in
-one running system.
+Host and Base changes use one coordinated protocol and ship as one workspace
+release after acceptance. The upgraded host rejects old state explicitly. Do
+not maintain both semantics in one running system.
 
 ### Phase 0 — Freeze invariants and update owning contracts
 
@@ -1344,13 +1292,12 @@ one running system.
    distinct variant of this one generic acquisition contract.
 3. Define the generic execution-admission v2 schema: executor-kind union,
    authenticated runtime/object binding, idempotent admission key, causal child
-   derivation, renewal owner, and terminal closure. Specify the migration of
+   derivation, renewal owner, and terminal closure. Specify the replacement of
    `AgentExecutionSessionFact`, not an automation side transport.
 4. Define the versioned revision and canonical authority-plan artifact
    schemas, host store ownership, compiler/catalog provenance, lookup,
    retention, and garbage collection.
-5. Specify the admission-fence -> terminalize sessions -> revoke legacy
-   authority migration order.
+5. Specify explicit pre-release state deletion and fail-closed startup.
 6. Add compile-time/dependency tests preventing channel IDs from entering
    mission authority APIs.
 
@@ -1368,8 +1315,8 @@ Exit evidence:
 2. Add idempotent root admission, causal child derivation, executor-owned lease
    renewal, and idempotent terminal closure.
 3. Add issuer validation for MissionsDO root admission.
-4. Propagate the opaque admission through scheduled agent turns and direct
-   method invocations.
+4. Propagate the opaque admission through isolated fresh-agent turns and direct
+   method invocations; continuing turns use their ordinary agent task.
 5. Admit child EvalDO runs from the verified parent execution admission.
 6. Change dispatcher/eval mission subject selection from channel lookup to the
    execution-session fact.
@@ -1377,9 +1324,9 @@ Exit evidence:
 
 Exit evidence:
 
-- two continuing ticks execute on one channel with different run admissions;
+- two continuing ticks execute on one channel without mission admission;
 - an interactive eval on that channel cannot observe mission grants;
-- fresh and continuing prompt/eval actions use the same admission primitive;
+- fresh prompt/eval and method actions use the generic mission admission primitive;
 - agent-turn, eval, and method variants authenticate their exact executor and
   reject cross-kind replay;
 - spoofed mission/run fields are rejected.
@@ -1392,9 +1339,9 @@ Exit evidence:
    versioned canonical artifact.
 4. Add the host-owned content-addressed artifact store, authenticated lookup,
    pinned compiler/catalog metadata, retention, and garbage collection.
-5. Add durable target-subject acquisition for the mission principal and
-   restart-safe projection through the ordinary approval queue.
-6. Implement run-only and always-for-this-automation approval choices.
+5. Add durable target-subject acquisition for mission principals and continuing
+   task principals, with restart-safe projection through the ordinary approval queue.
+6. Implement task and mission approval choices through ordinary acquisition.
 7. Remove raw permission rows from agent input and mission records.
 8. Move infrastructural calls to sealed runtime relationship/manifest policy.
 
@@ -1430,7 +1377,7 @@ Exit evidence:
 
 ### Phase 4 — Schema cutover, UI, and documentation
 
-1. Run the one-time definition, authority, run, and closure migration.
+1. Delete the obsolete protocol and document explicit disposal of pre-release state.
 2. Update Automations and transcript cards to the new state/projection model.
 3. Add pending-authority and structured-failure inspection.
 4. Complete D19's Base/host/registered-template inventory; update every relevant
@@ -1445,7 +1392,7 @@ Exit evidence:
 
 - no product surface contains proposal/review language for launch;
 - no live schema accepts old raw permission or optional source-ref shapes;
-- migrated authority is re-acquired rather than silently trusted;
+- old authority state is rejected rather than silently trusted;
 - every D19 inventory entry is updated or carries an evidence-backed
   not-applicable classification, and generated skill APIs match live schemas;
 - every changed optional template passes against the coordinated protocol and
@@ -1471,14 +1418,16 @@ Required acceptance scenarios:
 4. Critical operation requests exact approval on every distinct invocation.
 5. Denial reaches eval/agent as a typed error and produces a structured run
    outcome without corrupting the schedule.
-6. Two continuing ticks share history but not execution authority.
+6. Two continuing ticks share history and the conversation's stable task
+   authority, while each invocation still has its own execution lifecycle.
 7. A concurrent interactive turn in the same channel cannot exercise mission
    grants.
 8. A fresh tick gets isolated context/channel state and the same mission
    principal semantics.
-9. Agent prompt -> eval -> gated service call retains the exact run/mission
-   attestation without any channel lookup.
-10. Method automation uses the same mission/task authority model.
+9. Fresh agent prompt -> eval -> gated service call retains the exact
+   run/mission attestation without any channel lookup; continuing agent -> eval
+   inherits ordinary task authority.
+10. Method automation uses mission admission and authority, not a bespoke path.
 11. Revoking a mission grant affects the next evaluation and a parked retry.
 12. Editing changes the principal digest; old grants do not authorize the new
     revision.
@@ -1494,12 +1443,12 @@ Required acceptance scenarios:
     capability rows cannot mint authority.
 17. A forged channel ID, mission subject, task subject, or parent execution ID
     is rejected at host admission.
-18. Migrated active definitions remain inspectable and reacquire standing
-    authority through the standard path.
-19. Migration fences old admission, terminalizes every old session, and only
-    then revokes legacy grants/removes closure rows.
-20. Admission after host restart resolves the exact stored authority-plan artifact; a
+18. Old pre-release stores are rejected without automatic deletion or
+    compatibility interpretation.
+19. Admission after host restart resolves the exact stored authority-plan artifact; a
     missing, forged, or current-catalog-recompiled body is rejected.
+20. A natural two-tick continuing notification request produces two terminal
+    runs and two distinct durable notifications in the original conversation.
 
 ### Phase 6 — Coordinated multi-repository publication
 
@@ -1531,7 +1480,7 @@ complete from a local commit or push response alone.
 - mission principal construction and version separation;
 - operation intent -> method metadata -> capability/resource compilation;
 - standing eligibility and critical rejection;
-- schema discriminated unions and migration transforms;
+- schema discriminated unions and explicit old-state rejection;
 - schedule occurrence/run identity;
 - derived UI status from run phase/outcome.
 
@@ -1646,8 +1595,7 @@ Add tests or static checks that fail if:
 - the automation inspector reuses a permanent launch-time definition/run cache;
 - launch/edit performs an external mutation before durable intent;
 - pausing an unchanged mission revokes its standing grants or pending requests;
-- migration revokes a legacy mission grant while an old execution session is
-  still live;
+- a pre-release old store is silently reinterpreted or automatically deleted;
 - any relevant workspace skill or generated API reference retains obsolete
   proposal, raw-permission, pregranted-only, or channel-authority guidance;
 - an optional template prompt, manifest, operation descriptor, or example uses
@@ -1655,7 +1603,7 @@ Add tests or static checks that fail if:
 - a template-owned domain scheduler admits mission authority outside the
   canonical MissionsDO execution workflow;
 - `draft`, `needs-reapproval`, `mission_proposals`, or channel-bound closure
-  sessions return after the migration.
+  sessions return after the cutover.
 
 ## 17. Explicit non-goals
 
@@ -1683,14 +1631,15 @@ Add tests or static checks that fail if:
 
 The refactor is done when the following explanation is both complete and true:
 
-> The automation definition owns a versioned mission principal. The ordinary
-> authority system grants capabilities to that principal. MissionsDO admits one
-> durable run at a time. The host attests that the ordinary agent, method, or
-> child eval execution belongs to that run. The standard dispatcher evaluates
-> the mission and run grants, and the standard approval path handles anything
-> missing. Channels carry conversation history only. Every cross-owner step is
-> idempotent and recoverable, and the user can inspect the exact definition,
-> authority, wait, result, or failure from the persistent automation surface.
+> The automation definition owns a durable schedule and admits one run at a
+> time. A continuing tick is ordinary input to the existing agent and uses that
+> agent task's authority. A fresh agent, method, or inline eval executes for a
+> versioned mission principal. Launch pre-acquires predictable operations for
+> the selected subject, children inherit through the standard execution chain,
+> and missing authority uses the ordinary visible approval path. Channels carry
+> conversation history only. Every cross-owner step is idempotent and
+> recoverable, blocked ticks raise persistent attention, and the user can
+> inspect the exact definition, authority, wait, result, or failure.
 
 Anything needed to explain the system beyond those primitives must identify a
 real generic runtime or authority invariant. Automation-specific session,

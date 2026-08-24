@@ -2104,6 +2104,12 @@ export class ServiceDispatcher {
       );
     }
     const resourceKey = deriveAuthorityResource(descriptor.resource, [...input.args]);
+    const presentation = methodDef.presentation ?? describeCapability(capability);
+    if (tier !== "open" && !presentation.authorityCategory) {
+      throw new Error(
+        `Operation ${input.service}.${input.method} has no reviewed authority category`
+      );
+    }
     return {
       service: input.service,
       method: input.method,
@@ -2120,6 +2126,13 @@ export class ServiceDispatcher {
       provider: "-",
       providerEffectiveVersion: "-",
       use: input.use,
+      review: {
+        action: presentation.action,
+        domain: presentation.authorityCategory?.domain ?? "automation",
+        verb: presentation.authorityCategory?.verb ?? "act",
+        declaredBy:
+          presentation.authorityCategory?.declaredBy ?? `host:${input.service}.${input.method}`,
+      },
     };
   }
 

@@ -1,7 +1,7 @@
 import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 export const TARGET_AUTHORITY_REQUEST_SCHEMA: CanonicalSqliteSchema = {
-  version: 3,
+  version: 4,
   objects: [
     {
       type: "table",
@@ -30,6 +30,7 @@ export const TARGET_AUTHORITY_REQUEST_SCHEMA: CanonicalSqliteSchema = {
         state TEXT NOT NULL CHECK (state IN ('pending','granted','denied','cancelled')),
         source_user TEXT NOT NULL,
         capability_definition_digest TEXT NOT NULL,
+        review_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         settled_at INTEGER,
         grant_id TEXT,

@@ -92,6 +92,58 @@ describe("authorityService", () => {
     );
   });
 
+  it("pre-acquires an immutable plan only for the caller's attested task", async () => {
+    const requestForTarget = vi.fn();
+    const task = `task:${"d".repeat(64)}` as const;
+    const service = createAuthorityService({
+      dispatcher: {} as never,
+      acquisitions: {
+        requestForTarget,
+        targetRequestsFor: () => [],
+      } as never,
+      authorityPlans: {
+        get: () => ({
+          leaves: [
+            {
+              service: "notification",
+              method: "showToUser",
+              capability: "notification.show",
+              capabilityDefinitionDigest: "c".repeat(64),
+              resource: { kind: "exact", key: "user:alice" },
+              tier: "gated",
+              review: {
+                action: "show a notification",
+                domain: "people",
+                verb: "act",
+                declaredBy: "host:notification.showToUser",
+              },
+            },
+          ],
+        }),
+      } as never,
+    });
+    const caller = {
+      ...createVerifiedCaller("agent:launcher", "agent", undefined, null, {
+        userId: "alice",
+        handle: "alice",
+      }),
+      taskAuthority: task,
+    };
+
+    await expect(
+      service.handler({ caller } as never, "acquireForCurrentTask", [
+        { authorityPlanDigest: "b".repeat(64) },
+      ])
+    ).resolves.toEqual({ requestIds: [], grantIds: [], denialIds: [] });
+    expect(requestForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSubject: task,
+        sourceUser: "user:alice",
+        capability: "notification.show",
+      })
+    );
+  });
+
   it("replays acquisition from the durable target owner after the launching execution ends", async () => {
     const subject = `mission:timer@${"a".repeat(64)}` as const;
     const requestForTarget = vi.fn();
@@ -119,6 +171,12 @@ describe("authorityService", () => {
               capabilityDefinitionDigest: "c".repeat(64),
               resource: { kind: "exact", key: "provider:example" },
               tier: "gated",
+              review: {
+                action: "connect an account",
+                domain: "accounts",
+                verb: "manage",
+                declaredBy: "host:accounts.connect",
+              },
             },
           ],
         }),

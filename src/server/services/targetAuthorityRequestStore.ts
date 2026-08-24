@@ -10,6 +10,7 @@ import { TARGET_AUTHORITY_REQUEST_SCHEMA } from "./targetAuthorityRequestSchema.
 
 export interface DurableTargetAuthorityRequest extends TargetAuthorityRequest {
   capabilityDefinitionDigest: string;
+  review: import("@vibestudio/rpc").CompiledAuthorityPlanLeaf["review"];
 }
 
 export class TargetAuthorityRequestStore {
@@ -44,8 +45,8 @@ export class TargetAuthorityRequestStore {
     this.db
       .prepare(
         `INSERT INTO target_authority_requests
-      (request_id,target_subject,authority_plan_digest,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,created_at)
-      VALUES (?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(target_subject,authority_plan_digest,operation_key) DO NOTHING`
+      (request_id,target_subject,authority_plan_digest,operation_key,capability,resource_json,tier,state,source_user,capability_definition_digest,review_json,created_at)
+      VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?) ON CONFLICT(target_subject,authority_plan_digest,operation_key) DO NOTHING`
       )
       .run(
         requestId,
@@ -57,6 +58,7 @@ export class TargetAuthorityRequestStore {
         input.tier,
         input.sourceUser,
         input.capabilityDefinitionDigest,
+        canonicalJson(input.review),
         now
       );
     const request = this.require(requestId);
@@ -68,7 +70,8 @@ export class TargetAuthorityRequestStore {
       request.capabilityDefinitionDigest !== input.capabilityDefinitionDigest ||
       canonicalJson(request.resource) !== canonicalJson(input.resource) ||
       request.tier !== input.tier ||
-      request.sourceUser !== input.sourceUser
+      request.sourceUser !== input.sourceUser ||
+      canonicalJson(request.review) !== canonicalJson(input.review)
     ) {
       throw new Error(`Target authority request ${requestId} was replayed with different facts`);
     }
@@ -213,6 +216,7 @@ function row(value: Record<string, unknown>): DurableTargetAuthorityRequest {
     state: String(value["state"]) as DurableTargetAuthorityRequest["state"],
     sourceUser: String(value["source_user"]) as `user:${string}`,
     capabilityDefinitionDigest: String(value["capability_definition_digest"]),
+    review: JSON.parse(String(value["review_json"])) as DurableTargetAuthorityRequest["review"],
     createdAt: Number(value["created_at"]),
     ...(value["settled_at"] == null ? {} : { settledAt: Number(value["settled_at"]) }),
     ...(value["grant_id"] == null ? {} : { grantId: String(value["grant_id"]) }),

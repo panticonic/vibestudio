@@ -115,7 +115,56 @@ export function createAuthorityService(deps: {
             resource: leaf.resource,
             tier: leaf.tier,
             sourceUser,
-            renderedAction: `${leaf.service}.${leaf.method}`,
+            renderedAction: leaf.review.action,
+            review: leaf.review,
+          });
+        }
+        const requests = deps.acquisitions.targetRequestsFor(
+          targetSubject,
+          input.authorityPlanDigest
+        );
+        return {
+          requestIds: requests
+            .filter((request) => request.state === "pending")
+            .map((request) => request.requestId),
+          grantIds: requests
+            .filter((request) => request.state === "granted")
+            .map((request) => request.grantId ?? request.requestId),
+          denialIds: requests
+            .filter((request) => request.state === "denied")
+            .map((request) => request.requestId),
+        };
+      },
+      acquireForCurrentTask: (ctx, [input]) => {
+        const authorityPlans = requireDependency(
+          deps.authorityPlans,
+          "Task authority pre-acquisition"
+        );
+        const artifact = authorityPlans.get(input.authorityPlanDigest);
+        if (!artifact) throw new Error(`Unknown authority plan ${input.authorityPlanDigest}`);
+        const targetSubject = ctx.caller.taskAuthority;
+        if (!targetSubject) {
+          throw Object.assign(
+            new Error("Authority pre-acquisition requires an authenticated agent task"),
+            { code: "EACCES" }
+          );
+        }
+        const sourceUser = attributedUser(ctx);
+        for (const leaf of artifact.leaves) {
+          // Open calls need no grant. Critical consent is invocation-specific
+          // and therefore cannot honestly be pre-acquired for a future turn.
+          if (leaf.tier === "open" || leaf.tier === "critical") continue;
+          deps.acquisitions.requestForTarget({
+            targetSubject,
+            authorityPlanDigest: input.authorityPlanDigest,
+            operationKey: `${leaf.service}.${leaf.method}:${leaf.capabilityDefinitionDigest}`,
+            capability: leaf.capability,
+            capabilityDefinitionDigest: leaf.capabilityDefinitionDigest,
+            resource: leaf.resource,
+            tier: leaf.tier,
+            sourceUser,
+            renderedAction: leaf.review.action,
+            review: leaf.review,
           });
         }
         const requests = deps.acquisitions.targetRequestsFor(

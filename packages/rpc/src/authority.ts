@@ -29,6 +29,21 @@ export interface CompiledAuthorityPlanLeaf extends CapabilityScope {
   provider: string | "-";
   providerEffectiveVersion: string | "-";
   use: "action" | "conditional";
+  /** Receiver/census-reviewed semantics sealed into the content-addressed plan. */
+  review: {
+    action: string;
+    domain:
+      | "files"
+      | "sharing"
+      | "accounts"
+      | "web"
+      | "automation"
+      | "people"
+      | "computer"
+      | "safety";
+    verb: "see" | "act" | "manage";
+    declaredBy: string;
+  };
 }
 
 export interface CompiledAuthorityPlanArtifact {

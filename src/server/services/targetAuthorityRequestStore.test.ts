@@ -21,6 +21,12 @@ describe("TargetAuthorityRequestStore", () => {
       resource: { kind: "exact" as const, key: "user:alice" },
       tier: "gated" as const,
       sourceUser: "user:alice" as const,
+      review: {
+        action: "show a notification",
+        domain: "people" as const,
+        verb: "act" as const,
+        declaredBy: "host:notification.showToUser",
+      },
     };
     const firstStore = new TargetAuthorityRequestStore({ statePath: root });
     firstStore.registerSubject(
@@ -68,6 +74,12 @@ describe("TargetAuthorityRequestStore", () => {
         resource: { kind: "exact", key: "user:alice" },
         tier: "gated",
         sourceUser: "user:alice",
+        review: {
+          action: "show a notification",
+          domain: "people",
+          verb: "act",
+          declaredBy: "host:notification.showToUser",
+        },
       },
       20
     );

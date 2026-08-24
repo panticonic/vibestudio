@@ -19,6 +19,12 @@ const leaf = {
   resource: { kind: "exact" as const, key: "user:alice" },
   tier: "gated" as const,
   use: "action" as const,
+  review: {
+    action: "show a notification",
+    domain: "people" as const,
+    verb: "act" as const,
+    declaredBy: "host:notification.showToUser",
+  },
 };
 
 describe("AuthorityPlanStore", () => {

@@ -10,6 +10,7 @@ import {
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import { TargetAuthorityRequestStore } from "./targetAuthorityRequestStore.js";
 
 function snapshot() {
   return createInvocationSnapshot({
@@ -60,6 +61,101 @@ function reviewedPresentation() {
 }
 
 describe("AcquisitionCoordinator", () => {
+  it("settles a durable task-target request as a reusable task grant", async () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-acq-task-target-"));
+    const grantStore = new CapabilityGrantStore({ statePath });
+    const targetRequests = new TargetAuthorityRequestStore({ statePath });
+    const request = vi.fn(async () => "task" as const);
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+      targetRequests,
+    });
+    const targetSubject = `task:${"e".repeat(64)}` as const;
+    const authorityPlanDigest = "f".repeat(64);
+
+    const durable = coordinator.requestForTarget({
+      targetSubject,
+      authorityPlanDigest,
+      operationKey: "notification.showToUser:definition",
+      capability: "notification.show",
+      capabilityDefinitionDigest: "c".repeat(64),
+      resource: { kind: "exact", key: "user:alice" },
+      tier: "gated",
+      sourceUser: "user:alice",
+      renderedAction: "show a notification",
+      review: {
+        action: "show a notification",
+        domain: "people",
+        verb: "act",
+        declaredBy: "host:notification.showToUser",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(coordinator.targetRequestsFor(targetSubject, authorityPlanDigest)).toEqual([
+        expect.objectContaining({ requestId: durable.requestId, state: "granted" }),
+      ]);
+    });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["task", "deny"],
+        title: "Allow an agent task action",
+      })
+    );
+    expect(grantStore.grantsForSubjects([targetSubject], "notification.show")).toEqual([
+      expect.objectContaining({ subject: targetSubject, scope: "task" }),
+    ]);
+    targetRequests.close();
+    grantStore.close();
+  });
+
+  it("persists a durable target denial on the target task rather than the presentation session", async () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-acq-task-target-deny-"));
+    const grantStore = new CapabilityGrantStore({ statePath });
+    const targetRequests = new TargetAuthorityRequestStore({ statePath });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => "deny" as const) } as never,
+      grantStore,
+      targetRequests,
+    });
+    const targetSubject = `task:${"a".repeat(64)}` as const;
+    const authorityPlanDigest = "b".repeat(64);
+
+    coordinator.requestForTarget({
+      targetSubject,
+      authorityPlanDigest,
+      operationKey: "mail.send:definition",
+      capability: "workspace-service:mail",
+      capabilityDefinitionDigest: "c".repeat(64),
+      resource: { kind: "exact", key: "alice@example.com" },
+      tier: "gated",
+      sourceUser: "user:alice",
+      renderedAction: "send mail",
+      review: {
+        action: "send mail",
+        domain: "sharing",
+        verb: "act",
+        declaredBy: "workers/mail",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(coordinator.targetRequestsFor(targetSubject, authorityPlanDigest)).toEqual([
+        expect.objectContaining({ state: "denied" }),
+      ]);
+    });
+    expect(grantStore.grantsForSubjects([targetSubject], "workspace-service:mail")).toEqual([
+      expect.objectContaining({
+        effect: "deny",
+        subject: targetSubject,
+        scope: "task",
+      }),
+    ]);
+    targetRequests.close();
+    grantStore.close();
+  });
+
   it("rejects an acquisition origin for which no consumable grant subject exists", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-user-")),

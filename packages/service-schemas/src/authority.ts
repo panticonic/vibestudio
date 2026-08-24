@@ -246,6 +246,34 @@ export const authorityMethods = defineServiceMethods({
     authority: { principals: ["code"] },
     access: { sensitivity: "write" },
   },
+  acquireForCurrentTask: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.acquire",
+      rationale:
+        "Installed agent code may pre-acquire predictable operations only for its host-attested current task authority.",
+    },
+    description:
+      "Create or join durable pre-acquisition requests for the authenticated caller's current task.",
+    args: z.tuple([
+      z
+        .object({
+          authorityPlanDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        requestIds: z.array(z.string()),
+        grantIds: z.array(z.string()),
+        denialIds: z.array(z.string()),
+      })
+      .strict(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
   admitExecution: {
     tier: {
       tier: "open",
