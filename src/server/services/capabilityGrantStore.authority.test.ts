@@ -11,6 +11,27 @@ function store(label: string): CapabilityGrantStore {
 }
 
 describe("CapabilityGrantStore agent authority", () => {
+  it("reopens the current version-6 store without invalidating existing grants", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-grants-reopen-v6-"));
+    const first = new CapabilityGrantStore({ statePath });
+    const issued = first.issue({
+      effect: "allow",
+      capability: "workspace.gateway.access",
+      resource: { kind: "origin", origin: "https://example.com" },
+      subject: "user:alice",
+      issuedBy: "user:alice",
+      provenance: "acquisition",
+      constraints: { lineageAtConsent: ["none"] },
+    });
+    first.close();
+
+    const reopened = new CapabilityGrantStore({ statePath });
+    expect(reopened.grantsForSubjects(["user:alice"], issued.capability)).toEqual([
+      expect.objectContaining({ id: issued.id }),
+    ]);
+    reopened.close();
+  });
+
   it("round-trips the exact task constraint used by authorization", () => {
     const grants = store("task-scope");
     grants.issue({
