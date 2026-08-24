@@ -1,4 +1,5 @@
 import { createRpcClient, defineContract, withCausalParent } from "./client.js";
+import { createInternalRpcClient } from "./client-core.js";
 import { createInProcessNetwork, inProcessTransport } from "./transports/inProcess.js";
 import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
@@ -542,6 +543,35 @@ describe("createRpcClient", () => {
     await expect(peer.call.sum(10, 32)).resolves.toBe(42);
   });
 
+  it("observes outbound operations through direct, peer, and scoped clients", async () => {
+    const network = createInProcessNetwork();
+    const observed: Promise<unknown>[] = [];
+    const a = createRpcClient({
+      selfId: "a",
+      callerKind: "panel",
+      transport: inProcessTransport("a", network),
+    });
+    const b = createInternalRpcClient({
+      selfId: "b",
+      callerKind: "worker",
+      transport: inProcessTransport("b", network),
+      onOutboundOperation: (operation) => observed.push(operation),
+    });
+    const c = createRpcClient({
+      selfId: "c",
+      callerKind: "worker",
+      transport: inProcessTransport("c", network),
+    });
+    c.expose("ping", () => "pong");
+    b.expose("forward", (request) => request.rpc.call("c", "ping", []));
+
+    await expect(b.peer("c").call["ping"]!()).resolves.toBe("pong");
+    await expect(a.call("b", "forward", [])).resolves.toBe("pong");
+
+    expect(observed).toHaveLength(2);
+    await expect(Promise.all(observed)).resolves.toEqual(["pong", "pong"]);
+  });
+
   it("generates request ids when crypto.randomUUID is unavailable", async () => {
     const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
     Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
@@ -941,9 +971,9 @@ describe("stream() request bodies (§1.6 uploads)", () => {
         c.close();
       },
     });
-    await expect(
-      rpc.stream("main", "gateway.fetch", [{ path: "/x" }], { body })
-    ).rejects.toThrow(/cannot stream a request body/);
+    await expect(rpc.stream("main", "gateway.fetch", [{ path: "/x" }], { body })).rejects.toThrow(
+      /cannot stream a request body/
+    );
   });
 
   it("passes the body through to a body-capable transport's stream hook", async () => {

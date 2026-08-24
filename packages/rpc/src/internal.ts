@@ -28,3 +28,7 @@ export {
   createInternalConnectionlessRpcClient,
   type InternalConnectionlessRpcConfig,
 } from "./connectionless-core.js";
+export {
+  createCausalRpcOperationTracker,
+  type CausalRpcOperationTracker,
+} from "./causal-operation-tracker.js";

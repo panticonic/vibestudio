@@ -1031,6 +1031,49 @@ check must fail on `propose`, `needs-reapproval`, generic launch approval,
 pregranted-only automation execution, raw permission rows, channel-bound mission
 authority, or instructions to pass mission/user authority through eval input.
 
+### D20. Parent execution owns causal effects through settlement
+
+An admitted RPC execution remains active until every outbound RPC operation it
+started settles, whether the caller used the direct client, a request-scoped
+client, or a typed peer. This is a generic RPC-core lifecycle hook, not an
+automation wrapper. It drains to a fixed point and runs when the parent handler
+succeeds or throws. A delayed callback that has not started an RPC is not a
+causal child; work intended to begin after the parent returns must be persisted
+and admitted as a new execution.
+
+This rule would have prevented the notification incident: GAD persisted the
+inbox row, started `notification.signalUserInbox`, returned, and allowed the
+host to retire its authority parent before the child reached admission. Using
+`waitUntil` kept an isolate alive but did not keep the authority relationship
+alive. The live inbox invalidation is part of the declared notification effect,
+so GAD awaits it and propagates authorization or transport failure. A reconnect
+still reconstructs the durable inbox row when no shell transport is live.
+
+Turn completion and effect completion are separate facts. The trajectory fold
+retains each terminal child failure through turn closure. The mission ledger
+records:
+
+- `succeeded` only when the turn and all terminal child effects succeeded;
+- `completed-with-errors` when the turn completed but one or more child effects
+  failed; and
+- `failed` when the turn itself failed.
+
+Every effect failure includes the invocation ID, tool name, terminal outcome,
+stable code, and message. The mission run is the canonical outcome; user
+attention is projected through the existing durable GAD inbox, never an
+ephemeral shell-only banner. MissionsDO records a stable run-derived inbox
+effect in its transactional outbox, closes the execution admission, then
+terminalizes the run and reconciles the projection idempotently. Admission
+closure is not cleanup that may be swallowed: if it fails, the run remains
+nonterminal and retryable under the same session identity. A projection failure
+after terminalization leaves a retryable durable effect without erasing or
+stranding the canonical run. Structural end conditions such as `maxRuns` apply
+to every admitted terminal attempt, including failed and
+`completed-with-errors` attempts; only a successful response may satisfy a
+response-derived end condition. The chat inspector reads canonical mission
+state on every open and shows recent runs and effect failures; launch-time
+snapshots are never treated as a live run ledger.
+
 ## 11. Schema and vocabulary cleanup
 
 ### 11.1 Live automation state
@@ -1517,6 +1560,17 @@ Include a cutover fault matrix proving that new old-protocol admissions are
 fenced before any legacy revocation, and that no legacy grant is revoked while
 an admitted old execution remains live.
 
+For user attention, commit the canonical failed or `completed-with-errors` run
+and its GAD-inbox outbox row, fail the first cross-DO delivery, and prove that
+the run remains terminal while an alarm retry publishes exactly one durable
+inbox entry and re-drives live invalidation.
+
+At the RPC boundary, delay an unawaited causal child past the parent handler's
+return and prove that the parent nonce remains active until settlement. Repeat
+with a throwing parent, request-scoped client, and typed peer. Prove that work
+started only after the parent closes receives no inherited authority and must
+use a durable admitted continuation.
+
 ### Workspace skill and template contracts
 
 - inventory all relevant Base and host skill files using D19's concept search;
@@ -1543,6 +1597,12 @@ an admitted old execution remains live.
   authority, and infrastructure identity without jargon;
 - no transient start notification;
 - trusted chrome can report action/dismissal while untrusted apps cannot.
+- every inspector open reads canonical mission state rather than a permanent
+  launch snapshot cache;
+- recent `completed-with-errors` runs show exact failed effects and are included
+  in attention counts; and
+- a failed explicit inbox/interrupt delivery rejects the tool effect and cannot
+  be projected as a successful run.
 
 ### System tests
 
@@ -1575,6 +1635,15 @@ Add tests or static checks that fail if:
 - a global service wildcard enters an authority plan;
 - infrastructure dependency lists are duplicated in the automation compiler;
 - a nonterminal run lacks a recoverable phase/effect identity;
+- an outbound RPC path bypasses causal-operation observation or retires the
+  authority parent while a started child remains unsettled;
+- a parent-handler exception retires authority before its started children
+  settle;
+- a run terminalizes while its admitted execution session remains live, or a
+  session-closure failure is swallowed as best-effort cleanup;
+- a turn with a failed terminal child effect is recorded as `succeeded` or
+  omits the child failure evidence;
+- the automation inspector reuses a permanent launch-time definition/run cache;
 - launch/edit performs an external mutation before durable intent;
 - pausing an unchanged mission revokes its standing grants or pending requests;
 - migration revokes a legacy mission grant while an old execution session is

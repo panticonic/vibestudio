@@ -25,6 +25,8 @@ export interface ConnectionlessRpcConfig extends HttpClientTransportConfig {
 export interface InternalConnectionlessRpcConfig extends ConnectionlessRpcConfig {
   /** Runtime-only parent invocation correlation; never a workspace API. */
   authorityParentNonce?: () => string | undefined;
+  /** Runtime lifecycle hook; not exposed to workspace-authored clients. */
+  onOutboundOperation?: (operation: Promise<unknown>) => void;
 }
 
 export interface ConnectionlessRpcClient {
@@ -254,6 +256,7 @@ function createConnectionlessRpcClientCore(
     authorityAcquisition: "wait",
     ...(config.callerKind ? { callerKind: config.callerKind } : {}),
     ...(config.authorityParentNonce ? { authorityParentNonce: config.authorityParentNonce } : {}),
+    ...(config.onOutboundOperation ? { onOutboundOperation: config.onOutboundOperation } : {}),
   });
 
   return {

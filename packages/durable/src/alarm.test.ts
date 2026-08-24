@@ -50,6 +50,18 @@ class AlarmProbeDO extends DurableObjectBase {
     this.ctx.waitUntil?.(this.deferredOutbound);
     return "deferred";
   }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  startOutbound(throwAfterStart = false): string {
+    void this.rpc.call("main", "probe.immediate", []);
+    if (throwAfterStart) throw new Error("parent failed after starting child");
+    return "started";
+  }
 }
 
 class OpenSchemaProbeDO extends DurableObjectBase {
@@ -268,6 +280,31 @@ describe("DurableObjectBase alarm dispatch", () => {
     await expect(instance.deferredOutbound).rejects.toThrow();
 
     expect(outboundBody).not.toContain("authorityParentNonce");
+  });
+
+  it.each([
+    ["successful", false],
+    ["failed", true],
+  ])("keeps a %s invocation open until its immediate child RPC settles", async (_label, fail) => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      await blocked;
+      return new Response("child failed", { status: 503 });
+    });
+    const { call } = await createTestDO(AlarmProbeDO);
+    let settled = false;
+    const result = call("startOutbound", fail).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    expect(settled).toBe(false);
+    release();
+    if (fail) await expect(result).rejects.toThrow("parent failed after starting child");
+    else await expect(result).resolves.toBe("started");
   });
 
   it("fails the request when its durable scheduling write fails", async () => {

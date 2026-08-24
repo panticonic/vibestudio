@@ -151,6 +151,10 @@ export interface InternalRpcClientConfig extends RpcClientConfig, RpcClientRecov
    * public RpcClientConfig.
    */
   authorityParentNonce?: () => string | undefined;
+  /** Runtime lifecycle hook for every outbound operation, including calls
+   * made through scoped request clients and typed peers. The hook observes the
+   * exact promise without changing RPC results or error semantics. */
+  onOutboundOperation?: (operation: Promise<unknown>) => void;
 }
 
 function publicCaller(caller: AuthenticatedCaller): AuthenticatedCaller {
@@ -181,6 +185,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   >();
   const streamingHandlers = new Map<string, RpcContextStreamingHandler>();
   const eventListeners = new Map<string, Set<(event: RpcEventContext) => void>>();
+  const observeOutbound = <T>(operation: Promise<T>): Promise<T> => {
+    config.onOutboundOperation?.(operation);
+    return operation;
+  };
   const pendingRequests = new Map<
     string,
     {
@@ -270,11 +278,21 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     return {
       ...client,
       call: (targetId, method, args, options) =>
-        callWithProvenance(scopedProvenance, targetId, method, args, options),
+        observeOutbound(callWithProvenance(scopedProvenance, targetId, method, args, options)),
       stream: (targetId, method, args, options) =>
-        streamWithProvenance(scopedProvenance, targetId, method, args, options),
+        observeOutbound(
+          Promise.resolve().then(() =>
+            streamWithProvenance(scopedProvenance, targetId, method, args, options)
+          )
+        ),
+      streamReadable: (targetId, method, args, options) =>
+        observeOutbound(
+          Promise.resolve().then(() =>
+            streamReadableWithProvenance(scopedProvenance, targetId, method, args, options)
+          )
+        ),
       emit: (targetId, event, payload, options) =>
-        emitWithProvenance(scopedProvenance, targetId, event, payload, options),
+        observeOutbound(emitWithProvenance(scopedProvenance, targetId, event, payload, options)),
       peer: (targetId) => peer(targetId, scopedProvenance),
     };
   }
@@ -864,7 +882,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     const result: RpcPeer<TMethods, TEvents, TEmitEvents> = {
       id: targetId,
       call: createCallProxy<TMethods>((method, args) =>
-        callWithProvenance(provenance, targetId, method, args)
+        observeOutbound(callWithProvenance(provenance, targetId, method, args))
       ),
       on(event, listener) {
         return client.on(event, (ev) => {
@@ -872,7 +890,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         });
       },
       emit(event, payload) {
-        return emitWithProvenance(provenance, targetId, event, payload);
+        return observeOutbound(emitWithProvenance(provenance, targetId, event, payload));
       },
       withContract(_contract, _role) {
         return peer(targetId, provenance) as never;
@@ -1014,22 +1032,32 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     exposeStreaming(method, handler): void {
       streamingHandlers.set(method, handler);
     },
-    async call<T = unknown>(
+    call<T = unknown>(
       targetId: string,
       method: string,
       args: unknown[],
       options?: RpcCallOptions
     ): Promise<T> {
-      return callWithProvenance(baseProvenance, targetId, method, args, options);
+      return observeOutbound(
+        callWithProvenance<T>(baseProvenance, targetId, method, args, options)
+      );
     },
-    async stream(targetId, method, args, options): Promise<Response> {
-      return streamWithProvenance(baseProvenance, targetId, method, args, options);
+    stream(targetId, method, args, options): Promise<Response> {
+      return observeOutbound(
+        Promise.resolve().then(() =>
+          streamWithProvenance(baseProvenance, targetId, method, args, options)
+        )
+      );
     },
     streamReadable(targetId, method, args, options) {
-      return streamReadableWithProvenance(baseProvenance, targetId, method, args, options);
+      return observeOutbound(
+        Promise.resolve().then(() =>
+          streamReadableWithProvenance(baseProvenance, targetId, method, args, options)
+        )
+      );
     },
     emit(targetId, event, payload, options): Promise<void> {
-      return emitWithProvenance(baseProvenance, targetId, event, payload, options);
+      return observeOutbound(emitWithProvenance(baseProvenance, targetId, event, payload, options));
     },
     on(event, listener): () => void {
       let listeners = eventListeners.get(event);

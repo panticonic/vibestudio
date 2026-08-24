@@ -5,7 +5,9 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/u);
 const missionSubject = z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u);
 const stateRef = z.string().regex(/^state:[0-9a-f]{64}$/u) as z.ZodType<`state:${string}`>;
-const authorityPlanRef = z.string().regex(/^authority-plan:[0-9a-f]{64}$/u) as z.ZodType<`authority-plan:${string}`>;
+const authorityPlanRef = z
+  .string()
+  .regex(/^authority-plan:[0-9a-f]{64}$/u) as z.ZodType<`authority-plan:${string}`>;
 
 const executionImageSchema = z
   .object({
@@ -157,6 +159,22 @@ const runFailureSchema = z
   })
   .strict();
 
+const runEffectFailureSchema = z
+  .object({
+    invocationId: z.string().min(1),
+    name: z.string().min(1),
+    outcome: z.enum([
+      "tool_error",
+      "infrastructure_error",
+      "cancelled",
+      "stale_dispatch",
+      "abandoned",
+    ]),
+    code: z.string().min(1),
+    message: z.string(),
+  })
+  .strict();
+
 export const missionRunRecordSchema = z
   .object({
     runId: z.string().min(1),
@@ -173,7 +191,9 @@ export const missionRunRecordSchema = z
       "executing",
       "terminal",
     ]),
-    outcome: z.enum(["succeeded", "failed", "skipped", "interrupted", "cancelled"]).optional(),
+    outcome: z
+      .enum(["succeeded", "completed-with-errors", "failed", "skipped", "interrupted", "cancelled"])
+      .optional(),
     startedAt: z.number().int().nonnegative(),
     runNumber: z.number().int().positive().optional(),
     finishedAt: z.number().int().nonnegative().optional(),
@@ -184,6 +204,7 @@ export const missionRunRecordSchema = z
     finalMessage: z.string().optional(),
     completionResponse: z.string().optional(),
     failure: runFailureSchema.optional(),
+    effectFailures: z.array(runEffectFailureSchema).max(256).optional(),
   })
   .strict();
 
@@ -213,7 +234,7 @@ const overviewSchema = z
         total: z.number().int().nonnegative(),
         active: z.number().int().nonnegative(),
         running: z.number().int().nonnegative(),
-        failedLast24Hours: z.number().int().nonnegative(),
+        issueRunsLast24Hours: z.number().int().nonnegative(),
         completed: z.number().int().nonnegative(),
       })
       .strict(),
@@ -224,7 +245,7 @@ const overviewSchema = z
           recentRuns: z.array(missionRunRecordSchema),
           totalRuns: z.number().int().nonnegative(),
           activeRuns: z.number().int().nonnegative(),
-          failedRunsSince: z.number().int().nonnegative(),
+          issueRunsSince: z.number().int().nonnegative(),
         })
         .strict()
     ),
@@ -360,10 +381,17 @@ export const missionsMethods = defineReceiverServiceMethods({
       z
         .object({
           runId: z.string(),
-          outcome: z.enum(["succeeded", "failed", "interrupted", "cancelled"]),
+          outcome: z.enum([
+            "succeeded",
+            "completed-with-errors",
+            "failed",
+            "interrupted",
+            "cancelled",
+          ]),
           finalMessage: z.string().optional(),
           completionResponse: z.string().optional(),
           failure: runFailureSchema.optional(),
+          effectFailures: z.array(runEffectFailureSchema).max(256).optional(),
         })
         .strict(),
     ]),

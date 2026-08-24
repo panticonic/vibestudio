@@ -131,7 +131,13 @@ export type MissionRunPhase =
   | "executing"
   | "terminal";
 
-export type MissionRunOutcome = "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
+export type MissionRunOutcome =
+  | "succeeded"
+  | "completed-with-errors"
+  | "failed"
+  | "skipped"
+  | "interrupted"
+  | "cancelled";
 
 export interface MissionRunFailure {
   code: string;
@@ -142,6 +148,18 @@ export interface MissionRunFailure {
   executorId?: string;
   causalEventRef?: string;
   detailsRef?: string;
+}
+
+/** A terminal child effect that failed during an otherwise completed run.
+ * This is durable run evidence, not a second failure channel: the agent turn
+ * may have recovered and produced a final response, while the ledger still
+ * records that one of its requested effects did not succeed. */
+export interface MissionRunEffectFailure {
+  invocationId: string;
+  name: string;
+  outcome: "tool_error" | "infrastructure_error" | "cancelled" | "stale_dispatch" | "abandoned";
+  code: string;
+  message: string;
 }
 
 export interface MissionRunRecord {
@@ -163,6 +181,7 @@ export interface MissionRunRecord {
   finalMessage?: string;
   completionResponse?: string;
   failure?: MissionRunFailure;
+  effectFailures?: MissionRunEffectFailure[];
 }
 
 const HEX64 = /^[0-9a-f]{64}$/u;

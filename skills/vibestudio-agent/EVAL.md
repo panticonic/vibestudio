@@ -19,9 +19,11 @@ top-level `await` and `return` are allowed. The session's eval scope is
 selected by `--session`; the owner is your verified CLI identity, so eval runs
 against that session's context (fs/git/vcs) automatically.
 
-A trailing async IIFE is implicitly returned and awaited. Prefix it with
-`void` only when detached background execution is intentional; otherwise use
-top-level `await`, `return`, or the trailing IIFE so failures reach the caller.
+A trailing async IIFE is implicitly returned and awaited. Use top-level
+`await`, `return`, or the trailing IIFE so failures reach the caller. `void`
+does not create durable background work or retain the eval's execution
+authority: work intended to outlive the run must be persisted and admitted as
+a later execution by its owning queue/workflow.
 
 ## Bindings available to your code
 
