@@ -600,7 +600,7 @@ export class RpcServer {
       executionSessionForRuntime?: (
         runtimeId: string,
         nonce: string
-      ) => import("@vibestudio/rpc").AgentExecutionSessionFact | null;
+      ) => import("@vibestudio/rpc").ExecutionAdmissionFact | null;
       /** Canonical unattended-test policy inherited by reviewed runtimes in a test context. */
       testPolicyForContext?: (
         contextId: string
@@ -651,10 +651,6 @@ export class RpcServer {
         touch?(grantId: string): boolean;
         invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
       };
-      /** Stable mission fact for the same session identity used by service dispatch. */
-      reviewedClosureFactForSession?: (
-        sessionId: string
-      ) => import("@vibestudio/rpc").SessionReviewedClosureFact | null;
       /** Durable server-observed context latch for direct userland calls. */
       contextIntegrityFactForSession?: (
         sessionId: string,
@@ -987,7 +983,7 @@ export class RpcServer {
     }
     if (
       executionSession &&
-      (executionSession.eval.runtimeId !== callerId ||
+      (executionSession.executor.runtimeId !== callerId ||
         executionSession.contextId !== activeEntity?.contextId ||
         executionSession.agentBinding?.entityId !== resolvedAgentBinding?.entityId ||
         executionSession.agentBinding?.channelId !== resolvedAgentBinding?.channelId)
@@ -3527,7 +3523,6 @@ export class RpcServer {
       workspaceRole: this.deps.workspaceRoleResolver?.(input.caller.subject) ?? null,
       sessionId,
       grantStore: this.deps.capabilityGrantStore,
-      reviewedClosure: this.deps.reviewedClosureFactForSession?.(sessionId) ?? null,
       contextIntegrity:
         joinContextIntegrity(residentContextIntegrity, input.inheritedContextIntegrity ?? null) ??
         residentContextIntegrity,
@@ -3713,7 +3708,6 @@ export class RpcServer {
         capability: selection.capability,
         resourceKey: selection.resourceKey,
         grantStore: this.deps.capabilityGrantStore,
-        reviewedClosure: this.deps.reviewedClosureFactForSession?.(sessionId) ?? null,
         contextIntegrity: authorityFacts.contextIntegrity,
         tier,
       });
@@ -3798,9 +3792,7 @@ export class RpcServer {
         executionMode:
           leaf.context.executionSession?.mode ?? (leaf.context.testPolicy ? "test" : undefined),
         testPolicyId: leaf.context.testPolicy?.policyId,
-        reviewedClosureSubject: leaf.context.session.reviewedClosure
-          ? leaf.context.session.reviewedClosure.subject
-          : "-",
+        missionSubject: leaf.context.executionSession?.mission?.subject ?? "-",
         snippetDigest:
           leaf.context.authorizingOrigin.kind === "session"
             ? (leaf.context.executingCode?.principal.split("@").at(-1) ?? "-")

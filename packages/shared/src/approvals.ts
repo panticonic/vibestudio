@@ -512,32 +512,6 @@ export interface PendingUnitInstallReviewApproval extends PendingApprovalBase {
  * review, JIT approval, and Permissions; charter mechanics stay typed side
  * sections rather than becoming a second permission language.
  */
-export interface PendingMissionReviewApproval extends PendingApprovalBase {
-  kind: "mission-review";
-  missionId: string;
-  revision: number;
-  closureDigest: string;
-  reviewKind: "draft" | "revision" | "out-of-charter";
-  title: string;
-  taskSummary: string;
-  triggerSummary: string;
-  authority: {
-    rows: import("./authority/authorityRows.js").AuthorityRow[];
-    diff: import("./authority/authorityRowDiff.js").AuthorityRowDiff;
-  };
-  toolkitDomains: import("./authority/authorityDomains.js").AuthorityDomainId[];
-  networkSummary: string;
-  lineageSummary: string;
-  charter: import("./authority/mission.js").MissionCharter;
-  charterChanges: Array<{
-    field: "task" | "schedule" | "toolkit" | "network" | "data-flow" | "model";
-    before?: string;
-    after: string;
-    widening: boolean;
-  }>;
-  blockedAt?: number;
-}
-
 export interface PendingClientConfigField {
   name: string;
   label: string;
@@ -619,7 +593,6 @@ export type PendingApproval =
   | PendingCredentialApproval
   | PendingCapabilityApproval
   | PendingUnitInstallReviewApproval
-  | PendingMissionReviewApproval
   | PendingClientConfigApproval
   | PendingCredentialInputApproval
   | PendingSecretInputApproval

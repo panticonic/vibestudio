@@ -421,6 +421,44 @@
       ]
     },
     "methods": {
+      "acquireForTarget": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "authority.acquire",
+          "rationale": "Installed workflow code requests ordinary approval for an immutable host policy and attributed target principal."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "admitExecution": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "authority.execution",
+          "rationale": "Installed workflow code asks the host to bind one authenticated executor to a registered authority subject."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "awaitDecision": {
         "authority": {
           "principals": [
@@ -444,6 +482,44 @@
         "capability": null,
         "presentation": null
       },
+      "compileOperationPolicy": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "authority.compile",
+          "rationale": "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "finishExecution": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "authority.execution",
+          "rationale": "The workflow owner closes the exact execution admission it created."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "preflight": {
         "authority": {
           "principals": [
@@ -463,6 +539,25 @@
           "residency": "grant-authority",
           "family": "authority.control",
           "rationale": "Pure authority inspection; it neither prompts, mints, consumes, nor invokes a handler"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "retireTarget": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "authority.execution",
+          "rationale": "Installed workflow code retires an owner-attributed target only after its admitted executions have closed."
         },
         "capability": null,
         "presentation": null
@@ -7509,231 +7604,6 @@
       }
     }
   },
-  "reviewedClosure": {
-    "service": {
-      "principals": [
-        "code"
-      ]
-    },
-    "methods": {
-      "activate": {
-        "authority": {
-          "principals": [
-            "code"
-          ],
-          "requirement": {
-            "kind": "any",
-            "requirements": [
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "code",
-                    "capability": "reviewed-closure.activate"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "session",
-                    "capability": "reviewed-closure.activate"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              }
-            ]
-          },
-          "resource": {
-            "kind": "argument",
-            "index": 0,
-            "path": [
-              "closureDigest"
-            ],
-            "prefix": "closure:"
-          },
-          "prepared": {
-            "resolver": "reviewedClosure.activate.presentation",
-            "leaves": [
-              {
-                "capability": "reviewed-closure.activate",
-                "requirement": {
-                  "kind": "any",
-                  "requirements": [
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "code",
-                          "capability": "reviewed-closure.activate"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "session",
-                          "capability": "reviewed-closure.activate"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                "tier": "gated"
-              }
-            ]
-          }
-        },
-        "access": {
-          "sensitivity": "admin"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "grant-authority",
-          "family": "reviewedClosure.lifecycle",
-          "rationale": "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants."
-        },
-        "capability": "reviewed-closure.activate",
-        "presentation": {
-          "title": "Start an automated task",
-          "action": "start an automated task you reviewed",
-          "description": "Start running the automated task exactly as you reviewed and approved it.",
-          "group": "runtime",
-          "authorityCategory": {
-            "domain": "safety",
-            "verb": "manage"
-          }
-        }
-      },
-      "bindSession": {
-        "authority": {
-          "principals": [
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "codeOnly",
-          "residency": "grant-authority",
-          "family": "reviewedClosure.session",
-          "rationale": "Kernel binds an execution session to one active digest-bound closure for hot-path enforcement."
-        },
-        "capability": "reviewed-closure.bind-session",
-        "presentation": {
-          "title": "Use an automated task's permissions",
-          "action": "use the permissions granted to an automated task",
-          "description": "Connect a running automation to the exact permissions you approved for it.",
-          "group": "runtime",
-          "authorityCategory": {
-            "domain": "safety",
-            "verb": "manage"
-          }
-        }
-      },
-      "finishSession": {
-        "authority": {
-          "principals": [
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "codeOnly",
-          "residency": "grant-authority",
-          "family": "reviewedClosure.session",
-          "rationale": "Kernel closes the exact reviewed-closure session binding."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "retire": {
-        "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "destructive"
-        },
-        "tier": {
-          "tier": "critical",
-          "session": "family",
-          "residency": "grant-authority",
-          "family": "reviewedClosure.lifecycle",
-          "rationale": "Kernel retirement permanently revokes the closure and its standing grants."
-        },
-        "capability": "reviewed-closure.retire",
-        "presentation": {
-          "title": "Stop an automated task permanently",
-          "action": "permanently stop an automated task",
-          "description": "Permanently stop an automated task and remove its permissions.",
-          "group": "runtime",
-          "authorityCategory": {
-            "domain": "safety",
-            "verb": "manage"
-          }
-        }
-      },
-      "suspend": {
-        "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "grant-authority",
-          "family": "reviewedClosure.lifecycle",
-          "rationale": "Kernel suspension closes session admission and revokes standing allows."
-        },
-        "capability": "reviewed-closure.suspend",
-        "presentation": {
-          "title": "Pause an automated task",
-          "action": "pause an automated task",
-          "description": "Pause a running automated task. It can be resumed later.",
-          "group": "runtime",
-          "authorityCategory": {
-            "domain": "safety",
-            "verb": "manage"
-          }
-        }
-      }
-    }
-  },
   "runtime": {
     "service": {
       "principals": [
@@ -10085,129 +9955,6 @@
           "title": "Add or update parts of this workspace",
           "action": "add or update parts of this workspace",
           "description": "Review and accept or cancel new parts arriving in your workspace.",
-          "group": "approvals",
-          "authorityCategory": {
-            "domain": "safety",
-            "verb": "manage"
-          }
-        }
-      },
-      "resolveMissionReview": {
-        "authority": {
-          "requirement": {
-            "kind": "any",
-            "requirements": [
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "user",
-                    "capability": "approvals.decide"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "capability",
-                "principal": "host",
-                "capability": "approvals.decide"
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "code",
-                    "capability": "approvals.decide"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "session",
-                    "capability": "approvals.decide"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              }
-            ]
-          },
-          "resource": {
-            "kind": "literal",
-            "key": "approvals.decide"
-          },
-          "prepared": {
-            "resolver": "shellApproval.presenter.decide",
-            "leaves": [
-              {
-                "capability": "approvals.decide",
-                "requirement": {
-                  "kind": "any",
-                  "requirements": [
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "code",
-                          "capability": "approvals.decide"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "session",
-                          "capability": "approvals.decide"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                "tier": "gated"
-              }
-            ]
-          }
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "codeOnly",
-          "residency": "grant-authority",
-          "family": "shellApproval.read",
-          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf"
-        },
-        "capability": "approvals.decide",
-        "presentation": {
-          "title": "Respond to an automation plan",
-          "action": "respond to an automation plan",
-          "description": "Review and approve or dismiss a queued automation plan.",
           "group": "approvals",
           "authorityCategory": {
             "domain": "safety",

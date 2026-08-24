@@ -258,7 +258,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     const context: ServiceContext = {
       caller,
       evalInvocation: {
-        runId: executionSession.eval.runId,
+        runId: executionSession.executor.evalRunId,
         credential: "test-credential",
         objectKey: "eval-runtime",
       },

@@ -138,7 +138,7 @@ function approvalSnapshot(index: number): InvocationSnapshot {
     preparedStateDigest: "b".repeat(64),
     callerPrincipal: "session:attached-owner",
     sessionId: "attached-authority-session",
-    reviewedClosureSubject: "-",
+    missionSubject: "-",
     snippetDigest: "c".repeat(64),
     codeLineage: { class: "internal", chain: [] },
     contextLineage: null,

@@ -116,7 +116,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       ...resident,
       executionSession: {
         nonce: "exact-live-eval-session",
-      } as import("@vibestudio/rpc").AgentExecutionSessionFact,
+      } as import("@vibestudio/rpc").ExecutionAdmissionFact,
     };
     const assertAuthority = vi.fn(async () => undefined);
     const forwardProxyFetchStream = vi.fn(

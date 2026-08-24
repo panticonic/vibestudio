@@ -1,14 +1,27 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { AgentExecutionSessionFact, AgentExecutionTestPolicySpec } from "@vibestudio/rpc";
+import type { ExecutionAdmissionFact, AgentExecutionTestPolicySpec } from "@vibestudio/rpc";
 
 type AdmissionInput = Omit<
-  AgentExecutionSessionFact,
-  "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
-> & { taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal; expiresAt?: number };
+  ExecutionAdmissionFact,
+  | "v"
+  | "authoritySessionId"
+  | "authoritySessionVersion"
+  | "issuedAt"
+  | "expiresAt"
+  | "nonce"
+  | "executor"
+> & {
+  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+  taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal;
+  expiresAt?: number;
+};
+type EvalAdmissionFact = ExecutionAdmissionFact & {
+  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+};
 
 interface AdmissionWaiter {
   input: AdmissionInput;
-  resolve: (fact: AgentExecutionSessionFact) => void;
+  resolve: (fact: EvalAdmissionFact) => void;
   reject: (error: Error) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
@@ -20,20 +33,22 @@ interface AdmissionWaiter {
  * that a JavaScript continuation survived.
  */
 export class AgentExecutionSessionRegistry {
-  private readonly byRuntime = new Map<string, AgentExecutionSessionFact>();
+  private readonly byRuntime = new Map<string, ExecutionAdmissionFact>();
+  private readonly byAdmissionKey = new Map<string, ExecutionAdmissionFact>();
+  private readonly byNonce = new Map<string, ExecutionAdmissionFact>();
   /** A notebook history keeps one authority identity across cells, while this
    * map records the single cell currently executing in that history. */
   private readonly activeRunByRuntime = new Map<string, string>();
   /** Previous committed history fact while a new cell is being prepared. */
-  private readonly priorFactByActiveRuntime = new Map<string, AgentExecutionSessionFact | null>();
+  private readonly priorFactByActiveRuntime = new Map<string, ExecutionAdmissionFact | null>();
   private readonly testPoliciesByContext = new Map<
     string,
-    NonNullable<AgentExecutionSessionFact["testPolicy"]>
+    NonNullable<ExecutionAdmissionFact["testPolicy"]>
   >();
   private readonly orchestratorRuns = new Map<string, { runtimeId: string; runId: string }>();
   private readonly admissionWaiters = new Map<string, AdmissionWaiter[]>();
 
-  createTestPolicy(runId: string): NonNullable<AgentExecutionSessionFact["testPolicy"]> {
+  createTestPolicy(runId: string): NonNullable<ExecutionAdmissionFact["testPolicy"]> {
     if (!runId.startsWith("system-test-runner:")) {
       throw new Error("Test authority policy requires a canonical system-test run");
     }
@@ -97,7 +112,7 @@ export class AgentExecutionSessionRegistry {
 
   markTestContext(
     contextId: string,
-    policy: NonNullable<AgentExecutionSessionFact["testPolicy"]>
+    policy: NonNullable<ExecutionAdmissionFact["testPolicy"]>
   ): void {
     const existing = this.testPoliciesByContext.get(contextId);
     if (existing?.policyId === policy.policyId) {
@@ -138,36 +153,41 @@ export class AgentExecutionSessionRegistry {
 
   testPolicyForContext(
     contextId: string
-  ): NonNullable<AgentExecutionSessionFact["testPolicy"]> | null {
+  ): NonNullable<ExecutionAdmissionFact["testPolicy"]> | null {
     return this.testPoliciesByContext.get(contextId) ?? null;
   }
 
-  admit(input: AdmissionInput): AgentExecutionSessionFact {
+  admit(input: AdmissionInput): EvalAdmissionFact {
     const issuedAt = Date.now();
-    const retained = this.resolve(input.eval.runtimeId, issuedAt);
-    const activeRunId = this.activeRunByRuntime.get(input.eval.runtimeId);
+    const retained = this.resolve(input.executor.runtimeId, issuedAt);
+    if (retained && retained.executor.kind !== "eval") {
+      throw new Error(
+        `Execution runtime ${input.executor.runtimeId} is already admitted by a non-eval executor`
+      );
+    }
+    const activeRunId = this.activeRunByRuntime.get(input.executor.runtimeId);
     if (retained && activeRunId) {
-      if (activeRunId === input.eval.runId) {
+      if (activeRunId === input.executor.evalRunId) {
         if (!sameAdmission(retained, input)) {
           throw new Error(
-            `Evaluated run ${input.eval.runId} was replayed with different admission facts`
+            `Evaluated run ${input.executor.evalRunId} was replayed with different admission facts`
           );
         }
-        return retained;
+        return retained as EvalAdmissionFact;
       }
       throw new Error(
-        `Evaluated runtime ${input.eval.runtimeId} is already admitted for run ${activeRunId}`
+        `Evaluated runtime ${input.executor.runtimeId} is already admitted for run ${activeRunId}`
       );
     }
     const trustDrift = retained ? trustUnitDrift(retained, input) : [];
     if (retained && trustDrift.length > 0) {
       throw new Error(
-        `Evaluated runtime ${input.eval.runtimeId} was reused by a different notebook trust unit ` +
+        `Evaluated runtime ${input.executor.runtimeId} was reused by a different notebook trust unit ` +
           `(changed: ${trustDrift.join(", ")})`
       );
     }
-    const fact: AgentExecutionSessionFact = Object.freeze({
-      v: 1,
+    const fact: EvalAdmissionFact = Object.freeze({
+      v: 2,
       authoritySessionId: retained?.authoritySessionId ?? randomUUID(),
       authoritySessionVersion: (retained?.authoritySessionVersion ?? 0) + 1,
       ...input,
@@ -178,30 +198,81 @@ export class AgentExecutionSessionRegistry {
       expiresAt: input.expiresAt ?? issuedAt + 7 * 24 * 60 * 60 * 1_000,
       nonce: retained?.nonce ?? randomUUID(),
     });
-    this.byRuntime.set(fact.eval.runtimeId, fact);
-    this.priorFactByActiveRuntime.set(fact.eval.runtimeId, retained);
-    this.activeRunByRuntime.set(fact.eval.runtimeId, fact.eval.runId);
+    this.byRuntime.set(fact.executor.runtimeId, fact);
+    this.byAdmissionKey.set(fact.admissionKey, fact);
+    this.byNonce.set(fact.nonce, fact);
+    this.priorFactByActiveRuntime.set(fact.executor.runtimeId, retained);
+    this.activeRunByRuntime.set(fact.executor.runtimeId, fact.executor.evalRunId);
     if (fact.mode === "test" && fact.testPolicy) {
       const rootPolicyId = orchestratorPolicyId(fact.testPolicy);
       const root = this.orchestratorRuns.get(rootPolicyId);
       if (!root) {
         if (fact.testPolicy.kind !== "orchestrator") {
-          this.byRuntime.delete(fact.eval.runtimeId);
+          this.byRuntime.delete(fact.executor.runtimeId);
           throw new Error("Test-case authority policy requires a live system-test orchestrator");
         }
         this.orchestratorRuns.set(rootPolicyId, {
-          runtimeId: fact.eval.runtimeId,
-          runId: fact.eval.runId,
+          runtimeId: fact.executor.runtimeId,
+          runId: fact.executor.evalRunId,
         });
       } else if (
         fact.testPolicy.kind === "orchestrator" &&
-        root.runtimeId === fact.eval.runtimeId
+        root.runtimeId === fact.executor.runtimeId
       ) {
-        root.runId = fact.eval.runId;
+        root.runId = fact.executor.evalRunId;
       }
       this.markTestContext(fact.contextId, fact.testPolicy);
     }
     return fact;
+  }
+
+  admitExecution(
+    input: Omit<
+      ExecutionAdmissionFact,
+      "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
+    > & { expiresAt?: number }
+  ): ExecutionAdmissionFact {
+    if (input.executor.kind === "eval") return this.admit(input as AdmissionInput);
+    const existing = this.byAdmissionKey.get(input.admissionKey);
+    if (existing) {
+      if (existing.expiresAt <= Date.now()) this.removeGeneric(existing);
+      else if (sameGenericAdmission(existing, input)) return existing;
+      else
+        throw new Error(
+          `Execution admission ${input.admissionKey} was replayed with different facts`
+        );
+    }
+    const issuedAt = Date.now();
+    const fact: ExecutionAdmissionFact = Object.freeze({
+      v: 2,
+      authoritySessionId: randomUUID(),
+      authoritySessionVersion: 1,
+      ...input,
+      issuedAt,
+      expiresAt: input.expiresAt ?? issuedAt + 24 * 60 * 60 * 1_000,
+      nonce: randomUUID(),
+    });
+    this.byAdmissionKey.set(fact.admissionKey, fact);
+    this.byNonce.set(fact.nonce, fact);
+    return fact;
+  }
+
+  finishExecution(authoritySessionId: string): boolean {
+    const fact = [...this.byAdmissionKey.values()].find(
+      (candidate) => candidate.authoritySessionId === authoritySessionId
+    );
+    if (!fact) return false;
+    if (fact.executor.kind === "eval")
+      return this.close(fact.executor.runtimeId, fact.executor.evalRunId);
+    this.removeGeneric(fact);
+    return true;
+  }
+
+  hasLiveMissionSubject(subject: `mission:${string}@${string}`, now = Date.now()): boolean {
+    for (const fact of this.byAdmissionKey.values()) {
+      if (fact.expiresAt > now && fact.mission?.subject === subject) return true;
+    }
+    return false;
   }
 
   /**
@@ -212,23 +283,20 @@ export class AgentExecutionSessionRegistry {
    * concurrent callers before they reach it. There is no invented wait
    * deadline: the inbound RPC's cancellation signal owns abandonment.
    */
-  admitWhenAvailable(
-    input: AdmissionInput,
-    signal?: AbortSignal
-  ): Promise<AgentExecutionSessionFact> {
-    const runtimeId = input.eval.runtimeId;
+  admitWhenAvailable(input: AdmissionInput, signal?: AbortSignal): Promise<EvalAdmissionFact> {
+    const runtimeId = input.executor.runtimeId;
     const queued = this.admissionWaiters.get(runtimeId);
     const retained = this.resolve(runtimeId);
     const activeRunId = this.activeRunByRuntime.get(runtimeId);
     if ((!queued || queued.length === 0) && !activeRunId) {
       return Promise.resolve(this.admit(input));
     }
-    if (retained && activeRunId === input.eval.runId) {
+    if (retained && activeRunId === input.executor.evalRunId) {
       return Promise.resolve(this.admit(input));
     }
     if (signal?.aborted) return Promise.reject(admissionAbortError(runtimeId));
 
-    return new Promise<AgentExecutionSessionFact>((resolve, reject) => {
+    return new Promise<EvalAdmissionFact>((resolve, reject) => {
       const waiter: AdmissionWaiter = { input, resolve, reject, ...(signal ? { signal } : {}) };
       if (signal) {
         waiter.onAbort = () => {
@@ -247,7 +315,7 @@ export class AgentExecutionSessionRegistry {
     });
   }
 
-  resolve(runtimeId: string, now = Date.now()): AgentExecutionSessionFact | null {
+  resolve(runtimeId: string, now = Date.now()): ExecutionAdmissionFact | null {
     const fact = this.byRuntime.get(runtimeId);
     if (!fact) return null;
     if (fact.expiresAt <= now) {
@@ -259,7 +327,13 @@ export class AgentExecutionSessionRegistry {
       const rootPolicyId = orchestratorPolicyId(fact.testPolicy);
       const root = this.orchestratorRuns.get(rootPolicyId);
       const rootFact = root ? this.byRuntime.get(root.runtimeId) : undefined;
-      if (!root || !rootFact || rootFact.eval.runId !== root.runId || rootFact.expiresAt <= now) {
+      if (
+        !root ||
+        !rootFact ||
+        rootFact.executor.kind !== "eval" ||
+        rootFact.executor.evalRunId !== root.runId ||
+        rootFact.expiresAt <= now
+      ) {
         this.revokeOrchestrator(rootPolicyId);
         return null;
       }
@@ -272,9 +346,24 @@ export class AgentExecutionSessionRegistry {
    * Runtime identity alone is insufficient: the EvalDO also performs its own
    * lifecycle work while a run is admitted.
    */
-  resolveInvocation(runtimeId: string, nonce: string): AgentExecutionSessionFact | null {
-    const fact = this.resolve(runtimeId);
-    return fact?.nonce === nonce ? fact : null;
+  resolveInvocation(runtimeId: string, nonce: string): ExecutionAdmissionFact | null {
+    const candidate = this.byNonce.get(nonce);
+    if (candidate?.executor.kind === "eval") {
+      const fact = this.resolve(runtimeId);
+      return fact?.nonce === nonce &&
+        fact.executor.kind === "eval" &&
+        this.activeRunByRuntime.get(runtimeId) === fact.executor.evalRunId
+        ? fact
+        : null;
+    }
+    if (candidate) {
+      if (candidate.expiresAt <= Date.now()) {
+        this.removeGeneric(candidate);
+        return null;
+      }
+      return candidate.executor.runtimeId === runtimeId ? candidate : null;
+    }
+    return null;
   }
 
   close(runtimeId: string, runId?: string): boolean {
@@ -307,6 +396,8 @@ export class AgentExecutionSessionRegistry {
 
   clear(): void {
     this.byRuntime.clear();
+    this.byAdmissionKey.clear();
+    this.byNonce.clear();
     this.activeRunByRuntime.clear();
     this.priorFactByActiveRuntime.clear();
     this.testPoliciesByContext.clear();
@@ -320,21 +411,32 @@ export class AgentExecutionSessionRegistry {
     this.admissionWaiters.clear();
   }
 
-  private remove(fact: AgentExecutionSessionFact): void {
-    this.activeRunByRuntime.delete(fact.eval.runtimeId);
-    this.priorFactByActiveRuntime.delete(fact.eval.runtimeId);
+  private remove(fact: ExecutionAdmissionFact): void {
+    this.byAdmissionKey.delete(fact.admissionKey);
+    this.byNonce.delete(fact.nonce);
+    if (fact.executor.kind !== "eval") {
+      this.removeGeneric(fact);
+      return;
+    }
+    this.activeRunByRuntime.delete(fact.executor.runtimeId);
+    this.priorFactByActiveRuntime.delete(fact.executor.runtimeId);
     const policy = fact.testPolicy;
     if (fact.mode !== "test" || !policy) {
-      this.byRuntime.delete(fact.eval.runtimeId);
+      this.byRuntime.delete(fact.executor.runtimeId);
       return;
     }
     const rootPolicyId = orchestratorPolicyId(policy);
     const root = this.orchestratorRuns.get(rootPolicyId);
-    if (root?.runtimeId === fact.eval.runtimeId && root.runId === fact.eval.runId) {
+    if (root?.runtimeId === fact.executor.runtimeId && root.runId === fact.executor.evalRunId) {
       this.revokeOrchestrator(rootPolicyId);
       return;
     }
-    this.byRuntime.delete(fact.eval.runtimeId);
+    this.byRuntime.delete(fact.executor.runtimeId);
+  }
+
+  private removeGeneric(fact: ExecutionAdmissionFact): void {
+    this.byAdmissionKey.delete(fact.admissionKey);
+    this.byNonce.delete(fact.nonce);
   }
 
   private revokeOrchestrator(policyId: string): void {
@@ -397,9 +499,10 @@ export class AgentExecutionSessionRegistry {
   }
 }
 
-function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): boolean {
-  const { eventSinkNonce: _factSink, ...factEval } = fact.eval;
-  const { eventSinkNonce: _inputSink, ...inputEval } = input.eval;
+function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boolean {
+  if (fact.executor.kind !== "eval") return false;
+  const { eventSinkNonce: _factSink, ...factEval } = fact.executor;
+  const { eventSinkNonce: _inputSink, ...inputEval } = input.executor;
   return (
     fact.mode === input.mode &&
     fact.ownerUser === input.ownerUser &&
@@ -408,13 +511,35 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
     fact.taskRef === input.taskRef &&
     fact.taskAuthority === input.taskAuthority &&
     JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
-    JSON.stringify(fact.harness) === JSON.stringify(input.harness) &&
+    JSON.stringify(fact.executionImage) === JSON.stringify(input.executionImage) &&
     JSON.stringify(factEval) === JSON.stringify(inputEval) &&
     JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
     JSON.stringify(fact.causalParent) === JSON.stringify(input.causalParent) &&
-    JSON.stringify(fact.reviewedClosure ?? null) ===
-      JSON.stringify(input.reviewedClosure ?? null) &&
+    JSON.stringify(fact.parent) === JSON.stringify(input.parent) &&
+    JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
+    fact.operationPolicyDigest === input.operationPolicyDigest &&
     JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)
+  );
+}
+
+function sameGenericAdmission(
+  fact: ExecutionAdmissionFact,
+  input: Omit<
+    ExecutionAdmissionFact,
+    "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
+  > & { expiresAt?: number }
+): boolean {
+  return (
+    fact.admissionKey === input.admissionKey &&
+    fact.mode === input.mode &&
+    fact.ownerUser === input.ownerUser &&
+    fact.workspaceId === input.workspaceId &&
+    fact.contextId === input.contextId &&
+    fact.taskRef === input.taskRef &&
+    JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
+    JSON.stringify(fact.executionImage) === JSON.stringify(input.executionImage) &&
+    JSON.stringify(fact.executor) === JSON.stringify(input.executor) &&
+    fact.operationPolicyDigest === input.operationPolicyDigest
   );
 }
 
@@ -424,7 +549,7 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
  * not participate: those facts advance on every cell without changing who
  * owns the surviving modules and objects.
  */
-function trustUnitDrift(fact: AgentExecutionSessionFact, input: AdmissionInput): string[] {
+function trustUnitDrift(fact: ExecutionAdmissionFact, input: AdmissionInput): string[] {
   const drift: string[] = [];
   const changed = (name: string, left: unknown, right: unknown): void => {
     if (JSON.stringify(left) !== JSON.stringify(right)) drift.push(name);
@@ -434,9 +559,10 @@ function trustUnitDrift(fact: AgentExecutionSessionFact, input: AdmissionInput):
   changed("workspaceId", fact.workspaceId, input.workspaceId);
   changed("contextId", fact.contextId, input.contextId);
   changed("agentBinding", fact.agentBinding, input.agentBinding);
-  changed("harness", fact.harness, input.harness);
+  changed("executionImage", fact.executionImage, input.executionImage);
   changed("attachedHost", fact.attachedHost ?? null, input.attachedHost ?? null);
-  changed("reviewedClosure", fact.reviewedClosure ?? null, input.reviewedClosure ?? null);
+  changed("mission", fact.mission ?? null, input.mission ?? null);
+  changed("operationPolicyDigest", fact.operationPolicyDigest, input.operationPolicyDigest);
   changed("testPolicy", fact.testPolicy ?? null, input.testPolicy ?? null);
   return drift;
 }
@@ -447,8 +573,6 @@ function admissionAbortError(runtimeId: string): Error {
   return error;
 }
 
-function orchestratorPolicyId(
-  policy: NonNullable<AgentExecutionSessionFact["testPolicy"]>
-): string {
+function orchestratorPolicyId(policy: NonNullable<ExecutionAdmissionFact["testPolicy"]>): string {
   return policy.kind === "orchestrator" ? policy.policyId : policy.orchestratorPolicyId;
 }

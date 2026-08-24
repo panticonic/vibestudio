@@ -32,6 +32,7 @@ import { SESSION_CONNECTION_LOST_CODE } from "./protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import {
+  bindExecutionSession,
   executionSessionNonceFor,
   type InternalRpcEvent,
   type InternalRpcRequest,
@@ -1119,6 +1120,35 @@ export function withCausalParent(base: RpcClient, causalParent: RpcCausalParent)
       options?: RpcStreamOptions
     ) => base.streamReadable(targetId, method, args, { ...(options ?? {}), causalParent }),
     emit: base.emit.bind(base),
+    on: base.on.bind(base),
+    peer: base.peer.bind(base),
+    status: base.status.bind(base),
+    ready: base.ready.bind(base),
+    onStatusChange: base.onStatusChange.bind(base),
+  });
+}
+
+/** Runtime-only client view that binds every outbound effect to one host admission. */
+export function withExecutionAdmission(base: RpcClient, nonce: string): RpcClient {
+  const options = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T =>
+    bindExecutionSession({ ...(value ?? {}) } as T, nonce);
+  return Object.freeze({
+    selfId: base.selfId,
+    expose: base.expose.bind(base),
+    exposeAll: base.exposeAll.bind(base),
+    exposeStreaming: base.exposeStreaming.bind(base),
+    call: <T = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      value?: RpcCallOptions
+    ) => base.call<T>(targetId, method, args, options(value)),
+    stream: (targetId: string, method: string, args: unknown[], value?: RpcStreamOptions) =>
+      base.stream(targetId, method, args, options(value)),
+    streamReadable: (targetId: string, method: string, args: unknown[], value?: RpcStreamOptions) =>
+      base.streamReadable(targetId, method, args, options(value)),
+    emit: (targetId: string, event: string, payload: unknown, value?: RpcCallOptions) =>
+      base.emit(targetId, event, payload, options(value)),
     on: base.on.bind(base),
     peer: base.peer.bind(base),
     status: base.status.bind(base),

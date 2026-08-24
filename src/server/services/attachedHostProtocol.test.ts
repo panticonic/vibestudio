@@ -121,7 +121,7 @@ function approvalSnapshot(overrides: Partial<InvocationSnapshot> = {}): Invocati
     preparedStateDigest: "c".repeat(64),
     callerPrincipal: "session:eval-one",
     sessionId: "child-authority-session",
-    reviewedClosureSubject: "-",
+    missionSubject: "-",
     snippetDigest: "d".repeat(64),
     codeLineage: { class: "internal", chain: [] },
     contextLineage: null,

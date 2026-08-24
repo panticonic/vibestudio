@@ -20,7 +20,6 @@ export type ApprovalProvenanceKind =
   | "secret-input"
   | "userland"
   | "unit-install-review"
-  | "mission-review"
   | "device-code"
   | "external-agent"
   | "browser-permission";

@@ -105,18 +105,26 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
     authorizingOrigin: { kind: "session", principal: session },
     executingCode: null,
     executionSession: {
-      v: 1,
+      v: 2,
       authoritySessionId: "authority-session:s1",
       authoritySessionVersion: 1,
+      admissionKey: "session:s1",
       mode: "interactive",
       ownerUser: user,
       workspaceId: "ws-1",
       contextId: "context:s1",
       taskRef: "task:s1",
       taskAuthority: "task:s1",
-      eval: {
+      mission: {
+        subject: mission as `mission:${string}@${string}`,
+        missionId: "nightly",
+        revision: 1,
+        revisionDigest: "b".repeat(64),
+      },
+      executor: {
+        kind: "eval",
         runtimeId: "runtime:eval:s1",
-        runId: "run:s1",
+        evalRunId: "run:s1",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",
@@ -125,12 +133,14 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
           digest: "0".repeat(64),
         },
       },
-      harness: {
+      executionImage: {
         principal: code,
         repoPath: "workers/example",
+        ref: "state:example",
         effectiveVersion: codeEv,
         executionDigest: "e".repeat(64),
       },
+      parent: null,
       agentBinding: {
         bindingId: "binding:example",
         entityId: "entity:worker:example",
@@ -146,15 +156,6 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       audience: "host",
       version: "2.1",
       expiresAt: 10_000,
-      reviewedClosure: {
-        subject: `mission:nightly@${"b".repeat(64)}`,
-        closureDigest: "b".repeat(64),
-        harness: {
-          unit: "workers/system-agent",
-          ev: "c".repeat(64),
-          ref: `state:${"b".repeat(64)}`,
-        },
-      },
     },
     contextIntegrity: {
       class: externalKeys.length > 0 ? "external" : "internal",

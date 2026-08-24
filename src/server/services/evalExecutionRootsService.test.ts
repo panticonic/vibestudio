@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentExecutionSessionFact } from "@vibestudio/rpc";
+import type { ExecutionAdmissionFact } from "@vibestudio/rpc";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import {
@@ -41,11 +41,12 @@ function artifact(): ExecutionArtifactRefV1 {
   };
 }
 
-function execution(): AgentExecutionSessionFact {
+function execution(): ExecutionAdmissionFact {
   return {
-    v: 1,
+    v: 2,
     authoritySessionId: "authority:one",
     authoritySessionVersion: 1,
+    admissionKey: "eval:one",
     mode: "interactive",
     ownerUser: "user:one",
     workspaceId: "workspace:one",
@@ -53,15 +54,17 @@ function execution(): AgentExecutionSessionFact {
     agentBinding: null,
     taskRef: "task:one",
     taskAuthority: "task:one",
-    harness: {
+    executionImage: {
       principal: `code:vibestudio/internal@one`,
       repoPath: "vibestudio/internal",
+      ref: "state:one",
       effectiveVersion: "one",
       executionDigest: "d".repeat(64),
     },
-    eval: {
+    executor: {
+      kind: "eval",
       runtimeId,
-      runId,
+      evalRunId: runId,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",
@@ -70,6 +73,7 @@ function execution(): AgentExecutionSessionFact {
         digest: "f".repeat(64),
       },
     },
+    parent: null,
     causalParent: null,
     issuedAt: 1,
     expiresAt: Number.MAX_SAFE_INTEGER,

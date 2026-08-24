@@ -7,7 +7,6 @@ import type {
   PendingCapabilityApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
-  PendingMissionReviewApproval,
   PendingUnitInstallReviewApproval,
 } from "./approvals.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
@@ -183,7 +182,6 @@ export function getApprovalOperationKindLabel(kind: ApprovalOperationDescriptor[
 }
 
 export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone {
-  if (approval.kind === "mission-review") return "caution";
   if (approval.kind === "unit-install-review") {
     // Adopting a root is the workspace describing itself — the welcome after
     // creation, and the launch gate before it. It arrives with every extension
@@ -209,7 +207,6 @@ export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone
 }
 
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
-  if (approval.kind === "mission-review") return "Automation review";
   if (approval.kind === "browser-permission") {
     return "Website permission";
   }
@@ -744,8 +741,6 @@ export function getApprovalCopy(approval: PendingApproval): {
   warning?: string;
 } {
   switch (approval.kind) {
-    case "mission-review":
-      return getMissionReviewCopy(approval);
     case "browser-permission":
       return getBrowserPermissionCopy(approval);
     case "unit-install-review":
@@ -773,19 +768,6 @@ export function getApprovalCopy(approval: PendingApproval): {
     case "credential":
       return getCredentialCopy(approval);
   }
-}
-
-function getMissionReviewCopy(approval: PendingMissionReviewApproval) {
-  return {
-    title:
-      approval.reviewKind === "out-of-charter"
-        ? `${approval.title} needs a new permission`
-        : `Review ${approval.title}`,
-    summary:
-      approval.reviewKind === "out-of-charter"
-        ? `${approval.title} stopped before doing something outside its approved toolkit.`
-        : `${approval.title} is ready for your review.`,
-  };
 }
 
 function getBrowserPermissionCopy(approval: PendingBrowserPermissionApproval) {
@@ -1034,7 +1016,7 @@ export function getCapabilityPrimaryDestination(approval: PendingCapabilityAppro
 }
 
 export function shouldOpenApprovalDetails(approval: PendingApproval): boolean {
-  return approval.kind === "unit-install-review" || approval.kind === "mission-review";
+  return approval.kind === "unit-install-review";
 }
 
 function isBrowserOpenApproval(approval: PendingCapabilityApproval): boolean {

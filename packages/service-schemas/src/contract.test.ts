@@ -59,7 +59,6 @@ import { permissionsMethods } from "./permissions.js";
 import { phoneProvisioningMethods } from "./phoneProvisioning.js";
 import { phoneNativeEndpointMethods } from "./phoneNativeEndpoint.js";
 import { remoteCredMethods } from "./remoteCred.js";
-import { reviewedClosureMethods } from "./reviewedClosure.js";
 import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
 import { evalEngineMethods } from "./evalEngine.js";
@@ -182,11 +181,6 @@ const serviceTables: ServiceTable[] = [
   },
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
-  {
-    service: "reviewedClosure",
-    file: "reviewedClosure.ts",
-    methods: reviewedClosureMethods,
-  },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },
   { service: "eval", file: "eval.ts", methods: evalMethods },
   { service: "evalEngine", file: "evalEngine.ts", methods: evalEngineMethods },

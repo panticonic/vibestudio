@@ -1,7 +1,27 @@
 {
   "version": 1,
-  "censusDigest": "sha256:52440c45d444bea62a164285049efb7348a43c783e28175c0ad2758e49fd0140",
+  "censusDigest": "sha256:63c0b90b39687bdfb36292aa1e53da60aeb2a62ca104e43b8bcfd30f438c4331",
   "decisions": {
+    "host:authority.compileOperationPolicy": {
+      "review": "host-compiled-content-addressed-operation-policy",
+      "change": "Accepts only semantic service operations from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable verified artifact. Callers cannot author capability names, tiers, grants, or policy bodies."
+    },
+    "host:authority.acquireForTarget": {
+      "review": "owner-attributed-durable-target-acquisition",
+      "change": "Registers one digest-bound mission revision under the authenticated requesting user and creates or joins durable ordinary acquisitions for its host-compiled mission-grantable leaves. Runtime identity never becomes the acquisition owner."
+    },
+    "host:authority.admitExecution": {
+      "review": "exact-mission-executor-admission",
+      "change": "Binds one live verified Durable Object executor to an active owner-attributed mission subject, exact immutable execution image, and host-owned policy artifact. The returned opaque nonce conveys relationship evidence only and grants no capability by itself."
+    },
+    "host:authority.finishExecution": {
+      "review": "exact-execution-admission-closure",
+      "change": "Closes one opaque live execution admission created by the workflow owner. It grants no authority and does not mutate mission consent."
+    },
+    "host:authority.retireTarget": {
+      "review": "fenced-mission-authority-retirement",
+      "change": "Requires the attributed mission owner, refuses retirement while an admitted execution remains live, then fences the target, cancels pending acquisitions, and revokes its standing grants. Pause never uses this operation."
+    },
     "host:baseRelease.check": {
       "review": "read-only-base-release-lineage-comparison",
       "change": "Adds the missing reviewed open-tier decision for a read-only comparison between the installed Base lineage and the host's verified immutable release pin. The method performs no acquisition or publication and exposes only release compatibility metadata already owned by workspace supervision."
@@ -102,13 +122,9 @@
       "review": "root-presenter-independent-approval-decision",
       "change": "Opens the approval decision transport while selecting a prepared approvals.decide leaf for non-chrome code. Trusted presenters answer only exact live queue entries and no longer require authority to grant that same authority."
     },
-    "host:shellApproval.resolveMissionReview": {
-      "review": "root-presenter-independent-mission-review-decision",
-      "change": "Opens exact mission-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and the receiver's authenticated-human requirement."
-    },
     "host:shellApproval.resolveInstallReview": {
       "review": "install-review-typed-resolution",
-      "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
+      "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. It uses the same gated approvals.decide capability and trusted-chrome principals as ordinary resolution; the server derives the offerable rows itself and rejects any identity or permission the review did not offer."
     },
     "host:shellApproval.resolveBootstrap": {
       "review": "root-presenter-independent-bootstrap-decision",

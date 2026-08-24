@@ -40,7 +40,7 @@ export interface PreauthorizationEnvelopeInput {
   envelopeId?: string;
   sessionId: string;
   taskRef: string;
-  reviewedClosureSubject?: AuthorityGrantSubject;
+  missionSubject?: `mission:${string}@${string}`;
   createdBy: `user:${string}`;
   createdAt?: number;
   rules: readonly {
@@ -92,7 +92,7 @@ export class CapabilityGrantStore {
         `INSERT INTO authority_grants (
           id, effect, capability, capability_definition_digest,
           resource_key, resource_scope, subject,
-          session_id, invocation_digest, provider_execution_digest, reviewed_closure_subject, envelope_id,
+          session_id, invocation_digest, provider_execution_digest, mission_subject, envelope_id,
           agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
           decided_by, decision_surface, task_ref
@@ -109,7 +109,7 @@ export class CapabilityGrantStore {
         constraints.sessionId ?? null,
         constraints.invocationDigest ?? null,
         constraints.providerExecutionDigest ?? null,
-        constraints.reviewedClosureSubject ?? null,
+        constraints.missionSubject ?? null,
         constraints.envelopeId ?? null,
         constraints.agentBindingId ?? null,
         canonicalJson([...(constraints.lineageAtConsent ?? [])].sort()),
@@ -192,6 +192,16 @@ export class CapabilityGrantStore {
     const changed = Number(result.changes) === 1;
     if (changed && grant?.scope === "agent") this.emitAgentGrantWithdrawal(grant, now);
     return changed;
+  }
+
+  revokeSubject(subject: AuthorityGrantSubject, now = Date.now()): number {
+    return Number(
+      this.db
+        .prepare(
+          "UPDATE authority_grants SET revoked_at = ? WHERE subject = ? AND revoked_at IS NULL"
+        )
+        .run(now, subject).changes
+    );
   }
 
   touch(grantId: string, now = Date.now()): boolean {
@@ -597,14 +607,14 @@ export class CapabilityGrantStore {
       this.db
         .prepare(
           `INSERT INTO preauth_envelopes
-           (envelope_id, session_id, task_ref, reviewed_closure_subject, state, created_by, created_at, closed_at)
+           (envelope_id, session_id, task_ref, mission_subject, state, created_by, created_at, closed_at)
            VALUES (?, ?, ?, ?, 'active', ?, ?, NULL)`
         )
         .run(
           envelopeId,
           input.sessionId,
           input.taskRef,
-          input.reviewedClosureSubject ?? null,
+          input.missionSubject ?? null,
           input.createdBy,
           createdAt
         );
@@ -630,7 +640,7 @@ export class CapabilityGrantStore {
     envelopeId: string;
     sessionId: string;
     taskRef: string;
-    reviewedClosureSubject?: AuthorityGrantSubject;
+    missionSubject?: `mission:${string}@${string}`;
     capability: string;
     resourceKey: string;
   }): boolean {
@@ -639,14 +649,14 @@ export class CapabilityGrantStore {
         `SELECT r.* FROM envelope_rules r
          JOIN preauth_envelopes e ON e.envelope_id = r.envelope_id
          WHERE e.envelope_id = ? AND e.state = 'active' AND e.session_id = ? AND e.task_ref = ?
-           AND ((e.reviewed_closure_subject IS NULL AND ? IS NULL) OR e.reviewed_closure_subject = ?)`
+           AND ((e.mission_subject IS NULL AND ? IS NULL) OR e.mission_subject = ?)`
       )
       .all(
         input.envelopeId,
         input.sessionId,
         input.taskRef,
-        input.reviewedClosureSubject ?? null,
-        input.reviewedClosureSubject ?? null
+        input.missionSubject ?? null,
+        input.missionSubject ?? null
       ) as EnvelopeRuleRow[];
     return rows.some(
       (row) =>
@@ -712,10 +722,10 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     ...(row["provider_execution_digest"] === null
       ? {}
       : { providerExecutionDigest: String(row["provider_execution_digest"]) }),
-    ...(row["reviewed_closure_subject"] === null
+    ...(row["mission_subject"] === null
       ? {}
       : {
-          reviewedClosureSubject: String(row["reviewed_closure_subject"]) as AuthorityGrantSubject,
+          missionSubject: String(row["mission_subject"]) as `mission:${string}@${string}`,
         }),
     ...(row["agent_binding_id"] === null
       ? {}

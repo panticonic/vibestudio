@@ -28,7 +28,7 @@ export type {
   AuthorityRequirement,
   CapabilityScope,
   ContextIntegrityFact,
-  AgentExecutionSessionFact,
+  ExecutionAdmissionFact,
   AttachedHostExecutionFact,
   LiveWorkspaceRelationship,
   Principal,
@@ -85,12 +85,13 @@ export function authorityFailureForDecision(
           message: "Request user approval, then retry the exact invocation.",
         },
       };
-    case "mission-change-required":
+    case "operation-policy-denied":
       return {
         ...common,
         remediation: {
-          kind: "request-mission-change",
-          message: "End this run and propose a reviewed mission-charter change.",
+          kind: "edit-mission",
+          message:
+            "This operation is outside the active automation policy. Edit the automation before retrying it.",
         },
       };
     case "fixed-code-not-requested":
@@ -480,8 +481,8 @@ export function subjectsForOrigin(
   ) {
     subjects.add(`agent:${context.executionSession.agentBinding.bindingId}`);
   }
-  if (context.authorizingOrigin.kind === "session" && context.session.reviewedClosure) {
-    subjects.add(context.session.reviewedClosure.subject);
+  if (context.authorizingOrigin.kind === "session" && context.executionSession?.mission) {
+    subjects.add(context.executionSession.mission.subject);
   }
   return subjects;
 }
@@ -497,8 +498,8 @@ function principalForRequirement(
   if (kind === "code" && origin.kind === "session" && requirement.codeOnly !== true) {
     return origin.principal;
   }
-  if (kind === "mission" && origin.kind === "session" && context.session.reviewedClosure) {
-    return context.session.reviewedClosure.subject as Principal;
+  if (kind === "mission" && origin.kind === "session" && context.executionSession?.mission) {
+    return context.executionSession.mission.subject;
   }
   return null;
 }
@@ -646,9 +647,9 @@ function grantConstraintsMatch(
     constraints.providerExecutionDigest !== providerExecutionDigest
   )
     return false;
-  if (constraints.reviewedClosureSubject !== undefined) {
-    const closure = context.session.reviewedClosure;
-    if (!closure || constraints.reviewedClosureSubject !== closure.subject) return false;
+  if (constraints.missionSubject !== undefined) {
+    const mission = context.executionSession?.mission;
+    if (!mission || constraints.missionSubject !== mission.subject) return false;
   }
   return true;
 }

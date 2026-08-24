@@ -47,7 +47,7 @@ function setup(input: {
         }
       : {}),
   });
-  session.eval.authorityManifest = {
+  session.executor.authorityManifest = {
     mode: input.mode,
     effects: "read-write",
     approvals: input.approvals,

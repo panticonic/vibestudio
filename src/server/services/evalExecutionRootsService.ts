@@ -31,8 +31,9 @@ export function createEvalExecutionRootsService(deps: {
         const entity = deps.entityStore.cache.resolveActive(ctx.caller.runtime.id);
         if (
           !execution ||
-          execution.eval.runtimeId !== ctx.caller.runtime.id ||
-          execution.eval.runId !== runId ||
+          execution.executor.kind !== "eval" ||
+          execution.executor.runtimeId !== ctx.caller.runtime.id ||
+          execution.executor.evalRunId !== runId ||
           !ctx.caller.runtime.id.startsWith("do:vibestudio/internal:EvalDO:") ||
           entity?.kind !== "do" ||
           entity.source.repoPath !== "vibestudio/internal" ||

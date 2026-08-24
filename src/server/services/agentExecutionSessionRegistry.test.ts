@@ -6,6 +6,7 @@ function admission(
   runId = "run:one"
 ): Parameters<AgentExecutionSessionRegistry["admit"]>[0] {
   return {
+    admissionKey: `${runtimeId}:${runId}`,
     mode: "interactive" as const,
     ownerUser: "user:alice" as const,
     workspaceId: "workspace:one",
@@ -17,15 +18,17 @@ function admission(
     },
     taskRef: "task:one",
     taskAuthority: "task:one",
-    harness: {
+    executionImage: {
       principal: `code:workers/system-agent@ev:one` as const,
       repoPath: "workers/system-agent",
+      ref: "state:one",
       effectiveVersion: "ev:one",
       executionDigest: "a".repeat(64),
     },
-    eval: {
+    executor: {
+      kind: "eval",
       runtimeId,
-      runId,
+      evalRunId: runId,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",
@@ -34,6 +37,7 @@ function admission(
         digest: "0".repeat(64),
       },
     },
+    parent: null,
     causalParent: { logId: "log:one", head: "head:one", invocationId: "invocation:one" },
   };
 }
@@ -82,11 +86,11 @@ describe("AgentExecutionSessionRegistry test policy", () => {
       })
     ).toThrow(/already belongs to test policy/);
 
-    expect(registry.close(second.eval.runtimeId, second.eval.runId)).toBe(true);
+    expect(registry.close(second.executor.runtimeId, second.executor.evalRunId)).toBe(true);
     expect(registry.testPolicyForContext("ctx:durable-receiver")).toBe(policy);
-    expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
     expect(registry.testPolicyForContext("ctx:runner")).toBe(policy);
-    expect(registry.resolve(first.eval.runtimeId, 2_000)).toBeNull();
+    expect(registry.resolve(first.executor.runtimeId, 2_000)).toBeNull();
     expect(registry.testPolicyForContext("ctx:runner")).toBeNull();
     expect(registry.testPolicyForContext("ctx:child")).toBeNull();
     expect(registry.testPolicyForContext("ctx:durable-receiver")).toBeNull();
@@ -191,10 +195,10 @@ describe("AgentExecutionSessionRegistry test policy", () => {
       testPolicy: casePolicy,
     });
 
-    expect(registry.close(root.eval.runtimeId, root.eval.runId)).toBe(true);
-    expect(registry.resolve(child.eval.runtimeId)).toBe(child);
-    expect(registry.resolve(root.eval.runtimeId, 2_000)).toBeNull();
-    expect(registry.resolve(child.eval.runtimeId)).toBeNull();
+    expect(registry.close(root.executor.runtimeId, root.executor.evalRunId)).toBe(true);
+    expect(registry.resolve(child.executor.runtimeId)).toBe(child);
+    expect(registry.resolve(root.executor.runtimeId, 2_000)).toBeNull();
+    expect(registry.resolve(child.executor.runtimeId)).toBeNull();
     expect(registry.testPolicyForContext("ctx:orchestrator")).toBeNull();
     expect(registry.testPolicyForContext("ctx:case")).toBeNull();
     vi.restoreAllMocks();
@@ -206,52 +210,53 @@ describe("AgentExecutionSessionRegistry admission", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const registry = new AgentExecutionSessionRegistry();
     const fact = registry.admit({ ...admission(), expiresAt: 2_000 });
-    expect(registry.resolve(fact.eval.runtimeId, 1_999)).toBe(fact);
-    expect(registry.admit(admission(fact.eval.runtimeId, fact.eval.runId))).toBe(fact);
-    expect(() => registry.admit(admission(fact.eval.runtimeId, "run:replay"))).toThrow(
+    expect(registry.resolve(fact.executor.runtimeId, 1_999)).toBe(fact);
+    expect(registry.admit(admission(fact.executor.runtimeId, fact.executor.evalRunId))).toBe(fact);
+    expect(() => registry.admit(admission(fact.executor.runtimeId, "run:replay"))).toThrow(
       /already admitted/
     );
-    expect(registry.resolve(fact.eval.runtimeId, 2_000)).toBeNull();
+    expect(registry.resolve(fact.executor.runtimeId, 2_000)).toBeNull();
     vi.restoreAllMocks();
   });
 
   it("requires the exact run to close a cell and preserves the notebook trust identity", () => {
     const registry = new AgentExecutionSessionRegistry();
     const first = registry.admit(admission());
-    expect(registry.close(first.eval.runtimeId, "run:wrong-owner")).toBe(false);
-    expect(registry.resolve(first.eval.runtimeId)).toBe(first);
-    expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
-    expect(registry.resolve(first.eval.runtimeId)).toBe(first);
-    const second = registry.admit(admission(first.eval.runtimeId, "run:two"));
+    expect(registry.close(first.executor.runtimeId, "run:wrong-owner")).toBe(false);
+    expect(registry.resolve(first.executor.runtimeId)).toBe(first);
+    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
+    expect(registry.resolve(first.executor.runtimeId)).toBe(first);
+    expect(registry.resolveInvocation(first.executor.runtimeId, first.nonce)).toBeNull();
+    const second = registry.admit(admission(first.executor.runtimeId, "run:two"));
     expect(second.nonce).toBe(first.nonce);
     expect(second.authoritySessionId).toBe(first.authoritySessionId);
     expect(second.authoritySessionVersion).toBe(first.authoritySessionVersion + 1);
-    expect(registry.resolveInvocation(first.eval.runtimeId, first.nonce)).toBe(second);
+    expect(registry.resolveInvocation(first.executor.runtimeId, first.nonce)).toBe(second);
   });
 
   it("names trust dimensions without exposing their values when a warm notebook drifts", () => {
     const registry = new AgentExecutionSessionRegistry();
     const first = registry.admit(admission());
-    expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
 
     expect(() =>
       registry.admit({
-        ...admission(first.eval.runtimeId, "run:two"),
+        ...admission(first.executor.runtimeId, "run:two"),
         contextId: "context:other",
-        harness: {
-          ...first.harness,
+        executionImage: {
+          ...first.executionImage,
           effectiveVersion: "ev:other",
         },
       })
-    ).toThrow(/changed: contextId, harness/);
+    ).toThrow(/changed: contextId, executionImage/);
   });
 
   it("resolves evaluated effects only with the exact live admission nonce", () => {
     const registry = new AgentExecutionSessionRegistry();
     const fact = registry.admit(admission());
 
-    expect(registry.resolveInvocation(fact.eval.runtimeId, fact.nonce)).toBe(fact);
-    expect(registry.resolveInvocation(fact.eval.runtimeId, "another-session-nonce")).toBeNull();
+    expect(registry.resolveInvocation(fact.executor.runtimeId, fact.nonce)).toBe(fact);
+    expect(registry.resolveInvocation(fact.executor.runtimeId, "another-session-nonce")).toBeNull();
     expect(registry.resolveInvocation("runtime:eval:other", fact.nonce)).toBeNull();
   });
 
@@ -260,27 +265,27 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const first = registry.admit(admission());
     const order: string[] = [];
     const secondPromise = registry
-      .admitWhenAvailable(admission(first.eval.runtimeId, "run:two"))
+      .admitWhenAvailable(admission(first.executor.runtimeId, "run:two"))
       .then((fact) => {
-        order.push(fact.eval.runId);
+        order.push(fact.executor.evalRunId);
         return fact;
       });
     const thirdPromise = registry
-      .admitWhenAvailable(admission(first.eval.runtimeId, "run:three"))
+      .admitWhenAvailable(admission(first.executor.runtimeId, "run:three"))
       .then((fact) => {
-        order.push(fact.eval.runId);
+        order.push(fact.executor.evalRunId);
         return fact;
       });
 
     await Promise.resolve();
     expect(order).toEqual([]);
-    expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+    expect(registry.close(first.executor.runtimeId, first.executor.evalRunId)).toBe(true);
     const second = await secondPromise;
     expect(order).toEqual(["run:two"]);
-    expect(registry.close(second.eval.runtimeId, second.eval.runId)).toBe(true);
+    expect(registry.close(second.executor.runtimeId, second.executor.evalRunId)).toBe(true);
     const third = await thirdPromise;
     expect(order).toEqual(["run:two", "run:three"]);
-    expect(registry.close(third.eval.runtimeId, third.eval.runId)).toBe(true);
+    expect(registry.close(third.executor.runtimeId, third.executor.evalRunId)).toBe(true);
   });
 
   it("removes a cancelled admission wait without blocking the next run", async () => {
@@ -288,15 +293,17 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const first = registry.admit(admission());
     const controller = new AbortController();
     const cancelled = registry.admitWhenAvailable(
-      admission(first.eval.runtimeId, "run:cancelled"),
+      admission(first.executor.runtimeId, "run:cancelled"),
       controller.signal
     );
-    const next = registry.admitWhenAvailable(admission(first.eval.runtimeId, "run:next"));
+    const next = registry.admitWhenAvailable(admission(first.executor.runtimeId, "run:next"));
 
     controller.abort();
     await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-    registry.close(first.eval.runtimeId, first.eval.runId);
-    await expect(next).resolves.toMatchObject({ eval: { runId: "run:next" } });
+    registry.close(first.executor.runtimeId, first.executor.evalRunId);
+    await expect(next).resolves.toMatchObject({
+      executor: { kind: "eval", evalRunId: "run:next" },
+    });
   });
 
   it("rejects a same-run replay whose immutable admission facts changed", () => {
@@ -304,7 +311,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
     const first = registry.admit(admission());
     expect(() =>
       registry.admit({
-        ...admission(first.eval.runtimeId, first.eval.runId),
+        ...admission(first.executor.runtimeId, first.executor.evalRunId),
         contextId: "context:other",
       })
     ).toThrow(/different admission facts/);
@@ -320,7 +327,7 @@ describe("AgentExecutionSessionRegistry admission", () => {
       taskRef: "task:one",
       agentBinding: { bindingId: "binding:news", channelId: "channel:one" },
       causalParent: { invocationId: "invocation:one" },
-      harness: {
+      executionImage: {
         principal: `code:workers/system-agent@ev:one`,
         effectiveVersion: "ev:one",
         executionDigest: "a".repeat(64),
@@ -328,4 +335,80 @@ describe("AgentExecutionSessionRegistry admission", () => {
     });
     expect(Object.isFrozen(fact)).toBe(true);
   });
+
+  it.each(["agent-turn", "method"] as const)(
+    "admits and terminally closes a generic %s executor",
+    (kind) => {
+      const registry = new AgentExecutionSessionRegistry();
+      const runtimeId = `do:workers/automation:${kind}:one`;
+      const fact = registry.admitExecution({
+        admissionKey: `mission:one:${kind}`,
+        mode: "mission",
+        ownerUser: "user:alice",
+        workspaceId: "workspace:one",
+        contextId: "context:one",
+        agentBinding:
+          kind === "agent-turn"
+            ? { entityId: runtimeId, channelId: "channel:one", bindingId: "binding:one" }
+            : null,
+        taskRef: "run:one",
+        taskAuthority: "task:run-one",
+        executionImage: {
+          principal: "code:workers/automation@one",
+          repoPath: "workers/automation",
+          ref: "state:one",
+          effectiveVersion: "one",
+          executionDigest: "a".repeat(64),
+        },
+        executor:
+          kind === "agent-turn"
+            ? {
+                kind,
+                runtimeId,
+                entityId: runtimeId,
+                channelId: "channel:one",
+                turnId: "turn:one",
+              }
+            : {
+                kind,
+                runtimeId,
+                invocationId: "invocation:one",
+                service: "workers/automation",
+                method: "run",
+              },
+        operationPolicyDigest: "b".repeat(64),
+        mission: {
+          subject: `mission:one@${"c".repeat(64)}`,
+          missionId: "one",
+          revision: 1,
+          revisionDigest: "c".repeat(64),
+        },
+        parent: null,
+        causalParent: null,
+      });
+
+      expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBe(fact);
+      expect(
+        registry.admitExecution({
+          admissionKey: fact.admissionKey,
+          mode: fact.mode,
+          ownerUser: fact.ownerUser,
+          workspaceId: fact.workspaceId,
+          contextId: fact.contextId,
+          agentBinding: fact.agentBinding,
+          taskRef: fact.taskRef,
+          taskAuthority: fact.taskAuthority!,
+          executionImage: fact.executionImage,
+          executor: fact.executor,
+          operationPolicyDigest: fact.operationPolicyDigest,
+          mission: fact.mission,
+          parent: fact.parent,
+          causalParent: fact.causalParent,
+        })
+      ).toBe(fact);
+      expect(registry.finishExecution(fact.authoritySessionId)).toBe(true);
+      expect(registry.resolveInvocation(runtimeId, fact.nonce)).toBeNull();
+      expect(registry.finishExecution(fact.authoritySessionId)).toBe(false);
+    }
+  );
 });

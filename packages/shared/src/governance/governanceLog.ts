@@ -41,7 +41,6 @@ export const ApprovalRecordSchema = z
       "secret-input",
       "userland",
       "unit-install-review",
-      "mission-review",
       "device-code",
       "external-agent",
       "browser-permission",

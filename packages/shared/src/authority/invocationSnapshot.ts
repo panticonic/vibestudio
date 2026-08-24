@@ -39,7 +39,7 @@ export function createInvocationSnapshot(input: InvocationSnapshotInput): Invoca
     ...(input.agentScopeEligible ? { agentScopeEligible: true } : {}),
     ...(input.executionMode ? { executionMode: input.executionMode } : {}),
     ...(input.testPolicyId ? { testPolicyId: input.testPolicyId } : {}),
-    reviewedClosureSubject: input.reviewedClosureSubject,
+    missionSubject: input.missionSubject,
     snippetDigest: input.snippetDigest,
     codeLineage: {
       class: input.codeLineage.class,
@@ -75,7 +75,7 @@ export function invocationSnapshotDigest(snapshot: InvocationSnapshot): string {
     irreversible: snapshot.irreversible ?? false,
     executionMode: snapshot.executionMode ?? null,
     testPolicyId: snapshot.testPolicyId ?? null,
-    reviewedClosureSubject: snapshot.reviewedClosureSubject,
+    missionSubject: snapshot.missionSubject,
     snippetDigest: snapshot.snippetDigest,
     codeLineageClass: snapshot.codeLineage.class,
   };

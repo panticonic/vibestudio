@@ -261,17 +261,12 @@ function createApprovalQueueMock(
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestMissionReview: vi.fn(async () => ({
-      decision: "dismiss" as const,
-      decidedBy: "user:test" as const,
-    })),
     presentDeviceCode: vi.fn(() => ({
       approvalId: "device-code-test",
       cancelled: new AbortController().signal,
       dispose: vi.fn(),
     })),
     resolve: vi.fn(),
-    resolveMissionReview: vi.fn(),
     resolveInstallReview: vi.fn(),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),

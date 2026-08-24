@@ -43,7 +43,6 @@ import type {
   PendingSecretInputApproval,
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
-  PendingMissionReviewApproval,
   PendingUnitInstallReviewApproval,
   ReviewedUnit,
 } from "@vibestudio/shared/approvals";
@@ -431,24 +430,6 @@ export interface InstallLandingReport {
   workspaceUnchanged?: boolean;
 }
 
-export interface MissionReviewApprovalQueueRequest extends ApprovalQueueRequestBase {
-  kind: "mission-review";
-  missionId: string;
-  revision: number;
-  closureDigest: string;
-  reviewKind: PendingMissionReviewApproval["reviewKind"];
-  title: string;
-  taskSummary: string;
-  triggerSummary: string;
-  authority: PendingMissionReviewApproval["authority"];
-  toolkitDomains: PendingMissionReviewApproval["toolkitDomains"];
-  networkSummary: string;
-  lineageSummary: string;
-  charter: PendingMissionReviewApproval["charter"];
-  charterChanges: PendingMissionReviewApproval["charterChanges"];
-  blockedAt?: number;
-}
-
 export interface ClientConfigApprovalQueueRequest extends ApprovalQueueRequestBase {
   kind: "client-config";
   configId: string;
@@ -506,7 +487,6 @@ export type ApprovalQueueRequest =
   | CredentialApprovalQueueRequest
   | CapabilityApprovalQueueRequest
   | UnitInstallReviewQueueRequest
-  | MissionReviewApprovalQueueRequest
   | ClientConfigApprovalQueueRequest
   | CredentialInputApprovalQueueRequest
   | SecretInputApprovalQueueRequest
@@ -520,15 +500,6 @@ type AuthorityApprovalQueueRequest = Exclude<
   DecisionApprovalQueueRequest,
   UnitInstallReviewQueueRequest
 >;
-
-export type MissionReviewApprovalResult =
-  | {
-      decision: "approve";
-      selectedAuthorityKeys: string[];
-      decidedBy: `user:${string}`;
-    }
-  | { decision: "dismiss"; decidedBy: `user:${string}` }
-  | { decision: "cancelled" };
 
 export type ClientConfigApprovalResult =
   | { decision: "submit"; values: Record<string, string> }
@@ -550,12 +521,6 @@ interface DeviceCodeQueueWaiter {
   cancel: () => void;
 }
 
-interface MissionReviewQueueWaiter {
-  resolve: (result: MissionReviewApprovalResult) => void;
-  signal?: AbortSignal;
-  onAbort?: () => void;
-}
-
 interface QueueEntry {
   approval: PendingApproval;
   dedupKey: string;
@@ -564,7 +529,6 @@ interface QueueEntry {
   waiters: Map<number, QueueWaiter>;
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
   deviceCodeWaiters: Map<number, DeviceCodeQueueWaiter>;
-  missionReviewWaiters: Map<number, MissionReviewQueueWaiter>;
   nextWaiterId: number;
   /** The single in-flight human settlement; competing verdicts are rejected. */
   settlement?: Promise<void>;
@@ -605,20 +569,12 @@ export interface ApprovalQueue {
     req: CredentialInputApprovalQueueRequest
   ): Promise<FieldInputApprovalResult>;
   requestSecretInput(req: SecretInputApprovalQueueRequest): Promise<FieldInputApprovalResult>;
-  requestMissionReview(
-    req: MissionReviewApprovalQueueRequest
-  ): Promise<MissionReviewApprovalResult>;
   presentDeviceCode(req: DeviceCodeApprovalQueueRequest): DeviceCodeApprovalHandle;
   onPendingChanged?(listener: (pending: PendingApproval[]) => void): () => void;
   resolve(
     approvalId: string,
     decision: ApprovalDecision,
     resolver?: ApprovalResolver
-  ): Promise<void>;
-  resolveMissionReview(
-    approvalId: string,
-    resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" },
-    resolver: ApprovalResolver
   ): Promise<void>;
   /**
    * Accept a pending install review with exactly what the user selected, or
@@ -877,8 +833,6 @@ export function createApprovalQueue(deps: {
       case "secret-input":
       case "unit-install-review":
         return { value: approval.title };
-      case "mission-review":
-        return { key: approval.missionId, value: approval.closureDigest };
       default:
         return undefined;
     }
@@ -1049,9 +1003,6 @@ export function createApprovalQueue(deps: {
         canonicalJson(unitInstallReviewConsentFacts(req)),
       ]);
     }
-    if (req.kind === "mission-review") {
-      return canonicalKey(["mission-review", req.missionId, req.revision, req.closureDigest]);
-    }
     if (req.kind === "client-config") {
       return canonicalKey([
         "client-config",
@@ -1184,13 +1135,6 @@ export function createApprovalQueue(deps: {
     if (req.kind === "unit-install-review") {
       return { kind: "workspace", verb: req.title };
     }
-    if (req.kind === "mission-review") {
-      return {
-        kind: "runtime",
-        verb: "review mission",
-        object: { type: "mission", label: "Mission", value: req.title },
-      };
-    }
     if (req.kind === "client-config") {
       return {
         kind: "service-setup",
@@ -1294,26 +1238,6 @@ export function createApprovalQueue(deps: {
       const copy = getApprovalCopy(approval);
       return { ...approval, title: copy.title, description: copy.summary };
     }
-    if (req.kind === "mission-review") {
-      return {
-        ...base,
-        kind: "mission-review",
-        missionId: req.missionId,
-        revision: req.revision,
-        closureDigest: req.closureDigest,
-        reviewKind: req.reviewKind,
-        title: req.title,
-        taskSummary: req.taskSummary,
-        triggerSummary: req.triggerSummary,
-        authority: req.authority,
-        toolkitDomains: req.toolkitDomains,
-        networkSummary: req.networkSummary,
-        lineageSummary: req.lineageSummary,
-        charter: req.charter,
-        charterChanges: req.charterChanges,
-        ...(req.blockedAt === undefined ? {} : { blockedAt: req.blockedAt }),
-      } satisfies PendingMissionReviewApproval;
-    }
     if (req.kind === "client-config") {
       return {
         ...base,
@@ -1405,7 +1329,6 @@ export function createApprovalQueue(deps: {
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -1471,7 +1394,6 @@ export function createApprovalQueue(deps: {
       waiter.resolve("deny");
     }
     entry.waiters.clear();
-    dismissMissionReviewWaiters(entry);
   }
 
   async function submitFieldInput(
@@ -1513,17 +1435,6 @@ export function createApprovalQueue(deps: {
       waiter.cancel();
     }
     entry.deviceCodeWaiters.clear();
-    dismissMissionReviewWaiters(entry);
-  }
-
-  function dismissMissionReviewWaiters(entry: QueueEntry): void {
-    for (const waiter of entry.missionReviewWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ decision: "cancelled" });
-    }
-    entry.missionReviewWaiters.clear();
   }
 
   function enqueueDecisionWithHandle(
@@ -1584,7 +1495,6 @@ export function createApprovalQueue(deps: {
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -1670,74 +1580,6 @@ export function createApprovalQueue(deps: {
     return enqueueDecisionWithHandle(req);
   }
 
-  function enqueueMissionReview(
-    req: MissionReviewApprovalQueueRequest
-  ): Promise<MissionReviewApprovalResult> {
-    const dedupKey = dedupKeyFor(req);
-    let entry = entriesByDedupKey.get(dedupKey);
-    let newEntry = false;
-    if (!entry) {
-      const approval = createPendingApproval(req);
-      entry = {
-        approval,
-        dedupKey,
-        requestedByUserId: req.requestedByUserId,
-        waiters: new Map(),
-        fieldInputWaiters: new Map(),
-        deviceCodeWaiters: new Map(),
-        missionReviewWaiters: new Map(),
-        nextWaiterId: 0,
-      };
-      entriesById.set(approval.approvalId, entry);
-      entriesByDedupKey.set(dedupKey, entry);
-      newEntry = true;
-    }
-    if (entry.approval.kind !== "mission-review") {
-      throw new Error("Approval dedup collision for mission review");
-    }
-    const bound = entry;
-    return new Promise<MissionReviewApprovalResult>((resolve) => {
-      const waiterId = bound.nextWaiterId++;
-      const waiter: MissionReviewQueueWaiter = { resolve, signal: req.signal };
-      const onAbort = () => {
-        const current = entriesById.get(bound.approval.approvalId);
-        if (!current) {
-          resolve({ decision: "cancelled" });
-          return;
-        }
-        if (current.settlement) return;
-        current.missionReviewWaiters.delete(waiterId);
-        if (
-          current.waiters.size === 0 &&
-          current.fieldInputWaiters.size === 0 &&
-          current.missionReviewWaiters.size === 0
-        ) {
-          removeEntry(current);
-          emitPendingChanged();
-        }
-        resolve({ decision: "cancelled" });
-      };
-      if (req.signal) {
-        waiter.onAbort = onAbort;
-        if (req.signal.aborted) queueMicrotask(onAbort);
-        else req.signal.addEventListener("abort", onAbort, { once: true });
-      }
-      bound.missionReviewWaiters.set(waiterId, waiter);
-      if (newEntry) emitPendingChanged();
-    });
-  }
-
-  function settleMissionReviewEntry(entry: QueueEntry, result: MissionReviewApprovalResult): void {
-    removeEntry(entry);
-    for (const waiter of entry.missionReviewWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve(result);
-    }
-    entry.missionReviewWaiters.clear();
-  }
-
   return {
     beginPreparation(req) {
       if (typeof req.dedupKey !== "string") {
@@ -1763,7 +1605,6 @@ export function createApprovalQueue(deps: {
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -1841,10 +1682,6 @@ export function createApprovalQueue(deps: {
       return enqueueDecisionWithHandle(req).decision;
     },
 
-    requestMissionReview(req) {
-      return enqueueMissionReview(req);
-    },
-
     requestClientConfig(req) {
       // Auto-approval is an unattended mode. Field-input prompts cannot be
       // truthfully approved because the host has no value to submit; leaving
@@ -1884,7 +1721,6 @@ export function createApprovalQueue(deps: {
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -1981,42 +1817,6 @@ export function createApprovalQueue(deps: {
           resolver,
         },
         (e) => settleDecisionEntry(e, granted)
-      );
-    },
-
-    async resolveMissionReview(approvalId, resolution, resolver) {
-      const entry = entriesById.get(approvalId);
-      if (!entry || entry.approval.kind !== "mission-review") return;
-      const available = new Set(
-        entry.approval.authority.rows.map(
-          (row) => `${row.capability}\0${JSON.stringify(row.resourceScope)}`
-        )
-      );
-      if (
-        resolution.decision === "approve" &&
-        (new Set(resolution.selectedAuthorityKeys).size !==
-          resolution.selectedAuthorityKeys.length ||
-          resolution.selectedAuthorityKeys.some((key) => !available.has(key)))
-      ) {
-        throw new Error("Mission review selection contains an unknown authority row");
-      }
-      const result: MissionReviewApprovalResult =
-        resolution.decision === "dismiss"
-          ? { decision: "dismiss", decidedBy: `user:${resolver.subject.userId}` }
-          : {
-              decision: "approve",
-              selectedAuthorityKeys: resolution.selectedAuthorityKeys,
-              decidedBy: `user:${resolver.subject.userId}`,
-            };
-      await settle(
-        entry,
-        {
-          decision: resolution.decision === "approve" ? "approve" : "dismiss",
-          granted: resolution.decision === "approve",
-          grantScopeStored: resolution.decision === "approve" ? "mission" : null,
-          resolver,
-        },
-        (current) => settleMissionReviewEntry(current, result)
       );
     },
 
@@ -2231,7 +2031,6 @@ export function createApprovalQueue(deps: {
           waiter.cancel();
         }
         entry.deviceCodeWaiters.clear();
-        dismissMissionReviewWaiters(entry);
       }
       if (matching.length > 0) emitPendingChanged();
     },

@@ -126,33 +126,6 @@ export function createShellApprovalService(deps: {
         await approvalQueue.resolve(approvalId, decision, resolverFrom(ctx, deviceLabelFor));
         metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
       },
-      resolveMissionReview: async (ctx, [approvalId, resolution]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
-        if (!pending || pending.kind !== "mission-review") {
-          throw new ServiceError(
-            serviceName,
-            "resolveMissionReview",
-            "No pending mission review found",
-            "ENOENT"
-          );
-        }
-        const resolver = resolverFrom(ctx, deviceLabelFor);
-        if (!resolver) {
-          throw new ServiceError(
-            serviceName,
-            "resolveMissionReview",
-            "Mission review requires an authenticated human",
-            "EACCES"
-          );
-        }
-        await approvalQueue.resolveMissionReview(approvalId, resolution, resolver);
-        metrics.recordApprovalResolved({
-          decision: resolution.decision,
-          source: ctx.caller.runtime.kind,
-        });
-      },
       resolveInstallReview: async (ctx, [approvalId, resolution]) => {
         const pending = approvalQueue
           .listPending()

@@ -668,6 +668,30 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.acquireForTarget": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.acquire",
+      rationale:
+        "Installed workflow code requests ordinary approval for an immutable host policy and attributed target principal.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "authority.admitExecution": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.execution",
+      rationale:
+        "Installed workflow code asks the host to bind one authenticated executor to a registered authority subject.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.awaitDecision": {
     tier: {
       tier: "open",
@@ -680,6 +704,29 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.compileOperationPolicy": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.compile",
+      rationale:
+        "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "authority.finishExecution": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.execution",
+      rationale: "The workflow owner closes the exact execution admission it created.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.preflight": {
     tier: {
       tier: "open",
@@ -688,6 +735,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "authority.control",
       rationale:
         "Pure authority inspection; it neither prompts, mints, consumes, nor invokes a handler",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "authority.retireTarget": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.execution",
+      rationale:
+        "Installed workflow code retires an owner-attributed target only after its admitted executions have closed.",
     },
     capability: null,
     presentation: null,
@@ -4899,99 +4958,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "reviewedClosure.activate": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "grant-authority",
-      family: "reviewedClosure.lifecycle",
-      rationale:
-        "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants.",
-    },
-    capability: "reviewed-closure.activate",
-    presentation: {
-      title: "Start an automated task",
-      action: "start an automated task you reviewed",
-      description: "Start running the automated task exactly as you reviewed and approved it.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "reviewedClosure.bindSession": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "reviewedClosure.session",
-      rationale:
-        "Kernel binds an execution session to one active digest-bound closure for hot-path enforcement.",
-    },
-    capability: "reviewed-closure.bind-session",
-    presentation: {
-      title: "Use an automated task's permissions",
-      action: "use the permissions granted to an automated task",
-      description: "Connect a running automation to the exact permissions you approved for it.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "reviewedClosure.finishSession": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "reviewedClosure.session",
-      rationale: "Kernel closes the exact reviewed-closure session binding.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "reviewedClosure.retire": {
-    tier: {
-      tier: "critical",
-      session: "family",
-      residency: "grant-authority",
-      family: "reviewedClosure.lifecycle",
-      rationale: "Kernel retirement permanently revokes the closure and its standing grants.",
-    },
-    capability: "reviewed-closure.retire",
-    presentation: {
-      title: "Stop an automated task permanently",
-      action: "permanently stop an automated task",
-      description: "Permanently stop an automated task and remove its permissions.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "reviewedClosure.suspend": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "grant-authority",
-      family: "reviewedClosure.lifecycle",
-      rationale: "Kernel suspension closes session admission and revokes standing allows.",
-    },
-    capability: "reviewed-closure.suspend",
-    presentation: {
-      title: "Pause an automated task",
-      action: "pause an automated task",
-      description: "Pause a running automated task. It can be resumed later.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
   "runtime.activateReservedEntity": {
     tier: {
       tier: "open",
@@ -5626,27 +5592,6 @@ export const HOST_AUTHORITY_METHODS = {
       title: "Add or update parts of this workspace",
       action: "add or update parts of this workspace",
       description: "Review and accept or cancel new parts arriving in your workspace.",
-      group: "approvals",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-  },
-  "shellApproval.resolveMissionReview": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "shellApproval.read",
-      rationale:
-        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
-    },
-    capability: "approvals.decide",
-    presentation: {
-      title: "Respond to an automation plan",
-      action: "respond to an automation plan",
-      description: "Review and approve or dismiss a queued automation plan.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -7808,7 +7753,6 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "panelCdp.screenshot": ["context.boundary"],
   "panelCdp.stop": ["context.boundary"],
   "panelContext.describe": ["context.boundary"],
-  "reviewedClosure.activate": ["reviewed-closure.activate"],
   "runtime.cloneContext": ["context.boundary"],
   "runtime.createContext": ["context.boundary"],
   "runtime.createEntity": ["context.boundary"],
@@ -7821,7 +7765,6 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "shellApproval.resolve": ["approvals.decide"],
   "shellApproval.resolveBootstrap": ["approvals.decide"],
   "shellApproval.resolveInstallReview": ["approvals.decide"],
-  "shellApproval.resolveMissionReview": ["approvals.decide"],
   "shellApproval.submitClientConfig": ["protected-input.submit"],
   "shellApproval.submitCredentialInput": ["protected-input.submit"],
   "shellApproval.submitSecretInput": ["protected-input.submit"],
@@ -8015,22 +7958,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "remote-client.read": {
     domain: "people",
     verb: "see",
-  },
-  "reviewed-closure.activate": {
-    domain: "safety",
-    verb: "manage",
-  },
-  "reviewed-closure.bind-session": {
-    domain: "safety",
-    verb: "manage",
-  },
-  "reviewed-closure.retire": {
-    domain: "safety",
-    verb: "manage",
-  },
-  "reviewed-closure.suspend": {
-    domain: "safety",
-    verb: "manage",
   },
   "runtime.execution.recover": {
     domain: "automation",
@@ -8657,46 +8584,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "people",
       verb: "see",
-    },
-  },
-  "reviewed-closure.activate": {
-    title: "Start an automated task",
-    action: "start an automated task you reviewed",
-    description: "Start running the automated task exactly as you reviewed and approved it.",
-    group: "runtime",
-    authorityCategory: {
-      domain: "safety",
-      verb: "manage",
-    },
-  },
-  "reviewed-closure.bind-session": {
-    title: "Use an automated task's permissions",
-    action: "use the permissions granted to an automated task",
-    description: "Connect a running automation to the exact permissions you approved for it.",
-    group: "runtime",
-    authorityCategory: {
-      domain: "safety",
-      verb: "manage",
-    },
-  },
-  "reviewed-closure.retire": {
-    title: "Stop an automated task permanently",
-    action: "permanently stop an automated task",
-    description: "Permanently stop an automated task and remove its permissions.",
-    group: "runtime",
-    authorityCategory: {
-      domain: "safety",
-      verb: "manage",
-    },
-  },
-  "reviewed-closure.suspend": {
-    title: "Pause an automated task",
-    action: "pause an automated task",
-    description: "Pause a running automated task. It can be resumed later.",
-    group: "runtime",
-    authorityCategory: {
-      domain: "safety",
-      verb: "manage",
     },
   },
   "runtime.execution.recover": {

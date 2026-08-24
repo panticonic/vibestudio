@@ -29,14 +29,17 @@ export function createTestExecutionSession(input: {
   } | null;
   mode?: "interactive" | "mission" | "test";
   testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
-}): import("@vibestudio/rpc").AgentExecutionSessionFact {
+}): import("@vibestudio/rpc").ExecutionAdmissionFact & {
+  executor: Extract<import("@vibestudio/rpc").ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+} {
   const now = Date.now();
   const repoPath = input.repoPath ?? "tests/harness";
   const effectiveVersion = input.effectiveVersion ?? "test";
   return {
-    v: 1,
+    v: 2,
     authoritySessionId: `test:${input.runtimeId}`,
     authoritySessionVersion: 1,
+    admissionKey: `test:${input.runtimeId}`,
     mode: input.mode ?? "test",
     ownerUser: "user:test",
     workspaceId: "test",
@@ -52,17 +55,19 @@ export function createTestExecutionSession(input: {
     taskRef: `task:${input.runtimeId}`,
     taskAuthority: `task:${input.runtimeId}`,
     ...(input.testPolicy ? { testPolicy: input.testPolicy } : {}),
-    harness: {
+    executionImage: {
       principal:
         input.harnessPrincipal ??
         (codePrincipal({ repoPath, effectiveVersion }) as `code:${string}`),
       repoPath,
+      ref: "state:test",
       effectiveVersion,
       executionDigest: input.executionDigest ?? TEST_DIGEST,
     },
-    eval: {
+    executor: {
+      kind: "eval",
       runtimeId: input.runtimeId,
-      runId: `run:${input.runtimeId}`,
+      evalRunId: `run:${input.runtimeId}`,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",
@@ -71,6 +76,7 @@ export function createTestExecutionSession(input: {
         digest: "0".repeat(64),
       },
     },
+    parent: null,
     causalParent: null,
     issuedAt: now,
     expiresAt: now + 60_000,

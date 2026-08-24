@@ -7,7 +7,6 @@ import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/servi
 import {
   authorizeVerifiedCaller,
   attestDirectRpc,
-  callerMatchesReviewedClosureHarness,
   directAuthorityAudience,
   directAuthorityCapability,
   isBlessedSystemTestConduit,
@@ -46,16 +45,41 @@ describe("authority runtime", () => {
       null,
       null,
       {
-        harness: {
+        v: 2,
+        authoritySessionId: "authority:test-harness",
+        authoritySessionVersion: 1,
+        admissionKey: "test:case-1",
+        mode: "test",
+        ownerUser: "user:test",
+        workspaceId: "workspace:test",
+        contextId: "context:test",
+        agentBinding: null,
+        taskRef: "case-1",
+        taskAuthority: "task:case-1",
+        executionImage: {
+          ref: "state:test",
           repoPath: "workers/system-test-runner",
           effectiveVersion,
           principal: `code:workers/system-test-runner@${effectiveVersion}`,
           executionDigest,
         },
-        eval: {
-          runId: "system-test-runner:self-development:case-1",
+        executor: {
+          kind: "eval",
+          evalRunId: "system-test-runner:self-development:case-1",
           runtimeId: "do:vibestudio/internal:EvalDO:system-test-doctor",
+          authorityManifest: {
+            mode: "adaptive",
+            effects: "read-write",
+            approvals: "prompt",
+            requests: [],
+            digest: "0".repeat(64),
+          },
         },
+        parent: null,
+        causalParent: null,
+        issuedAt: 1,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        nonce: "nonce:test-harness",
       } as never
     );
     expect(isBlessedSystemTestConduit(conduit, () => true)).toBe(true);
@@ -68,7 +92,13 @@ describe("authority runtime", () => {
           ...harness,
           executionSession: {
             ...harness.executionSession!,
-            eval: { ...harness.executionSession!.eval, runId: "eval:ordinary" },
+            executor: {
+              ...(harness.executionSession!.executor as Extract<
+                import("@vibestudio/rpc").ExecutionAdmissionFact["executor"],
+                { kind: "eval" }
+              >),
+              evalRunId: "eval:ordinary",
+            },
           },
         },
         () => true
@@ -135,35 +165,6 @@ describe("authority runtime", () => {
         tier: "gated",
       })
     ).toBeNull();
-  });
-
-  it("joins mission harnesses to the exact canonical sealed code identity", () => {
-    const caller = createVerifiedCaller("do:workers/system-agent:SystemAgentWorker:run", "do", {
-      callerId: "do:workers/system-agent:SystemAgentWorker:run",
-      callerKind: "do",
-      repoPath: "workers/system-agent",
-      effectiveVersion: digest,
-      executionDigest: "b".repeat(64),
-    });
-    const mission = {
-      subject: `mission:msn_system_agent@${"c".repeat(64)}` as const,
-      closureDigest: "c".repeat(64),
-      harness: { unit: "workers/system-agent", ev: digest, ref: `state:${"b".repeat(64)}` },
-    };
-
-    expect(callerMatchesReviewedClosureHarness(caller, mission)).toBe(true);
-    expect(
-      callerMatchesReviewedClosureHarness(caller, {
-        ...mission,
-        harness: { ...mission.harness, unit: "workers/other" },
-      })
-    ).toBe(false);
-    expect(
-      callerMatchesReviewedClosureHarness(caller, {
-        ...mission,
-        harness: { ...mission.harness, ev: "d".repeat(64) },
-      })
-    ).toBe(false);
   });
 
   it("binds direct human critical calls to the exact authenticated session", () => {

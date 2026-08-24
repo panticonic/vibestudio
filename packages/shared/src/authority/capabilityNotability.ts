@@ -198,7 +198,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "workspace.build-cache.manage", notability: "everyday" },
   { key: "workspace.runtime-state.inspect", notability: "everyday" },
   { key: "workspace.runtime-state.manage", notability: "headline" },
-  { key: "reviewed-closure.", notability: "headline" },
   { key: "service:workers.resolveService", notability: "everyday" },
 
   // ── Your files & work ──────────────────────────────────────────────────────

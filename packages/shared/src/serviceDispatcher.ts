@@ -42,6 +42,7 @@ import type {
   AcquisitionInfo,
   AuthorityPreflightLeaf,
   AuthorityPreflightResult,
+  CompiledOperationPolicyLeaf,
   InvocationSnapshot,
   ResourceScope,
 } from "@vibestudio/rpc";
@@ -223,7 +224,7 @@ export interface VerifiedCodeIdentity {
   requested?: readonly import("@vibestudio/rpc").CapabilityScope[];
   /**
    * Host-verified owner projection for a concrete EvalDO. This is attribution
-   * only; dynamic authority comes from an AgentExecutionSessionFact.
+   * only; dynamic authority comes from an ExecutionAdmissionFact.
    */
   evalOrigin?: {
     ownerId: string;
@@ -264,7 +265,7 @@ export interface VerifiedCaller {
    * runtime code transporting it. Agent binding alone is only a relationship
    * fact and never selects the authorizing origin.
    */
-  executionSession?: import("@vibestudio/rpc").AgentExecutionSessionFact;
+  executionSession?: import("@vibestudio/rpc").ExecutionAdmissionFact;
   /** Host-attested live task closure inherited through runtime ancestry. */
   taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal;
   /**
@@ -287,7 +288,7 @@ export function createVerifiedCaller(
   code?: VerifiedCodeIdentity | null,
   agentBinding?: AgentBinding | RuntimeAgentBinding | null,
   subject?: UserSubject | null,
-  executionSession?: import("@vibestudio/rpc").AgentExecutionSessionFact | null,
+  executionSession?: import("@vibestudio/rpc").ExecutionAdmissionFact | null,
   testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy | null
 ): VerifiedCaller {
   return {
@@ -730,13 +731,6 @@ export class ServiceDispatcher {
       resource: ResourceScope;
     }): number;
     invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
-    proposeReviewedClosureRevision?(input: {
-      snapshot: InvocationSnapshot;
-      tier: "gated" | "critical";
-      renderedAction: string;
-      resource: ResourceScope;
-      presentation?: AuthorityChallengePresentation;
-    }): void | Promise<void>;
   };
   /**
    * Is a review covering this exact unit version still open?
@@ -824,7 +818,7 @@ export class ServiceDispatcher {
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
-        reviewedClosureChangeRequired?: boolean;
+        operationPolicyDenied?: boolean;
       }
     | Promise<{
         context: AuthorizationContext;
@@ -835,7 +829,7 @@ export class ServiceDispatcher {
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
-        reviewedClosureChangeRequired?: boolean;
+        operationPolicyDenied?: boolean;
       }>;
 
   setAuthorityResolver(
@@ -861,7 +855,7 @@ export class ServiceDispatcher {
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
-          reviewedClosureChangeRequired?: boolean;
+          operationPolicyDenied?: boolean;
         }
       | Promise<{
           context: AuthorizationContext;
@@ -872,7 +866,7 @@ export class ServiceDispatcher {
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
-          reviewedClosureChangeRequired?: boolean;
+          operationPolicyDenied?: boolean;
         }>
   ): void {
     this.authorityResolver = resolver;
@@ -1645,9 +1639,7 @@ export class ServiceDispatcher {
           resolved.context.executionSession?.mode ??
           (resolved.context.testPolicy ? "test" : undefined),
         testPolicyId: resolved.context.testPolicy?.policyId,
-        reviewedClosureSubject: resolved.context.session.reviewedClosure
-          ? resolved.context.session.reviewedClosure.subject
-          : "-",
+        missionSubject: resolved.context.executionSession?.mission?.subject ?? "-",
         snippetDigest:
           resolved.context.authorizingOrigin.kind === "session"
             ? (resolved.context.executingCode?.principal.split("@").slice(-1)[0] ?? "-")
@@ -1718,7 +1710,9 @@ export class ServiceDispatcher {
           });
         }
       }
-      const runManifest = resolved.context.executionSession?.eval.authorityManifest;
+      const admissionExecutor = resolved.context.executionSession?.executor;
+      const runManifest =
+        admissionExecutor?.kind === "eval" ? admissionExecutor.authorityManifest : undefined;
       if (
         runManifest &&
         reviewedTier !== "open" &&
@@ -1779,10 +1773,10 @@ export class ServiceDispatcher {
         providerExecutionDigest: snapshot.providerExecutionDigest,
       });
       const decision =
-        resolved.reviewedClosureChangeRequired === true
+        resolved.operationPolicyDenied === true
           ? {
               allowed: false as const,
-              code: "mission-change-required" as const,
+              code: "operation-policy-denied" as const,
               reason: "This operation is outside the active mission charter",
               requirement,
             }
@@ -1865,24 +1859,12 @@ export class ServiceDispatcher {
             resourceKey,
             tier: reviewedTier,
           });
-      if (decision.code === "mission-change-required") {
-        if (!preflight) {
-          await this.authorityAcquirer?.proposeReviewedClosureRevision?.({
-            snapshot,
-            tier: reviewedTier === "open" ? "gated" : reviewedTier,
-            renderedAction:
-              challenge?.operation.verb ??
-              methodDef.access?.approval?.[0]?.operation.verb ??
-              describeCapability(capability).action,
-            resource: { kind: "exact", key: resourceKey },
-            ...(challenge ? { presentation: challenge } : {}),
-          });
-        }
+      if (decision.code === "operation-policy-denied") {
         throw new ServiceAccessError(
           service,
           method,
-          `The mission must be revised before this operation can run${formatAccessHint(methodDef)}`,
-          "EMISSIONCHANGE",
+          `The operation is outside the active automation policy${formatAccessHint(methodDef)}`,
+          "EOPERATIONPOLICY",
           { denied: true, authorityFailure }
         );
       }
@@ -2106,6 +2088,60 @@ export class ServiceDispatcher {
    */
   hasService(service: string): boolean {
     return this.handlers.has(service);
+  }
+
+  /**
+   * Compile the receiver-owned static authority declaration for one semantic
+   * operation. Dynamic prepared methods cannot be guessed at launch and must
+   * be represented by a receiver-defined bounded operation instead.
+   */
+  compileOperationLeaf(input: {
+    service: string;
+    method: string;
+    args: readonly unknown[];
+    use: "action" | "conditional";
+  }): CompiledOperationPolicyLeaf {
+    const serviceDef = this.definitions.get(input.service);
+    const methodDef = serviceDef?.methods[input.method];
+    const tier = this.methodTiers.get(`${input.service}.${input.method}`)?.tier;
+    if (!serviceDef || !methodDef || !tier) {
+      throw new Error(`Unknown operation ${input.service}.${input.method}`);
+    }
+    const capability =
+      tier === "open" ? `service:${input.service}.${input.method}` : methodDef.capability;
+    if (!capability)
+      throw new Error(`Operation ${input.service}.${input.method} has no semantic capability`);
+    const declaration = methodDef.authority ?? serviceDef.authority;
+    const descriptor =
+      "requirement" in declaration
+        ? declaration
+        : {
+            requirement: requirementForPrincipals(declaration.principals, capability),
+            resource: { kind: "literal" as const, key: capability },
+          };
+    if ("prepared" in descriptor && descriptor.prepared) {
+      throw new Error(
+        `Operation ${input.service}.${input.method} uses dynamic authority preparation and needs a receiver-defined bounded operation`
+      );
+    }
+    const resourceKey = deriveAuthorityResource(descriptor.resource, [...input.args]);
+    return {
+      service: input.service,
+      method: input.method,
+      capability,
+      resource: { kind: "exact", key: resourceKey },
+      tier,
+      capabilityDefinitionDigest: sha256Canonical({
+        service: input.service,
+        method: input.method,
+        capability,
+        declaration,
+        tier,
+      }),
+      provider: "-",
+      providerEffectiveVersion: "-",
+      use: input.use,
+    };
   }
 
   /**

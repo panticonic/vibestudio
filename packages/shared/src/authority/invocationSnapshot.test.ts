@@ -15,7 +15,7 @@ const base = () =>
     preparedStateDigest: "-",
     callerPrincipal: "session:conversation-1",
     sessionId: "conversation-1",
-    reviewedClosureSubject: "-",
+    missionSubject: "-",
     snippetDigest: "a".repeat(64),
     codeLineage: { class: "internal", chain: ["repo:x@y"] },
     contextLineage: { class: "external", latchEpoch: 2, externalKeys: ["web:example.com"] },
@@ -56,7 +56,7 @@ describe("invocation snapshot", () => {
     expect(
       invocationSnapshotDigest({
         ...snapshot,
-        reviewedClosureSubject: "mission:m@closure",
+        missionSubject: "mission:m@closure",
       })
     ).not.toBe(digest);
     expect(

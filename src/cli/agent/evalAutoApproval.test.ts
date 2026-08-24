@@ -42,7 +42,7 @@ function capabilityApproval(input: {
       preparedStateDigest: "prepared-1",
       callerPrincipal: "code:eval@ev-1",
       sessionId: "authority-session-1",
-      reviewedClosureSubject: "-",
+      missionSubject: "-",
       snippetDigest: "snippet-1",
       codeLineage: { class: "internal", chain: [] },
       contextLineage: { class: "internal", latchEpoch: 1, externalKeys: [] },

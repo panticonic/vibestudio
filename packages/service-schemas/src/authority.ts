@@ -75,7 +75,7 @@ const leafSchema = z
       .object({
         reasonCode: z.enum([
           "approval-required",
-          "mission-change-required",
+          "operation-policy-denied",
           "user-denied",
           "receiver-rejected",
           "fixed-code-not-requested",
@@ -93,7 +93,7 @@ const leafSchema = z
           .object({
             kind: z.enum([
               "request-user-approval",
-              "request-mission-change",
+              "edit-mission",
               "update-installed-code-manifest",
               "declare-rpc-receiver",
               "use-admitted-principal",
@@ -177,5 +177,172 @@ export const authorityMethods = defineServiceMethods({
       .strict(),
     authority: EVERY_ORIGIN,
     access: { sensitivity: "read" },
+  },
+  compileOperationPolicy: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.compile",
+      rationale:
+        "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows.",
+    },
+    description: "Compile and publish one immutable content-addressed operation policy.",
+    args: z.tuple([
+      z
+        .object({
+          executionImageDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+          operations: z
+            .array(
+              z
+                .object({
+                  service: z.string().min(1),
+                  method: z.string().min(1),
+                  args: z.array(z.unknown()).optional(),
+                  use: z.enum(["action", "conditional"]),
+                })
+                .strict()
+            )
+            .max(256),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        schemaVersion: z.literal(1),
+        digest: z.string().regex(/^[0-9a-f]{64}$/u),
+        artifactRef: z.string().regex(/^policy:[0-9a-f]{64}$/u),
+        compilerVersion: z.string(),
+        catalogDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+      })
+      .strict(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  acquireForTarget: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.acquire",
+      rationale:
+        "Installed workflow code requests ordinary approval for an immutable host policy and attributed target principal.",
+    },
+    description:
+      "Create or join durable authority requests for a target subject and immutable policy.",
+    args: z.tuple([
+      z
+        .object({
+          targetSubject: z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u),
+          operationPolicyDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        requestIds: z.array(z.string()),
+        grantIds: z.array(z.string()),
+        denialIds: z.array(z.string()),
+      })
+      .strict(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  admitExecution: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.execution",
+      rationale:
+        "Installed workflow code asks the host to bind one authenticated executor to a registered authority subject.",
+    },
+    description: "Admit one exact mission executor and return its opaque call-binding nonce.",
+    args: z.tuple([
+      z
+        .object({
+          admissionKey: z.string().min(1),
+          contextId: z.string().min(1),
+          taskRef: z.string().min(1),
+          mission: z
+            .object({
+              subject: z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u),
+              missionId: z.string().min(1),
+              revision: z.number().int().positive(),
+              revisionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+            })
+            .strict(),
+          executionImage: z
+            .object({
+              source: z.string().min(1),
+              ref: z.string().regex(/^state:[0-9a-f]{64}$/u),
+              effectiveVersion: z.string().regex(/^[0-9a-f]{64}$/u),
+              className: z.string().min(1),
+            })
+            .strict(),
+          operationPolicyDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+          executor: z.discriminatedUnion("kind", [
+            z
+              .object({
+                kind: z.literal("agent-turn"),
+                runtimeId: z.string().min(1),
+                entityId: z.string().min(1),
+                channelId: z.string().min(1),
+                turnId: z.string().min(1),
+              })
+              .strict(),
+            z
+              .object({
+                kind: z.literal("method"),
+                runtimeId: z.string().min(1),
+                invocationId: z.string().min(1),
+                service: z.string().min(1),
+                method: z.string().min(1),
+              })
+              .strict(),
+          ]),
+        })
+        .strict(),
+    ]),
+    returns: z.object({ authoritySessionId: z.string(), nonce: z.string() }).strict(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  finishExecution: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.execution",
+      rationale: "The workflow owner closes the exact execution admission it created.",
+    },
+    description: "Terminalize one execution admission.",
+    args: z.tuple([z.object({ authoritySessionId: z.string().min(1) }).strict()]),
+    returns: z.void(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
+  retireTarget: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.execution",
+      rationale:
+        "Installed workflow code retires an owner-attributed target only after its admitted executions have closed.",
+    },
+    description:
+      "Fence a retired target subject, cancel pending requests, and revoke its standing grants.",
+    args: z.tuple([
+      z.object({ targetSubject: z.string().regex(/^mission:[^@]+@[0-9a-f]{64}$/u) }).strict(),
+    ]),
+    returns: z
+      .object({
+        cancelledRequestCount: z.number().int().nonnegative(),
+        revokedGrantCount: z.number().int().nonnegative(),
+      })
+      .strict(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
   },
 });

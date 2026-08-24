@@ -736,7 +736,10 @@ describe("createEvalService", () => {
       calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
     ).objectKey;
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
-    expect(executionSessions.resolve(runtimeId)?.eval.runId).toBe(runId);
+    expect(executionSessions.resolve(runtimeId)?.executor).toMatchObject({
+      kind: "eval",
+      evalRunId: runId,
+    });
 
     acceptRetry();
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -748,7 +751,7 @@ describe("createEvalService", () => {
     expect(executionSessions.resolve(runtimeId)).not.toBeNull();
     settleLiveEvent();
     expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      eval: { runtimeId, runId },
+      executor: { kind: "eval", runtimeId, evalRunId: runId },
     });
   });
 
@@ -772,7 +775,7 @@ describe("createEvalService", () => {
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
     expect(calls.filter((call) => call.method === "startRun")).toHaveLength(1);
     expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      eval: { runtimeId, runId: "effect:eval:rejected" },
+      executor: { kind: "eval", runtimeId, evalRunId: "effect:eval:rejected" },
     });
     expect(activity.getActivity().activeRuns).toBe(0);
   });
@@ -798,13 +801,16 @@ describe("createEvalService", () => {
     ).objectKey;
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
-    expect(executionSessions.resolve(runtimeId)?.eval.runId).toBe(runId);
+    expect(executionSessions.resolve(runtimeId)?.executor).toMatchObject({
+      kind: "eval",
+      evalRunId: runId,
+    });
     expect(activity.getActivity().activeRuns).toBe(1);
 
     settleLiveEvent();
     settleLiveEvent();
     expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      eval: { runtimeId, runId: "effect:eval:live-terminal" },
+      executor: { kind: "eval", runtimeId, evalRunId: "effect:eval:live-terminal" },
     });
     expect(activity.getActivity().activeRuns).toBe(0);
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
@@ -850,15 +856,18 @@ describe("createEvalService", () => {
       agentBinding: null,
       taskRef: "system-test:cancel-lifecycle-case",
       taskAuthority: "task:system-test-cancel-lifecycle-case",
-      harness: {
+      executionImage: {
         principal: `code:workers/system-test-runner@test`,
         repoPath: "workers/system-test-runner",
+        ref: "state:test",
         effectiveVersion: "test",
         executionDigest: "a".repeat(64),
       },
-      eval: {
+      admissionKey: "test:cancel-lifecycle-child",
+      executor: {
+        kind: "eval",
         runtimeId: "do:vibestudio/internal:EvalDO:cancel-lifecycle-child",
-        runId: "system-test-runner:cancel-lifecycle-child",
+        evalRunId: "system-test-runner:cancel-lifecycle-child",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",
@@ -867,18 +876,19 @@ describe("createEvalService", () => {
           digest: "0".repeat(64),
         },
       },
+      parent: null,
       causalParent: null,
       testPolicy: casePolicy,
     });
 
     expect(executionSessions.resolve(rootRuntimeId)?.nonce).toBe(root?.nonce);
-    expect(executionSessions.resolve(child.eval.runtimeId)?.nonce).toBe(child.nonce);
+    expect(executionSessions.resolve(child.executor.runtimeId)?.nonce).toBe(child.nonce);
     expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
-    expect(executionSessions.resolve(child.eval.runtimeId)).not.toBeNull();
+    expect(executionSessions.resolve(child.executor.runtimeId)).not.toBeNull();
 
     settleLiveEvent();
     expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
-    expect(executionSessions.resolve(child.eval.runtimeId)).not.toBeNull();
+    expect(executionSessions.resolve(child.executor.runtimeId)).not.toBeNull();
     expect(executionSessions.testPolicyForContext("ctx:orchestrator")).not.toBeNull();
     expect(executionSessions.testPolicyForContext("ctx:case")).not.toBeNull();
   });
@@ -904,7 +914,7 @@ describe("createEvalService", () => {
     });
     expect(calls.some((call) => call.method === "executeRun")).toBe(false);
     expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      eval: { runtimeId, runId: "run:held" },
+      executor: { kind: "eval", runtimeId, evalRunId: "run:held" },
     });
     expect(activity.getActivity().activeRuns).toBe(1);
     settleLiveEvent();

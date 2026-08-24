@@ -25,7 +25,7 @@ function snapshot() {
     preparedStateDigest: "-",
     callerPrincipal: "session:chat-1",
     sessionId: "chat-1",
-    reviewedClosureSubject: "-",
+    missionSubject: "-",
     snippetDigest: "a".repeat(64),
     codeLineage: { class: "internal", chain: [] },
     contextLineage: { class: "internal", latchEpoch: 0, externalKeys: [] },

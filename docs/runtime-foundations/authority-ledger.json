@@ -6703,6 +6703,94 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:authority.acquireForTarget",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "acquireForTarget",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.acquire",
+      "reviewRationale": "Installed workflow code requests ordinary approval for an immutable host policy and attributed target principal.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.acquireForTarget"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.acquireForTarget),workspace-member)",
+      "r3b": {
+        "review": "owner-attributed-durable-target-acquisition",
+        "change": "Registers one digest-bound mission revision under the authenticated requesting user and creates or joins durable ordinary acquisitions for its host-compiled mission-grantable leaves. Runtime identity never becomes the acquisition owner."
+      },
+      "capability": "service:authority.acquireForTarget",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.admitExecution",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "admitExecution",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.execution",
+      "reviewRationale": "Installed workflow code asks the host to bind one authenticated executor to a registered authority subject.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.admitExecution"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.admitExecution),workspace-member)",
+      "r3b": {
+        "review": "exact-mission-executor-admission",
+        "change": "Binds one live verified Durable Object executor to an active owner-attributed mission subject, exact immutable execution image, and host-owned policy artifact. The returned opaque nonce conveys relationship evidence only and grants no capability by itself."
+      },
+      "capability": "service:authority.admitExecution",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:authority.awaitDecision",
       "rpcPlane": "host-service",
       "owner": "authority",
@@ -6751,6 +6839,94 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:authority.compileOperationPolicy",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "compileOperationPolicy",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.compile",
+      "reviewRationale": "Installed code asks the host to compile receiver-owned declarations; it cannot author capability rows.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.compileOperationPolicy"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.compileOperationPolicy),workspace-member)",
+      "r3b": {
+        "review": "host-compiled-content-addressed-operation-policy",
+        "change": "Accepts only semantic service operations from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable verified artifact. Callers cannot author capability names, tiers, grants, or policy bodies."
+      },
+      "capability": "service:authority.compileOperationPolicy",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.finishExecution",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "finishExecution",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.execution",
+      "reviewRationale": "The workflow owner closes the exact execution admission it created.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.finishExecution"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.finishExecution),workspace-member)",
+      "r3b": {
+        "review": "exact-execution-admission-closure",
+        "change": "Closes one opaque live execution admission created by the workflow owner. It grants no authority and does not mutate mission consent."
+      },
+      "capability": "service:authority.finishExecution",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:authority.preflight",
       "rpcPlane": "host-service",
       "owner": "authority",
@@ -6796,6 +6972,50 @@
         "change": null
       },
       "capability": "service:authority.preflight",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.retireTarget",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "retireTarget",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.execution",
+      "reviewRationale": "Installed workflow code retires an owner-attributed target only after its admitted executions have closed.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.retireTarget"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.retireTarget),workspace-member)",
+      "r3b": {
+        "review": "fenced-mission-authority-retirement",
+        "change": "Requires the attributed mission owner, refuses retirement while an admitted execution remains live, then fences the target, cancels pending acquisitions, and revokes its standing grants. Pause never uses this operation."
+      },
+      "capability": "service:authority.retireTarget",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -20983,275 +21203,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:reviewedClosure.activate",
-      "rpcPlane": "host-service",
-      "owner": "reviewedClosure",
-      "method": "activate",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "grant-authority",
-      "mechanismFamily": "reviewedClosure.lifecycle",
-      "reviewRationale": "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants.",
-      "resourceDerivation": {
-        "kind": "argument",
-        "index": 0,
-        "path": [
-          "closureDigest"
-        ],
-        "prefix": "closure:"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"reviewed-closure.activate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"reviewed-closure.activate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:reviewedClosure.activate",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:reviewedClosure.activate#capability:reviewed-closure.activate",
-      "rpcPlane": "host-service",
-      "owner": "reviewedClosure",
-      "method": "activate",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "grant-authority",
-      "mechanismFamily": "reviewedClosure.lifecycle",
-      "reviewRationale": "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants.",
-      "capability": "reviewed-closure.activate",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "reviewedClosure.activate.presentation"
-      },
-      "authorityPrincipals": [
-        "code",
-        "session"
-      ],
-      "sensitivity": "admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"reviewed-closure.activate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"reviewed-closure.activate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:reviewedClosure.bindSession",
-      "rpcPlane": "host-service",
-      "owner": "reviewedClosure",
-      "method": "bindSession",
-      "tier": "open",
-      "sessionAdmission": "codeOnly",
-      "residency": "grant-authority",
-      "mechanismFamily": "reviewedClosure.session",
-      "reviewRationale": "Kernel binds an execution session to one active digest-bound closure for hot-path enforcement.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:reviewedClosure.bindSession"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "allOf(capability(code,service:reviewedClosure.bindSession),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:reviewedClosure.bindSession",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:reviewedClosure.finishSession",
-      "rpcPlane": "host-service",
-      "owner": "reviewedClosure",
-      "method": "finishSession",
-      "tier": "open",
-      "sessionAdmission": "codeOnly",
-      "residency": "grant-authority",
-      "mechanismFamily": "reviewedClosure.session",
-      "reviewRationale": "Kernel closes the exact reviewed-closure session binding.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:reviewedClosure.finishSession"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "allOf(capability(code,service:reviewedClosure.finishSession),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:reviewedClosure.finishSession",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:reviewedClosure.retire",
-      "rpcPlane": "host-service",
-      "owner": "reviewedClosure",
-      "method": "retire",
-      "tier": "critical",
-      "sessionAdmission": "family",
-      "residency": "grant-authority",
-      "mechanismFamily": "reviewedClosure.lifecycle",
-      "reviewRationale": "Kernel retirement permanently revokes the closure and its standing grants.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:reviewedClosure.retire"
-      },
-      "authorityPrincipals": [
-        "host",
-        "code"
-      ],
-      "sensitivity": "destructive",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:reviewedClosure.retire),allOf(capability(code,service:reviewedClosure.retire),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:reviewedClosure.retire",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:reviewedClosure.suspend",
-      "rpcPlane": "host-service",
-      "owner": "reviewedClosure",
-      "method": "suspend",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "grant-authority",
-      "mechanismFamily": "reviewedClosure.lifecycle",
-      "reviewRationale": "Kernel suspension closes session admission and revokes standing allows.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:reviewedClosure.suspend"
-      },
-      "authorityPrincipals": [
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:reviewedClosure.suspend),allOf(capability(code,service:reviewedClosure.suspend),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:reviewedClosure.suspend",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:runtime.activateReservedEntity",
       "rpcPlane": "host-service",
       "owner": "runtime",
@@ -23567,7 +23518,7 @@
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "install-review-typed-resolution",
-        "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
+        "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. It uses the same gated approvals.decide capability and trusted-chrome principals as ordinary resolution; the server derives the offerable rows itself and rejects any identity or permission the review did not offer."
       },
       "capability": "service:shellApproval.resolveInstallReview",
       "parityAssertion": "generated-census:host-authority"
@@ -23577,96 +23528,6 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "resolveInstallReview",
-      "tier": "gated",
-      "sessionAdmission": "codeOnly",
-      "residency": "grant-authority",
-      "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
-      "capability": "approvals.decide",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "shellApproval.presenter.decide"
-      },
-      "authorityPrincipals": [
-        "code",
-        "session"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:shellApproval.resolveMissionReview",
-      "rpcPlane": "host-service",
-      "owner": "shellApproval",
-      "method": "resolveMissionReview",
-      "tier": "open",
-      "sessionAdmission": "codeOnly",
-      "residency": "grant-authority",
-      "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "approvals.decide"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session",
-        "user"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "root-presenter-independent-mission-review-decision",
-        "change": "Opens exact mission-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and the receiver's authenticated-human requirement."
-      },
-      "capability": "service:shellApproval.resolveMissionReview",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:shellApproval.resolveMissionReview#capability:approvals.decide",
-      "rpcPlane": "host-service",
-      "owner": "shellApproval",
-      "method": "resolveMissionReview",
       "tier": "gated",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",

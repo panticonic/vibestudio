@@ -1,6 +1,6 @@
 import type { AcquisitionInfo, InvocationSnapshot, ResourceScope } from "@vibestudio/rpc";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
 import type { OperationSubstance } from "@vibestudio/shared/approvals";
 import type { AuthorityAcquisitionDecision } from "@vibestudio/shared/approvalContract";
@@ -17,6 +17,11 @@ import {
 import { createHash } from "node:crypto";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { testPolicyAuthorityDecision } from "./authorityRuntime.js";
+import type {
+  DurableTargetAuthorityRequest,
+  TargetAuthorityRequestStore,
+} from "./targetAuthorityRequestStore.js";
+import { invocationSnapshotDigest } from "@vibestudio/shared/authority/invocationSnapshot";
 
 export interface AcquisitionRequestInput {
   snapshot: InvocationSnapshot;
@@ -32,6 +37,7 @@ export interface AcquisitionRequestInput {
 export interface AcquisitionOutcome {
   state: "decided" | "closed";
   decision?: AuthorityAcquisitionDecision;
+  grantId?: string;
   info?: AcquisitionInfo;
 }
 
@@ -103,9 +109,142 @@ export class AcquisitionCoordinator {
     private readonly deps: {
       approvalQueue: ApprovalQueue;
       grantStore: CapabilityGrantStore;
+      targetRequests?: TargetAuthorityRequestStore;
       notifyOwner?: (ownerRuntimeId: string, acquisitionId: string) => Promise<void> | void;
     }
   ) {}
+
+  requestForTarget(input: {
+    targetSubject: import("@vibestudio/rpc").AuthorityGrantSubject;
+    operationPolicyDigest: string;
+    operationKey: string;
+    capability: string;
+    capabilityDefinitionDigest: string;
+    resource: ResourceScope;
+    tier: "gated" | "critical";
+    sourceUser: `user:${string}`;
+    renderedAction: string;
+  }): DurableTargetAuthorityRequest {
+    const store = this.requireTargetRequests();
+    const durable = store.ensure(input);
+    if (durable.state === "pending") this.presentTargetRequest(durable, input.renderedAction);
+    return durable;
+  }
+
+  resumeTargetRequests(): void {
+    if (!this.deps.targetRequests) return;
+    for (const request of this.deps.targetRequests.pending()) {
+      this.presentTargetRequest(request, request.capability);
+    }
+  }
+
+  targetRequestsFor(
+    subject: import("@vibestudio/rpc").AuthorityGrantSubject,
+    policyDigest: string
+  ): DurableTargetAuthorityRequest[] {
+    return this.requireTargetRequests().forPolicy(subject, policyDigest);
+  }
+
+  registerTargetSubject(
+    subject: import("@vibestudio/rpc").AuthorityGrantSubject,
+    policyDigest: string,
+    ownerUser: `user:${string}`
+  ): void {
+    this.requireTargetRequests().registerSubject(subject, policyDigest, ownerUser);
+  }
+
+  targetSubject(subject: import("@vibestudio/rpc").AuthorityGrantSubject) {
+    return this.requireTargetRequests().subject(subject);
+  }
+
+  retireTargetSubject(subject: import("@vibestudio/rpc").AuthorityGrantSubject) {
+    return this.requireTargetRequests().retireSubject(subject);
+  }
+
+  private requireTargetRequests(): TargetAuthorityRequestStore {
+    if (!this.deps.targetRequests)
+      throw new Error("Durable target authority acquisition is unavailable in this host role");
+    return this.deps.targetRequests;
+  }
+
+  private presentTargetRequest(
+    request: DurableTargetAuthorityRequest,
+    renderedAction: string
+  ): void {
+    const runtimeId = `authority-target:${request.requestId}`;
+    const sessionId = `target:${request.requestId}`;
+    const userId = request.sourceUser.slice("user:".length);
+    const caller: VerifiedCaller = createHostCaller(runtimeId, "server", {
+      userId,
+      handle: userId,
+    });
+    const snapshot: InvocationSnapshot = {
+      v: 2,
+      service: "authority",
+      method: "acquireForTarget",
+      capability: request.capability,
+      capabilityDefinitionDigest: request.capabilityDefinitionDigest,
+      resourceType: request.resource.kind,
+      provider: "-",
+      providerExecutionDigest: "-",
+      resourceKey:
+        request.resource.kind === "exact" ? request.resource.key : canonicalJson(request.resource),
+      argsDigest: request.operationKey,
+      preparedStateDigest: request.operationPolicyDigest,
+      callerPrincipal: `session:${sessionId}`,
+      sessionId,
+      taskRef: request.requestId,
+      lineageClasses: ["none"],
+      executionMode: "mission",
+      missionSubject: request.targetSubject as `mission:${string}@${string}`,
+      snippetDigest: "-",
+      codeLineage: { class: "unknown", chain: [] },
+      contextLineage: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+      initiatorChain: [request.sourceUser],
+      at: request.createdAt,
+    };
+    const input: AcquisitionRequestInput = {
+      snapshot,
+      snapshotDigest: invocationSnapshotDigest(snapshot),
+      tier: request.tier,
+      caller,
+      renderedAction,
+      resource: request.resource,
+      presentation: {
+        title: "Allow an automation action",
+        description: "Grant this exact operation to the installed automation revision.",
+        deniedReason: "The automation cannot perform this operation without your approval.",
+        allowedDecisions: request.tier === "critical" ? ["once", "deny"] : ["mission", "deny"],
+        dedupKey: request.requestId,
+        resource: {
+          type: request.resource.kind,
+          label: "Resource",
+          value:
+            request.resource.kind === "exact"
+              ? request.resource.key
+              : canonicalJson(request.resource),
+        },
+        operation: {
+          kind: "unknown",
+          verb: "allow",
+          object: { type: "automation-operation", label: "Operation", value: renderedAction },
+        },
+      },
+    };
+    void this.requestAndWait(input)
+      .then((outcome) => {
+        const state =
+          outcome.decision === "mission"
+            ? "granted"
+            : outcome.decision === "deny"
+              ? "denied"
+              : "cancelled";
+        this.requireTargetRequests().settle(request.requestId, state, outcome.grantId);
+      })
+      .catch((error) => {
+        console.error("[AuthorityAcquisition] target request presentation failed:", error);
+      });
+  }
 
   request(input: AcquisitionRequestInput, signal?: AbortSignal): AcquisitionInfo {
     return this.requestWithContinuation(input, "owner-redrive", signal);
@@ -565,9 +704,13 @@ export class AcquisitionCoordinator {
     ) {
       throw new Error(`Authority presentation returned disallowed decision '${decision}'`);
     }
-    this.persistDecision(input, authorityDecision);
+    const grantId = this.persistDecision(input, authorityDecision);
     entry.info.pending = false;
-    this.finish(entry, { state: "decided", decision: authorityDecision });
+    this.finish(entry, {
+      state: "decided",
+      decision: authorityDecision,
+      ...(grantId ? { grantId } : {}),
+    });
   }
 
   private finish(entry: PendingAcquisition, outcome: AcquisitionOutcome): void {
@@ -660,7 +803,7 @@ export class AcquisitionCoordinator {
   private persistDecision(
     input: AcquisitionRequestInput,
     decision: AuthorityAcquisitionDecision
-  ): void {
+  ): string | undefined {
     const capabilityDefinition =
       input.snapshot.capabilityDefinitionDigest === "-"
         ? {}
@@ -673,10 +816,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: input.snapshot.callerPrincipal,
         constraints: {
-          sessionId: input.snapshot.sessionId,
-          ...(input.snapshot.reviewedClosureSubject === "-"
-            ? {}
-            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
+          ...(input.snapshot.missionSubject === "-"
+            ? { sessionId: input.snapshot.sessionId }
+            : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent: [],
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
@@ -702,9 +844,9 @@ export class AcquisitionCoordinator {
           ...(input.snapshot.agentBindingId
             ? { agentBindingId: input.snapshot.agentBindingId }
             : {}),
-          ...(input.snapshot.reviewedClosureSubject === "-"
+          ...(input.snapshot.missionSubject === "-"
             ? {}
-            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
+            : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
@@ -724,9 +866,9 @@ export class AcquisitionCoordinator {
           ...(input.snapshot.agentBindingId
             ? { agentBindingId: input.snapshot.agentBindingId }
             : {}),
-          ...(input.snapshot.reviewedClosureSubject === "-"
+          ...(input.snapshot.missionSubject === "-"
             ? {}
-            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
+            : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
@@ -749,9 +891,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: input.snapshot.taskAuthority,
         constraints: {
-          ...(input.snapshot.reviewedClosureSubject === "-"
+          ...(input.snapshot.missionSubject === "-"
             ? {}
-            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
+            : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
@@ -789,24 +931,23 @@ export class AcquisitionCoordinator {
       return;
     }
     if (decision === "mission") {
-      if (input.snapshot.reviewedClosureSubject === "-") {
+      if (input.snapshot.missionSubject === "-") {
         throw new Error("Mission approval requires an attested mission");
       }
-      this.deps.grantStore.issue({
+      return this.deps.grantStore.issue({
         effect: "allow",
         capability: input.snapshot.capability,
         resource: input.resource,
-        subject: input.snapshot.reviewedClosureSubject,
+        subject: input.snapshot.missionSubject,
         constraints: {
-          reviewedClosureSubject: input.snapshot.reviewedClosureSubject,
+          missionSubject: input.snapshot.missionSubject,
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
         scope: "mission",
         ...capabilityDefinition,
-      });
-      return;
+      }).id;
     }
     if (decision === "lock") {
       if (!input.snapshot.agentBindingId) {
@@ -844,6 +985,7 @@ export class AcquisitionCoordinator {
         ? { expiresAt: input.presentation.grantExpiresAt }
         : {}),
     });
+    return;
   }
 }
 
@@ -1010,7 +1152,7 @@ function decisionsForOrigin(
       "once",
       "session",
       "task",
-      ...(input.snapshot.reviewedClosureSubject === "-" ? [] : (["mission"] as const)),
+      ...(input.snapshot.missionSubject === "-" ? [] : (["mission"] as const)),
       ...(input.snapshot.agentBindingId && input.snapshot.agentScopeEligible
         ? (["agent", "lock"] as const)
         : []),

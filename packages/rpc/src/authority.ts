@@ -21,6 +21,42 @@ export interface CapabilityScope {
   resource: ResourceScope;
 }
 
+export interface CompiledOperationPolicyLeaf extends CapabilityScope {
+  service: string;
+  method: string;
+  tier: "open" | "gated" | "critical";
+  capabilityDefinitionDigest: string;
+  provider: string | "-";
+  providerEffectiveVersion: string | "-";
+  use: "action" | "conditional";
+}
+
+export interface CompiledOperationPolicyArtifact {
+  schemaVersion: 1;
+  compilerVersion: string;
+  catalogDigest: string;
+  executionImageDigest: string;
+  leaves: readonly CompiledOperationPolicyLeaf[];
+  bodyDigest: string;
+  createdAt: number;
+}
+
+export interface TargetAuthorityRequest {
+  v: 1;
+  requestId: string;
+  targetSubject: AuthorityGrantSubject;
+  operationPolicyDigest: string;
+  operationKey: string;
+  capability: string;
+  resource: ResourceScope;
+  tier: "gated" | "critical";
+  state: "pending" | "granted" | "denied" | "cancelled";
+  sourceUser: `user:${string}`;
+  createdAt: number;
+  settledAt?: number;
+  grantId?: string;
+}
+
 /**
  * A host-normalized evaluated-execution ceiling. It is an attenuation term,
  * never a grant or receiver allowlist. Relationship and transport facts are
@@ -81,13 +117,38 @@ export interface CodeLineageFact {
   externalKeys: readonly string[];
 }
 
-export interface SessionReviewedClosureFact {
-  subject: AuthorityGrantSubject;
-  closureDigest: string;
-  harness: { unit: string; ev: string; ref?: string };
+export type AgentExecutionMode = "interactive" | "mission" | "test";
+
+export interface ExecutionImageFact {
+  principal: `code:${string}`;
+  repoPath: string;
+  ref: `state:${string}`;
+  effectiveVersion: string;
+  executionDigest: string;
 }
 
-export type AgentExecutionMode = "interactive" | "mission" | "test";
+export type ExecutionAdmissionExecutor =
+  | {
+      kind: "agent-turn";
+      runtimeId: string;
+      entityId: string;
+      channelId: string;
+      turnId: string;
+    }
+  | {
+      kind: "eval";
+      runtimeId: string;
+      evalRunId: string;
+      authorityManifest: EvalAuthorityManifest;
+      eventSinkNonce?: string;
+    }
+  | {
+      kind: "method";
+      runtimeId: string;
+      invocationId: string;
+      service: string;
+      method: string;
+    };
 
 /**
  * A capability-name matcher for unattended test decisions. Exact is the
@@ -153,10 +214,11 @@ export interface AgentExecutionTestPolicySpec {
  * approved mission, or test policy. It is relationship evidence, never a
  * capability token and never accepted from caller input.
  */
-export interface AgentExecutionSessionFact {
-  v: 1;
+export interface ExecutionAdmissionFact {
+  v: 2;
   authoritySessionId: string;
   authoritySessionVersion: number;
+  admissionKey: string;
   mode: AgentExecutionMode;
   ownerUser: `user:${string}`;
   workspaceId: string;
@@ -169,26 +231,16 @@ export interface AgentExecutionSessionFact {
   taskRef: string;
   /** Opaque host-minted identity shared by the verified runtime task closure. */
   taskAuthority?: TaskGrantPrincipal;
-  harness: {
-    /** `code:<repoPath>@<effectiveVersion>` — the reviewed source identity. */
-    principal: `code:${string}`;
-    repoPath: string;
-    effectiveVersion: string;
-    /**
-     * The artifact the recipe produced for this run. Authenticated in its own
-     * right and used for activation checks and audit; it is deliberately not
-     * part of the principal, because authorization asks which unit this is and
-     * not which build of it is loaded.
-     */
-    executionDigest: string;
+  executionImage: ExecutionImageFact;
+  executor: ExecutionAdmissionExecutor;
+  operationPolicyDigest?: string;
+  mission?: {
+    subject: `mission:${string}@${string}`;
+    missionId: string;
+    revision: number;
+    revisionDigest: string;
   };
-  eval: {
-    runtimeId: string;
-    runId: string;
-    authorityManifest: EvalAuthorityManifest;
-    /** Host-minted producer credential for the canonical live event sink. */
-    eventSinkNonce?: string;
-  };
+  parent: { authoritySessionId: string; nonce: string } | null;
   /** Present only when verified attached transport created this eval run. */
   attachedHost?: AttachedHostExecutionFact;
   causalParent: {
@@ -196,7 +248,6 @@ export interface AgentExecutionSessionFact {
     head: string;
     invocationId: string;
   } | null;
-  reviewedClosure?: SessionReviewedClosureFact;
   testPolicy?: AgentExecutionTestPolicy;
   issuedAt: number;
   expiresAt: number;
@@ -222,7 +273,7 @@ export interface AuthorizationContext {
   initiatorChain: readonly string[];
   ownerChain: readonly `user:${string}`[];
   agentBinding: { entity: EntityPrincipal; contextId: string; channelId: string } | null;
-  executionSession: AgentExecutionSessionFact | null;
+  executionSession: ExecutionAdmissionFact | null;
   /**
    * Host-attested unattended-test policy for the live execution context.
    *
@@ -239,7 +290,6 @@ export interface AuthorizationContext {
     audience: string;
     version: string;
     expiresAt: number;
-    reviewedClosure?: SessionReviewedClosureFact;
     mediatingHarness?: `code:${string}`;
     taskRef?: string;
     /** Host-attested task closure; never accepted from invocation payloads. */
@@ -256,7 +306,7 @@ export interface AuthorityGrantConstraints {
    * omit this so definition-stable provider rebuilds do not lapse authority.
    */
   providerExecutionDigest?: string;
-  reviewedClosureSubject?: AuthorityGrantSubject;
+  missionSubject?: `mission:${string}@${string}`;
   envelopeId?: string;
   lineageAtConsent?: readonly string[];
   taskRef?: string;
@@ -324,7 +374,7 @@ export interface AuthorizationDecision {
   code:
     | "allowed"
     | "approval-required"
-    | "mission-change-required"
+    | "operation-policy-denied"
     | "user-denied"
     | "receiver-rejected"
     | "fixed-code-not-requested"
@@ -369,7 +419,7 @@ export interface InvocationSnapshot {
   agentScopeEligible?: boolean;
   executionMode?: AgentExecutionMode;
   testPolicyId?: string;
-  reviewedClosureSubject: AuthorityGrantSubject | "-";
+  missionSubject: `mission:${string}@${string}` | "-";
   snippetDigest: string;
   codeLineage: { class: CodeLineageFact["class"]; chain: readonly string[] };
   contextLineage: ContextIntegrityFact | null;
@@ -419,7 +469,7 @@ export type AuthorityFailureReasonCode =
 
 export type AuthorityRemediationKind =
   | "request-user-approval"
-  | "request-mission-change"
+  | "edit-mission"
   | "update-installed-code-manifest"
   | "declare-rpc-receiver"
   | "use-admitted-principal"

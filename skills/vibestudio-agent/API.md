@@ -528,7 +528,6 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `shellApproval.resolve` | Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request. |
-| `shellApproval.resolveMissionReview` | Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved. |
 | `shellApproval.resolveInstallReview` | Accept a pending install review, allowing the selected parts and permissions now, or cancel it. |
 | `shellApproval.resolveBootstrap` | Convergently resolve a snapshot of pending startup-app approvals. IDs already settled by an earlier partial attempt are reported as not pending so the remaining decisions can continue. |
 | `shellApproval.submitClientConfig` | Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request. |

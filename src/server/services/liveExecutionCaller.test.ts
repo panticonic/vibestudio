@@ -1,4 +1,4 @@
-import type { AgentExecutionSessionFact, AgentExecutionTestPolicy } from "@vibestudio/rpc";
+import type { ExecutionAdmissionFact, AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { describe, expect, it } from "vitest";
@@ -55,21 +55,24 @@ const activeEntity = {
 } satisfies EntityRecord;
 
 const executionSession = {
-  v: 1,
+  v: 2,
   authoritySessionId: "authority-session-1",
   authoritySessionVersion: 1,
+  admissionKey: "test:run-1",
   workspaceId: "workspace-1",
   contextId: activeEntity.contextId,
   mode: "test",
-  harness: {
+  executionImage: {
     principal: "code:workers/system-test-runner@runner-ev",
     repoPath: "workers/system-test-runner",
+    ref: "state:runner",
     effectiveVersion: "runner-ev",
     executionDigest: "digest",
   },
-  eval: {
+  executor: {
+    kind: "eval",
     runtimeId: registered.runtime.id,
-    runId: "system-test-runner:run-1",
+    evalRunId: "system-test-runner:run-1",
     authorityManifest: {
       mode: "adaptive",
       effects: "read-write",
@@ -78,6 +81,7 @@ const executionSession = {
       digest: "0".repeat(64),
     },
   },
+  parent: null,
   agentBinding: {
     entityId: activeEntity.agentBinding.entityId,
     channelId: activeEntity.agentBinding.channelId,
@@ -91,7 +95,7 @@ const executionSession = {
   issuedAt: 1,
   expiresAt: Number.MAX_SAFE_INTEGER,
   nonce: "nonce-1",
-} satisfies AgentExecutionSessionFact;
+} satisfies ExecutionAdmissionFact;
 
 describe("live execution caller resolution", () => {
   it("joins a registered image to the current agent session and case policy", () => {
@@ -108,8 +112,8 @@ describe("live execution caller resolution", () => {
       code: {
         callerId: registered.runtime.id,
         callerKind: "do",
-        repoPath: executionSession.harness.repoPath,
-        effectiveVersion: executionSession.harness.effectiveVersion,
+        repoPath: executionSession.executionImage.repoPath,
+        effectiveVersion: executionSession.executionImage.effectiveVersion,
         executionDigest: "digest",
         requested: [],
       },
@@ -125,7 +129,10 @@ describe("live execution caller resolution", () => {
         runtime: registered.runtime,
         executionSession: {
           ...executionSession,
-          harness: { ...executionSession.harness, principal: "code:workers/other@runner-ev" },
+          executionImage: {
+            ...executionSession.executionImage,
+            principal: "code:workers/other@runner-ev",
+          },
         },
         residentCode: registered.code,
       })

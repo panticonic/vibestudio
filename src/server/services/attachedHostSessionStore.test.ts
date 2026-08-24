@@ -65,7 +65,7 @@ function challengeRecord(): AttachedHostChallengeRecord {
         preparedStateDigest: "b".repeat(64),
         callerPrincipal: "session:one",
         sessionId: "authority-session",
-        reviewedClosureSubject: "-",
+        missionSubject: "-",
         snippetDigest: "c".repeat(64),
         codeLineage: { class: "internal", chain: [] },
         contextLineage: null,

@@ -48,21 +48,23 @@ export function isAttestedSystemTestHarness(
   isConduitBlessed: (identity: NonNullable<VerifiedCaller["code"]>) => boolean
 ): boolean {
   const executionSession = caller.executionSession;
-  const outerRunId = executionSession?.eval.runId;
+  const executor = executionSession?.executor;
+  const outerRunId = executor?.kind === "eval" ? executor.evalRunId : null;
   const code = caller.code;
-  const harness = executionSession?.harness;
+  const executionImage = executionSession?.executionImage;
   return Boolean(
     caller.runtime.kind === "do" &&
     caller.runtime.id.startsWith("do:vibestudio/internal:EvalDO:") &&
-    executionSession?.eval.runtimeId === caller.runtime.id &&
+    executor?.kind === "eval" &&
+    executor.runtimeId === caller.runtime.id &&
     outerRunId?.startsWith("system-test-runner:") &&
     code?.repoPath === "workers/system-test-runner" &&
     code.executionDigest &&
     isConduitBlessed(code) &&
-    harness?.repoPath === code.repoPath &&
-    harness.effectiveVersion === code.effectiveVersion &&
-    harness.executionDigest === code.executionDigest &&
-    harness.principal === codePrincipal(code)
+    executionImage?.repoPath === code.repoPath &&
+    executionImage.effectiveVersion === code.effectiveVersion &&
+    executionImage.executionDigest === code.executionDigest &&
+    executionImage.principal === codePrincipal(code)
   );
 }
 
@@ -76,7 +78,6 @@ export interface AuthorityFacts {
   capability: string;
   resourceKey: string;
   tier?: "open" | "gated" | "critical";
-  reviewedClosure?: import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   incarnationId?: string | null;
   grantStore?: CapabilityGrantStore;
@@ -130,18 +131,6 @@ export function testPolicyAllowsGatedInvocation(
   );
 }
 
-/** Exact mission-to-runtime join; both sides use canonical repo identity + EV. */
-export function callerMatchesReviewedClosureHarness(
-  caller: VerifiedCaller,
-  closure: import("@vibestudio/rpc").SessionReviewedClosureFact
-): boolean {
-  return Boolean(
-    caller.code?.executionDigest &&
-    caller.code.repoPath === closure.harness.unit &&
-    caller.code.effectiveVersion === closure.harness.ev
-  );
-}
-
 /**
  * Constructs the one authenticated authority vocabulary from verified host
  * records. R3A baseline grants are explicit, exact-resource grants that retain
@@ -189,7 +178,7 @@ export function authorizeVerifiedCaller(
   if (executionSession) {
     const mismatches = [
       executionSession.workspaceId !== facts.workspaceId ? "workspace" : null,
-      executionSession.eval.runtimeId !== caller.runtime.id ? "runtime" : null,
+      executionSession.executor.runtimeId !== caller.runtime.id ? "runtime" : null,
       executionSession.agentBinding
         ? executionSession.contextId !== caller.agentBinding?.contextId
           ? "context"
@@ -201,17 +190,12 @@ export function authorizeVerifiedCaller(
         : caller.agentBinding !== undefined
           ? "unexpected-agent-binding"
           : null,
-      executionSession.harness.principal !== code ? "harness" : null,
-      executionSession.mode === "mission" &&
-      (!facts.reviewedClosure ||
-        executionSession.reviewedClosure?.subject !== facts.reviewedClosure.subject ||
-        executionSession.reviewedClosure.closureDigest !== facts.reviewedClosure.closureDigest)
-        ? "reviewed-closure"
-        : null,
+      executionSession.executionImage.principal !== code ? "execution-image" : null,
+      executionSession.mode === "mission" && !executionSession.mission ? "mission" : null,
     ].filter((mismatch): mismatch is string => mismatch !== null);
     if (mismatches.length > 0) {
-      const harnessDetail = mismatches.includes("harness")
-        ? `; expected harness ${executionSession.harness.principal}, resolved ${
+      const harnessDetail = mismatches.includes("execution-image")
+        ? `; expected execution image ${executionSession.executionImage.principal}, resolved ${
             code ?? "no code principal"
           }`
         : "";
@@ -272,8 +256,7 @@ export function authorizeVerifiedCaller(
       // and single-use nonce, while receivers reject after they can no longer
       // prove the nonce unused.
       expiresAt: now + 60_000,
-      ...(facts.reviewedClosure ? { reviewedClosure: facts.reviewedClosure } : {}),
-      ...(executionSession ? { mediatingHarness: executionSession.harness.principal } : {}),
+      ...(executionSession ? { mediatingHarness: executionSession.executionImage.principal } : {}),
       ...(executionSession ? { taskRef: executionSession.taskRef } : {}),
       ...(taskAuthority ? { taskAuthority } : {}),
     },
@@ -347,9 +330,7 @@ export function authorizeVerifiedCaller(
     if (facts.tier === "critical" && !subjects.includes(sessionPrincipal)) {
       subjects.push(sessionPrincipal);
     }
-    if (context.session.reviewedClosure) {
-      subjects.push(context.session.reviewedClosure.subject);
-    }
+    if (executionSession?.mission) subjects.push(executionSession.mission.subject);
     if (context.session.taskAuthority) subjects.push(context.session.taskAuthority);
     grants.push(...facts.grantStore.grantsForSubjects(subjects, facts.capability, now));
   }
@@ -404,7 +385,6 @@ export function attestDirectRpc(input: {
   sessionId: string;
   incarnationId?: string | null;
   grantStore?: CapabilityGrantStore;
-  reviewedClosure?: import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   /** Live workspace service capability selected from the exact declarations. */
   capability?: string;
@@ -443,7 +423,6 @@ export function attestDirectRpc(input: {
     resourceKey,
     incarnationId: input.incarnationId,
     grantStore: input.grantStore,
-    reviewedClosure: input.reviewedClosure,
     contextIntegrity: input.contextIntegrity,
     tier: input.tier ?? productPolicy?.tier,
     now,

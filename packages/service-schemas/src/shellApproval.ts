@@ -9,7 +9,6 @@ import type {
   ApprovalRequesterIdentity,
   DiffReviewEntry,
   PendingApproval,
-  PendingMissionReviewApproval,
   PendingUnitInstallReviewApproval,
 } from "@vibestudio/shared/approvals";
 import type {
@@ -26,12 +25,10 @@ import {
   fixedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
-import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/promptRegistry";
 import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
 import { authorityRowSchema } from "./authority.js";
 export { authorityRowSchema } from "./authority.js";
-import { missionCharterSchema } from "./missions.js";
 
 export const shellApprovalValuesSchema = z
   .record(z.string().min(1).max(128), z.string().max(4096))
@@ -484,48 +481,6 @@ export const installReviewResolutionSchema = z
   })
   .strict() satisfies z.ZodType<InstallReviewResolution>;
 
-export const pendingMissionReviewApprovalSchema = z
-  .object({
-    ...pendingApprovalBaseShape,
-    kind: z.literal("mission-review"),
-    missionId: z.string().min(1),
-    revision: z.number().int().positive(),
-    closureDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-    reviewKind: z.enum(["draft", "revision", "out-of-charter"]),
-    title: z.string().min(1),
-    taskSummary: z.string().min(1),
-    triggerSummary: z.string().min(1),
-    authority: z
-      .object({
-        rows: z.array(authorityRowSchema),
-        diff: authorityRowDiffSchema,
-      })
-      .strict(),
-    toolkitDomains: z.array(
-      z.enum(
-        Object.keys(AUTHORITY_DOMAINS) as [
-          keyof typeof AUTHORITY_DOMAINS,
-          ...(keyof typeof AUTHORITY_DOMAINS)[],
-        ]
-      )
-    ),
-    networkSummary: z.string().min(1),
-    lineageSummary: z.string().min(1),
-    charter: missionCharterSchema,
-    charterChanges: z.array(
-      z
-        .object({
-          field: z.enum(["task", "schedule", "toolkit", "network", "data-flow", "model"]),
-          before: z.string().optional(),
-          after: z.string(),
-          widening: z.boolean(),
-        })
-        .strict()
-    ),
-    blockedAt: z.number().optional(),
-  })
-  .strict() satisfies z.ZodType<PendingMissionReviewApproval>;
-
 const audienceSchema = z
   .object({ url: z.string(), match: z.enum(["origin", "path-prefix", "exact"]) })
   .strict();
@@ -634,7 +589,7 @@ export const invocationSnapshotSchema = z
     lineageClasses: z.array(z.string()).readonly().optional(),
     irreversible: z.boolean().optional(),
     agentScopeEligible: z.boolean().optional(),
-    reviewedClosureSubject: z.string() as z.ZodType<InvocationSnapshot["reviewedClosureSubject"]>,
+    missionSubject: z.string() as z.ZodType<InvocationSnapshot["missionSubject"]>,
     snippetDigest: z.string(),
     codeLineage: z
       .object({
@@ -789,7 +744,6 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   pendingUnitInstallReviewApprovalSchema,
-  pendingMissionReviewApprovalSchema,
   z
     .object({
       ...pendingApprovalBaseShape,
@@ -935,45 +889,6 @@ export const shellApprovalMethods = defineServiceMethods({
     authority: approvalDecisionAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", "once"] }],
-  },
-  resolveMissionReview: {
-    capability: "approvals.decide",
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "shellApproval.read",
-      rationale:
-        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
-    },
-    presentation: {
-      title: "Respond to an automation plan",
-      action: "respond to an automation plan",
-      description: "Review and approve or dismiss a queued automation plan.",
-      group: "approvals",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-    description:
-      "Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved.",
-    args: z.tuple([
-      z.string(),
-      z.discriminatedUnion("decision", [
-        z
-          .object({
-            decision: z.literal("approve"),
-            selectedAuthorityKeys: z.array(z.string().min(1)),
-          })
-          .strict(),
-        z.object({ decision: z.literal("dismiss") }).strict(),
-      ]),
-    ]),
-    returns: z.void(),
-    authority: approvalDecisionAuthority,
-    access: RESOLVE_ACCESS,
-    examples: [{ args: ["approval-123", { decision: "dismiss" }] }],
   },
   /**
    * Accept an install review with exactly what the user selected.

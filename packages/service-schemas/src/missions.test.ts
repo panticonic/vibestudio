@@ -6,90 +6,79 @@ import {
   missionsMethods,
 } from "./missions.js";
 
-describe("missions service agent ergonomics", () => {
-  it("exposes immediate launch and lifecycle control to sessions", () => {
-    for (const method of ["edit", "runNow", "pause", "resume", "retire"] as const) {
-      expect(missionsMethods[method].agentFacing).toBe(true);
-      expect(missionsMethods[method].tier.session).toBe("family");
-      expect(missionsMethods[method].authority?.principals).toContain("session");
-    }
-    expect(missionsMethods.launch.agentFacing).toBe(false);
+const hex = "a".repeat(64);
+const image = {
+  source: "workers/rollout",
+  ref: `state:${"b".repeat(64)}`,
+  effectiveVersion: hex,
+  className: "RolloutDO",
+  objectKey: "primary",
+};
+
+describe("missions v2 contract", () => {
+  it("launches immediately and has no review endpoint", () => {
     expect(missionsMethods.launch.tier.tier).toBe("open");
     expect(missionsMethods).not.toHaveProperty("requestReview");
+    expect(missionsMethods).not.toHaveProperty("pauseForAuthorityDenial");
   });
 
-  it("provides one addressed read for a transcript tick inspector", () => {
-    expect(missionsMethods.getRun.agentFacing).not.toBe(false);
-    expect(missionsMethods.getRun.tier.session).toBe("family");
-    expect(missionsMethods.getRun.description).toContain("exact automation run");
-  });
-
-  it("keeps historical pre-ref definitions readable for repair", () => {
-    expect(
-      missionCharterSchema.parse({
-        summary: "Historical timer",
-        harness: { unit: "workers/agent", ev: "a".repeat(64) },
-        execution: {
-          kind: "method",
-          target: { source: "workers/agent", className: "Agent", objectKey: "old" },
-          method: "tick",
-          args: [],
-        },
-        trigger: { kind: "manual" },
-      }).harness.ref
-    ).toBeUndefined();
-  });
-
-  it("carries calendar, finite-run, and completion state through the wire contract", () => {
+  it("requires an immutable image and semantic operations", () => {
     const charter = missionCharterSchema.parse({
       summary: "Watch the rollout",
-      harness: { unit: "workers/rollout", ev: "a".repeat(64), ref: `state:${"b".repeat(64)}` },
       execution: {
         kind: "method",
-        target: { source: "workers/rollout", className: "RolloutDO", objectKey: "primary" },
+        image,
         method: "check",
         args: [],
+        operations: [{ service: "workers/rollout", method: "check", args: [], use: "action" }],
       },
       trigger: {
         kind: "cron",
         expression: "5 5 * * THU",
         timezone: "America/New_York",
-        untilAt: 1_800_000_000_000,
         maxRuns: 12,
       },
     });
-    expect(charter.trigger).toMatchObject({ kind: "cron", maxRuns: 12 });
+    const operationPolicy = {
+      schemaVersion: 1,
+      digest: hex,
+      artifactRef: `policy:${hex}`,
+      compilerVersion: "1",
+      catalogDigest: hex,
+    };
     expect(
       missionRecordSchema.parse({
-        missionId: "mission-rollout",
+        schemaVersion: 2,
+        missionId: "rollout",
         name: "Rollout watcher",
         revision: 1,
         charter,
-        owner: { userId: "alice", deviceId: "panel:alice" },
-        state: "completed",
-        revisionDigest: "b".repeat(64),
+        operationPolicy,
+        owner: { userId: "alice" },
+        state: "active",
+        revisionDigest: hex,
+        authority: { requestIds: [], grantIds: [], denialIds: [] },
         createdAt: 1,
-        updatedAt: 2,
-        runCount: 3,
-        completedAt: 3,
-        completionReason: "response",
-        completionResponse: "The rollout is complete.",
-        permissions: [],
-        standingRestrictions: [],
-      })
-    ).toMatchObject({ state: "completed", runCount: 3, completionReason: "response" });
+        updatedAt: 1,
+        activatedAt: 1,
+        runCount: 0,
+      }).state
+    ).toBe("active");
     expect(
       missionRunRecordSchema.parse({
-        runId: "run-3",
-        missionId: "mission-rollout",
-        closureDigest: "c".repeat(64),
+        runId: "run-1",
+        missionId: "rollout",
+        missionSubject: `mission:rollout@${hex}`,
         revision: 1,
         trigger: "scheduled",
-        status: "succeeded",
-        startedAt: 2,
-        runNumber: 3,
-        completionResponse: "The rollout is complete.",
-      })
-    ).toMatchObject({ revision: 1, runNumber: 3, completionResponse: "The rollout is complete." });
+        phase: "terminal",
+        outcome: "succeeded",
+        startedAt: 1,
+      }).outcome
+    ).toBe("succeeded");
+  });
+
+  it("pause changes scheduling state without changing authority", () => {
+    expect(missionsMethods.pause.tier.rationale).toContain("without changing standing authority");
   });
 });

@@ -2947,9 +2947,10 @@ describe("RpcServer relay behavior", () => {
       null,
       { userId: "user-1", handle: "user1" },
       {
-        v: 1,
+        v: 2,
         authoritySessionId: "authority:test-run",
         authoritySessionVersion: 1,
+        admissionKey: "test:doctor",
         mode: "test",
         ownerUser: "user:user-1",
         workspaceId: "test-workspace",
@@ -2957,15 +2958,17 @@ describe("RpcServer relay behavior", () => {
         agentBinding: null,
         taskRef: "eval:test-run",
         taskAuthority: "task:eval-test-run",
-        harness: {
+        executionImage: {
           principal: `code:workers/system-test-runner@ev-runner`,
           repoPath: "workers/system-test-runner",
+          ref: "state:runner",
           effectiveVersion: "ev-runner",
           executionDigest: digest,
         },
-        eval: {
+        executor: {
+          kind: "eval",
           runtimeId,
-          runId: "doctor",
+          evalRunId: "doctor",
           authorityManifest: {
             mode: "adaptive",
             effects: "read-write",
@@ -2974,6 +2977,7 @@ describe("RpcServer relay behavior", () => {
             digest: "0".repeat(64),
           },
         },
+        parent: null,
         causalParent: null,
         testPolicy: {
           policyId: "test:doctor:test-run",
@@ -3167,9 +3171,10 @@ describe("RpcServer relay behavior", () => {
     const runtimeId = "do:vibestudio/internal:EvalDO:session-boundary";
     const nonce = "eval-session-nonce-1234";
     const session = {
-      v: 1,
+      v: 2,
       authoritySessionId: "authority:session-boundary",
       authoritySessionVersion: 1,
+      admissionKey: "eval:session-boundary",
       mode: "interactive",
       ownerUser: "user:user-1",
       workspaceId: "test-workspace",
@@ -3177,15 +3182,17 @@ describe("RpcServer relay behavior", () => {
       agentBinding: null,
       taskRef: "eval:session-boundary",
       taskAuthority: "task:eval-session-boundary",
-      harness: {
+      executionImage: {
         principal: `code:workers/system-test-runner@ev-runner`,
         repoPath: "workers/system-test-runner",
+        ref: "state:runner",
         effectiveVersion: "ev-runner",
         executionDigest: "b".repeat(64),
       },
-      eval: {
+      executor: {
+        kind: "eval",
         runtimeId,
-        runId: "run:session-boundary",
+        evalRunId: "run:session-boundary",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",
@@ -3194,11 +3201,12 @@ describe("RpcServer relay behavior", () => {
           digest: "0".repeat(64),
         },
       },
+      parent: null,
       causalParent: null,
       issuedAt: Date.now(),
       expiresAt: Date.now() + 60_000,
       nonce,
-    } satisfies import("@vibestudio/rpc").AgentExecutionSessionFact;
+    } satisfies import("@vibestudio/rpc").ExecutionAdmissionFact;
     const executionSessionForRuntime = vi.fn(
       (candidateRuntimeId: string, candidateNonce: string) =>
         candidateRuntimeId === runtimeId && candidateNonce === nonce ? session : null
@@ -3624,19 +3632,12 @@ describe("RpcServer relay behavior", () => {
   });
 
   it("keeps an agent binding as a relationship fact rather than inventing a session origin", async () => {
-    const mission = {
-      subject: "mission:mission-local-model@closure-1" as const,
-      closureDigest: "closure-1",
-      harness: { unit: "workers/agent-worker", ev: "ev-agent", ref: `state:${"a".repeat(64)}` },
-    };
     const contextIntegrity = {
       class: "external" as const,
       latchEpoch: 3,
       externalKeys: ["web:models.example"],
     };
     const { server, entityCache } = createServer({
-      reviewedClosureFactForSession: (sessionId) =>
-        sessionId === "channel-stable" ? mission : null,
       contextIntegrityFactForSession: (sessionId) => {
         expect(sessionId).toBe("channel-stable");
         return contextIntegrity;
@@ -3674,7 +3675,7 @@ describe("RpcServer relay behavior", () => {
     const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
     expect((relayed.delivery.caller as AttestedCaller).authorization?.context).toMatchObject({
       authorizingOrigin: { kind: "user", principal: "user:user-1" },
-      session: { id: "channel-stable", reviewedClosure: mission },
+      session: { id: "channel-stable" },
       contextIntegrity,
     });
   });

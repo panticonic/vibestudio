@@ -248,9 +248,6 @@ export function createEvalService(deps: {
   workspaceId: string;
   executionSessions: AgentExecutionSessionRegistry;
   taskAuthorities: TaskAuthorityRegistry;
-  reviewedClosureFactForSession?: (
-    sessionId: string
-  ) => import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
   /**
    * Host-wide background-work registry (idle-exit monitor). Every admitted run
@@ -693,8 +690,8 @@ export function createEvalService(deps: {
         "access"
       );
     }
-    const sessionId = agentBinding?.channelId ?? evalRuntimeId;
-    const mission = deps.reviewedClosureFactForSession?.(sessionId) ?? null;
+    const parentAdmission = ctx.caller.executionSession ?? null;
+    const mission = parentAdmission?.mission ?? null;
     const inheritedTestPolicy = deps.executionSessions.testPolicyForContext(owner.contextId);
     const testPolicy =
       !mission &&
@@ -723,18 +720,28 @@ export function createEvalService(deps: {
           : null,
         taskRef,
         taskAuthority,
-        harness: {
+        admissionKey: `eval:${evalRuntimeId}:${runId}`,
+        executionImage: {
           principal: codePrincipal(harness),
           repoPath: harness.repoPath,
+          ref: `state:${harness.executionDigest}`,
           effectiveVersion: harness.effectiveVersion,
           executionDigest: harness.executionDigest,
         },
-        eval: {
+        executor: {
+          kind: "eval",
           runtimeId: evalRuntimeId,
-          runId,
+          evalRunId: runId,
           authorityManifest: normalizeAuthorityManifest(runArgs, ctx.caller.code?.requested ?? []),
           eventSinkNonce,
         },
+        ...(mission ? { mission } : {}),
+        ...(parentAdmission?.operationPolicyDigest
+          ? { operationPolicyDigest: parentAdmission.operationPolicyDigest }
+          : {}),
+        parent: parentAdmission
+          ? { authoritySessionId: parentAdmission.authoritySessionId, nonce: parentAdmission.nonce }
+          : null,
         ...(ctx.attachedHost ? { attachedHost: ctx.attachedHost } : {}),
         causalParent: ctx.causalParent
           ? {
@@ -743,20 +750,20 @@ export function createEvalService(deps: {
               invocationId: ctx.causalParent.invocationId,
             }
           : null,
-        ...(mission ? { mission } : {}),
         ...(testPolicy ? { testPolicy } : {}),
       },
       ctx.signal
     );
     deps.taskAuthorities.bindExecution(executionSession);
-    if (!executionSession.eval.eventSinkNonce) {
+    const evalExecutor = executionSession.executor;
+    if (evalExecutor.kind !== "eval" || !evalExecutor.eventSinkNonce) {
       deps.executionSessions.discard(evalRuntimeId, runId);
       throw new Error("Evaluated execution admission has no live event sink");
     }
     const activityId =
       deps.activity && deps.eventSinks ? `eval:${evalRuntimeId}:${runId}` : undefined;
     deps.eventSinks?.register({
-      nonce: executionSession.eval.eventSinkNonce,
+      nonce: evalExecutor.eventSinkNonce,
       runtimeId: evalRuntimeId,
       runId,
       contextId: owner.contextId,
@@ -775,7 +782,7 @@ export function createEvalService(deps: {
       deps.eventSinks?.close(eventSinkNonce);
       if (activityId) deps.activity?.end(activityId);
     };
-    const authorityManifestDigest = executionSession.eval.authorityManifest.digest;
+    const authorityManifestDigest = evalExecutor.authorityManifest.digest;
     const runDigest = sha256Canonical({
       runId,
       ownerRuntimeId: ownerId,
@@ -831,15 +838,15 @@ export function createEvalService(deps: {
           "service"
         );
       }
-      const principalDigest = executionSession.harness.executionDigest;
+      const principalDigest = executionSession.executionImage.executionDigest;
       const prospectiveCtx: ServiceContext = {
         caller: {
           runtime: { id: evalRuntimeId, kind: "do" },
           code: {
             callerId: evalRuntimeId,
             callerKind: "do",
-            repoPath: executionSession.harness.repoPath,
-            effectiveVersion: executionSession.harness.effectiveVersion,
+            repoPath: executionSession.executionImage.repoPath,
+            effectiveVersion: executionSession.executionImage.effectiveVersion,
             executionDigest: principalDigest,
             requested: ownerHarness?.requested ?? [],
           },
@@ -848,9 +855,7 @@ export function createEvalService(deps: {
           ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
         },
         ...(ctx.causalParent ? { causalParent: ctx.causalParent } : {}),
-        ...(executionSession.eval.authorityManifest.effects === "read-only"
-          ? { readOnly: true }
-          : {}),
+        ...(evalExecutor.authorityManifest.effects === "read-only" ? { readOnly: true } : {}),
       };
       try {
         for (const operation of normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ??
@@ -893,10 +898,10 @@ export function createEvalService(deps: {
         agentInvocationId: ctx.causalParent?.invocationId,
         parent,
         timeoutMs,
-        readOnly: executionSession.eval.authorityManifest.effects === "read-only",
+        readOnly: evalExecutor.authorityManifest.effects === "read-only",
         authorityManifestDigest,
         intentDigest: runDigest,
-        eventSinkNonce: executionSession.eval.eventSinkNonce,
+        eventSinkNonce: evalExecutor.eventSinkNonce,
         resultReceiverRef: runArgs.resultReceiver ? ownerId : undefined,
         ...chatBinding,
       },
@@ -904,7 +909,7 @@ export function createEvalService(deps: {
       channelId: isAgentDo ? agentBinding.channelId : undefined,
       runDigest,
       authorityManifestDigest,
-      eventSinkNonce: executionSession.eval.eventSinkNonce,
+      eventSinkNonce: evalExecutor.eventSinkNonce,
       activityId,
     };
   }

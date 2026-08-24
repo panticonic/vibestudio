@@ -1,4 +1,4 @@
-import type { AgentExecutionSessionFact, AgentExecutionTestPolicy } from "@vibestudio/rpc";
+import type { ExecutionAdmissionFact, AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import type { VerifiedCaller, VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { codePrincipalMatches } from "@vibestudio/shared/authority/codePrincipal";
@@ -10,17 +10,22 @@ import { codePrincipalMatches } from "@vibestudio/shared/authority/codePrincipal
  */
 export function executionHarnessCodeIdentity(input: {
   runtime: VerifiedCaller["runtime"];
-  executionSession: AgentExecutionSessionFact;
+  executionSession: ExecutionAdmissionFact;
   residentCode?: VerifiedCodeIdentity;
 }): VerifiedCodeIdentity {
   const { runtime, executionSession, residentCode } = input;
   if (runtime.kind !== "do") {
     throw new Error(`Evaluated execution runtime must be a Durable Object, got ${runtime.kind}`);
   }
-  if (!codePrincipalMatches(executionSession.harness.principal, executionSession.harness)) {
+  if (
+    !codePrincipalMatches(
+      executionSession.executionImage.principal,
+      executionSession.executionImage
+    )
+  ) {
     throw new Error("Evaluated execution harness principal does not match its source identity");
   }
-  const executionDigest = executionSession.harness.executionDigest;
+  const executionDigest = executionSession.executionImage.executionDigest;
   if (!executionDigest) {
     throw new Error("Evaluated execution harness has no execution digest");
   }
@@ -29,13 +34,13 @@ export function executionHarnessCodeIdentity(input: {
   const residentIsHarness = Boolean(
     residentCode?.executionDigest === executionDigest &&
     residentCode &&
-    codePrincipalMatches(executionSession.harness.principal, residentCode)
+    codePrincipalMatches(executionSession.executionImage.principal, residentCode)
   );
   return {
     callerId: runtime.id,
     callerKind: "do",
-    repoPath: executionSession.harness.repoPath,
-    effectiveVersion: executionSession.harness.effectiveVersion,
+    repoPath: executionSession.executionImage.repoPath,
+    effectiveVersion: executionSession.executionImage.effectiveVersion,
     executionDigest,
     requested: residentIsHarness ? (residentCode?.requested ?? []) : [],
     ...(residentCode?.evalOrigin ? { evalOrigin: residentCode.evalOrigin } : {}),
@@ -81,7 +86,7 @@ export function refineExecutionTestPolicy(
 export function resolveLiveExecutionCaller(input: {
   registered: VerifiedCaller;
   activeEntity: EntityRecord | null;
-  executionSession: AgentExecutionSessionFact | null;
+  executionSession: ExecutionAdmissionFact | null;
   contextTestPolicy: AgentExecutionTestPolicy | null;
   taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
   /**
@@ -102,7 +107,8 @@ export function resolveLiveExecutionCaller(input: {
 
   if (
     executionSession &&
-    (executionSession.eval.runtimeId !== registered.runtime.id ||
+    (executionSession.executor.kind !== "eval" ||
+      executionSession.executor.runtimeId !== registered.runtime.id ||
       executionSession.contextId !== activeEntity?.contextId ||
       executionSession.agentBinding?.entityId !== agentBinding?.entityId ||
       executionSession.agentBinding?.channelId !== agentBinding?.channelId)

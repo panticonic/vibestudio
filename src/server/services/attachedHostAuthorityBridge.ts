@@ -161,13 +161,6 @@ export interface OrdinaryAuthorityAcquirer {
     resource: ResourceScope;
   }): number;
   invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
-  proposeReviewedClosureRevision?(input: {
-    snapshot: InvocationSnapshot;
-    tier: "gated" | "critical";
-    renderedAction: string;
-    resource: ResourceScope;
-    presentation?: AuthorityChallengePresentation;
-  }): void | Promise<void>;
 }
 
 /** One dispatcher adapter: local calls retain the normal coordinator while
@@ -193,17 +186,6 @@ export function attachedHostAwareAuthorityAcquirer(
       : {}),
     invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
       ordinary.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
-    ...(ordinary.proposeReviewedClosureRevision
-      ? {
-          proposeReviewedClosureRevision: (input: {
-            snapshot: InvocationSnapshot;
-            tier: "gated" | "critical";
-            renderedAction: string;
-            resource: ResourceScope;
-            presentation?: AuthorityChallengePresentation;
-          }) => ordinary.proposeReviewedClosureRevision!(input),
-        }
-      : {}),
   };
 }
 

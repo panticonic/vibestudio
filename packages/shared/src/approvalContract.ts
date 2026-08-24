@@ -50,7 +50,6 @@ export type PushApprovalDataPayload = {
     | "credential"
     | "capability"
     | "unit-install-review"
-    | "mission-review"
     | "client-config"
     | "credential-input"
     | "secret-input"

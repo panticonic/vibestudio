@@ -107,10 +107,11 @@ export function createEvalEventIngressService(deps: {
         if (
           !execution ||
           !authenticatedRoute ||
-          execution.eval.eventSinkNonce !== sinkNonce ||
-          execution.eval.runtimeId !== ctx.caller.runtime.id ||
-          execution.eval.runId !== runId ||
-          authenticatedRoute.runtimeId !== execution.eval.runtimeId ||
+          execution.executor.kind !== "eval" ||
+          execution.executor.eventSinkNonce !== sinkNonce ||
+          execution.executor.runtimeId !== ctx.caller.runtime.id ||
+          execution.executor.evalRunId !== runId ||
+          authenticatedRoute.runtimeId !== execution.executor.runtimeId ||
           authenticatedRoute.runId !== runId ||
           authenticatedRoute.contextId !== execution.contextId
         ) {

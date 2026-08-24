@@ -911,6 +911,10 @@ async function main() {
   const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
+  const { OperationPolicyStore } = await import("./services/operationPolicyStore.js");
+  const operationPolicyStore = new OperationPolicyStore({ statePath });
+  const { TargetAuthorityRequestStore } = await import("./services/targetAuthorityRequestStore.js");
+  const targetAuthorityRequests = new TargetAuthorityRequestStore({ statePath });
   const { UserlandResourceHandleStore } = await import("./services/userlandResourceHandleStore.js");
   const userlandResourceHandles = new UserlandResourceHandleStore({ statePath });
   const { AgentExecutionSessionRegistry } =
@@ -932,22 +936,8 @@ async function main() {
   const recordContextIngestionBatch = createContextIngestionBatchRecorder(contextIntegrityStore);
   const { ConduitBlessingStore } = await import("./services/conduitBlessingStore.js");
   const conduitBlessingStore = new ConduitBlessingStore({ statePath });
-  const {
-    authorizeVerifiedCaller,
-    callerMatchesReviewedClosureHarness,
-    isAttestedSystemTestHarness,
-    isBlessedSystemTestConduit,
-  } = await import("./services/authorityRuntime.js");
-  const { ReviewedClosureRegistry } = await import("./services/reviewedClosureRegistry.js");
-  const reviewedClosureRegistry = new ReviewedClosureRegistry({
-    statePath,
-    grantStore: capabilityGrantStore,
-    isHarnessBlessed: (identity) =>
-      conduitBlessingStore.isBlessed({
-        repoPath: identity.unit,
-        effectiveVersion: identity.ev,
-      }),
-  });
+  const { authorizeVerifiedCaller, isAttestedSystemTestHarness, isBlessedSystemTestConduit } =
+    await import("./services/authorityRuntime.js");
   // Exact root bootstrap may run while services are starting, before the
   // dispatcher can be marked fully initialized. Install the one compositional
   // resolver as soon as all of its
@@ -955,30 +945,25 @@ async function main() {
   // markInitialized() after every service has registered.
   dispatcher.setAuthorityResolver(
     ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
-      const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
+      const sessionId = caller.executionSession?.authoritySessionId ?? caller.runtime.id;
       const sessionOrigin = caller.executionSession !== undefined;
-      const reviewedClosure = reviewedClosureRegistry.factForSession(sessionId);
-      let reviewedClosureChangeRequired = false;
-      try {
-        reviewedClosureRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
-      } catch (error) {
-        if (
-          reviewedClosure &&
-          error instanceof Error &&
-          (error as NodeJS.ErrnoException).code === "EMISSIONSCOPE"
-        ) {
-          reviewedClosureChangeRequired = true;
-        } else {
-          throw error;
-        }
-      }
+      const operationPolicyDigest = caller.executionSession?.operationPolicyDigest;
+      const executor = caller.executionSession?.executor;
+      const admittedRootMethod =
+        executor?.kind === "method" &&
+        executor.runtimeId === caller.runtime.id &&
+        executor.service === service &&
+        executor.method === method;
+      const operationPolicyDenied =
+        operationPolicyDigest && !admittedRootMethod
+          ? !operationPolicyStore.permits(operationPolicyDigest, service, method, resourceKey)
+          : false;
       const conduitBlessed = Boolean(
         caller.code?.executionDigest &&
         conduitBlessingStore.isBlessed(caller.code) &&
         caller.executionSession &&
-        caller.executionSession.harness.executionDigest === caller.code.executionDigest &&
-        caller.executionSession.harness.principal === codePrincipal(caller.code) &&
-        (!reviewedClosure || callerMatchesReviewedClosureHarness(caller, reviewedClosure))
+        caller.executionSession.executionImage.executionDigest === caller.code.executionDigest &&
+        caller.executionSession.executionImage.principal === codePrincipal(caller.code)
       );
       return {
         ...authorizeVerifiedCaller(caller, {
@@ -990,7 +975,6 @@ async function main() {
           capability,
           resourceKey,
           tier,
-          reviewedClosure,
           contextIntegrity: joinContextIntegrity(
             sessionOrigin && caller.agentBinding
               ? contextIntegrityStore.effectiveFact({
@@ -1003,7 +987,7 @@ async function main() {
           ) ?? { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
           grantStore: capabilityGrantStore,
         }),
-        ...(reviewedClosureChangeRequired ? { reviewedClosureChangeRequired: true } : {}),
+        ...(operationPolicyDenied ? { operationPolicyDenied: true } : {}),
       };
     }
   );
@@ -1069,6 +1053,7 @@ async function main() {
   const acquisitionCoordinator = new AcquisitionCoordinator({
     approvalQueue,
     grantStore: capabilityGrantStore,
+    targetRequests: targetAuthorityRequests,
     notifyOwner: async (ownerRuntimeId, acquisitionId) => {
       const ref = parseDoTargetId(ownerRuntimeId);
       const doDispatch = resolvedDoDispatchForTitles;
@@ -1076,6 +1061,7 @@ async function main() {
       await doDispatch.dispatch(ref, "onAuthorityChanged", acquisitionId);
     },
   });
+  acquisitionCoordinator.resumeTargetRequests();
   const { UnitAdmissionStore } = await import("./services/unitAdmissionStore.js");
   // Where each unit's bytes came from. Constructed further down, once the
   // workspace VCS can be read; the admission store asks through this holder so
@@ -1350,8 +1336,10 @@ async function main() {
       });
     },
     assertMissionNetworkExposure: (caller, targetUrl) => {
-      const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
-      return reviewedClosureRegistry.assertNetworkExposure(sessionId, targetUrl.origin);
+      const policy = caller.executionSession?.operationPolicyDigest;
+      return policy
+        ? operationPolicyStore.permits(policy, "fetch", "request", targetUrl.origin)
+        : false;
     },
   });
   let panelRuntimeCoordinatorForCleanup:
@@ -2167,60 +2155,6 @@ async function main() {
         capabilityGrantStore.priorInteractiveApprovalCount(input),
       invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
         acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
-      /**
-       * Pause an automation when a closure-scoped call wants authority the
-       * installed closure lacks. The host never edits or widens authority on
-       * the automation's behalf; a later user edit is the only way to install
-       * a broader revision.
-       *
-       * Best effort by construction: the caller has ALREADY decided to deny, and
-       * this only stops future ticks and leaves the denial visible. Anything
-       * unrecordable is therefore logged, never thrown — throwing here replaced
-       * a clean `EMISSIONCHANGE` denial with a raw error, which reached a
-       * Durable Object as an uncaught 500 and killed it mid-activation. A
-       * closure compiled from a product spec (quickfire's, for one) has no
-       * mission document to revise at all, so that path is ordinary, not
-       * exceptional: the capability gap belongs in the closure's checked-in
-       * exposure list, and this log is where a developer finds out which one.
-       */
-      proposeReviewedClosureRevision: ({ snapshot, tier, resource }) => {
-        const unrecordable = (reason: string): void => {
-          console.warn(
-            `[ReviewedClosure] ${reason}; the call is denied and no automation was paused`,
-            {
-              subject: snapshot.reviewedClosureSubject,
-              capability: snapshot.capability,
-              resource: resource.kind === "exact" ? resource.key : resource,
-              tier,
-            }
-          );
-        };
-        if (snapshot.reviewedClosureSubject === "-") {
-          unrecordable("Authority-denial pause requires an automation closure invocation");
-          return;
-        }
-        const source = reviewedClosureRegistry.sourceForSession(snapshot.sessionId);
-        const ref = source ? parseDoTargetId(source.issuer) : null;
-        const dispatcher = resolvedDoDispatchForTitles;
-        if (!source || source.sourceDocument.kind !== "mission" || !ref || !dispatcher) {
-          unrecordable(
-            `Reviewed closure ${
-              source ? `is compiled from a ${source.sourceDocument.kind} document` : "is unknown"
-            } and has no reachable source-document owner`
-          );
-          return;
-        }
-        void dispatcher
-          .dispatch(ref, "pauseForAuthorityDenial", {
-            missionId: source.sourceDocument.id,
-            capability: snapshot.capability,
-            resource,
-            tier,
-          })
-          .catch((error) => {
-            console.error("[ReviewedClosure] Could not pause denied automation:", error);
-          });
-      },
     };
   dispatcher.setAuthorityAcquirer(
     attachedHostChildEndpoint && attachedHostDecisionConsumer && attachedHostApprovalClient
@@ -3352,14 +3286,18 @@ async function main() {
 
   {
     const { createAuthorityService } = await import("./services/authorityService.js");
+    const { resolveCodeIdentity } = await import("./services/principalIdentity.js");
     container.registerRpc(
-      createAuthorityService({ dispatcher, acquisitions: acquisitionCoordinator })
+      createAuthorityService({
+        dispatcher,
+        acquisitions: acquisitionCoordinator,
+        operationPolicies: operationPolicyStore,
+        executionAdmissions: agentExecutionSessions,
+        grants: capabilityGrantStore,
+        workspaceId,
+        resolveCodeIdentity: (runtimeId) => resolveCodeIdentity(entityCache, runtimeId),
+      })
     );
-  }
-
-  {
-    const { createReviewedClosureService } = await import("./services/reviewedClosureService.js");
-    container.registerRpc(createReviewedClosureService({ registry: reviewedClosureRegistry }));
   }
 
   {
@@ -3512,20 +3450,21 @@ async function main() {
         });
         dispatcher.setAuthorityObserver(({ executionSession, kind, payload }) => {
           const prefix = "do:vibestudio/internal:EvalDO:";
-          if (!executionSession.eval.runtimeId.startsWith(prefix)) return;
+          const executor = executionSession.executor;
+          if (executor.kind !== "eval" || !executor.runtimeId.startsWith(prefix)) return;
           return doDispatch
             .dispatch(
               {
                 source: "vibestudio/internal",
                 className: "EvalDO",
-                objectKey: executionSession.eval.runtimeId.slice(prefix.length),
+                objectKey: executor.runtimeId.slice(prefix.length),
               },
               "appendAuthorityEvent",
-              executionSession.eval.runId,
+              executor.evalRunId,
               kind,
               {
                 ...payload,
-                callerId: executionSession.eval.runtimeId,
+                callerId: executor.runtimeId,
                 taskRef: executionSession.taskRef,
                 taskAuthority: executionSession.taskAuthority,
               }
@@ -3540,8 +3479,6 @@ async function main() {
           workspaceId,
           executionSessions: agentExecutionSessions,
           taskAuthorities,
-          reviewedClosureFactForSession: (sessionId) =>
-            reviewedClosureRegistry.factForSession(sessionId),
           isSystemTestHarness: (caller, runId) =>
             runId.startsWith("system-test-runner:") &&
             isBlessedSystemTestConduit(caller, (identity) =>
@@ -4612,8 +4549,6 @@ async function main() {
         membershipGate: membershipEntryGate,
         workspaceRoleResolver,
         describeCapability,
-        reviewedClosureFactForSession: (sessionId) =>
-          reviewedClosureRegistry.factForSession(sessionId),
         contextIntegrityFactForSession: (sessionId, caller) =>
           caller.executionSession !== undefined
             ? contextIntegrityStore.effectiveFact({
@@ -5687,8 +5622,12 @@ async function main() {
             return buildWorkspaceDeclarations(config);
           },
           assertUserlandServiceExposure: (ctx, service) => {
-            const sessionId = ctx.caller.agentBinding?.channelId ?? ctx.caller.runtime.id;
-            reviewedClosureRegistry.assertUserlandServiceExposure({ sessionId, ...service });
+            const policy = ctx.caller.executionSession?.operationPolicyDigest;
+            if (policy && !operationPolicyStore.permitsService(policy, service.name)) {
+              throw Object.assign(new Error(`Operation policy does not expose ${service.name}`), {
+                code: "EMISSIONSCOPE",
+              });
+            }
           },
           activateDurableObject: ({
             source,
@@ -7335,9 +7274,10 @@ async function main() {
       console.error("[Server] Resource handle store shutdown error:", error);
     }
     try {
-      reviewedClosureRegistry.close();
+      operationPolicyStore.close();
+      targetAuthorityRequests.close();
     } catch (error) {
-      console.error("[Server] Reviewed closure registry shutdown error:", error);
+      console.error("[Server] Authority artifact store shutdown error:", error);
     }
     try {
       identityDb.close();

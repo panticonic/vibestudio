@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentExecutionSessionFact, TaskGrantPrincipal } from "@vibestudio/rpc";
+import type { ExecutionAdmissionFact, TaskGrantPrincipal } from "@vibestudio/rpc";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -23,8 +23,8 @@ export class TaskAuthorityRegistry {
     } = {}
   ) {}
 
-  bindExecution(session: AgentExecutionSessionFact): void {
-    const runtimeId = session.eval.runtimeId;
+  bindExecution(session: ExecutionAdmissionFact): void {
+    const runtimeId = session.executor.runtimeId;
     if (!session.taskAuthority) {
       throw new Error(`Runtime ${runtimeId} has no task authority`);
     }

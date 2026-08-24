@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { AgentExecutionSessionFact } from "@vibestudio/rpc";
+import type { ExecutionAdmissionFact } from "@vibestudio/rpc";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { TaskAuthorityRegistry, taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
 
-function execution(runtimeId: string, taskAuthority: `task:${string}`): AgentExecutionSessionFact {
+function execution(runtimeId: string, taskAuthority: `task:${string}`): ExecutionAdmissionFact {
   return {
-    v: 1,
+    v: 2,
     authoritySessionId: `authority:${runtimeId}`,
     authoritySessionVersion: 1,
+    admissionKey: `task:${runtimeId}`,
     mode: "interactive",
     ownerUser: "user:alice",
     workspaceId: "workspace:one",
@@ -15,15 +16,17 @@ function execution(runtimeId: string, taskAuthority: `task:${string}`): AgentExe
     agentBinding: null,
     taskRef: "channel:one",
     taskAuthority,
-    harness: {
+    executionImage: {
       principal: "code:workers/agent@one",
       repoPath: "workers/agent",
+      ref: "state:one",
       effectiveVersion: "one",
       executionDigest: "a".repeat(64),
     },
-    eval: {
+    executor: {
+      kind: "eval",
       runtimeId,
-      runId: "run:one",
+      evalRunId: "run:one",
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",
@@ -32,6 +35,7 @@ function execution(runtimeId: string, taskAuthority: `task:${string}`): AgentExe
         digest: "b".repeat(64),
       },
     },
+    parent: null,
     causalParent: null,
     issuedAt: 1,
     expiresAt: Number.MAX_SAFE_INTEGER,
