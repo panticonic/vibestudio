@@ -223,8 +223,8 @@ credential, not the browsing.
 | `runtime.supervision.manage`        | manage     | start, stop, restart, or restore an app |
 | `workspace-panels.manage`           | manage     | add or remove panels                    |
 | `workspace.runtime-state.manage`    | act        | rearrange panels and views              |
-| `missions.edit` / `missions.review` | manage     | define and review an automation         |
-| `missions.run` / `missions.pause`   | act        | run or pause an automation              |
+| `missions.edit`                     | manage     | change an automation                    |
+| `missions.run`                      | act        | run an automation                       |
 | `subagents.create`                  | act        | start a helper agent                    |
 | `runtime.code-execution.manage`     | act        | run code in the workspace               |
 | `code-runner.reset`                 | act        | reset the code runner                   |

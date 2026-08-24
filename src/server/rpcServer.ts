@@ -2439,11 +2439,20 @@ export class RpcServer {
 
   private async handleRoute(
     client: WsClientState,
-    targetId: string,
+    targetId: unknown,
     message: RpcMessage,
     targetConnectionId: string | undefined,
     routeEnvelope: RpcEnvelope
   ): Promise<void> {
+    if (typeof targetId !== "string") {
+      this.sendRouteError(
+        client,
+        "server",
+        message,
+        createRelayError("RPC target must be a target-id string", "RPC_PROTOCOL_ERROR")
+      );
+      return;
+    }
     // A routed stream is still owned by the caller connection's canonical
     // streaming relay. That relay performs target authorization, dispatches the
     // connectionless DO stream, frames the response back to this exact socket,
@@ -3353,13 +3362,25 @@ export class RpcServer {
   private async relayCall(
     callerId: string,
     callerKind: CallerKind,
-    targetId: string,
+    targetId: unknown,
     method: string,
     args: unknown[],
     targetConnectionId?: string,
     meta?: RelayCallMeta,
     relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
+    if (typeof targetId !== "string") {
+      const resolvedTarget =
+        targetId && typeof targetId === "object" && "targetId" in targetId
+          ? (targetId as { targetId?: unknown }).targetId
+          : undefined;
+      throw createRelayError(
+        typeof resolvedTarget === "string"
+          ? "RPC target must be a target-id string; pass resolvedService.targetId, not the resolveService result object"
+          : "RPC target must be a target-id string",
+        "RPC_PROTOCOL_ERROR"
+      );
+    }
     const isPanelOrShellTarget = !targetId.startsWith("do:") && !targetId.startsWith("worker:");
     if (isPanelOrShellTarget) {
       const options = relayCallOptions(meta);

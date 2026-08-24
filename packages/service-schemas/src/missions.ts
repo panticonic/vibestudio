@@ -354,8 +354,8 @@ export const missionsMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
     agentFacing: true,
   },
-  pause: lifecycle("Pause", "pause", "missions.pause"),
-  resume: lifecycle("Resume", "resume", "missions.pause"),
+  pause: lifecycle("Pause", "pause"),
+  resume: lifecycle("Resume", "resume"),
   retire: {
     capability: "missions.retire",
     tier: critical(
@@ -453,12 +453,11 @@ function presentation(title: string, action: string, description: string) {
     authorityCategory: { domain: "safety" as const, verb: "manage" as const },
   };
 }
-function lifecycle(title: string, action: string, capability: string) {
+function lifecycle(title: string, action: string) {
   return {
-    capability,
-    tier: gated(
+    tier: open(
       "mission.control",
-      `${title} changes admission eligibility without changing standing authority.`
+      `${title} is a reversible, owner-scoped scheduling control without changing standing authority.`
     ),
     presentation: presentation(
       `${title} an automation`,

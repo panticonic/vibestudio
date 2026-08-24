@@ -1035,6 +1035,26 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
 });
 
 describe("RpcServer relay behavior", () => {
+  it("rejects a resolved-service object with an actionable protocol error", async () => {
+    const { server } = createServer();
+    await expect(
+      testServer(server).relayCall(
+        "do:workers/eval:EvalDO:eval",
+        "do",
+        {
+          kind: "durable-object",
+          targetId: "do:workers/missions:MissionsDO:workspace-missions",
+        } as never,
+        "list",
+        []
+      )
+    ).rejects.toMatchObject({
+      code: "RPC_PROTOCOL_ERROR",
+      message:
+        "RPC target must be a target-id string; pass resolvedService.targetId, not the resolveService result object",
+    });
+  });
+
   it("routes canonical worker handles through their loader instance name", async () => {
     const { server } = createServer();
     server.setWorkerdUrl("http://127.0.0.1:8787");

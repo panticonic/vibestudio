@@ -79,6 +79,8 @@ describe("missions v3 contract", () => {
   });
 
   it("pause changes scheduling state without changing authority", () => {
+    expect(missionsMethods.pause.tier.tier).toBe("open");
+    expect(missionsMethods.resume.tier.tier).toBe("open");
     expect(missionsMethods.pause.tier.rationale).toContain("without changing standing authority");
   });
 });
