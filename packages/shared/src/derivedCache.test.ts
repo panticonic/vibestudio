@@ -47,6 +47,28 @@ afterEach(() => {
 });
 
 describe("DerivedCacheCoordinator", () => {
+  it("charges a shared inode proportionally instead of once per pathname", async () => {
+    const root = cacheRoot();
+    const owner = path.join(path.dirname(root), "content-owner");
+    fs.mkdirSync(path.dirname(owner), { recursive: true });
+    fs.writeFileSync(owner, Buffer.alloc(64 * 1024));
+    for (const key of ["first", "second"]) {
+      const directory = path.join(root, key);
+      fs.mkdirSync(directory, { recursive: true });
+      fs.linkSync(owner, path.join(directory, "payload"));
+    }
+    const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    try {
+      const status = await coordinator.status(root);
+      const allocated = fs.statSync(owner).blocks * 512;
+      expect(status.entries).toBe(2);
+      expect(status.bytes).toBeGreaterThanOrEqual(Math.floor((allocated * 2) / 3));
+      expect(status.bytes).toBeLessThan(allocated);
+    } finally {
+      coordinator.close();
+    }
+  });
+
   it("yields the event loop while measuring a cache tree", async () => {
     const root = cacheRoot();
     for (let index = 0; index < 300; index += 1) put(root, `entry-${index}`, 128);

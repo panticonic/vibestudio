@@ -94,9 +94,9 @@ times. Automatic collection removes only unleased entries, uses atomic
 rename-to-trash as its commit point, and targets both a byte ceiling and a
 filesystem free-space floor. `vibestudio storage status` reports declared cache
 roots; `vibestudio storage prune --dry-run` previews the live-safe collector.
-When upgrading from a version without leases, restart every Vibestudio process
-that shares the profile before the first live prune; an older process cannot
-advertise the cache entry it is reading.
+Hardlinked immutable payloads are charged fractionally to each link, so cache
+budgets and status measure physical inode ownership rather than counting the
+same bytes once for every materialized pathname.
 
 ### `derived-cache/external-deps/`
 
@@ -121,6 +121,16 @@ rollback do not depend on this cache remaining present.
 The npm download/content cache. It is regenerable but is not yet live-pruned;
 only dependency installation directories and reconstruction build results have
 the scoped reader leases required for deletion while Vibestudio is running.
+
+### `derived-cache/dependency-files/`
+
+Profile-wide content-addressed ownership for immutable files in dependency
+installations. External and extension-runtime dependency environments retain
+their independent npm resolution topologies, but equal file bytes with equal
+Unix modes are hardlinked to one stored inode instead of copied into every
+closure. This pool is offline-only: deleting a dependency environment removes
+only its links, while pool collection must first prove that no published
+environment still references an inode.
 
 ### Cache policy
 

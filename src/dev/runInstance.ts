@@ -85,19 +85,6 @@ function pruneUnreferencedInstanceCas(root: string): {
   return { removedFiles, removedBytes };
 }
 
-function removeRetiredInstanceCaches(root: string, instanceId: string): void {
-  const removed: string[] = [];
-  for (const name of ["external-deps", "extension-runtime-deps", "npm-cache"]) {
-    const retired = path.join(root, name);
-    if (!fs.existsSync(retired)) continue;
-    fs.rmSync(retired, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    removed.push(name);
-  }
-  if (removed.length > 0) {
-    console.log(`[instance:${instanceId}] removed retired caches: ${removed.join(", ")}`);
-  }
-}
-
 function extractInstance(argv: string[]): {
   instanceId?: string;
   baseCheckout?: string;
@@ -356,7 +343,6 @@ async function main(): Promise<void> {
       }
     }
     if (!disposable) {
-      removeRetiredInstanceCaches(root, id);
       await prunePersistentInstanceBuildCache(root, id);
     }
     process.exitCode =

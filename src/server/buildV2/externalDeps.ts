@@ -25,6 +25,10 @@ import {
 } from "@vibestudio/shared/derivedCache";
 import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
+import {
+  deduplicateDependencyContent,
+  pruneUnreferencedDependencyContent,
+} from "./dependencyContentStore.js";
 
 // ---------------------------------------------------------------------------
 // Transitive collection
@@ -796,7 +800,7 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
-const EXTERNAL_DEPS_RECEIPT_VERSION = 2;
+const EXTERNAL_DEPS_RECEIPT_VERSION = 3;
 
 interface PatchedFileReceipt {
   path: string;
@@ -1056,11 +1060,13 @@ function borrowedDependencyEnvironment(
       if (released) return;
       released = true;
       lease.release();
-      void scheduleDerivedCachePrune(baseDir).catch((error) => {
-        console.warn(
-          `[externalDeps] Cache prune failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-      });
+      void scheduleDerivedCachePrune(baseDir)
+        .then((pruned) => (pruned ? pruneUnreferencedDependencyContent() : undefined))
+        .catch((error) => {
+          console.warn(
+            `[externalDeps] Cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
     },
   };
 }
@@ -1261,6 +1267,11 @@ async function ensureDepsInstalledOnce(
     // Validate npm's installed package identities before making the cache
     // visible, then publish the receipt atomically with the directory rename.
     await writeExternalDepsReceipt(tmpDir, await createExternalDepsReceipt(tmpDir, patchedFiles));
+
+    // A closure owns resolution topology, not another physical copy of every
+    // immutable package byte. Content-address the completed, patched tree while
+    // it is still unpublished so readers never observe a partially linked view.
+    await deduplicateDependencyContent(tmpDir);
 
     // Race-safe promotion: try rename, handle concurrent winner
     try {

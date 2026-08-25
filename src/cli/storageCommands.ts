@@ -48,6 +48,11 @@ function cacheRoots(): StorageRoot[] {
     { kind: "offline-only", name: "shared npm cache", path: path.join(shared, "npm-cache") },
     {
       kind: "offline-only",
+      name: "shared dependency file content",
+      path: path.join(shared, "dependency-files"),
+    },
+    {
+      kind: "offline-only",
       name: "shared authority analysis",
       path: path.join(shared, "authority-analysis"),
     },
@@ -55,21 +60,6 @@ function cacheRoots(): StorageRoot[] {
       kind: "offline-only",
       name: "selected instance CAS",
       path: path.join(getCentralDataPath(), "cas"),
-    },
-    {
-      kind: "offline-only",
-      name: "retired profile external dependencies",
-      path: path.join(profile, "external-deps"),
-    },
-    {
-      kind: "offline-only",
-      name: "retired profile extension runtime dependencies",
-      path: path.join(profile, "extension-runtime-deps"),
-    },
-    {
-      kind: "offline-only",
-      name: "retired profile npm cache",
-      path: path.join(profile, "npm-cache"),
     },
   ];
 
@@ -85,13 +75,6 @@ function cacheRoots(): StorageRoot[] {
           name: `instance ${repo.name}/${instance.name} build cache`,
           path: path.join(repoRoot, instance.name, "build-cache"),
         });
-        for (const name of ["external-deps", "extension-runtime-deps", "npm-cache"]) {
-          roots.push({
-            kind: "offline-only",
-            name: `retired instance ${repo.name}/${instance.name} ${name}`,
-            path: path.join(repoRoot, instance.name, name),
-          });
-        }
       }
     }
   } catch (error) {
@@ -120,7 +103,9 @@ function humanBytes(bytes: number): string {
 
 function storedBytes(storedPath: string): number {
   const stat = fs.lstatSync(storedPath);
-  if (!stat.isDirectory()) return stat.blocks * 512 || stat.size;
+  if (!stat.isDirectory()) {
+    return Math.ceil((stat.blocks * 512 || stat.size) / Math.max(1, stat.nlink));
+  }
   return fs
     .readdirSync(storedPath)
     .reduce((total, child) => total + storedBytes(path.join(storedPath, child)), stat.blocks * 512);

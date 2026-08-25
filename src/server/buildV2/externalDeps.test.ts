@@ -67,6 +67,7 @@ import {
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
+import { pruneUnreferencedDependencyContent } from "./dependencyContentStore.js";
 
 async function ensureExternalDeps(
   deps: Record<string, string>,
@@ -591,6 +592,10 @@ describe("ensureExternalDeps", () => {
       fs.readFileSync(path.join(nodeModulesDir, "transitive-target", "index.js"), "utf8")
     ).toBe('export default "patched";\n');
 
+    // Published dependency payloads are immutable shared content. Corrupt this
+    // closure by replacing its directory entry, which must not alter another
+    // closure or the content owner.
+    fs.rmSync(patchedFile);
     fs.writeFileSync(patchedFile, "tampered\n");
     await ensureExternalDeps(
       { "parent-with-transitive": "1.0.0", "transitive-target": "2.0.0" },
@@ -642,6 +647,36 @@ describe("ensureExternalDeps", () => {
 
     expect(nodeModulesDir.startsWith(path.join(testExtDepsRoot, "external-deps"))).toBe(true);
     expect(nodeModulesDir.startsWith("/tmp/test-extdeps-instance")).toBe(false);
+  });
+
+  it("physically shares equal dependency files across distinct closure topologies", async () => {
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+
+    const first = await ensureExternalDeps({ leftpad: "1.0.0" });
+    const second = await ensureExternalDeps({ leftpad: "1.0.0", zod: "3.25.76" });
+    const firstFile = fs.statSync(path.join(first, "leftpad", "index.js"));
+    const secondFile = fs.statSync(path.join(second, "leftpad", "index.js"));
+
+    expect(firstFile.ino).toBe(secondFile.ino);
+    expect(firstFile.mode & 0o222).toBe(0);
+    expect(() => fs.writeFileSync(path.join(first, "leftpad", "index.js"), "mutated\n")).toThrow(
+      /EACCES/u
+    );
+    expect(firstFile.nlink).toBeGreaterThanOrEqual(3); // content owner + two closure views
+    expect(fs.existsSync(path.join(testExtDepsRoot, "dependency-files", "0444", "sha256"))).toBe(
+      true
+    );
+  });
+
+  it("collects dependency content after its last published topology is gone", async () => {
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+    const nodeModules = await ensureExternalDeps({ leftpad: "1.0.0" });
+    fs.rmSync(path.dirname(nodeModules), { recursive: true, force: true });
+
+    const pruned = await pruneUnreferencedDependencyContent();
+
+    expect(pruned.files).toBeGreaterThan(0);
+    expect(pruned.bytes).toBeGreaterThan(0);
   });
 
   it("exposes npm registry misses as caller-correctable package resolution errors", async () => {
@@ -727,8 +762,11 @@ describe("ensureExternalDeps", () => {
       packages: Record<string, { integrity?: string }>;
     };
     delete hiddenLock.packages["node_modules/leftpad"]?.integrity;
+    fs.rmSync(hiddenLockPath);
     fs.writeFileSync(hiddenLockPath, JSON.stringify(hiddenLock));
-    fs.writeFileSync(path.join(cacheDir, ".ready"), new Date().toISOString());
+    const readyPath = path.join(cacheDir, ".ready");
+    fs.rmSync(readyPath);
+    fs.writeFileSync(readyPath, new Date().toISOString());
     expect(fs.existsSync(path.join(cacheDir, ".ready"))).toBe(true);
 
     const repaired = await ensureExternalDeps({ leftpad: "1.0.0" });

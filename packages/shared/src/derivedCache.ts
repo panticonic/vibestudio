@@ -65,7 +65,15 @@ async function allocatedBytes(storedPath: string): Promise<number> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw error;
   }
-  if (!stat.isDirectory()) return (stat.blocks ?? 0) * 512 || stat.size;
+  if (!stat.isDirectory()) {
+    const allocated = (stat.blocks ?? 0) * 512 || stat.size;
+    // Charge a hardlinked inode proportionally to each directory view instead
+    // of pretending every pathname owns another physical copy. Summed across
+    // the content owner and all materializations this is the real allocation;
+    // it also keeps cheap cache topology from being evicted as though it still
+    // contained duplicated payload bytes.
+    return Math.ceil(allocated / Math.max(1, stat.nlink));
+  }
   let bytes = (stat.blocks ?? 0) * 512;
   for (const child of await fs.promises.readdir(storedPath)) {
     bytes += await allocatedBytes(path.join(storedPath, child));
@@ -359,22 +367,24 @@ export class DerivedCacheCoordinator {
           .all(root, now) as Array<{ key: string }>
       ).map((entry) => entry.key)
     );
-    const entries = await Promise.all((await cacheDirectories(root)).map(async (key) => {
-      const storedPath = entryPath(root, key);
-      const bytes = await allocatedBytes(storedPath);
-      let modified = 0;
-      try {
-        modified = Math.floor((await fs.promises.stat(storedPath)).mtimeMs);
-      } catch {
-        // A concurrent owner can remove a failed unpublished entry.
-      }
-      return {
-        key,
-        bytes,
-        lastAccess: stored.get(key) ?? modified,
-        leased: leased.has(key),
-      };
-    }));
+    const entries = await Promise.all(
+      (await cacheDirectories(root)).map(async (key) => {
+        const storedPath = entryPath(root, key);
+        const bytes = await allocatedBytes(storedPath);
+        let modified = 0;
+        try {
+          modified = Math.floor((await fs.promises.stat(storedPath)).mtimeMs);
+        } catch {
+          // A concurrent owner can remove a failed unpublished entry.
+        }
+        return {
+          key,
+          bytes,
+          lastAccess: stored.get(key) ?? modified,
+          leased: leased.has(key),
+        };
+      })
+    );
     this.transaction(() => {
       const present = new Set(entries.map((entry) => entry.key));
       for (const entry of entries) {
