@@ -2936,6 +2936,68 @@ describe("runtimeService.cloneContext", () => {
     }
   });
 
+  it("lets the cloning owner durably bind a cloned agent to its child channel", async () => {
+    const { service, instance } = await buildDeps({
+      semanticContexts: { forkContext: vi.fn(async () => {}) },
+    });
+    const channel = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/pubsub-channel" },
+        className: "PubSubChannel",
+        key: "chat-parent",
+        contextId: "ctx-agent-fork",
+      },
+    ])) as { id: string };
+    const agent = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/agent-worker" },
+        className: "AiChatWorker",
+        key: "agent-parent",
+        contextId: "ctx-agent-fork",
+        agentChannelId: "chat-parent",
+      },
+    ])) as { id: string };
+    const caller = createVerifiedCaller(channel.id, "do");
+
+    const clone = (await service.handler({ caller }, "cloneContext", [
+      {
+        sourceContextId: "ctx-agent-fork",
+        include: [channel.id, agent.id],
+        targetKey: "fork:agent-binding",
+      },
+    ])) as CloneResult;
+    const clonedChannel = clone.entities.find((entity) => entity.sourceId === channel.id)!;
+    const clonedAgent = clone.entities.find((entity) => entity.sourceId === agent.id)!;
+    expect(instance.entityResolve(clonedAgent.newId)?.agentBinding).toBeUndefined();
+
+    await service.handler({ caller }, "rebindAgentChannel", [
+      { entityId: clonedAgent.newId, channelId: clonedChannel.newKey },
+    ]);
+
+    expect(instance.entityResolve(clonedAgent.newId)?.agentBinding).toEqual({
+      entityId: clonedAgent.newId,
+      contextId: clone.contextId,
+      channelId: clonedChannel.newKey,
+    });
+  });
+
+  it("rejects agent-channel rebinding by a runtime that does not own the target", async () => {
+    const { service } = await buildDeps();
+    const agent = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ key: "foreign-agent", contextId: "ctx-foreign-agent" }),
+    ])) as { id: string };
+
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("do:workers/other:OtherDO:caller", "do") },
+        "rebindAgentChannel",
+        [{ entityId: agent.id, channelId: "chat-forbidden" }]
+      )
+    ).rejects.toThrow(/does not own/);
+  });
+
   it("is idempotent under targetKey (same child + deterministic keys) and records a lineage edge", async () => {
     const { service } = await buildDeps({
       semanticContexts: { forkContext: vi.fn(async () => {}) },

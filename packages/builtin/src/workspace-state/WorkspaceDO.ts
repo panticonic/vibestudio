@@ -888,6 +888,39 @@ export class WorkspaceDO extends DurableObjectBase {
     return this.rowToEntity(row);
   }
 
+  /**
+   * Move a self-hosted agent entity to the channel it now serves. A conversation
+   * fork creates the entity before the child channel is known to its runtime;
+   * this is the single durable identity transition that joins those two halves.
+   * External relay bindings remain immutable and cannot be converted here.
+   */
+  @schemaRpc()
+  entityRebindAgentChannel(id: string, channelId: string): EntityRecord {
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.readEntityRow(id);
+      if (!row || row.status !== "active") {
+        throw new Error(`agent channel binding target is not active: ${id}`);
+      }
+      if (!channelId) throw new Error("agent channel binding requires a channel id");
+      if (!["do", "worker", "session"].includes(row.kind)) {
+        throw new Error(`entity ${id} cannot serve an agent channel`);
+      }
+      if (row.agent_entity_id !== null && row.agent_entity_id !== id) {
+        throw new Error(`entity ${id} relays another agent and cannot be rebound as self-hosted`);
+      }
+      if (row.agent_channel_id !== channelId || row.agent_entity_id !== null) {
+        this.sql.exec(
+          `UPDATE entities SET agent_entity_id = NULL, agent_channel_id = ? WHERE id = ?`,
+          channelId,
+          id
+        );
+      }
+      const updated = this.readEntityRow(id);
+      if (!updated) throw new Error(`entityRebindAgentChannel: failed to read ${id} after update`);
+      return this.rowToEntity(updated);
+    });
+  }
+
   /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
   @schemaRpc()
   entityRetire(id: string): EntityRecord | null {

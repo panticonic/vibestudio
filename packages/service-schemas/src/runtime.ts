@@ -978,6 +978,29 @@ export const runtimeMethods = defineServiceMethods({
     },
     examples: [{ args: [{ sourceContextId: "ctx-abc" }] }],
   },
+  rebindAgentChannel: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "runtime.mutate",
+      rationale:
+        "A runtime owner may complete the authenticated identity transition for an agent entity it just cloned.",
+    },
+    description:
+      "Atomically bind an owned self-hosted agent entity to the channel it now serves. Used by lifecycle operations such as conversation forks after cloning and before the cloned agent is activated on the child channel.",
+    args: z.tuple([
+      z
+        .object({
+          entityId: z.string().min(1),
+          channelId: z.string().min(1).max(200),
+        })
+        .strict(),
+    ]),
+    returns: z.void(),
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
+  },
   destroyContext: {
     tier: {
       tier: "open",

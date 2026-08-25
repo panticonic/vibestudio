@@ -3278,6 +3278,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "entityRebindAgentChannel",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-only-cloned-agent-binding-persistence",
+        "change": "Adds a typed host-only write that moves one active local agent entity to an exact channel and atomically replaces its self agent-binding. The receiver accepts only Durable Object, worker, or session entities, rejects external relay identities, and grants no channel membership or caller-selected authority."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",

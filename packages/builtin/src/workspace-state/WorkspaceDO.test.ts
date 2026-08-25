@@ -492,6 +492,43 @@ describe("WorkspaceDO.entityActivate", () => {
     });
   });
 
+  it("idempotently binds an unbound cloned agent to its child channel", () => {
+    const agent = instance.entityActivate(
+      doInput({
+        source: { repoPath: "workers/agent-worker", effectiveVersion: VERSION },
+        className: "AiChatWorker",
+        key: "agent-fork",
+        contextId: "ctx-fork",
+      })
+    );
+
+    const first = instance.entityRebindAgentChannel(agent.id, "chat-fork");
+    const second = instance.entityRebindAgentChannel(agent.id, "chat-fork");
+
+    expect(first.agentBinding).toEqual({
+      entityId: agent.id,
+      contextId: "ctx-fork",
+      channelId: "chat-fork",
+    });
+    expect(second).toEqual(first);
+  });
+
+  it("does not convert an external relay into a self-hosted agent", () => {
+    const relay = instance.entityActivate(
+      doInput({
+        agentBinding: {
+          entityId: "session:external",
+          contextId: "ctx-1",
+          channelId: "chat-parent",
+        },
+      })
+    );
+
+    expect(() => instance.entityRebindAgentChannel(relay.id, "chat-fork")).toThrow(
+      /relays another agent/
+    );
+  });
+
   it("reactivates a retired row with identical identity", () => {
     const initial = instance.entityActivate(panelInput());
     instance.entityRetire(initial.id);

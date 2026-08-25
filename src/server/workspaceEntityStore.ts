@@ -135,6 +135,13 @@ export class WorkspaceEntityStore {
     return records;
   }
 
+  /** Durably move a self-hosted agent to its current channel and refresh auth cache. */
+  async rebindAgentChannel(id: string, channelId: string): Promise<EntityRecord> {
+    const record = await this.dispatch<EntityRecord>("entityRebindAgentChannel", id, channelId);
+    this.deps.entityCache._onActivate(record);
+    return record;
+  }
+
   /** Retire a WorkspaceDO entity and mirror the retirement. Null if already gone. */
   async retire(id: string): Promise<EntityRecord | null> {
     const record = await this.dispatch<EntityRecord | null>("entityRetire", id);

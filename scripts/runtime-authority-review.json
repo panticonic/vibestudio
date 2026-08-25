@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:eb844421979f4fc53ceddfa0f26b3f64dce885d34641e27b89753c4b1d5db24e",
+  "censusDigest": "sha256:33a5d2ee51332bedc83710d43acfb7792997498074fe78289f18279769a85a81",
   "decisions": {
     "host:authority.compileAuthorityPlan": {
       "review": "host-compiled-content-addressed-authority-plan",
@@ -217,6 +217,10 @@
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:retainExecutionRoot": {
       "review": "host-only-exact-eval-execution-retention",
       "change": "Adds a host-only write of one validated immutable execution artifact reference joined to its exact eval run. It cannot fabricate an artifact, widen executable authority, or delete retention."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel": {
+      "review": "host-only-cloned-agent-binding-persistence",
+      "change": "Adds a typed host-only write that moves one active local agent entity to an exact channel and atomically replaces its self agent-binding. The receiver accepts only Durable Object, worker, or session entities, rejects external relay identities, and grants no channel membership or caller-selected authority."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots": {
       "review": "host-only-active-entity-execution-root-census",

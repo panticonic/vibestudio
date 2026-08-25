@@ -1361,6 +1361,23 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "entityRebindAgentChannel": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "entityRetire": {
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",

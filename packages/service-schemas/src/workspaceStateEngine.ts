@@ -234,6 +234,11 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     args: z.tuple([z.array(entityActivationSchema)]),
     returns: z.array(entityRecordSchema),
   },
+  entityRebindAgentChannel: {
+    ...internal("write"),
+    args: z.tuple([z.string().min(1), z.string().min(1).max(200)]),
+    returns: entityRecordSchema,
+  },
   entityRetire: {
     ...internal("destructive"),
     args: z.tuple([z.string().min(1)]),

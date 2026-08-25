@@ -652,6 +652,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     await deps.releaseResourceBindings(record);
   }
 
+  async function rebindAgentChannel(
+    caller: VerifiedCaller,
+    input: { entityId: string; channelId: string }
+  ): Promise<void> {
+    const record = await store.resolveActiveRecord(input.entityId);
+    if (!record) {
+      throw new Error(`runtime.rebindAgentChannel target is not active: ${input.entityId}`);
+    }
+    if (!isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, record)) {
+      throw new Error(`runtime.rebindAgentChannel caller does not own ${input.entityId}`);
+    }
+    await store.rebindAgentChannel(record.id, input.channelId);
+  }
+
   const entityHandle = (record: EntityRecord, targetId = record.id): RuntimeEntityHandle => ({
     id: record.id,
     kind: record.kind as RuntimeEntityHandle["kind"],
@@ -2151,6 +2165,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           },
           cloneArgs
         ),
+      rebindAgentChannel: async (ctx, [input]) => {
+        await rebindAgentChannel(ctx.caller, input);
+      },
       destroyContext: async (_ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
