@@ -313,7 +313,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         contextFiles: {
           readFile: async (ctx, filePath, contextId) => {
             const fsService =
-              container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
+              container.get<import("./services/fsService.js").FsService>("fsService");
             return (await fsService.handleCall(
               ctx,
               "readFile",
@@ -322,7 +322,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           },
           readManagedFiles: async (ctx, patterns, contextId) => {
             const fsService =
-              container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
+              container.get<import("./services/fsService.js").FsService>("fsService");
             return fsService.readManagedFiles(
               ctx,
               patterns,
@@ -708,13 +708,13 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     const { createFsServiceDefinition } = await import("./services/fsServiceDef.js");
-    let fsServiceInstance: import("@vibestudio/shared/fsService").FsService;
+    let fsServiceInstance: import("./services/fsService.js").FsService;
     container.registerManaged({
       name: "fsRpc",
       dependencies: ["fsService"],
       async start(resolve) {
         fsServiceInstance = assertPresent(
-          resolve<import("@vibestudio/shared/fsService").FsService>("fsService")
+          resolve<import("./services/fsService.js").FsService>("fsService")
         );
       },
       getServiceDefinition() {

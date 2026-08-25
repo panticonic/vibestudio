@@ -8,7 +8,7 @@ import {
   samePendingApprovals,
   sourceLabel,
 } from "./bootstrapLaunchGate.js";
-import { templateOrigin } from "./authority/reviewedUnitParts.js";
+import { templateOrigin } from "@vibestudio/origin-identity";
 
 const hostOrigin = {
   url: null,

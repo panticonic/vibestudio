@@ -10,7 +10,7 @@ import {
   expandCapabilityDependencies,
   inferUnitTransportCapabilities,
   inferWorkspacePackageReferences,
-} from "@vibestudio/shared/unitAuthorityInference";
+} from "@vibestudio/unit-authority-inference";
 import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

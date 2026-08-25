@@ -20,7 +20,7 @@ import { stateLayout } from "./stateLayout.js";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { FsService } from "@vibestudio/shared/fsService";
+import type { FsService } from "./services/fsService.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { BuildResult } from "./buildV2/buildStore.js";

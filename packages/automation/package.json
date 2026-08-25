@@ -1,0 +1,20 @@
+{
+  "name": "@vibestudio/automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./cronSchedule": "./src/cronSchedule.ts",
+    "./mission": "./src/mission.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/automation/src"
+  },
+  "dependencies": {
+    "@vibestudio/shared": "workspace:*",
+    "croner": "10.0.1"
+  }
+}

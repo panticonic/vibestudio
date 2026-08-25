@@ -1350,7 +1350,7 @@ async function main() {
       workspaceId,
       getFsService: () => {
         try {
-          return container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
+          return container.get<import("./services/fsService.js").FsService>("fsService");
         } catch {
           return null;
         }
@@ -4501,7 +4501,7 @@ async function main() {
     dependencies: ["tokenManager", "fsService"],
     async start(resolve) {
       const fsService = assertPresent(
-        resolve<import("@vibestudio/shared/fsService").FsService>("fsService")
+        resolve<import("./services/fsService.js").FsService>("fsService")
       );
       const { createWorkspaceCredentialRedeemer } = await import("./services/authService.js");
       const server = new RpcServer({
@@ -5664,10 +5664,10 @@ async function main() {
   // Filesystem service (used internally by workerdManager; in Electron mode
   // the main process has its OWN FsService for panel-facing FS RPC)
   {
-    const { FsService } = await import("@vibestudio/shared/fsService");
+    const { FsService } = await import("./services/fsService.js");
     const { isWritableVcsPath } = await import("./vcsHost/paths.js");
     type FsCausalParent = import("@vibestudio/rpc").RpcCausalParent | null;
-    type FsMutationIntegrity = import("@vibestudio/shared/fsService").FsVcsMutationIntegrity;
+    type FsMutationIntegrity = import("./services/fsService.js").FsVcsMutationIntegrity;
     const callSemantic = <T>(
       method: string,
       input: unknown,
@@ -5682,7 +5682,7 @@ async function main() {
             causalParent,
             assertPresent(contextIntegrity)
           );
-    const vcsBridge: import("@vibestudio/shared/fsService").FsVcsBridge = {
+    const vcsBridge: import("./services/fsService.js").FsVcsBridge = {
       isTracked: async (relPath) => isWritableVcsPath(relPath),
       edit: (input, causalParent, integrity) =>
         callSemantic("vcsEdit", input, causalParent, integrity),

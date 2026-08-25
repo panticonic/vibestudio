@@ -18,18 +18,18 @@ import { rgPath as bundledRipgrepPath } from "@vscode/ripgrep";
 import ignore, { type Ignore } from "ignore";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { FileHandle as NodeFileHandle } from "fs/promises";
-import type { ServiceContext } from "./serviceDispatcher.js";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
-import type { ContextFolderManager } from "./contextFolderManager.js";
+import type { ContextFolderManager } from "@vibestudio/shared/contextFolderManager";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { EntityCache } from "./runtime/entityCache.js";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   canonicalizeWorkspaceFilePath,
   CONTAINER_SECTIONS,
   splitRepoPath,
   taxonomyRepoForPath,
   type RepoPath,
-} from "./runtime/entitySpec.js";
+} from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 
 /**

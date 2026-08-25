@@ -3,7 +3,7 @@
  * context folder for context-bound callers. An unchained extension granted the
  * explicit `host-fs-access` capability is the deliberate unrestricted-host
  * exception. The implementation lives in
- * `@vibestudio/shared/fsService` (FsService); this module declares the RPC
+ * `./fsService.js` (FsService); this module declares the RPC
  * surface (method schemas + policy) for dispatcher registration.
  *
  * Caller-kind argument conventions (handled inside FsService):
@@ -27,7 +27,7 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { handleFsCall, type FsService } from "@vibestudio/shared/fsService";
+import { handleFsCall, type FsService } from "./fsService.js";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 
 export function createFsServiceDefinition(getFsService: () => FsService): ServiceDefinition {

@@ -1,5 +1,5 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { FsService } from "@vibestudio/shared/fsService";
+import type { FsService } from "../services/fsService.js";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { createHostCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";

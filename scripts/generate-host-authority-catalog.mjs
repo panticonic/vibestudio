@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { format, resolveConfig } from "prettier";
-import { declaredMethodCapabilityDependencies } from "@vibestudio/shared/unitAuthorityInference";
+import { declaredMethodCapabilityDependencies } from "@vibestudio/unit-authority-inference";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = path.join(

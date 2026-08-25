@@ -10,7 +10,7 @@ import {
   inferWorkspaceServiceCapabilities,
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
-} from "@vibestudio/shared/unitAuthorityInference";
+} from "@vibestudio/unit-authority-inference";
 
 describe("inferWorkspaceServiceCapabilities", () => {
   const selectors = new Map([

@@ -14,7 +14,6 @@
  * `installReviewRows`.
  */
 
-import { getDomain } from "tldts";
 import type { ReviewedUnit } from "../approvals.js";
 import type { UnitAuthorityRequest } from "../authorityManifest.js";
 import type { CapabilityPresentationResolver } from "../authorityPresentation.js";
@@ -170,70 +169,4 @@ export function multipleTemplateContributorsOrigin(): InstallReviewOrigin {
     originStatus: "multiple-template-contributors",
     firstEncounter: false,
   };
-}
-
-/**
- * Where bytes came from, from a template pin.
- *
- * There is no publisher identity, so the URL is the identity: it is never
- * abbreviated away, internationalized domains render as punycode, and the
- * template's self-given name is carried separately so it can only ever appear
- * as a title.
- *
- * Two things this deliberately does NOT do.
- *
- * It does not rewrite the URL. The previous form rebuilt it from protocol, host
- * and path, which silently dropped a non-default port and every other authority
- * component — so two different sources could print as the same identity string.
- * `URL` already punycodes the host on parse, so `href` is the ASCII form a
- * person reads, with nothing removed.
- *
- * It does not guess the registrable domain. `registrableDomain` is the real
- * boundary, from the public suffix list `tldts` ships — never "the last two
- * labels", which is wrong for `co.uk` and every other multi-label suffix, and
- * which would emphasize `com.attacker` inside `github.com.attacker.net`. The
- * emphasis this field drives is the whole defence against a lookalike host, so
- * a wrong answer here is worse than no emphasis at all.
- *
- * `allowPrivateDomains` is on deliberately. The private section of the list is
- * where one operator hands out names to strangers — `acme.github.io`,
- * `acme.pages.dev` — and there the boundary a person must judge is the label
- * the stranger holds, not the operator's domain. Emphasizing `github.io` in
- * `acme.github.io` would say "this is GitHub's" about a name anyone can take.
- *
- * A host with no suffix at all — an IP literal, `localhost`, a single label —
- * gets the whole host, which is exactly right: there is no narrower boundary,
- * and the whole host is then what gets emphasized.
- */
-export function templateOrigin(input: {
-  url: string;
-  version: string | null;
-  selfName?: string;
-  admittedOriginKeys: ReadonlySet<string>;
-  isWorkspaceRoot?: boolean;
-}): InstallReviewOrigin {
-  const parsed = safeUrl(input.url);
-  const host = parsed ? parsed.hostname : null;
-  // Host plus owner path segment: a new repository under a domain the user
-  // already runs code from is not a wholly new source.
-  const ownerSegment = parsed?.pathname.split("/").filter(Boolean)[0];
-  const originKey = host ? (ownerSegment ? `${host}/${ownerSegment}` : host) : input.url;
-  return {
-    url: parsed ? parsed.href : input.url,
-    originKey,
-    registrableDomain: host ? (getDomain(host, { allowPrivateDomains: true }) ?? host) : null,
-    version: input.version,
-    ...(input.selfName ? { selfName: input.selfName } : {}),
-    isHostBuild: false,
-    ...(input.isWorkspaceRoot ? { isWorkspaceRoot: true } : {}),
-    firstEncounter: !input.admittedOriginKeys.has(originKey),
-  };
-}
-
-function safeUrl(value: string): URL | null {
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
 }

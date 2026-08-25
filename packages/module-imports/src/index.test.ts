@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  analyzeModuleImports,
-  definitelyTypedCoordinate,
-  moduleCoordinate,
-} from "./moduleImports.js";
+import { analyzeModuleImports, definitelyTypedCoordinate, moduleCoordinate } from "./index.js";
 
 describe("analyzeModuleImports", () => {
   it("reports static, exported, dynamic, and CommonJS references with locations", () => {
@@ -169,7 +165,7 @@ describe("analyzeModuleImports", () => {
     const source = [
       'import { inject } from "@workspace/runtime/worker";',
       "export class Service {",
-      "  constructor(@inject(\"store\") readonly store: unknown) {}",
+      '  constructor(@inject("store") readonly store: unknown) {}',
       "}",
     ].join("\n");
 

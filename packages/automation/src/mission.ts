@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { canonicalJson } from "../canonicalJson.js";
-import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
   canonicalCronExpression,
   canonicalCronTimeZone,

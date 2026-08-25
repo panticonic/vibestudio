@@ -58,7 +58,6 @@
     "./evalRuntimeIdentity": "./src/evalRuntimeIdentity.ts",
     "./extensionRuntimeAbi": "./src/extensionRuntimeAbi.ts",
     "./externalOpen": "./src/externalOpen.ts",
-    "./fsService": "./src/fsService.ts",
     "./gadRuntimeMethods": "./src/gadRuntimeMethods.ts",
     "./hostConfig": "./src/hostConfig.ts",
     "./hostCommands": "./src/hostCommands.ts",
@@ -69,7 +68,6 @@
     "./lazyTypedServiceClient": "./src/lazyTypedServiceClient.ts",
     "./lexorank": "./src/lexorank.ts",
     "./lineDiff": "./src/lineDiff.ts",
-    "./moduleImports": "./src/moduleImports.ts",
     "./managedService": "./src/managedService.ts",
     "./npmInstaller": "./src/npmInstaller.ts",
     "./ownedProcessGroup": "./src/ownedProcessGroup.ts",
@@ -112,7 +110,6 @@
     "./tokenManager": "./src/tokenManager.ts",
     "./theme": "./src/theme.ts",
     "./typedServiceClient": "./src/typedServiceClient.ts",
-    "./unitAuthorityInference": "./src/unitAuthorityInference.mjs",
     "./types": "./src/types.ts",
     "./unitManifest": "./src/unitManifest.ts",
     "./userNotifications": "./src/userNotifications.ts",
@@ -131,7 +128,6 @@
     "test": "cd ../.. && vitest run packages/shared/src"
   },
   "dependencies": {
-    "@babel/parser": "^7.29.2",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
@@ -140,14 +136,8 @@
     "@vibestudio/identity": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/sqlite": "workspace:*",
-    "@vibestudio/typecheck": "workspace:*",
     "@vibestudio/types": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
-    "@vscode/ripgrep": "1.18.0",
-    "croner": "10.0.1",
-    "ignore": "7.0.5",
-    "tldts": "^7.0.19",
-    "typescript": "7.0.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {

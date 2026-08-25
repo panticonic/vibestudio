@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { templateOrigin } from "./reviewedUnitParts.js";
+import { templateOrigin } from "./index.js";
 import {
   originDomainFact,
   originTextSegments,
   type InstallReviewOrigin,
-} from "./unitInstallReview.js";
+} from "@vibestudio/shared/authority/unitInstallReview";
 
 /**
  * Origin identity, which is the only identity this system has

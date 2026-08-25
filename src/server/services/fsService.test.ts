@@ -38,10 +38,10 @@ import {
   type FsVcsContent,
   type FsVcsEditOp,
 } from "./fsService.js";
-import { EntityCache } from "./runtime/entityCache.js";
-import type { EntityKind, EntityRecord } from "./runtime/entitySpec.js";
-import type { ContextFolderManager } from "./contextFolderManager.js";
-import { createVerifiedCaller, type ServiceContext } from "./serviceDispatcher.js";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { ContextFolderManager } from "@vibestudio/shared/contextFolderManager";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 
 /**
  * Minimal ContextFolderManager stub.

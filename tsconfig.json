@@ -22,6 +22,7 @@
     "moduleResolution": "bundler",
     "types": ["node", "vitest/globals"],
     "paths": {
+      "@vibestudio/automation/*": ["./packages/automation/src/*"],
       "@vibestudio/browser-contracts": ["./packages/browser-contracts/src/index.ts"],
       "@vibestudio/browser-contracts/*": ["./packages/browser-contracts/src/*"],
       "@vibestudio/browser-data": ["./packages/browser-data/src/index.ts"],
@@ -50,6 +51,8 @@
       "@vibestudio/extension-host/child-runtime": ["./packages/extension-host/src/childRuntime.ts"],
       "@vibestudio/git": ["./packages/git/src/index.ts"],
       "@vibestudio/git/formatting": ["./packages/git/src/formatting.ts"],
+      "@vibestudio/module-imports": ["./packages/module-imports/src/index.ts"],
+      "@vibestudio/origin-identity": ["./packages/origin-identity/src/index.ts"],
       "@vibestudio/identity/*": ["./packages/identity/src/*"],
       "@vibestudio/trajectory-identity": ["./packages/trajectory-identity/src/index.ts"],
       "@vibestudio/process-adapter": ["./packages/process-adapter/src/index.ts"],

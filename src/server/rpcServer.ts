@@ -592,7 +592,7 @@ export class RpcServer {
         import("./services/egressProxy.js").EgressProxy,
         "forwardProxyFetchStream"
       >;
-      fsService?: Pick<import("@vibestudio/shared/fsService").FsService, "closeHandlesForCaller">;
+      fsService?: Pick<import("./services/fsService.js").FsService, "closeHandlesForCaller">;
       entityCache?: EntityCache;
       /** Exact active-row readiness barrier required before direct DO relay. */
       ensureUserlandDoReady: (ref: DORef) => Promise<void>;

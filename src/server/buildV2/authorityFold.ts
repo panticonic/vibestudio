@@ -8,7 +8,7 @@ import {
   HOST_AUTHORITY_METHODS,
   HOST_METHOD_MANIFEST_DEPENDENCIES,
 } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
-import { inferUnitTransportCapabilities } from "@vibestudio/shared/unitAuthorityInference";
+import { inferUnitTransportCapabilities } from "@vibestudio/unit-authority-inference";
 import {
   authorityRequestCoversEffect,
   userlandHandleResourcePrefix,

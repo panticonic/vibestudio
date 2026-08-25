@@ -19,10 +19,8 @@ import type {
   UnitInstallSourceOrigin,
 } from "@vibestudio/shared/authority/unitInstallReview";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
-import {
-  multipleTemplateContributorsOrigin,
-  templateOrigin,
-} from "@vibestudio/shared/authority/reviewedUnitParts";
+import { multipleTemplateContributorsOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import { templateOrigin } from "@vibestudio/origin-identity";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import { parseTemplateState } from "@vibestudio/workspace/templateState";
 import {

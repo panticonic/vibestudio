@@ -2,9 +2,9 @@ import YAML from "yaml";
 import {
   hostBuildOrigin,
   multipleTemplateContributorsOrigin,
-  templateOrigin,
   unresolvedOrigin,
 } from "@vibestudio/shared/authority/reviewedUnitParts";
+import { templateOrigin } from "@vibestudio/origin-identity";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { parseTemplateState } from "@vibestudio/workspace/templateState";
 import { sanitizeTemplateDisplayText } from "@vibestudio/workspace-contracts/workspaceConfigSchema";

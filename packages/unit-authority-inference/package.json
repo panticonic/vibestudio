@@ -1,0 +1,22 @@
+{
+  "name": "@vibestudio/unit-authority-inference",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "default": "./src/index.mjs"
+    }
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run scripts/lib/unit-authority-inference.test.mjs"
+  },
+  "dependencies": {
+    "@vibestudio/typecheck": "workspace:*",
+    "typescript": "7.0.2"
+  }
+}

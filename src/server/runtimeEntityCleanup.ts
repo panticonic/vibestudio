@@ -1,4 +1,4 @@
-import type { FsService } from "@vibestudio/shared/fsService";
+import type { FsService } from "./services/fsService.js";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
