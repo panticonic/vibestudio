@@ -4,7 +4,7 @@ import { getProfileDataPath } from "@vibestudio/env-paths";
 import { writeFileAtomicSync } from "../atomicFile.js";
 
 export interface StoredSystemTestRun {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runId: string;
   createdAt: number;
   serverUrl: string;
@@ -12,9 +12,12 @@ export interface StoredSystemTestRun {
   ownerId: string;
   contextId: string;
   subKey: string;
-  /** Absolute run-specific artifact directory. Optional only for schema-v1
-   * records created before artifact provenance was persisted for every run. */
-  artifactDir?: string;
+  /** Durable test-record owner. Inspection calls this target directly and
+   * never re-enters the completed coordinator execution. */
+  runnerEntityId: string;
+  runnerTargetId: string;
+  /** Absolute run-specific artifact directory. */
+  artifactDir: string;
   config: {
     names: string[];
     category?: string;
@@ -57,15 +60,17 @@ export function loadSystemTestRun(runId: string): StoredSystemTestRun | null {
   try {
     const value = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<StoredSystemTestRun>;
     if (
-      value.schemaVersion !== 1 ||
+      value.schemaVersion !== 2 ||
       value.runId !== runId ||
       typeof value.serverUrl !== "string" ||
       typeof value.sessionName !== "string" ||
       typeof value.ownerId !== "string" ||
       typeof value.contextId !== "string" ||
       typeof value.subKey !== "string" ||
-      (value.artifactDir !== undefined &&
-        (typeof value.artifactDir !== "string" || !path.isAbsolute(value.artifactDir))) ||
+      typeof value.runnerEntityId !== "string" ||
+      typeof value.runnerTargetId !== "string" ||
+      typeof value.artifactDir !== "string" ||
+      !path.isAbsolute(value.artifactDir) ||
       !value.config ||
       !Array.isArray(value.config.names)
     ) {

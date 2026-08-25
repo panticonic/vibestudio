@@ -1,11 +1,6 @@
-import { randomUUID } from "node:crypto";
-import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
-import {
-  EVAL_RESULT_RETURN_PREVIEW_CHARS,
-  createEvalExecutor,
-  evalMethods,
-} from "@vibestudio/service-schemas/eval";
+import { evalMethods } from "@vibestudio/service-schemas/eval";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
@@ -67,22 +62,7 @@ function isSystemTestThinkingLevel(value: unknown): value is SystemTestThinkingL
   );
 }
 const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
-// Diagnostic commands must fail visibly when an unhealthy EvalDO cannot
-// reconstruct a persisted run. An unbounded inspector is especially harmful:
-// it turns the primary recovery surface into another silent stall.
-const SYSTEM_TEST_INSPECTION_TIMEOUT_MS = 30_000;
-// The first page is returned through eval itself. Reserve an object-envelope
-// budget and assume worst-case JSON escaping (one code unit → six characters)
-// so the pager can never compact its own response into another truncation
-// envelope. Later pages use the direct scope reader.
-const EVAL_RETURN_PAGE_ENVELOPE_CHARS = 1_024;
-const EVAL_RETURN_PAGE_CHARS = Math.floor(
-  (EVAL_RESULT_RETURN_PREVIEW_CHARS - EVAL_RETURN_PAGE_ENVELOPE_CHARS) / 6
-);
-// Once the first eval has cached the source string, direct owner-scoped scope
-// reads bypass the EvalDO run-result envelope. A 128 Ki-code-unit page becomes
-// ~342 KiB as UTF-16LE base64, comfortably bounded while reducing round trips.
-const DIRECT_SCOPE_PAGE_CHARS = 128 * 1024;
+const SYSTEM_TEST_TRAJECTORY_PAGE_CHARS = 128 * 1024;
 const STARTUP_READINESS_DEADLINE_MS = 60_000;
 const STALE_STATUS_ATTESTATION_RE =
   /host authority attestation nonce was replayed or is outside the receiver's retention bound/u;
@@ -117,18 +97,16 @@ function evalClientFor(scope: SessionScope) {
   return typedClient("eval", evalMethods, scope.client);
 }
 
-function evalExecutorFor(scope: SessionScope) {
-  return createEvalExecutor(<T>(method: string, args: unknown[]) =>
-    scope.client.call<T>(method, args)
-  );
-}
-
 const SYSTEM_TEST_SESSION = "system-tests";
 const SYSTEM_TEST_RUNNER_SOURCE = "workers/system-test-runner";
 const SYSTEM_TEST_RUNNER_CLASS = "SystemTestRunnerDO";
 
 export function systemTestCoordinatorScopeKey(runId: string): string {
   return `system-test-coordinator:${runId}`;
+}
+
+function systemTestRecordOwnerKey(ownerId: string): string {
+  return `cli-runs-${createHash("sha256").update(ownerId).digest("hex")}`;
 }
 
 async function systemTestRunnerFor(
@@ -267,7 +245,11 @@ function startRouting(scope: SessionScope, stored?: StoredSystemTestRun | null) 
   };
 }
 
-export function systemTestRunCode(runId: string, config: StoredSystemTestRun["config"]): string {
+export function systemTestRunCode(
+  runId: string,
+  config: StoredSystemTestRun["config"],
+  runner: Pick<RuntimeEntityHandle, "id" | "targetId">
+): string {
   const options = JSON.stringify({ runId, ...config });
   return `
     const progressKey = ${JSON.stringify(runId)};
@@ -291,12 +273,8 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       lastProgress = durable;
       (ctx as any).reportProgress(durable);
     };
-    let driver = null;
-    let driverContextId = null;
-    let driverRetired = false;
-    let driverContextDestroyed = false;
-    let driverResultReleased = false;
-    let driverResourcesReleased = false;
+    const driver = ${JSON.stringify(runner)};
+    let driverExecutionReleased = false;
     let cancellationCleanup = null;
     let cancellationRequested = false;
     const describeCleanupFailure = (error) => {
@@ -327,67 +305,26 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
         }
       }
     };
-    const retireDriver = async () => {
-      if (!driver || driverRetired) return;
-      await afterRuntimeReady(() => services.runtime.retireEntity({ id: driver.id }));
-      driverRetired = true;
-    };
-    const releaseDriverResources = async () => {
-      if (!driver || driverResourcesReleased) return;
-      try {
-        if (!driverResultReleased) {
-          await afterRuntimeReady(() =>
-            rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey])
-          );
-          driverResultReleased = true;
-        }
-        await retireDriver();
-        if (driverContextId && !driverContextDestroyed) {
-          await afterRuntimeReady(() =>
-            services.runtime.destroyContext({
-              contextId: driverContextId,
-              recursive: true,
-            })
-          );
-          driverContextDestroyed = true;
-        }
-        driverResourcesReleased = true;
-      } catch (error) {
-        throw new AggregateError([error], "System-test driver cleanup failed");
-      }
+    const releaseDriverExecution = async () => {
+      if (driverExecutionReleased) return;
+      await afterRuntimeReady(() =>
+        rpc.call(driver.targetId, "releaseSystemTestRunExecution", [progressKey])
+      );
+      driverExecutionReleased = true;
     };
     try {
-      const driverContext = await services.runtime.createContext({});
-      driverContextId = driverContext.contextId;
-      driver = await services.runtime.createEntity({
-        kind: "do",
-        execution: {
-          surface: "code",
-          source: "workers/system-test-runner",
-        },
-        className: "SystemTestRunnerDO",
-        key: progressKey,
-        contextId: driverContextId,
-      });
       await rpc.call(driver.targetId, "startSystemTestRun", [{
         ...${options},
-        contextId: driverContextId,
+        contextId: ctx.contextId,
       }]);
       ctx.onCancel(async () => {
         cancellationRequested = true;
         const cleanup = (async () => {
-          const cancelledRecord = await rpc.call(
+          await rpc.call(
             driver.targetId,
             "cancelSystemTestRun",
             [progressKey],
           );
-          if (cancelledRecord) {
-            const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-              ? scope.systemTestRuns
-              : {};
-            runs[progressKey] = cancelledRecord;
-            scope.systemTestRuns = runs;
-          }
           const prior = lastProgress && typeof lastProgress === "object"
             ? lastProgress
             : { runId: progressKey, startedAt: new Date().toISOString(), total: 0, queued: [], running: [], completed: [] };
@@ -428,12 +365,7 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
             [progressKey],
           );
           if (!record) throw new Error("System-test driver returned no record for " + progressKey);
-          const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-            ? scope.systemTestRuns
-            : {};
-          runs[progressKey] = record;
-          scope.systemTestRuns = runs;
-          await releaseDriverResources();
+          await releaseDriverExecution();
           return record.summary;
         }
         throw new Error(
@@ -462,9 +394,8 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       }
     } finally {
       // EvalDO starts registered cancellation cleanup before aborting ordinary
-      // execution. Let it settle first, then unconditionally release both the
-      // finite inner EvalDO and its driver. Validation errors, transport errors,
-      // and successful runs therefore share one exact terminal path.
+      // execution. Let it settle first, then release only the finite inner
+      // execution. The shared runner remains the durable owner of test records.
       let cancellationFailure = null;
       if (cancellationCleanup) {
         try {
@@ -475,7 +406,7 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       }
       let releaseFailure = null;
       try {
-        await releaseDriverResources();
+        await releaseDriverExecution();
       } catch (error) {
         releaseFailure = error;
       }
@@ -491,20 +422,6 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
   `;
 }
 
-function readCode(runId: string, expression: string): string {
-  return `
-    import {
-      failedSystemTestNames,
-      getSystemTestRun,
-      inspectSystemTestRun,
-      systemTestTrajectory,
-    } from "@workspace-skills/system-testing/cli";
-    const record = getSystemTestRun(scope.systemTestRuns, ${JSON.stringify(runId)});
-    if (!record) throw new Error("No persisted system-test result for run ${runId}");
-    return ${expression};
-  `;
-}
-
 async function startRun(
   scope: SessionScope,
   config: StoredSystemTestRun["config"],
@@ -512,8 +429,13 @@ async function startRun(
   onCreated?: (stored: StoredSystemTestRun) => void
 ): Promise<StoredSystemTestRun> {
   const runId = `st_${randomUUID().replaceAll("-", "")}`;
+  const runner = await systemTestRunnerFor(
+    scope,
+    scope.contextId,
+    systemTestRecordOwnerKey(scope.session.entityId)
+  );
   const stored: StoredSystemTestRun = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId,
     createdAt: Date.now(),
     serverUrl: scope.session.serverUrl,
@@ -525,6 +447,8 @@ async function startRun(
     // same owner session. Give the coordinator its own address; the runner
     // deliberately keeps runId for its finite test notebook.
     subKey: systemTestCoordinatorScopeKey(runId),
+    runnerEntityId: runner.id,
+    runnerTargetId: runner.targetId,
     artifactDir: systemTestArtifactDir(runId, artifactRoot),
     config,
   };
@@ -540,7 +464,7 @@ async function startRun(
     runId,
     source: {
       kind: "inline",
-      code: systemTestRunCode(runId, config),
+      code: systemTestRunCode(runId, config, runner),
       syntax: "typescript",
     },
   });
@@ -784,7 +708,6 @@ async function run(inv: ParsedInvocation): Promise<number> {
       if (await signalCancellation.ensureCancellation()) return 130;
       const value = resultValue(status);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
-      await retainRunDiagnostics(scope, stored, value);
       printRun(value, json, artifact);
       return failedSummary(value) ? 1 : 0;
     } finally {
@@ -923,311 +846,105 @@ async function runs(inv: ParsedInvocation): Promise<number> {
 
 async function readPersisted(
   inv: ParsedInvocation,
-  code: (runId: string) => string,
-  readLive?: (progress: Record<string, unknown>) => unknown,
-  pageCode?: (runId: string, start: number, end: number, pageKey: string) => string
-): Promise<{ runId: string; stored: StoredSystemTestRun | null; value: unknown }> {
+  method: string,
+  args: (runId: string) => unknown[],
+  readLive?: (progress: Record<string, unknown>) => unknown
+): Promise<{ runId: string; stored: StoredSystemTestRun; value: unknown }> {
   const runId = requireRunId(inv);
   const stored = loadSystemTestRun(runId);
-  const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
-  const outer = await evalClientFor(scope).get({ ...routing(scope, stored), runId });
-  const progress =
-    outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
-      ? (outer.progress as Record<string, unknown>)
-      : null;
-  // The runner heartbeat retains the completed bounded/full inspection packet.
-  // Prefer it even after terminal completion: enqueuing a second eval behind an
-  // unhealthy or still-unwinding owner EvalDO defeats the purpose of the
-  // diagnostic command and can make `inspect` appear to hang.
-  const live = progress && readLive ? readLive(progress) : undefined;
-  if (live !== undefined) return { runId, stored, value: live };
-  // Eval run handles are process-local. After a source-server restart a
-  // completed system-test run is legitimately "unknown", while its record is
-  // still durable in the owner's EvalDO scope. Probe that durable record below
-  // instead of making the volatile orchestration handle a prerequisite for
-  // inspect/trajectory/rerun.
-  if (outer.status !== "done" && outer.status !== "unknown" && outer.status !== "cancelled") {
-    throw new CliError(
-      `system-test run ${runId} is ${outer.status}; live inspection is not available yet, retry shortly`
+  if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
+  const scope = await resolveSystemTestScope(inv, stored.sessionName);
+  try {
+    const value = await scope.client.callTarget<unknown>(
+      stored.runnerTargetId,
+      method,
+      args(runId)
     );
+    return { runId, stored, value };
+  } catch (durableError) {
+    if (!readLive) throw durableError;
+    const outer = await evalClientFor(scope).get({ ...routing(scope, stored), runId });
+    const progress =
+      outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
+        ? (outer.progress as Record<string, unknown>)
+        : null;
+    const live = progress ? readLive(progress) : undefined;
+    if (live !== undefined) return { runId, stored, value: live };
+    throw durableError;
   }
-  if (outer.status === "done") resultValue(outer);
-  const result = await evalExecutorFor(scope)({
-    ...startRouting(scope, stored),
-    runId: randomUUID(),
-    source: { kind: "inline", code: code(runId), syntax: "typescript" },
-    timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
-  });
-  if (!result.success) throw new CliError(result.error ?? "could not inspect system-test run");
-  const value = await expandTruncatedReturn(
-    scope,
-    stored,
-    result.returnValue,
-    pageCode ? (start, end, pageKey) => pageCode(runId, start, end, pageKey) : undefined
-  );
-  return { runId, stored, value };
 }
 
-function truncatedReturn(value: unknown): {
-  scopeKey: string;
-  originalChars: number;
-} | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  return row["truncated"] === true &&
-    typeof row["scopeKey"] === "string" &&
-    typeof row["originalChars"] === "number"
-    ? { scopeKey: row["scopeKey"], originalChars: row["originalChars"] }
-    : null;
-}
-
-/**
- * Build an owner-scoped deterministic pager for a persisted diagnostic value.
- * This deliberately does not read `$lastLargeReturn`: that shared recovery slot
- * can be replaced by another diagnostic eval between the truncation envelope
- * and the first page read.
- */
-export function systemTestJsonPageExpression(
-  expression: string,
-  start: number,
-  end: number,
-  pageKey: string
-): string {
-  return `(() => {
-    const pageKey = ${JSON.stringify(pageKey)};
-    if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
-      const value = (${expression});
-      scope[pageKey] = JSON.stringify(value, null, 2);
-    }
-    const source = scope[pageKey];
-    if (typeof source !== "string") {
-      throw new Error("Cached system-test diagnostic is not text");
-    }
-    const chunk = source.slice(${start}, ${end});
-    return {
-      length: source.length,
-      encoding: "plain-string",
-      chunk,
-    };
-  })()`;
-}
-
-async function expandTruncatedReturn(
-  scope: SessionScope,
-  stored: StoredSystemTestRun | null,
-  value: unknown,
-  pageCode?: (start: number, end: number, pageKey: string) => string
-): Promise<unknown> {
-  const truncated = truncatedReturn(value);
-  if (!truncated) return value;
-
-  // Ordinary large eval returns are recovered from the stable scope key named
-  // by the truncation envelope (currently scope.$lastLargeReturn). Callers
-  // that can deterministically reconstruct the value (notably persisted full
-  // trajectories) provide pageCode instead: EvalDO deliberately caps the
-  // generic scope spill at 1 MiB, while pathological trajectories can exceed
-  // that. A deterministic pager caches its serialized reconstruction under a
-  // temporary scope key, then returns bounded slices. This avoids both claiming
-  // recoverability from a capped spill and rebuilding/stringifying a
-  // multi-megabyte trajectory once per page.
-  const pageKey = `__systemTestReturn_${randomUUID().replaceAll("-", "")}`;
-  const client = evalClientFor(scope);
-  let text = "";
-  let reportedLength: number | null = null;
-  let targetLength = truncated.originalChars;
+async function readPersistedTrajectory(
+  inv: ParsedInvocation,
+  testName: string,
+  full: boolean,
+  readLive?: (progress: Record<string, unknown>) => unknown
+): Promise<{ runId: string; stored: StoredSystemTestRun; value: unknown }> {
+  const runId = requireRunId(inv);
+  const stored = loadSystemTestRun(runId);
+  if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
+  const scope = await resolveSystemTestScope(inv, stored.sessionName);
   try {
     let offset = 0;
-    while (offset < targetLength) {
-      const requestedChars = offset === 0 ? EVAL_RETURN_PAGE_CHARS : DIRECT_SCOPE_PAGE_CHARS;
-      // The first page is an eval because it atomically snapshots either the
-      // envelope's stable spill key or a deterministic reconstruction into
-      // `pageKey`. Every
-      // subsequent page is a direct scope read: no compilation, no run row,
-      // no result compaction, and no repeated trajectory serialization.
-      let resolvedRow: {
-        length?: unknown;
-        chunk?: unknown;
-        encoding?: unknown;
-      } | null = null;
-      if (offset === 0) {
-        const page = await evalExecutorFor(scope)({
-          ...startRouting(scope, stored),
-          runId: randomUUID(),
-          source: {
-            kind: "inline",
-            code:
-              pageCode?.(offset, offset + requestedChars, pageKey) ??
-              `
-              const pageKey = ${JSON.stringify(pageKey)};
-              if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
-                scope[pageKey] = scope[${JSON.stringify(truncated.scopeKey)}];
-              }
-              const source = scope[pageKey];
-              if (typeof source !== "string") {
-                throw new Error("Large eval return spill is unavailable or is not text");
-              }
-              const chunk = source.slice(${offset}, ${offset + requestedChars});
-              return {
-                length: source.length,
-                encoding: "plain-string",
-                chunk,
-              };
-            `,
-            syntax: "typescript",
-          },
-          timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
-        });
-        if (!page.success) {
-          throw new CliError(page.error ?? "could not page large system-test result");
-        }
-        resolvedRow = page.returnValue as typeof resolvedRow;
-      } else {
-        resolvedRow = await client.readScopeTextPage({
-          ...routing(scope, stored),
-          key: pageKey,
-          offset,
-          limit: requestedChars,
-        });
-      }
+    let length: number | null = null;
+    let text = "";
+    do {
+      const page = await scope.client.callTarget<{
+        length: number;
+        encoding: "plain-string";
+        chunk: string;
+      }>(stored.runnerTargetId, "readSystemTestTrajectoryPage", [
+        runId,
+        testName,
+        full,
+        offset,
+        SYSTEM_TEST_TRAJECTORY_PAGE_CHARS,
+      ]);
       if (
-        typeof resolvedRow?.length !== "number" ||
-        typeof resolvedRow.chunk !== "string" ||
-        (resolvedRow.encoding !== "utf16le-base64" && resolvedRow.encoding !== "plain-string")
+        !Number.isSafeInteger(page.length) ||
+        page.length < 0 ||
+        page.encoding !== "plain-string" ||
+        typeof page.chunk !== "string"
       ) {
-        throw new CliError("invalid page while retrieving large system-test result");
+        throw new CliError("invalid page while retrieving system-test trajectory");
       }
-      const decodedChunk =
-        resolvedRow.encoding === "plain-string"
-          ? resolvedRow.chunk
-          : Buffer.from(resolvedRow.chunk, "base64").toString("utf16le");
-      reportedLength ??= resolvedRow.length;
-      if (resolvedRow.length !== reportedLength) {
-        throw new CliError("large system-test result changed while it was being retrieved");
+      length ??= page.length;
+      if (page.length !== length) {
+        throw new CliError("system-test trajectory changed while it was being retrieved");
       }
-      // A caller-supplied deterministic pager may serialize the source value
-      // slightly differently from EvalDO's generic return serializer. Its
-      // first page is authoritative for that reconstructed JSON stream. The
-      // generic spill path must still match the advertised original length so
-      // a capped spill is never mistaken for a complete value.
-      targetLength = reportedLength;
-      text += decodedChunk;
-      if (decodedChunk.length === 0 && offset < targetLength) {
-        throw new CliError("large system-test result returned an empty page before completion");
+      if (page.chunk.length === 0 && offset < length) {
+        throw new CliError("system-test trajectory returned an empty page before completion");
       }
-      offset += decodedChunk.length;
+      text += page.chunk;
+      offset += page.chunk.length;
+    } while (length === null || offset < length);
+    if (text.length !== length) {
+      throw new CliError(
+        `system-test trajectory is incomplete (expected ${length} chars, received ${text.length})`
+      );
     }
-  } finally {
-    await client
-      .deleteScopeValue({ ...routing(scope, stored), key: pageKey })
-      .catch(() => undefined);
+    return { runId, stored, value: JSON.parse(text) as unknown };
+  } catch (durableError) {
+    if (!readLive) throw durableError;
+    const outer = await evalClientFor(scope).get({ ...routing(scope, stored), runId });
+    const progress =
+      outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
+        ? (outer.progress as Record<string, unknown>)
+        : null;
+    const live = progress ? readLive(progress) : undefined;
+    if (live !== undefined) return { runId, stored, value: live };
+    throw durableError;
   }
-
-  if (
-    reportedLength === null ||
-    (!pageCode && reportedLength !== truncated.originalChars) ||
-    text.length !== reportedLength
-  ) {
-    const expected =
-      !pageCode && reportedLength !== truncated.originalChars
-        ? `${truncated.originalChars} advertised / ${reportedLength ?? "unknown"} paged`
-        : String(reportedLength ?? truncated.originalChars);
-    throw new CliError(
-      `large system-test result is incomplete (expected ${expected} chars, received ${text.length})`
-    );
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new CliError(
-      `large system-test result was not valid JSON: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
-/**
- * Capture the diagnostics packet while the workspace that produced it still
- * exists.
- *
- * `inspect` and `trajectory` read the run out of the *workspace*, so every
- * failure's evidence dies with the instance that produced it. Since a change to
- * workspace source only takes effect on reprovision, the ordinary repair loop —
- * run, read the failure, fix, run again — destroys the evidence at exactly the
- * moment it becomes worth reading. Persisting the packet at completion, next to
- * the summary this command already retains, makes a failed run inspectable
- * afterwards.
- */
-async function retainRunDiagnostics(
-  scope: SessionScope,
-  stored: StoredSystemTestRun,
-  summary: unknown
-): Promise<void> {
-  if (!failedSummary(summary)) return;
-  try {
-    const result = await evalExecutorFor(scope)({
-      ...startRouting(scope, stored),
-      runId: randomUUID(),
-      source: {
-        kind: "inline",
-        code: readCode(stored.runId, "inspectSystemTestRun(record, {})"),
-        syntax: "typescript",
-      },
-      timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
-    });
-    if (!result.success) return;
-    const packet = await expandTruncatedReturn(scope, stored, result.returnValue);
-    writeSystemTestArtifact(stored.runId, "inspect", packet, stored.artifactDir);
-  } catch {
-    // Best effort: a run that cannot be inspected here is still reportable, and
-    // failing the run over its own post-mortem would be worse than the gap.
-  }
-}
-
-/**
- * The retained packet, used only when the producing workspace is gone. A live
- * workspace always answers first, so this never shadows fresher evidence.
- */
-function retainedInspection(
-  inv: ParsedInvocation,
-  testName: string | undefined
-): { value: unknown; artifact: string } | null {
-  if (testName) return null;
-  let runId: string;
-  try {
-    runId = requireRunId(inv);
-  } catch {
-    return null;
-  }
-  const stored = loadSystemTestRun(runId);
-  const dir = storedArtifactDir(runId, stored);
-  const value = loadSystemTestArtifact(runId, "inspect", dir);
-  return value === null
-    ? null
-    : { value, artifact: path.join(systemTestArtifactDir(runId, dir), "inspect.json") };
 }
 
 async function inspect(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const testName = typeof inv.flags["test"] === "string" ? inv.flags["test"] : undefined;
-    const retained = retainedInspection(inv, testName);
-    if (retained) {
-      printResult(retained.value, {
-        json,
-        human: () => {
-          console.log(JSON.stringify(retained.value, null, 2));
-          console.log(
-            `retained: ${retained.artifact} (the workspace that ran this no longer has it)`
-          );
-        },
-      });
-      return 0;
-    }
-    const inspectExpression = `inspectSystemTestRun(record, ${
-      testName ? `{ testName: ${JSON.stringify(testName)} }` : "{}"
-    })`;
     const { runId, stored, value } = await readPersisted(
       inv,
-      (id) => readCode(id, inspectExpression),
+      "inspectSystemTestRun",
+      (id) => [id, testName],
       (progress) => {
         const live = progress["liveInspection"] as Record<string, unknown> | undefined;
         if (!live) return undefined;
@@ -1237,9 +954,7 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
         const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
         const row = trajectories?.[testName] as Record<string, unknown> | undefined;
         return row?.["bounded"];
-      },
-      (id, start, end, pageKey) =>
-        readCode(id, systemTestJsonPageExpression(inspectExpression, start, end, pageKey))
+      }
     );
     const artifact = writeSystemTestArtifact(
       runId,
@@ -1267,10 +982,10 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
     if (!testName)
       throw new UsageError("usage: vibestudio system-test trajectory RUN_ID TEST_NAME");
     const full = inv.flags["full"] === true;
-    const trajectoryExpression = `systemTestTrajectory(record, ${JSON.stringify(testName)}, { full: ${full ? "true" : "false"} })`;
-    const { runId, stored, value } = await readPersisted(
+    const { runId, stored, value } = await readPersistedTrajectory(
       inv,
-      (id) => readCode(id, trajectoryExpression),
+      testName,
+      full,
       (progress) => {
         const live = progress["liveInspection"] as Record<string, unknown> | undefined;
         const trajectories = live?.["trajectories"] as Record<string, unknown> | undefined;
@@ -1284,11 +999,7 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
           reason: "Full trajectory becomes available when the running test completes",
           bounded: row["bounded"],
         };
-      },
-      full
-        ? (id, start, end, pageKey) =>
-            readCode(id, systemTestJsonPageExpression(trajectoryExpression, start, end, pageKey))
-        : undefined
+      }
     );
     const artifact = writeSystemTestArtifact(
       runId,
@@ -1328,11 +1039,10 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
     const prior =
       localNames.length > 0
         ? { config: storedPrior.config, names: [...new Set(localNames)] }
-        : ((
-            await readPersisted(inv, (id) =>
-              readCode(id, "({ config: record.config, names: failedSystemTestNames(record) })")
-            )
-          ).value as { config?: StoredSystemTestRun["config"]; names?: string[] });
+        : ((await readPersisted(inv, "getFailedSystemTestRun", (id) => [id])).value as {
+            config?: StoredSystemTestRun["config"];
+            names?: string[];
+          });
     const names = prior.names;
     if (!Array.isArray(names) || names.length === 0) {
       throw new CliError(`system-test run ${sourceRunId} has no failed tests to rerun`);

@@ -141,9 +141,18 @@ export class WorkerdInspectorBridge {
   /** Close all proxied sessions (e.g. before a workerd restart). */
   closeAll(): void {
     for (const session of this.sessions) {
+      // This bridge owns the upstream loopback connection. Generation closure
+      // is its transport terminal, not an ordinary inspector disconnect: a
+      // close handshake can remain OPEN while workerd is itself draining, and
+      // forgetting that socket here leaves SIGTERM waiting on a connection no
+      // component can close. Sever it before releasing the session record.
+      if (
+        session.upstream.readyState === WebSocket.CONNECTING ||
+        session.upstream.readyState === WebSocket.OPEN
+      ) {
+        session.upstream.terminate();
+      }
       session.client.close(1012, "workerd restarting");
-      if (session.upstream.readyState === WebSocket.CONNECTING) session.upstream.terminate();
-      else if (session.upstream.readyState === WebSocket.OPEN) session.upstream.close();
     }
     this.sessions.clear();
   }

@@ -4,7 +4,6 @@ import {
   isRetryableSystemTestStatusReadFailure,
   settleSystemTestDoctor,
   settleSystemTestStartup,
-  systemTestJsonPageExpression,
   systemTestDoctorRecovery,
   systemTestCoordinatorScopeKey,
   systemTestRunCode,
@@ -396,21 +395,20 @@ describe("system-test startup preparation", () => {
 });
 
 describe("system-test durable driver lifecycle", () => {
-  it("uses short start/status/result RPCs and retires the driver after parent unwind", () => {
-    const code = systemTestRunCode("st_test", {
-      names: ["probe"],
-      all: false,
-      concurrency: 1,
-    });
+  const runner = { id: "do:runner", targetId: "do:runner" };
+
+  it("releases the finite execution while preserving its durable record owner", () => {
+    const code = systemTestRunCode(
+      "st_test",
+      { names: ["probe"], all: false, concurrency: 1 },
+      runner
+    );
 
     expect(code).toContain('"startSystemTestRun"');
     expect(code).toContain('"getSystemTestRunSnapshot"');
     expect(code).toContain('"getSystemTestRunResult"');
     expect(code).not.toContain('"runSystemTests"');
-    expect(code).toContain(
-      'execution: {\n          surface: "code",\n          source: "workers/system-test-runner"'
-    );
-    expect(code).not.toContain('kind: "do",\n        source: "workers/system-test-runner"');
+    expect(code).toContain('const driver = {"id":"do:runner","targetId":"do:runner"}');
     expect(code).toContain("let cancellationCleanup = null");
     expect(code).toContain("const durableHeartbeatLimit = 48 * 1024");
     expect(code).not.toContain("const durableHeartbeatLimit = 220 * 1024");
@@ -419,46 +417,23 @@ describe("system-test durable driver lifecycle", () => {
     expect(code).toContain("cancellationCleanup = cleanup");
     expect(code).toContain('status: "cancelled"');
     expect(code).toContain("if (cancellationCleanup)");
-    expect(code).toContain("await releaseDriverResources()");
     expect(code).toContain('failures.map(describeCleanupFailure).join("; ")');
-    expect(code).toContain('"releaseSystemTestRunResult"');
-    expect(code).toContain("let driverResultReleased = false");
-    expect(code).toContain("let driverContextDestroyed = false");
-    expect(code).toContain("await services.runtime.createContext({})");
-    expect(code).toContain("services.runtime.destroyContext({");
-    expect(code).toContain("contextId: driverContextId");
+    expect(code).toContain('"releaseSystemTestRunExecution"');
+    expect(code).toContain("let driverExecutionReleased = false");
+    expect(code).not.toContain("services.runtime.createContext");
+    expect(code).not.toContain("services.runtime.destroyContext");
+    expect(code).not.toContain("services.runtime.retireEntity");
+    expect(code).not.toContain("scope.systemTestRuns");
     expect(code).toContain('snapshot?.status === "cancelling"');
-    expect(code).toContain("services.runtime.retireEntity({ id: driver.id })");
-    expect(code.indexOf("services.runtime.retireEntity")).toBeLessThan(
-      code.indexOf("driverRetired = true")
-    );
     const cancellationStart = code.indexOf("ctx.onCancel(async () => {");
     const pollingStart = code.indexOf("for (;;) {", cancellationStart);
     expect(cancellationStart).toBeGreaterThanOrEqual(0);
     expect(pollingStart).toBeGreaterThan(cancellationStart);
-    expect(code.slice(cancellationStart, pollingStart)).not.toContain(
-      "await releaseDriverResources()"
-    );
-    expect(code.indexOf('"releaseSystemTestRunResult"')).toBeLessThan(
-      code.indexOf("driverResultReleased = true")
-    );
-    expect(code.indexOf("driverResultReleased = true")).toBeLessThan(
-      code.indexOf("await retireDriver()")
-    );
-    expect(code.indexOf("await retireDriver()")).toBeLessThan(
-      code.indexOf("services.runtime.destroyContext")
-    );
-    expect(code.indexOf("services.runtime.destroyContext")).toBeLessThan(
-      code.indexOf("driverResourcesReleased = true")
-    );
-    expect(code.indexOf("driverRetired = true")).toBeLessThan(
-      code.indexOf("driverResourcesReleased = true")
-    );
     expect(code.indexOf("cancellationCleanup = cleanup")).toBeLessThan(
       code.lastIndexOf("if (cancellationCleanup)")
     );
     expect(code.indexOf("if (cancellationCleanup)")).toBeLessThan(
-      code.lastIndexOf("await releaseDriverResources()")
+      code.lastIndexOf("await releaseDriverExecution()")
     );
   });
 
@@ -467,11 +442,11 @@ describe("system-test durable driver lifecycle", () => {
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>;
     const run = async (failure: "release" | "retire" | "destroy") => {
-      const generated = systemTestRunCode(`st_retry_${failure}`, {
-        names: ["probe"],
-        all: false,
-        concurrency: 1,
-      });
+      const generated = systemTestRunCode(
+        `st_retry_${failure}`,
+        { names: ["probe"], all: false, concurrency: 1 },
+        runner
+      );
       const source = transformSync(`async function __generatedRun() {\n${generated}\n}`, {
         format: "esm",
         target: "es2022",
@@ -515,7 +490,7 @@ describe("system-test durable driver lifecycle", () => {
           if (method === "getSystemTestRunResult") {
             return { summary: { runId: `st_retry_${failure}`, passed: 1 } };
           }
-          if (method === "releaseSystemTestRunResult") {
+          if (method === "releaseSystemTestRunExecution") {
             releaseAttempts += 1;
             if (failure === "release" && releaseAttempts === 1) {
               throw new Error("lost release acknowledgement");
@@ -531,26 +506,33 @@ describe("system-test durable driver lifecycle", () => {
         onCancel: () => undefined,
       };
 
-      await expect(execute(services, rpc, ctx, {})).rejects.toThrow(
-        /System-test driver cleanup failed/
-      );
+      if (failure === "release") {
+        await expect(execute(services, rpc, ctx, {})).rejects.toThrow(
+          /lost release acknowledgement/
+        );
+      } else {
+        await expect(execute(services, rpc, ctx, {})).resolves.toEqual({
+          runId: `st_retry_${failure}`,
+          passed: 1,
+        });
+      }
       return { releaseAttempts, retirementAttempts, destructionAttempts };
     };
 
     await expect(run("release")).resolves.toEqual({
       releaseAttempts: 2,
-      retirementAttempts: 1,
-      destructionAttempts: 1,
+      retirementAttempts: 0,
+      destructionAttempts: 0,
     });
     await expect(run("retire")).resolves.toEqual({
       releaseAttempts: 1,
-      retirementAttempts: 2,
-      destructionAttempts: 1,
+      retirementAttempts: 0,
+      destructionAttempts: 0,
     });
     await expect(run("destroy")).resolves.toEqual({
       releaseAttempts: 1,
-      retirementAttempts: 1,
-      destructionAttempts: 2,
+      retirementAttempts: 0,
+      destructionAttempts: 0,
     });
   });
 
@@ -558,11 +540,11 @@ describe("system-test durable driver lifecycle", () => {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>;
-    const generated = systemTestRunCode("st_runtime_transition", {
-      names: ["probe"],
-      all: false,
-      concurrency: 1,
-    });
+    const generated = systemTestRunCode(
+      "st_runtime_transition",
+      { names: ["probe"], all: false, concurrency: 1 },
+      runner
+    );
     const source = transformSync(`async function __generatedRun() {\n${generated}\n}`, {
       format: "esm",
       target: "es2022",
@@ -594,7 +576,7 @@ describe("system-test durable driver lifecycle", () => {
         if (method === "getSystemTestRunResult") {
           return { summary: { runId: "st_runtime_transition", passed: 1 } };
         }
-        if (method === "releaseSystemTestRunResult") {
+        if (method === "releaseSystemTestRunExecution") {
           releaseAttempts += 1;
           if (releaseAttempts < 3) {
             throw Object.assign(new Error("runtime generation transition in flight"), {
@@ -617,21 +599,5 @@ describe("system-test durable driver lifecycle", () => {
       passed: 1,
     });
     expect(releaseAttempts).toBe(3);
-  });
-});
-
-describe("system-test persisted diagnostic paging", () => {
-  it("caches a deterministic reconstruction instead of the shared large-return spill", () => {
-    const code = systemTestJsonPageExpression(
-      "inspectSystemTestRun(record, {})",
-      0,
-      1024,
-      "__page"
-    );
-
-    expect(code).toContain("inspectSystemTestRun(record, {})");
-    expect(code).toContain("scope[pageKey] = JSON.stringify(value, null, 2)");
-    expect(code).not.toContain("$lastLargeReturn");
-    expect(code).toContain("source.slice(0, 1024)");
   });
 });

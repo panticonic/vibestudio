@@ -208,4 +208,37 @@ describe("WorkerdInspectorBridge", () => {
     );
     expect(upstream.terminate).toHaveBeenCalledOnce();
   });
+
+  it("severs an open upstream inspector socket when its workerd generation closes", () => {
+    const client = new FakeInspectorSocket();
+    client.readyState = WebSocket.OPEN;
+    const upstream = new FakeInspectorSocket();
+    bridge = new WorkerdInspectorBridge({
+      getInspectorUrl: () => "http://127.0.0.1:9229",
+      port: 4100,
+      createUpstreamSocket: () => upstream as never,
+    });
+    const endpoint = bridge.getEndpoint("core:user:worker-host", "panel:x");
+    const wss = {
+      handleUpgrade: vi.fn((_req, _socket, _head, accept) => accept(client)),
+    };
+    bridge.handleUpgrade(
+      {
+        url: "/workerd-inspector/core%3Auser%3Aworker-host",
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("inspection", endpoint?.token ?? ""),
+        },
+      } as never,
+      { write: vi.fn(), destroy: vi.fn() } as never,
+      Buffer.alloc(0),
+      wss as never
+    );
+    upstream.open();
+
+    bridge.closeAll();
+
+    expect(client.close).toHaveBeenCalledWith(1012, "workerd restarting");
+    expect(upstream.terminate).toHaveBeenCalledOnce();
+    expect(upstream.close).not.toHaveBeenCalled();
+  });
 });
