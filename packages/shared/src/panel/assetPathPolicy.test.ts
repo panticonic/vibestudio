@@ -159,6 +159,14 @@ describe("unit icon targets", () => {
     );
   });
 
+  it("carries an exact source state separately from the content identity", () => {
+    const version = "a".repeat(64);
+    const state = "b".repeat(64);
+    expect(unitIconTarget(SOURCE, "./assets/icon.svg", version, state)).toBe(
+      `__vibestudio/unit-icon?source=about%2Fhelp&path=assets%2Ficon.svg&v=${version}&s=${state}`
+    );
+  });
+
   it("omits the version when there is none, rather than sending an empty one", () => {
     // An empty `v` would look versioned to the route and make a mutable icon
     // immutable — the one way this can go wrong.

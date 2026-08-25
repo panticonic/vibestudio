@@ -44,6 +44,8 @@ export interface WorkspacePanelTreeHistoryRow {
 export interface WorkspacePanelDetail {
   revision: number;
   icon?: string;
+  iconVersion?: string;
+  iconState?: string;
   slot: WorkspacePanelTreeSlot;
   currentHistory: WorkspacePanelTreeHistoryRow;
   entity: EntityRecord;

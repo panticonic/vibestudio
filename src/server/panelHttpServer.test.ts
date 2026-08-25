@@ -682,7 +682,7 @@ describe("PanelHttpServer build cache", () => {
       "/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg"
     );
 
-    expect(getUnitIcon).toHaveBeenCalledWith("workers/mail", "assets/icon.svg");
+    expect(getUnitIcon).toHaveBeenCalledWith("workers/mail", "assets/icon.svg", undefined);
     expect(getBuild).not.toHaveBeenCalled();
     expect(response.statusCodeWritten).toBe(200);
     expect(response.headersWritten?.["Content-Type"]).toBe("image/svg+xml");
@@ -698,22 +698,33 @@ describe("PanelHttpServer build cache", () => {
     expect(revalidated.statusCodeWritten).toBe(304);
     expect(revalidated.body).toBeUndefined();
 
-    // A `v` naming the content makes the URL immutable, so a remote client can
+    // A `v` selects exact workspace content and makes the URL immutable, so a remote client can
     // store the glyph instead of re-fetching every unit's icon on every
     // launcher render — measured at 20 of 57 round trips for one panel open.
     const versioned = await handlePanelRequest(
       server,
-      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${contentHash.slice(0, 16)}`
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${contentHash}&s=${"a".repeat(64)}`
+    );
+    expect(getUnitIcon).toHaveBeenLastCalledWith(
+      "workers/mail",
+      "assets/icon.svg",
+      `state:${"a".repeat(64)}`
     );
     expect(versioned.statusCodeWritten).toBe(200);
     expect(versioned.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
 
-    // A malformed version must not buy immutability for a mutable URL.
+    const mismatched = await handlePanelRequest(
+      server,
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${"f".repeat(64)}&s=${"a".repeat(64)}`
+    );
+    expect(mismatched.statusCodeWritten).toBe(404);
+
+    // A malformed selector must not be interpreted as mutable current state.
     const bogus = await handlePanelRequest(
       server,
       "/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=nope"
     );
-    expect(bogus.headersWritten?.["Cache-Control"]).toBe("private, no-cache");
+    expect(bogus.statusCodeWritten).toBe(400);
   });
 
   it("does not synthesize build refs from panel context ids", async () => {

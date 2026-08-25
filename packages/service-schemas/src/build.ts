@@ -526,11 +526,17 @@ export const panelMetadataSchema = z
   .object({
     source: z.string(),
     title: z.string(),
-    // Manifest emoji and data images are returned verbatim. File-backed icons
-    // are resolved by the workspace build service into a data URI so every
-    // shell sees the same immutable bytes without depending on a co-located
-    // workspace HTTP gateway.
-    icon: z.string().max(1_500_000).optional(),
+    // Semantic manifest declaration only (emoji or a unit-relative asset path).
+    // Asset bytes travel over the versioned workspace HTTP route, never RPC.
+    icon: z.string().max(256).optional(),
+    iconVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    iconState: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
     description: z.string().optional(),
     hiddenInLauncher: z.boolean(),
     stateArgs: z.unknown().optional(),

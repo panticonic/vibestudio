@@ -236,14 +236,14 @@ describe("build service extension diagnostics", () => {
     expect(buildSystem.listBuildUnits).toHaveBeenCalledWith("ctx:feature", ["panel"]);
   });
 
-  it("returns declared file-backed icons as transport-stable data images", async () => {
+  it("returns file-backed icons as compact declarations bound to exact source state", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.listBuildUnits).mockResolvedValue([
       {
         unitName: "@workspace-panels/hello-svelte",
         unitPath: "panels/hello-svelte",
         kind: "panel",
-        stateHash: "state:panel",
+        stateHash: `state:${"a".repeat(64)}`,
         effectiveVersion: "ev-panel",
         manifest: { title: "Hello Svelte", icon: "./assets/icon.svg" },
       },
@@ -253,9 +253,9 @@ describe("build service extension diagnostics", () => {
       path: "assets/icon.svg",
       stateHash: `state:${"a".repeat(64)}`,
       effectiveVersion: "ev-1",
-      contentHash: "icon-hash",
+      contentHash: "b".repeat(64),
       contentType: "image/svg+xml",
-      body: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      body: Buffer.alloc(538),
     });
     const service = createBuildService({ buildSystem, listUnits: () => [] });
 
@@ -266,11 +266,15 @@ describe("build service extension diagnostics", () => {
       ])
     ).resolves.toMatchObject({
       source: "panels/hello-svelte",
-      icon: `data:image/svg+xml;base64,${Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg"/>'
-      ).toString("base64")}`,
+      icon: "./assets/icon.svg",
+      iconVersion: "b".repeat(64),
+      iconState: "a".repeat(64),
     });
-    expect(buildSystem.getUnitIcon).toHaveBeenCalledWith("panels/hello-svelte", "assets/icon.svg");
+    expect(buildSystem.getUnitIcon).toHaveBeenCalledWith(
+      "panels/hello-svelte",
+      "assets/icon.svg",
+      `state:${"a".repeat(64)}`
+    );
   });
 
   it("runs retention diagnostics without accepting caller-maintained roots", async () => {

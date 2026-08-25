@@ -372,6 +372,10 @@ export interface Panel {
   title: string;
   /** Semantic icon declared by the current workspace panel manifest. */
   icon?: string;
+  /** Immutable workspace state that owns a relative icon declaration. */
+  iconVersion?: string;
+  /** Immutable workspace state used to retrieve the declared icon bytes. */
+  iconState?: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
   /** Content-addressed BuildV2 artifact executed by this panel incarnation. */
@@ -496,6 +500,8 @@ export interface PanelSummary {
   id: string;
   title: string;
   icon?: string;
+  iconVersion?: string;
+  iconState?: string;
   /** Workspace unit that owns a relative image icon. */
   source?: string;
   childCount: number;
@@ -511,6 +517,8 @@ export interface PanelAncestor {
   id: string;
   title: string;
   icon?: string;
+  iconVersion?: string;
+  iconState?: string;
   /** Workspace unit that owns a relative image icon. */
   source?: string;
   favicon?: PanelNavigationState["favicon"];

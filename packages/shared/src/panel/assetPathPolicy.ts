@@ -197,10 +197,16 @@ export function panelAssetCacheKey(
  * every launcher render re-fetches every unit's icon. `icon` is the manifest's
  * declared value, so a `./`-relative one is the only kind this applies to.
  */
-export function unitIconTarget(source: string, icon: string, version?: string): string | null {
+export function unitIconTarget(
+  source: string,
+  icon: string,
+  version?: string,
+  state?: string
+): string | null {
   if (!icon.startsWith("./")) return null;
   const query = new URLSearchParams({ source, path: icon.slice(2) });
   if (version) query.set("v", version);
+  if (state) query.set("s", state);
   return `__vibestudio/unit-icon?${query.toString()}`;
 }
 

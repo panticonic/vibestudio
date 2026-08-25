@@ -67,8 +67,12 @@ export interface PanelHttpCallbacks {
   /** Build trigger */
   getBuild(source: string, ref?: string): Promise<BuildResult>;
 
-  /** Declared icon bytes from the exact workspace content state. */
-  getUnitIcon(source: string, artifactPath: string): Promise<ResolvedUnitIcon | null>;
+  /** Declared icon bytes from current or explicitly selected workspace content. */
+  getUnitIcon(
+    source: string,
+    artifactPath: string,
+    stateRef?: string
+  ): Promise<ResolvedUnitIcon | null>;
 
   /** Resolve an already-built immutable artifact selected by runtime activation. */
   getBuildByKey(buildKey: string): BuildResult | null;
@@ -428,29 +432,50 @@ export class PanelHttpServer {
     if (pathname === "/__vibestudio/unit-icon") {
       const source = url.searchParams.get("source");
       const artifactPath = url.searchParams.get("path");
+      const version = url.searchParams.get("v");
+      const state = url.searchParams.get("s");
       if (!source || !artifactPath || artifactPath.startsWith("/") || artifactPath.includes("..")) {
         res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Invalid unit icon request");
         return;
       }
+      if (version !== null && !/^[0-9a-f]{8,64}$/u.test(version)) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Invalid unit icon version");
+        return;
+      }
+      if (
+        (state !== null && !/^[0-9a-f]{64}$/u.test(state)) ||
+        (state !== null && (version === null || version.length !== 64))
+      ) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Invalid unit icon state");
+        return;
+      }
       try {
-        const icon = await this.callbacks?.getUnitIcon(source, artifactPath);
+        const icon = await this.callbacks?.getUnitIcon(
+          source,
+          artifactPath,
+          state ? `state:${state}` : undefined
+        );
         if (!icon) {
           res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
           res.end("Unit icon not found");
           return;
         }
+        if (version && !icon.contentHash.startsWith(version)) {
+          res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Unit icon version not found");
+          return;
+        }
         const etag = `"${icon.contentHash}"`;
-        // A `v` naming the icon's content makes this URL immutable, which is the
-        // difference between a client storing the icon once and re-fetching
+        // `v` names the verified content bytes. `s`, when present, selects the
+        // immutable workspace state from which those bytes must be read. This is
+        // the difference between a client storing the icon once and re-fetching
         // every unit's icon on every launcher render. Measured on a phone, the
         // revalidating form was 20 of 57 round trips for one panel open.
         //
-        // The value is not checked against the bytes: it is a cache key, not a
-        // claim. A client sending a stale `v` gets today's icon stored under
-        // yesterday's key, and the next tree it reads carries the new `v` — so
-        // the wrong thing to do here is fail the request.
-        const versioned = /^[0-9a-f]{8,64}$/u.test(url.searchParams.get("v") ?? "");
+        const versioned = version !== null;
         const headers = {
           "Cache-Control": versioned ? "public, max-age=31536000, immutable" : "private, no-cache",
           ETag: etag,

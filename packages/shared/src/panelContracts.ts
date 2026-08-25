@@ -444,6 +444,14 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
     id: z.string(),
     title: z.string(),
     icon: z.string().max(256).optional(),
+    iconVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    iconState: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
     buildKey: z

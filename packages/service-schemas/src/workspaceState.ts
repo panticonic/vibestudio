@@ -216,6 +216,14 @@ export const PanelDetailSchema = z
   .object({
     revision: z.number().int().nonnegative(),
     icon: z.string().max(256).optional(),
+    iconVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    iconState: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
     slot: SlotRowSchema,
     currentHistory: SlotHistoryRowSchema,
     entity: EntityRecordSchema,
@@ -247,6 +255,14 @@ const PanelTreeNodeSchema = RawPanelTreeNodeSchema.omit({ options: true })
   .extend({
     title: z.string(),
     icon: z.string().max(256).optional(),
+    iconVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
+    iconState: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
     kind: z.enum(["workspace", "browser"]).optional(),
     ref: z.string().nullable().optional(),
     placement: z

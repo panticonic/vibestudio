@@ -161,6 +161,7 @@ describe("BuildSystemV2 startup", () => {
       buildSystem.getUnitIcon("panels/icon-only", "assets/icon.svg"),
     ]);
     const cached = await buildSystem.getUnitIcon("panels/icon-only", "assets/icon.svg");
+    const exact = await buildSystem.getUnitIcon("panels/icon-only", "assets/icon.svg", TEST_STATE);
 
     expect(first).toMatchObject({
       source: "panels/icon-only",
@@ -171,6 +172,7 @@ describe("BuildSystemV2 startup", () => {
     expect(first?.body.toString("utf8")).toBe(iconText);
     expect(concurrent).toBe(first);
     expect(cached).toBe(first);
+    expect(exact).toBe(first);
     expect(readFile).toHaveBeenCalledOnce();
     expect(materializeForBuild).not.toHaveBeenCalled();
     await expect(

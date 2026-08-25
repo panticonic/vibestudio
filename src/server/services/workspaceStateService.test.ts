@@ -39,7 +39,10 @@ function makeService(opts: {
   dispatchReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
   presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
-  getUnitIcon?: (source: string, ref?: string) => Promise<string | undefined>;
+  getUnitDecoration?: (
+    source: string,
+    ref?: string
+  ) => Promise<{ icon?: string; iconVersion?: string; iconState?: string } | undefined>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -66,7 +69,7 @@ function makeService(opts: {
         })
       )(method, args);
     },
-    ...(opts.getUnitIcon ? { getUnitIcon: opts.getUnitIcon } : {}),
+    ...(opts.getUnitDecoration ? { getUnitDecoration: opts.getUnitDecoration } : {}),
     panelAccess: {
       contextExists: () => false,
       resolveCallerContext: async () => null,
@@ -185,8 +188,8 @@ describe("workspaceStateService — topology authority", () => {
       dispatchReturns: { panelTreeDetail: detail },
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
-      getUnitIcon: async (source, ref) =>
-        source === "panels/chat" && ref === "event:chat" ? "💬" : undefined,
+      getUnitDecoration: async (source, ref) =>
+        source === "panels/chat" && ref === "event:chat" ? { icon: "💬" } : undefined,
     });
 
     await expect(
@@ -255,9 +258,13 @@ describe("workspaceStateService — topology authority", () => {
       dispatchReturns: { panelTreePage: page },
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Agentic Chat" } : undefined,
-      getUnitIcon: async (source, ref) => {
+      getUnitDecoration: async (source, ref) => {
         iconRequests.push({ source, ...(ref ? { ref } : {}) });
-        return "data:image/svg+xml;base64,PHN2Zy8+";
+        return {
+          icon: "./assets/icon.svg",
+          iconVersion: "b".repeat(64),
+          iconState: "a".repeat(64),
+        };
       },
     });
 
@@ -269,7 +276,9 @@ describe("workspaceStateService — topology authority", () => {
       nodes: [
         {
           title: "Agentic Chat",
-          icon: "data:image/svg+xml;base64,PHN2Zy8+",
+          icon: "./assets/icon.svg",
+          iconVersion: "b".repeat(64),
+          iconState: "a".repeat(64),
           ref: "ctx:chat",
           placement: { disposition: "side", preferredWidth: 420 },
         },
@@ -279,7 +288,7 @@ describe("workspaceStateService — topology authority", () => {
   });
 
   it("uses the durable context coordinate when panel history has no explicit ref", async () => {
-    const getUnitIcon = vi.fn(async () => "🧭");
+    const getUnitDecoration = vi.fn(async () => ({ icon: "🧭" }));
     const { svc } = makeService({
       dispatchReturns: {
         panelTreePage: {
@@ -299,14 +308,14 @@ describe("workspaceStateService — topology authority", () => {
           nextCursor: null,
         },
       },
-      getUnitIcon,
+      getUnitDecoration,
     });
 
     await svc.handler(makeCtx() as never, "panelTree.page", [
       { group: { kind: "roots", ownerUserId: null } },
     ]);
 
-    expect(getUnitIcon).toHaveBeenCalledWith("panels/new-app", "ctx:context-new-app");
+    expect(getUnitDecoration).toHaveBeenCalledWith("panels/new-app", "ctx:context-new-app");
   });
 
   it("rejects malformed current presentation options instead of hiding them", async () => {

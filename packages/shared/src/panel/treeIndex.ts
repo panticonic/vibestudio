@@ -14,6 +14,8 @@ export interface PanelTreeNode {
   ownerUserId: string | null;
   title: string;
   icon?: string;
+  iconVersion?: string;
+  iconState?: string;
   createdAt: number;
   childCount: number;
   source?: string;

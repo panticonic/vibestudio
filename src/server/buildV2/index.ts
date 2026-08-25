@@ -343,8 +343,12 @@ export interface BuildSystemV2 {
     options?: BuildUnitOptions & { library?: false | undefined }
   ): Promise<BuildResult>;
 
-  /** Resolve the declared icon directly from exact workspace content. */
-  getUnitIcon(source: string, artifactPath: string): Promise<ResolvedUnitIcon | null>;
+  /** Resolve the declared icon directly from current or explicitly selected workspace content. */
+  getUnitIcon(
+    source: string,
+    artifactPath: string,
+    stateRef?: string
+  ): Promise<ResolvedUnitIcon | null>;
 
   /** Resolve a build unit at `main`, a `ctx:*` context selector, or `state:*`. */
   resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
@@ -1817,9 +1821,15 @@ export async function initBuildSystemV2(
   };
   const getUnitIcon = async (
     requestedSource: string,
-    requestedPath: string
+    requestedPath: string,
+    stateRef?: string
   ): Promise<ResolvedUnitIcon | null> => {
-    const view = await currentUnitIconView();
+    if (stateRef && !/^state:[0-9a-f]{64}$/u.test(stateRef)) {
+      throw new Error(`Invalid immutable unit icon state: ${stateRef}`);
+    }
+    const view = stateRef
+      ? { ...(await viewAt(stateRef)), stateHash: stateRef }
+      : await currentUnitIconView();
     const node = view.graph
       .allNodes()
       .find((candidate) => candidate.relativePath === requestedSource);
