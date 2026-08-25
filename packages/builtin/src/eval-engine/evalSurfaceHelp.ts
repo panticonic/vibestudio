@@ -77,9 +77,9 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "runtime.retireEntity": {
     description:
-      "Prefer workers.destroy(entityOrId) for regular workers and disposable resolved Durable Objects. The raw equivalent is " +
+      "Prefer workers.destroy(entityOrId) for regular workers and caller-created Durable Objects. The raw equivalent is " +
       'rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity id returned by ' +
-      "runtime.createEntity or the targetId returned by workers.resolveDurableObject. Resolving a shared service does not transfer ownership; retire only entities whose lifecycle you own. Verify retirement with runtime.listEntities.",
+      "runtime.createEntity. Resolving a Durable Object or shared service does not transfer ownership; create owned disposable objects with workers.createDurableObject. Verify retirement with runtime.listEntities.",
   },
   "workers.create": {
     description:
@@ -90,7 +90,7 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "workers.destroy": {
     description:
-      "destroy(handleOrId) retires one regular-worker instance. Await it from finally before " +
+      "destroy(handleOrId) retires one caller-created worker or Durable Object. Await it from finally before " +
       "reusing a stable key or finishing a disposable probe.",
   },
 };

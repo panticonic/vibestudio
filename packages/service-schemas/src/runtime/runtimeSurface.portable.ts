@@ -46,6 +46,7 @@ export const PANEL_HANDLE_AUTOMATION_GUIDE =
 export const WORKERS_MEMBERS = [
   "listSources",
   "create",
+  "createDurableObject",
   "list",
   "destroy",
   "resetStorage",
@@ -98,6 +99,35 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
     },
     examples: [{ args: ["workers/my-worker", { key: "probe-1" }] }],
   },
+  createDurableObject: {
+    signature:
+      "createDurableObject(source: string, className: string, options?: DurableObjectCreateOptions): Promise<DurableObjectEntityHandle>",
+    description:
+      "Create a concrete Durable Object through the canonical entity lifecycle, owned by the caller and therefore safe to pass to workers.destroy. Use resolveDurableObject for an existing/shared object; resolving never transfers lifecycle ownership.",
+    argumentNames: ["source", "className", "options"],
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: "string", description: "Workspace-relative worker source." },
+        { type: "string", description: "Manifest-declared Durable Object class." },
+        {
+          type: "object",
+          properties: {
+            key: { type: "string" },
+            contextId: { type: "string" },
+            stateArgs: {},
+            ref: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+      ],
+      minItems: 2,
+      maxItems: 3,
+    },
+    examples: [
+      { args: ["workers/notes", "NotesDO", { key: "disposable-probe" }] },
+    ],
+  },
   list: {
     signature: "list(): Promise<WorkerEntityInfo[]>",
     description: "List live regular-worker instances and their canonical entity handles.",
@@ -108,7 +138,7 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
   destroy: {
     signature: "destroy(entity: RuntimeEntityReference): Promise<void>",
     description:
-      "Retire a runtime entity through the canonical lifecycle. Pass the handle from workers.create, a disposable target from workers.resolveDurableObject, or either canonical id. Resolving a shared service does not transfer ownership; retire only entities whose lifecycle you own.",
+      "Retire a runtime entity through the canonical lifecycle. Pass a handle from workers.create or workers.createDurableObject, or its canonical id. Resolving an object or service does not transfer lifecycle ownership.",
     argumentNames: ["entity"],
     argsSchema: {
       type: "array",
@@ -209,7 +239,7 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature:
       "resolveDurableObject(source: string, className: string, objectKey: string): Promise<ResolvedDurableObjectTarget>",
     description:
-      "Resolve and activate a concrete Durable Object target when no workspace service declaration exists. Prefer resolveService whenever a declared service is available. For a disposable object whose lifecycle you own, pass the returned target directly to workers.destroy after clearing any test data.",
+      "Resolve and activate an existing concrete Durable Object target when no workspace service declaration exists. Prefer resolveService whenever a declared service is available. Resolution grants relay access but never lifecycle ownership; use createDurableObject when the caller must own and destroy a disposable object.",
     argumentNames: ["source", "className", "objectKey"],
     argsSchema: {
       type: "array",
