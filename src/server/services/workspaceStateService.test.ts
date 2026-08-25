@@ -39,7 +39,7 @@ function makeService(opts: {
   dispatchReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
   presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
-  getUnitIcon?: (source: string) => string | undefined;
+  getUnitIcon?: (source: string, ref?: string) => Promise<string | undefined>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -170,23 +170,30 @@ describe("workspaceStateService — topology authority", () => {
     ]);
   });
 
-  it("composes Base-owned titles into addressed panel detail", async () => {
+  it("composes Base-owned titles and exact-ref icons into addressed panel detail", async () => {
     const detail = {
       revision: 1,
       slot: { slot_id: "panel:chat" },
-      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      currentHistory: {
+        source: "panels/chat",
+        context_id: "ctx-chat",
+        options: JSON.stringify({ ref: "event:chat" }),
+      },
       entity: { id: "panel:chat" },
     };
     const { svc } = makeService({
       dispatchReturns: { panelTreeDetail: detail },
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
+      getUnitIcon: async (source, ref) =>
+        source === "panels/chat" && ref === "event:chat" ? "💬" : undefined,
     });
 
     await expect(
       svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
     ).resolves.toEqual({
       ...detail,
+      icon: "💬",
       slot: { ...detail.slot, current_entity_title: "Chat" },
     });
   });
@@ -224,6 +231,7 @@ describe("workspaceStateService — topology authority", () => {
   });
 
   it("composes fresh icons and strict current placement at the one service boundary", async () => {
+    const iconRequests: Array<{ source: string; ref?: string }> = [];
     const page = {
       revision: 1,
       group: { kind: "roots" as const, ownerUserId: null },
@@ -247,7 +255,10 @@ describe("workspaceStateService — topology authority", () => {
       dispatchReturns: { panelTreePage: page },
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Agentic Chat" } : undefined,
-      getUnitIcon: () => "./assets/chat.svg",
+      getUnitIcon: async (source, ref) => {
+        iconRequests.push({ source, ...(ref ? { ref } : {}) });
+        return "data:image/svg+xml;base64,PHN2Zy8+";
+      },
     });
 
     await expect(
@@ -258,12 +269,44 @@ describe("workspaceStateService — topology authority", () => {
       nodes: [
         {
           title: "Agentic Chat",
-          icon: "./assets/chat.svg",
+          icon: "data:image/svg+xml;base64,PHN2Zy8+",
           ref: "ctx:chat",
           placement: { disposition: "side", preferredWidth: 420 },
         },
       ],
     });
+    expect(iconRequests).toEqual([{ source: "panels/chat", ref: "ctx:chat" }]);
+  });
+
+  it("uses the durable context coordinate when panel history has no explicit ref", async () => {
+    const getUnitIcon = vi.fn(async () => "🧭");
+    const { svc } = makeService({
+      dispatchReturns: {
+        panelTreePage: {
+          revision: 1,
+          group: { kind: "roots" as const, ownerUserId: null },
+          nodes: [
+            {
+              slotId: "panel:new-app",
+              parentSlotId: null,
+              ownerUserId: null,
+              source: "panels/new-app",
+              contextId: "context-new-app",
+              createdAt: 1,
+              childCount: 0,
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+      getUnitIcon,
+    });
+
+    await svc.handler(makeCtx() as never, "panelTree.page", [
+      { group: { kind: "roots", ownerUserId: null } },
+    ]);
+
+    expect(getUnitIcon).toHaveBeenCalledWith("panels/new-app", "ctx:context-new-app");
   });
 
   it("rejects malformed current presentation options instead of hiding them", async () => {

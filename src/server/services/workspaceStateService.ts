@@ -55,8 +55,8 @@ export interface WorkspaceStateServiceDeps {
   workspaceId: string;
   /** Mechanical transport to Base's single workspace-presentation owner. */
   presentationDispatch(method: string, args: unknown[]): Promise<unknown>;
-  /** Read current unit decoration from the canonical workspace source. */
-  getUnitIcon?: (source: string) => string | undefined;
+  /** Resolve unit decoration from the exact source coordinate in panel history. */
+  getUnitIcon?: (source: string, ref?: string) => Promise<string | undefined>;
   /**
    * Notify the server's AlarmDriver that a DO's wake schedule changed, so it
    * can re-arm its timer. Called after `alarmSet`/`alarmClear` persist.
@@ -137,27 +137,39 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     slotIds.length === 0
       ? Promise.resolve({} as Record<string, string>)
       : (deps.presentationDispatch("titlesForSlots", [slotIds]) as Promise<Record<string, string>>);
+  const resolveIcon = async (
+    source: string | undefined,
+    contextId: string | undefined,
+    options: ReturnType<typeof presentationOptions>
+  ): Promise<string | undefined> => {
+    if (!source || source.startsWith("browser:") || !deps.getUnitIcon) return undefined;
+    const ref = options.ref ?? (contextId ? `ctx:${contextId}` : undefined);
+    return deps.getUnitIcon(source, ref ?? undefined);
+  };
   const presentNodes = async (nodes: RawTreeNode[]): Promise<PanelTreeNode[]> => {
     const titles = await titlesForSlots(nodes.map((node) => node.slotId));
-    return nodes.map(({ options, ...node }) => {
-      const icon = node.source ? deps.getUnitIcon?.(node.source) : undefined;
-      return {
-        ...node,
-        // A slot id is an address, not a name. Slots created before titles were
-        // recorded with the binding, and any node whose title write is still in
-        // flight, fall back to the source they present — never to their id.
-        title: titles[node.slotId] ?? node.source ?? node.slotId,
-        ...(icon ? { icon } : {}),
-        ...(node.source
-          ? {
-              kind: node.source.startsWith("browser:")
-                ? ("browser" as const)
-                : ("workspace" as const),
-            }
-          : {}),
-        ...presentationOptions(options),
-      };
-    });
+    return Promise.all(
+      nodes.map(async ({ options, ...node }) => {
+        const parsedOptions = presentationOptions(options);
+        const icon = await resolveIcon(node.source, node.contextId, parsedOptions);
+        return {
+          ...node,
+          // A slot id is an address, not a name. Slots created before titles were
+          // recorded with the binding, and any node whose title write is still in
+          // flight, fall back to the source they present — never to their id.
+          title: titles[node.slotId] ?? node.source ?? node.slotId,
+          ...(icon ? { icon } : {}),
+          ...(node.source
+            ? {
+                kind: node.source.startsWith("browser:")
+                  ? ("browser" as const)
+                  : ("workspace" as const),
+              }
+            : {}),
+          ...parsedOptions,
+        };
+      })
+    );
   };
   const presentPage = async (page: RawTreePage): Promise<WorkspacePanelTreePage> => ({
     ...page,
@@ -168,7 +180,12 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
   ): Promise<WorkspacePanelDetail | null> => {
     if (!detail) return null;
     const titles = await titlesForSlots([detail.slot.slot_id]);
-    const icon = deps.getUnitIcon?.(detail.currentHistory.source);
+    const parsedOptions = presentationOptions(detail.currentHistory.options);
+    const icon = await resolveIcon(
+      detail.currentHistory.source,
+      detail.currentHistory.context_id,
+      parsedOptions
+    );
     return {
       ...detail,
       slot: {

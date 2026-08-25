@@ -6,6 +6,43 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
 
+export interface ResolvedPanelMetadata {
+  source: string;
+  title: string;
+  icon?: string;
+  description?: string;
+  hiddenInLauncher: boolean;
+  stateArgs?: unknown;
+  autoArchiveWhenEmpty?: boolean;
+}
+
+/** Resolve panel identity from the same exact workspace coordinate as its code. */
+export async function resolvePanelMetadata(
+  buildSystem: BuildSystemV2,
+  unit: string,
+  ref?: string
+): Promise<ResolvedPanelMetadata | null> {
+  const node = (await buildSystem.listBuildUnits(ref, ["panel"])).find(
+    (candidate) => candidate.unitName === unit || candidate.unitPath === unit
+  );
+  if (!node) return null;
+  const declaredIcon = node.manifest.icon;
+  const resolvedIcon = declaredIcon?.startsWith("./")
+    ? await buildSystem.getUnitIcon(node.unitPath, declaredIcon.slice(2))
+    : null;
+  return {
+    source: node.unitPath,
+    title: node.manifest.title ?? node.unitName,
+    icon: resolvedIcon
+      ? `data:${resolvedIcon.contentType};base64,${resolvedIcon.body.toString("base64")}`
+      : declaredIcon,
+    description: node.manifest.description,
+    hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
+    stateArgs: node.manifest.stateArgs,
+    autoArchiveWhenEmpty: node.manifest.autoArchiveWhenEmpty,
+  };
+}
+
 const SKILLS_PACKAGE_SCOPE = (() => {
   const scope = BUILDABLE_UNIT_DIRS.find((d) => d.dir === "skills")?.scope;
   if (!scope) throw new Error("BUILDABLE_UNIT_DIRS is missing the skills scope");
@@ -200,27 +237,7 @@ export function createBuildService(deps: {
         deps.buildSystem.inspectExecution(executionDigest),
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
-      getPanelMetadata: async (_ctx, [unit, ref]) => {
-        const node = (await deps.buildSystem.listBuildUnits(ref, ["panel"])).find(
-          (candidate) => candidate.unitName === unit || candidate.unitPath === unit
-        );
-        if (!node) return null;
-        const declaredIcon = node.manifest.icon;
-        const resolvedIcon = declaredIcon?.startsWith("./")
-          ? await deps.buildSystem.getUnitIcon(node.unitPath, declaredIcon.slice(2))
-          : null;
-        return {
-          source: node.unitPath,
-          title: node.manifest.title ?? node.unitName,
-          icon: resolvedIcon
-            ? `data:${resolvedIcon.contentType};base64,${resolvedIcon.body.toString("base64")}`
-            : declaredIcon,
-          description: node.manifest.description,
-          hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
-          stateArgs: node.manifest.stateArgs,
-          autoArchiveWhenEmpty: node.manifest.autoArchiveWhenEmpty,
-        };
-      },
+      getPanelMetadata: (_ctx, [unit, ref]) => resolvePanelMetadata(deps.buildSystem, unit, ref),
       listSkills: () =>
         deps.buildSystem
           .getGraph()

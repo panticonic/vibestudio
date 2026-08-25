@@ -3700,7 +3700,11 @@ async function main() {
           doDispatch,
           workspaceId,
           presentationDispatch: dispatchPresentation,
-          getUnitIcon: getWorkspaceUnitIcon,
+          getUnitIcon: async (source, ref) => {
+            const { resolvePanelMetadata } = await import("./services/buildService.js");
+            return (await resolvePanelMetadata(assertPresent(buildSystemInstance), source, ref))
+              ?.icon;
+          },
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
           ).createPanelAccessPermissionDeps({
