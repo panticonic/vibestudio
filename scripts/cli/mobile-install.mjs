@@ -12,6 +12,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
+import { buildAndroidApp, internalAndroidApkPath } from "./lib/mobile-native-android.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
@@ -27,15 +28,7 @@ if (!pkg.version) {
 const releaseArtifactName = "app-release.apk";
 const releasePackage = "app.vibestudio.mobile";
 const internalPackage = "app.vibestudio.mobile.internal";
-const internalApkPath = path.join(
-  androidDir,
-  "app",
-  "build",
-  "outputs",
-  "apk",
-  "internal",
-  "app-internal.apk"
-);
+const internalApkPath = internalAndroidApkPath(repoRoot);
 const defaultReleaseBaseUrl = `https://github.com/vibestudio/vibestudio/releases/download/v${pkg.version}`;
 const defaultArtifactUrl =
   process.env.VIBESTUDIO_MOBILE_APK_URL ?? `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
@@ -573,17 +566,13 @@ async function main() {
   if (options.fromSource && !options.noBuild) {
     const deviceAbi = await readAndroidDeviceAbi(adbPath, options.device);
     console.log(`[mobile-install] Building native libraries for ${deviceAbi}`);
-    await run(
-      "./gradlew",
-      [
-        "assembleInternal",
-        "--no-daemon",
-        "--max-workers=2",
-        "-Pkotlin.compiler.execution.strategy=in-process",
-        `-PreactNativeArchitectures=${deviceAbi}`,
-      ],
-      { cwd: androidDir }
-    );
+    await buildAndroidApp({
+      appRoot: repoRoot,
+      variant: "internal",
+      architectures: [deviceAbi],
+      env: process.env,
+      stdio: "inherit",
+    });
   } else if (!options.noBuild && !fs.existsSync(apkPath)) {
     console.log(`[mobile-install] Downloading prebuilt APK: ${options.artifactUrl}`);
     await downloadFile(options.artifactUrl, apkPath);

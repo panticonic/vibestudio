@@ -28,6 +28,7 @@ import {
   waitForRootInvite,
 } from "./lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
+import { buildAndroidApp } from "./lib/mobile-native-android.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -539,10 +540,12 @@ async function runMobileInstall(options) {
 }
 
 async function buildAndroidApk() {
-  await runCommand("./gradlew", ["assembleInternal", "--rerun-tasks"], {
-    cwd: androidDir,
+  await buildAndroidApp({
+    appRoot: repoRoot,
+    variant: "internal",
+    rerunTasks: true,
     env: process.env,
-    label: "gradle",
+    stdio: "inherit",
   });
 }
 

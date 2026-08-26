@@ -4137,6 +4137,356 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "mobileNative.adbReverse": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "configure Android port routing",
+      description: "Expose selected host ports to an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.buildAndroid": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "build the Android app",
+      description: "Build the installed Vibestudio Android shell for testing.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.clearAndroidApp": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "reset the Android app",
+      description: "Clear Vibestudio application data on an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.doctor": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "inspect mobile development status",
+      description: "Check the host toolchain and attached mobile devices.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.installAndroid": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "install the Android app",
+      description: "Build and install Vibestudio on an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.installIos": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "install the iOS app",
+      description: "Build and install Vibestudio on an iOS simulator or device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.launchAndroid": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "launch the Android app",
+      description: "Launch Vibestudio on an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.launchIos": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "launch the iOS app",
+      description: "Launch Vibestudio on an iOS simulator or device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.listDevices": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "list attached Android devices",
+      description: "Read identifiers and status for Android devices visible to adb.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.listIosSimulators": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "list iOS simulators",
+      description: "Read identifiers and status for local iOS simulators.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.logcat": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "stream Android device logs",
+      description: "Read live logs from an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.logsIos": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "stream iOS simulator logs",
+      description: "Read live logs from an iOS simulator.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.screenshot": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "capture an Android screenshot",
+      description: "Read the current screen of an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.screenshotIos": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "capture an iOS screenshot",
+      description: "Read the current screen of an iOS simulator.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.shell": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale:
+        "Runs a reviewed mobile build or device command against the installed host scaffold",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Change a mobile runtime",
+      action: "run an Android device command",
+      description: "Run a reviewed shell command on an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.verify": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "inspect an Android app",
+      description:
+        "Read installation, process, and rendering state from an attached Android device.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "mobileNative.verifyWorkspaceReady": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "mobile-native.execute",
+      rationale: "Reads private state from a host mobile toolchain or attached device",
+    },
+    capability: "native.mobile.execute",
+    presentation: {
+      title: "Access a mobile runtime",
+      action: "inspect Android workspace readiness",
+      description:
+        "Read process logs from an attached Android device until its workspace is ready.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
+  },
   "notification.dismiss": {
     tier: {
       tier: "open",
@@ -7931,6 +8281,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "safety",
     verb: "see",
   },
+  "native.mobile.execute": {
+    domain: "people",
+    verb: "manage",
+  },
   "network.response.read": {
     domain: "web",
     verb: "see",
@@ -8478,6 +8832,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "safety",
       verb: "see",
+    },
+  },
+  "native.mobile.execute": {
+    title: "Change a mobile runtime",
+    action: "configure Android port routing",
+    description: "Expose selected host ports to an attached Android device.",
+    group: "runtime",
+    authorityCategory: {
+      domain: "people",
+      verb: "manage",
     },
   },
   "network.response.read": {

@@ -11,6 +11,7 @@ import { ExtensionHost } from "@vibestudio/extension-host";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createEvalService } from "./evalService.js";
 import { createPushService } from "./pushService.js";
+import { createMobileNativeService } from "./mobileNativeService.js";
 import { createWebhookIngressService } from "./webhookIngressService.js";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
@@ -80,6 +81,11 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
   // in-memory store instead of letting the census silently skip it.
   const pushDefinition = createPushService({ databasePath: ":memory:" }).definition;
   definitions.set(pushDefinition.name, pushDefinition);
+  // The native executor's application root is a deliberate artifact boundary,
+  // so the generic callable proxy cannot represent it as a string. Construction
+  // does not touch the scaffold until a method runs.
+  const mobileNativeDefinition = createMobileNativeService({ appRoot: process.cwd() });
+  definitions.set(mobileNativeDefinition.name, mobileNativeDefinition);
   // Webhook ingress validates optional primitive configuration at construction
   // time. Empty deps select its production defaults and an isolated in-memory
   // store, preserving authority coverage without weakening that validation.

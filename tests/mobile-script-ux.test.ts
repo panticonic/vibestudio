@@ -38,15 +38,20 @@ afterEach(() => {
 
 describe("mobile script platform and relay guarantees", () => {
   it("builds source APKs without leaving Gradle or Kotlin compiler daemons behind", () => {
-    const source = fs.readFileSync(
+    const installSource = fs.readFileSync(
       path.join(process.cwd(), "scripts/cli/mobile-install.mjs"),
       "utf8"
     );
-    expect(source).toContain('"--no-daemon"');
-    expect(source).toContain('"--max-workers=2"');
-    expect(source).toContain('"-Pkotlin.compiler.execution.strategy=in-process"');
-    expect(source).toContain("-PreactNativeArchitectures=${deviceAbi}");
-    expect(source).not.toContain('"--rerun-tasks"');
+    const buildSource = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/lib/mobile-native-android.mjs"),
+      "utf8"
+    );
+    expect(installSource).toContain("buildAndroidApp");
+    expect(buildSource).toContain('"--no-daemon"');
+    expect(buildSource).toContain('"--max-workers=2"');
+    expect(buildSource).toContain('"-Pkotlin.compiler.execution.strategy=in-process"');
+    expect(buildSource).toContain('-PreactNativeArchitectures=${architectures.join(",")}');
+    expect(installSource).not.toContain("rerunTasks: true");
   });
 
   it("resolves one adb target and validates its primary build ABI", () => {

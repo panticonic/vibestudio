@@ -33,6 +33,7 @@ import { docsMethods } from "./docs.js";
 import { desktopEventsMethods } from "./desktopEvents.js";
 import { developmentMethods } from "./development.js";
 import { developmentNativeMethods } from "./developmentNative.js";
+import { mobileNativeMethods } from "./mobileNative.js";
 import { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
 import { attachedHostsMethods } from "./attachedHosts.js";
 import { durableWorkMethods } from "./durableWork.js";
@@ -140,6 +141,7 @@ const serviceTables: ServiceTable[] = [
     file: "developmentNative.ts",
     methods: developmentNativeMethods,
   },
+  { service: "mobileNative", file: "mobileNative.ts", methods: mobileNativeMethods },
   {
     service: "developmentClientExecutor",
     file: "developmentClientExecutor.ts",
@@ -231,6 +233,11 @@ const approvedReturnlessMethods = new Set([
   // structural codec; the Response itself is owned and validated by RPC.
   "events.watch",
   "desktopEvents.watch",
+  // Native diagnostic streams use the same raw Response transport. Their byte
+  // content is intentionally unbounded and is validated at the stream bridge.
+  "mobileNative.logcat",
+  "mobileNative.logsIos",
+  "mobileNative.shell",
 ]);
 
 const approvedWeakReturnRoots = new Set<string>();

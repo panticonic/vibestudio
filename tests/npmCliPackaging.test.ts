@@ -37,6 +37,8 @@ describe("npm CLI packaging", () => {
     expect(fs.existsSync(path.resolve("scripts/cli/remote-serve.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/server-entry.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/smoke-remote-server.mjs"))).toBe(true);
+    expect(fs.existsSync(path.resolve("scripts/cli/lib/mobile-native-android.mjs"))).toBe(true);
+    expect(buildScript).not.toContain("stageMobileNativeScaffold");
   });
 
   it("stages the complete shared npm update launcher contract", () => {
@@ -63,6 +65,7 @@ describe("npm CLI packaging", () => {
       "scripts/cli/lib/smoke-remote-server.mjs",
       "scripts/cli/lib/connect-grammar.generated.mjs",
       "scripts/cli/lib/config-paths.mjs",
+      "scripts/cli/lib/mobile-native-android.mjs",
     ]) {
       const target = path.join(root, relative);
       mkdirSync(path.dirname(target), { recursive: true });

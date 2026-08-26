@@ -14,7 +14,16 @@ afterEach(() => {
 function sourceRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "phone-provisioning-test-"));
   roots.push(root);
-  fs.mkdirSync(path.join(root, "apps", "mobile", "android"), { recursive: true });
+  for (const relative of [
+    "apps/mobile/android/gradlew",
+    "apps/mobile/package.json",
+    "apps/mobile/index.js",
+    "node_modules/react-native/package.json",
+  ]) {
+    const target = path.join(root, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "");
+  }
   return root;
 }
 

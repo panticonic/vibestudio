@@ -13,6 +13,10 @@ import {
 } from "@vibestudio/service-schemas/phoneProvisioning";
 import { HubDeviceSchema } from "@vibestudio/service-schemas/hubControl";
 import { z } from "zod";
+import {
+  hasCompleteAndroidSourceProject,
+  mobileCliEnvironment,
+} from "../../../scripts/cli/lib/mobile-native-android.mjs";
 
 interface ScriptResult {
   stdout: string;
@@ -51,12 +55,7 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
       const script = deps.resolveScriptPath(name);
       const child = spawn(process.execPath, [script, ...args], {
         cwd: deps.appRoot,
-        env: {
-          ...process.env,
-          ELECTRON_RUN_AS_NODE: "1",
-          VIBESTUDIO_APP_ROOT: deps.appRoot,
-          VIBESTUDIO_APP_VERSION: deps.appVersion,
-        },
+        env: mobileCliEnvironment(deps.appRoot, deps.appVersion),
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
@@ -98,7 +97,18 @@ export function createPhoneProvisioningService(
   const hostPlatform = deps.hostPlatform ?? process.platform;
   const platforms: PhonePlatform[] = hostPlatform === "darwin" ? ["android", "ios"] : ["android"];
   const sourcePlatforms = platforms.filter((platform) =>
-    fs.existsSync(path.join(deps.appRoot, "apps", "mobile", platform))
+    platform === "android"
+      ? hasCompleteAndroidSourceProject(deps.appRoot)
+      : fs.existsSync(
+          path.join(
+            deps.appRoot,
+            "apps",
+            "mobile",
+            "ios",
+            "Vibestudio.xcodeproj",
+            "project.pbxproj"
+          )
+        )
   );
   const localProviderId = "desktop-local";
   const now = deps.now ?? Date.now;

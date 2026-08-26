@@ -18565,6 +18565,788 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:mobileNative.adbReverse",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "adbReverse",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.adbReverse",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.buildAndroid",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "buildAndroid",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.buildAndroid",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.clearAndroidApp",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "clearAndroidApp",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.clearAndroidApp",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.doctor",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "doctor",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.doctor",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.installAndroid",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "installAndroid",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.installAndroid",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.installIos",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "installIos",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.installIos",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.launchAndroid",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "launchAndroid",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.launchAndroid",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.launchIos",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "launchIos",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.launchIos",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.listDevices",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "listDevices",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.listDevices",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.listIosSimulators",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "listIosSimulators",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.listIosSimulators",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.logcat",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "logcat",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.logcat",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.logsIos",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "logsIos",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.logsIos",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.screenshot",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "screenshot",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.screenshot",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.screenshotIos",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "screenshotIos",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.screenshotIos",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.shell",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "shell",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Runs a reviewed mobile build or device command against the installed host scaffold",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.shell",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.verify",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "verify",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.verify",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:mobileNative.verifyWorkspaceReady",
+      "rpcPlane": "host-service",
+      "owner": "mobileNative",
+      "method": "verifyWorkspaceReady",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "mobile-native.execute",
+      "reviewRationale": "Reads private state from a host mobile toolchain or attached device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "native.mobile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"native.mobile.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:mobileNative.verifyWorkspaceReady",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:notification.dismiss",
       "rpcPlane": "host-service",
       "owner": "notification",

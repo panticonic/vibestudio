@@ -4596,6 +4596,10 @@ async function main() {
     workspaceChildHub,
     panelRuntimeCoordinator,
   });
+  {
+    const { createMobileNativeService } = await import("./services/mobileNativeService.js");
+    container.registerRpc(createMobileNativeService({ appRoot }));
+  }
 
   let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
 
