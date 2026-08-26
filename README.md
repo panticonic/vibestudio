@@ -2,21 +2,26 @@
 
 ## An integrated personal software environment
 
-Vibestudio is a browser and light-weight sandbox for agents and personalized apps. The goal is to blur the line between using and building software, using AI, while imposing hard barriers, with fine grained control over what your agents can access.
+Vibestudio is a browser and light-weight sandbox for agents and personalized apps. The goal is to tighten the loop between agentically building software, humans using their own personal apps, integrating agents directly into those apps, and generating UI on-the-fly in agentic contexts -- while imposing hard barriers, with fine-grained control over what your agents can access.
 
-Vibestudio takes a batteries-included approach: Build system, agentic harness, sandboxed file system, version control, credentials management and more are all included (mostly in a way so you can tweak them to your needs) and standardized to make one unified happy-path of composable components.
+- **Batteries included.** One build system, version-controlled file structure, background-process runtime, credentials management, and agentic harness -- standardized into a single composable happy-path so agents cannot and need not reinvent the wheel.
+- **Self-modifying agentic harness.** The agentic system is embedded inside the environment it builds, so it can modify itself and be used in or adapted for any app you create.
+- **Sandbox with capability grants.** A browser-style, out-of-band approval system (similar to camera or storage access, but with many more capabilities) gives you fine-grained control over every privileged access -- instead of handing over your keys and hoping for the best.
+- **Agentic chat as an app.** The chat UI is itself an app inside the system, with affordances for inline generative UI and the ability to automate and inspect running apps from within a conversation.
 
-Vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
+Vibestudio sandbox details:
 
-The vibestudio sandbox:
+- Browser-style capability grant / approval system and credential store for external provider integrations (e.g. Google Workspace, OpenAI etc.).
+- Context-isolated file system per app / agent instance.
+- Facilities for building and debugging software within the system, including agents, apps and reusable packages.
+- Light-weight isolation based on browser/JS isolates, arguably the lightest, most wide-spread and battle-tested sandbox out there.
+- Background processes and DB persistence via the included workerd service (the tech that drives Cloudflare Workers).
+- Extension system for native-access Node.js code.
+- Mobile, CLI and desktop apps based on one sandbox runtime that you can customize yourself.
 
-- has a browser-style out-of-band capability grant / approval system (similar to camera, microphone or storage access in normal browsers, just with many more capabilities) and credential store for external provider integrations (e.g. Google Workspace, OpenAI etc.).
-- includes a context-isolated file system per app / agent instance.
-- has facilities for building and debugging software within the system, including agents, apps and reusable packages.
-- is particularly light-weight because it is based on browser/JS isolates, arguably the lightest, most wide-spread and battle-tested sandbox out there.
-- supports background processes and DB persistence via the included workerd service (the tech that drives CloudFlare workers).
-- has an extension system for native access node.js code.
-- has mobile, cli and desktop apps based on one sanbox runtime that you can customize yourself.
+### Toward safely sharing AI-enabled code
+
+A further question vibestudio is exploring: how do we create an environment to safely integrate untrusted code into an agentic system? For the near term we will likely rely on adapting shared primitives rather than generating complex experiences entirely on the fly -- but if those primitives need to be AI-enabled, there are obvious security and control challenges. The capability-grant system prototyped here is a step toward the equivalent of an agentic, bring-your-own-agent web page.
 
 ## Status
 
