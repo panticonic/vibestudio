@@ -26,6 +26,7 @@ describe("managed system-test startup preparation output", () => {
   it("requires a successful doctor receipt for the exact paired workspace", () => {
     const output = `${JSON.stringify({
       ok: true,
+      startupApprovals: { approvedReviewIds: ["creation-review"], approvedPartCount: 2 },
       checks: [
         {
           name: "server",
@@ -43,5 +44,26 @@ describe("managed system-test startup preparation output", () => {
     expect(() =>
       assertSystemTestPreparationResult('{"ok":false,"checks":[]}\n', "workspace-one")
     ).toThrow(/no successful doctor result/u);
+  });
+
+  it("requires fresh provisioning to exercise the ordinary startup review", () => {
+    const result = (approvedPartCount: number) =>
+      `${JSON.stringify({
+        ok: true,
+        startupApprovals: { approvedReviewIds: [], approvedPartCount },
+        checks: [
+          {
+            name: "server",
+            ok: true,
+            detail: "reachable",
+            data: { workspaceId: "workspace-one" },
+          },
+        ],
+      })}\n`;
+
+    expect(() => assertSystemTestPreparationResult(result(1), "workspace-one")).not.toThrow();
+    expect(() => assertSystemTestPreparationResult(result(0), "workspace-one")).toThrow(
+      /without exercising its startup approval review/u
+    );
   });
 });

@@ -1682,16 +1682,6 @@ async function main() {
     await Promise.all(
       [...groups.entries()].map(async ([batchKey, group]) => {
         const origins = await resolveUnitOrigins(group.units.map((unit) => unit.source.repo));
-        // Selecting an exact local Base checkout is the developer's trust
-        // decision for that committed candidate. Requiring the ordinary
-        // launch review here would make every local Base commit unbootable
-        // until a fresh modal was answered, defeating host/Base co-development.
-        // The preapproval is still exact-version bound and exists only in this
-        // isolated development workspace.
-        if (developmentRootTemplate) {
-          await input.applyApproved(group.units, group.identityKeys, origins);
-          return;
-        }
         void unitInstallReviewCoordinator
           .enqueue({
             entries: group.units,
@@ -1810,10 +1800,9 @@ async function main() {
 
             // Planning is the authority transaction that makes reconciliation
             // eligible to classify these exact builds as trusted. Start the
-            // background pass only after that transaction has either staged
-            // the ordinary review or committed the explicit local-checkout
-            // preapproval. Running both concurrently lets reconciliation see
-            // the old trust state and publish a second, stale launch review.
+            // background pass only after the ordinary review has been staged.
+            // Running both concurrently lets reconciliation see the old trust
+            // state and publish a second, stale launch review.
             await Promise.all(tasks);
           }
           const reconcileAll = () =>
@@ -7031,23 +7020,6 @@ async function main() {
         const origins = await resolveUnitOrigins(
           creationReview.units.map((unit) => unit.source.repo)
         );
-        // The explicit local checkout selection also covers the panels and
-        // workers landed by that exact root. Record the normal admission
-        // transaction without publishing a redundant human review; ordinary
-        // published roots continue through the review queue below.
-        if (developmentRootTemplate) {
-          buildUnitChangeApprovalProvider.acceptPreapprovedTrust(
-            creationReview.identityKeys,
-            "workspace-creation",
-            undefined,
-            origins
-          );
-          creationReviewUnits = new Set();
-          creationReviewOwed = false;
-          workspaceCreationReview.resolve();
-          workspaceCreationReviewState = { status: "resolved" };
-          return;
-        }
         const rootOrigin =
           [...origins.values()].find((origin) => origin.isWorkspaceRoot === true) ?? null;
         const decisionPromise = approvalQueue.request({

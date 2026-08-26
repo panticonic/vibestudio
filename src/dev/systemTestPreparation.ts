@@ -70,4 +70,16 @@ export function assertSystemTestPreparationResult(
       )}; expected ${expectedWorkspaceId}`
     );
   }
+  const startupApprovals =
+    result["startupApprovals"] &&
+    typeof result["startupApprovals"] === "object" &&
+    !Array.isArray(result["startupApprovals"])
+      ? (result["startupApprovals"] as Record<string, unknown>)
+      : null;
+  const approvedPartCount = startupApprovals?.["approvedPartCount"];
+  if (typeof approvedPartCount !== "number" || approvedPartCount < 1) {
+    throw new Error(
+      "fresh managed workspace reached readiness without exercising its startup approval review"
+    );
+  }
 }
