@@ -105,6 +105,7 @@ export type RefAdvanceGateContext =
        *  shared candidate view so one approval covers the whole batch). When
        *  absent the gate composes one itself from the batch entries. */
       candidateWorkspaceState?: string;
+      epochTransition?: true;
     };
 
 /**
@@ -131,6 +132,12 @@ export function createMainRefAdvanceGate(deps: {
   ): Promise<string>;
   /** Reject candidate workspace-wide invariants before prompting or advancing refs. */
   validateCandidateWorkspaceState?(
+    stateHash: string,
+    changedPaths: readonly string[],
+    signal?: AbortSignal,
+    reportProgress?: (progress: ApprovalPreparationProgress) => void
+  ): Promise<void>;
+  validateEpochTransitionCandidate?(
     stateHash: string,
     changedPaths: readonly string[],
     signal?: AbortSignal,
@@ -200,20 +207,18 @@ export function createMainRefAdvanceGate(deps: {
       const changedRepoPaths = batch.entries.map((entry) => entry.repoPath);
       const reportProgress = (progress: ApprovalPreparationProgress) =>
         deps.updateCandidateReview?.(batch.publication.publicationId, progress);
-      if (context.signal) {
-        await deps.validateCandidateWorkspaceState?.(
-          candidateView,
-          changedRepoPaths,
-          context.signal,
-          reportProgress
-        );
-      } else {
-        await deps.validateCandidateWorkspaceState?.(
-          candidateView,
-          changedRepoPaths,
-          undefined,
-          reportProgress
-        );
+      const validateCandidate = context.epochTransition
+        ? deps.validateEpochTransitionCandidate
+        : deps.validateCandidateWorkspaceState;
+      if (context.epochTransition && !validateCandidate) {
+        throw new Error("Epoch-transition candidate validation is unavailable");
+      }
+      if (validateCandidate) {
+        if (context.signal) {
+          await validateCandidate(candidateView, changedRepoPaths, context.signal, reportProgress);
+        } else {
+          await validateCandidate(candidateView, changedRepoPaths, undefined, reportProgress);
+        }
       }
     } catch (error) {
       deps.failCandidateReview?.(batch.publication.publicationId, error);

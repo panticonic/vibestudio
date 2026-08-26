@@ -6745,6 +6745,50 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:authority.acquireForCurrentTask",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "acquireForCurrentTask",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.acquire",
+      "reviewRationale": "Installed agent code may pre-acquire predictable operations only for its host-attested current task authority.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.acquireForCurrentTask"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:authority.acquireForCurrentTask),workspace-member)",
+      "r3b": {
+        "review": "host-attested-current-task-acquisition",
+        "change": "Lets installed agent code pre-acquire predictable operations only within the host-attested authority of its currently active task. The caller cannot name another task, user, or authority ceiling, and ordinary receiver-side authorization remains authoritative."
+      },
+      "capability": "service:authority.acquireForCurrentTask",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:authority.acquireForTarget",
       "rpcPlane": "host-service",
       "owner": "authority",
@@ -22017,6 +22061,50 @@
         "change": null
       },
       "capability": "service:runtime.listOwnedContexts",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.rebindAgentChannel",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "rebindAgentChannel",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "supervision",
+      "mechanismFamily": "runtime.mutate",
+      "reviewRationale": "A runtime owner may complete the authenticated identity transition for an agent entity it just cloned.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.rebindAgentChannel"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:runtime.rebindAgentChannel),workspace-member)",
+      "r3b": {
+        "review": "owner-scoped-cloned-agent-channel-binding",
+        "change": "Completes the authenticated channel identity transition for an agent entity created by the invoking runtime owner. The receiver binds only that newly cloned entity and does not grant workspace operations or broaden the owner's existing authority."
+      },
+      "capability": "service:runtime.rebindAgentChannel",
       "parityAssertion": "generated-census:host-authority"
     },
     {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseWorkspaceConfigContentWithId,
+  parseWorkspaceSystemEpochEnvelope,
   readWorkspaceConfig,
   resolveHostTargetDecl,
   resolveHostTargetRequiredExtensions,
@@ -13,6 +14,17 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const parse = (yaml: string) =>
   parseWorkspaceConfigContentWithId(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${yaml}`, "test-ws");
+
+describe("workspace epoch envelope", () => {
+  it("reads a foreign epoch without interpreting future manifest fields", () => {
+    expect(
+      parseWorkspaceSystemEpochEnvelope("systemEpoch: 99\nfutureShape:\n  unknowable: true\n")
+    ).toBe(99);
+    expect(() => parseWorkspaceSystemEpochEnvelope("systemEpoch: -1\n")).toThrow(
+      /nonnegative integer/u
+    );
+  });
+});
 
 const FULL_MANIFEST = `
 singletonObjects:
@@ -100,10 +112,10 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     );
     expect(() =>
       parseWorkspaceConfigContentWithId(
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH - 1}\ninitPanels: []\n`,
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH + 1}\ninitPanels: []\n`,
         "test-ws"
       )
-    ).toThrow(/incompatible with host runtime ABI/);
+    ).toThrow(/requires workspace host epoch/);
   });
 
   it("parses a full declaration set", () => {

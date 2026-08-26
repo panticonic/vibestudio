@@ -68,8 +68,25 @@ import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAu
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import {
+  assertWorkspaceHostLaunchBinding,
+  readWorkspaceHostLaunchRecord,
+  writeWorkspaceHostLaunchRecord,
+} from "@vibestudio/workspace/hostLaunchRecord";
+import {
+  parseWorkspaceSystemEpochEnvelope,
+  WORKSPACE_CONFIG_PATH,
+} from "@vibestudio/workspace/configParser";
+import {
+  WorkspaceCreationDescriptorSchema,
+  WorkspaceTemplatePinSchema,
+} from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import { getCentralDataPath } from "@vibestudio/env-paths";
+import {
+  resolveHistoricalWorkspaceHost,
+  WORKSPACE_EPOCH_HANDOFF_EXIT_CODE,
+} from "./historicalWorkspaceHost.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -439,6 +456,20 @@ async function main() {
   // source after startup.
   const workspaceId = childWorkspaceId;
   const developmentRootTemplate = developmentRootTemplateSelection();
+  const rawCreationIntent = process.env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"]?.trim();
+  const creationIntent = rawCreationIntent
+    ? WorkspaceCreationDescriptorSchema.parse(JSON.parse(rawCreationIntent))
+    : null;
+  if (creationIntent && creationIntent.workspaceId !== workspaceId) {
+    throw new Error("Workspace creation intent does not match the hub-assigned identity");
+  }
+  if (
+    creationIntent &&
+    developmentRootTemplate &&
+    !sameRootTemplatePin(creationIntent.rootTemplate, developmentRootTemplate.pin)
+  ) {
+    throw new Error("Workspace creation intent does not match the selected development Base");
+  }
 
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
@@ -451,7 +482,11 @@ async function main() {
       init: args.init,
       requireExplicitSelection: isWorkspaceServer,
       workspaceId,
-      ...(developmentRootTemplate ? { rootTemplate: developmentRootTemplate.pin } : {}),
+      ...(creationIntent
+        ? { rootTemplate: creationIntent.rootTemplate }
+        : developmentRootTemplate
+          ? { rootTemplate: developmentRootTemplate.pin }
+          : {}),
     });
     // Managed directory names are storage coordinates, not workspace
     // identities. In particular, ephemeral children use a randomized disk
@@ -1944,6 +1979,27 @@ async function main() {
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
+  let epochHandoffCommitted = false;
+  // This is the durable dispatch coordinate for every protected-main state,
+  // including the initial publication and an epoch-crossing publication.
+  workspaceVcs.onProtectedPublication(async (event) => {
+    const manifest = await readWorkspaceFileAtState(
+      event.workspaceStateHash,
+      WORKSPACE_CONFIG_PATH
+    );
+    if (manifest === null) throw new Error("Published workspace state has no runtime manifest");
+    const publishedEpoch = parseWorkspaceSystemEpochEnvelope(manifest);
+    writeWorkspaceHostLaunchRecord(statePath, {
+      version: 1,
+      workspaceId,
+      systemEpoch: publishedEpoch,
+      stateHash: event.workspaceStateHash,
+      publicationId: event.publicationId,
+    });
+    // Once protected main belongs to another host, this process may finish the
+    // request that committed it but must not interpret or reconcile that state.
+    epochHandoffCommitted = publishedEpoch !== WORKSPACE_SYSTEM_EPOCH;
+  });
   // Bridge one atomic protected publication to the client event bus.
   workspaceVcs.onProtectedPublication((event) => {
     eventService.emit("vcs:publication", event);
@@ -1954,6 +2010,7 @@ async function main() {
     }
   });
   workspaceVcs.onProtectedPublication(async (event) => {
+    if (epochHandoffCommitted) return;
     treeScanner.invalidate();
     if (event.changedPaths.some((changed) => changed.startsWith("meta/"))) {
       const reloadSeq = ++latestMetaConfigReloadSeq;
@@ -2950,6 +3007,46 @@ async function main() {
           throw error;
         }
       },
+      validateEpochTransitionCandidate: async (
+        stateHash,
+        _changedPaths,
+        signal,
+        reportProgress
+      ) => {
+        signal?.throwIfAborted();
+        reportProgress?.({
+          label: "Checking target workspace host",
+          detail: "Reading the candidate compatibility generation and finding its installed host.",
+        });
+        const manifest = await readWorkspaceFileAtState(stateHash, WORKSPACE_CONFIG_PATH);
+        if (manifest === null) {
+          throw new Error("Epoch-transition candidate has no runtime manifest");
+        }
+        const targetEpoch = parseWorkspaceSystemEpochEnvelope(manifest);
+        if (targetEpoch === WORKSPACE_SYSTEM_EPOCH) {
+          throw new Error(
+            `Workspace already runs on epoch ${targetEpoch}; publish this change normally`
+          );
+        }
+        const installedEpochRaw = process.env["VIBESTUDIO_CURRENT_SYSTEM_EPOCH"];
+        const installedEpoch = installedEpochRaw ? Number(installedEpochRaw) : Number.NaN;
+        if (!Number.isInteger(installedEpoch) || installedEpoch < 0) {
+          throw new Error("Epoch transitions require a current hub-owned workspace runtime");
+        }
+        if (targetEpoch !== installedEpoch) {
+          // Merely opening this exact launch set proves the target is available.
+          // The old host deliberately does not parse an unknown future schema.
+          resolveHistoricalWorkspaceHost(
+            path.join(getCentralDataPath(), "host-versions"),
+            targetEpoch
+          );
+        }
+        signal?.throwIfAborted();
+        reportProgress?.({
+          label: "Target workspace host is available",
+          detail: `Epoch ${targetEpoch} will take ownership after this protected publication.`,
+        });
+      },
       computeDeleteDependents: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
     });
     // Remote context mirrors (plan §6.5): read-side of exact context content
@@ -2994,6 +3091,12 @@ async function main() {
           },
           testPolicyForContext: (contextId) =>
             agentExecutionSessions.testPolicyForContext(contextId),
+          onEpochTransitionPublished: () => {
+            const timer = setTimeout(() => {
+              process.exit(WORKSPACE_EPOCH_HANDOFF_EXIT_CODE);
+            }, 250);
+            timer.unref();
+          },
         });
       },
     });
@@ -5862,6 +5965,22 @@ async function main() {
       const activated = await vcs.activateWorkspaceFromSource();
       if (activated.initialized) productSeedStateHash = activated.stateHash;
       contextIntegrityStore.ensureCutover(activated.stateHash);
+      const launchRecord = readWorkspaceHostLaunchRecord(statePath);
+      if (!launchRecord) {
+        throw new Error("Workspace semantic main has no durable host launch record");
+      }
+      const headPublication = protectedRefStore.readHeadPublication();
+      const manifest = await readWorkspaceFileAtState(activated.stateHash, WORKSPACE_CONFIG_PATH);
+      if (manifest === null) throw new Error("Protected workspace main has no runtime manifest");
+      const admittedEpoch = parseWorkspaceSystemEpochEnvelope(manifest);
+      assertWorkspaceHostLaunchBinding(launchRecord, {
+        workspaceId,
+        stateHash: activated.stateHash,
+        publicationId: headPublication?.publicationId ?? null,
+        manifestEpoch: admittedEpoch,
+        hostEpoch: WORKSPACE_SYSTEM_EPOCH,
+      });
+      await workspaceChildHub.completeWorkspaceCreation();
       spanStartedAt = performance.now();
       const config = await readWorkspaceConfigFromState(vcs, workspaceId, activated.stateHash);
       const configReadMs = performance.now() - spanStartedAt;

@@ -150,7 +150,8 @@ mode concurrently with other native-input work.
 ```bash
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev:base setup   # clone and remember the external Base checkout (one time)
-pnpm dev             # build + start Electron in the source developer instance
+pnpm start           # build + start Electron in the source developer instance
+pnpm dev             # alias for the same supervised development launch
 pnpm dev:production  # fresh disposable instance using the pinned production Base
 pnpm dev:webrtc      # build + start a local hub, then connect to a routed child over WebRTC
 pnpm cli --help      # run the CLI live from TypeScript
@@ -171,12 +172,12 @@ The command clones the canonical Base repository into the sibling
 `../vibestudio-workspace-base` directory when it is absent, then records its
 canonical path in this repository's local Git configuration under
 `vibestudio.baseCheckout`. The setting is untracked, shared by this clone's Git
-worktrees, and resolved by every Base-aware developer command: `pnpm dev`,
+worktrees, and resolved by every Base-aware developer command: `pnpm start`, `pnpm dev`,
 `pnpm server:live`, userland and browser tests, type checks, generators, Metro,
 smoke tests, and commit checks. It is deliberately not an ambient `.env` file.
 Once setup has completed, no command or commit requires the checkout path again.
 
-`pnpm dev` snapshots the checkout's visible worktree into an instance-owned
+`pnpm start` and `pnpm dev` snapshot the checkout's visible worktree into an instance-owned
 checkpoint. Tracked and untracked non-ignored edits are included; you do not
 need to commit, push, tag, or publish Base before starting or restarting the
 app. The developer checkout itself is never staged or committed by this
@@ -202,7 +203,7 @@ Useful configuration commands:
 pnpm dev:base status             # show the configured checkout, HEAD, and cleanliness
 pnpm dev:base use /other/base    # select an existing Base checkout
 pnpm dev:base path               # print the selected checkout for scripts/editors
-pnpm dev:base clear              # return pnpm dev to the published Base release
+pnpm dev:base clear              # require setup again; use dev:production for the published Base
 ```
 
 `--base-checkout PATH` and `VIBESTUDIO_USERLAND_ROOT=PATH` remain explicit,
@@ -249,7 +250,7 @@ instances run concurrently. Stopping one never targets another hub.
 - `pnpm type-check:cloudflare` - Type-check the signaling and apex Cloudflare Workers
 - `pnpm deploy:cloudflare` - Deploy the signaling Worker and apex relay Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed apex and signaling Workers
-- `pnpm start` - Start the app (requires prior build)
+- `pnpm start` - Build and start the source developer instance with the configured Base
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
 - `pnpm format:check` - Check formatting

@@ -422,7 +422,7 @@ it("documents runtime-owned worker lifecycle helpers without exposing raw transp
     access: { callers: ["worker", "do"] },
   });
   expect(byId(projected, "runtime:workerRuntime.workers.destroy").description).toContain(
-    "disposable target from workers.resolveDurableObject"
+    "Resolving an object or service does not transfer lifecycle ownership"
   );
   expect(byId(projected, "runtime:workerRuntime.workers.resolveService")).toMatchObject({
     qualifiedName: "workers.resolveService",

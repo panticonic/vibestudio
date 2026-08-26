@@ -307,6 +307,12 @@ async function main(): Promise<void> {
         ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
         productionBase: parsed.productionBase,
       })) ?? undefined;
+    if (!parsed.productionBase && !developmentBase) {
+      throw new Error(
+        "No development Base checkout is configured. Run `pnpm dev:base setup`, " +
+          "or select the shipped release explicitly with `pnpm dev:production`."
+      );
+    }
     const sourceCoupled = id === "source" && !disposable;
     const env = developmentInstanceEnvironment({
       parent: process.env,

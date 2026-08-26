@@ -62,6 +62,7 @@ function service(options?: {
     ctx: ServiceContext,
     input: { contextId: string; sourceDeltaId: string }
   ) => Promise<void>;
+  onEpochTransitionPublished?: () => void;
 }) {
   const semanticCall = vi.fn(async (method: string, request: { input: unknown }) => {
     if (options && "failure" in options) throw options.failure;
@@ -73,10 +74,17 @@ function service(options?: {
     if (options?.semanticCall) return options.semanticCall("vcsPush", { input });
     return options?.result ?? { contextId: "context:own" };
   });
+  const semanticEpochTransitionPublishCall = vi.fn(
+    async (_input: unknown, ..._authorityEnvelope: unknown[]) => {
+      if (options && "failure" in options) throw options.failure;
+      return options?.result ?? { contextId: "context:own" };
+    }
+  );
   const definition = createVcsService({
     workspaceVcs: {
       semanticCall,
       semanticPublishCall,
+      semanticEpochTransitionPublishCall,
       referencesReachable: vi.fn(async (contextIds, references) =>
         typeof options?.referencesReachable === "function"
           ? options.referencesReachable(contextIds, references)
@@ -97,8 +105,16 @@ function service(options?: {
     ...(options?.onExternalDeltaIntegrated
       ? { onExternalDeltaIntegrated: options.onExternalDeltaIntegrated }
       : {}),
+    ...(options?.onEpochTransitionPublished
+      ? { onEpochTransitionPublished: options.onEpochTransitionPublished }
+      : {}),
   });
-  return { definition, semanticCall, semanticPublishCall };
+  return {
+    definition,
+    semanticCall,
+    semanticPublishCall,
+    semanticEpochTransitionPublishCall,
+  };
 }
 
 describe("canonical vcsService", () => {
@@ -306,6 +322,59 @@ describe("canonical vcsService", () => {
       },
     ]);
     expect(semanticPublishCall).toHaveBeenCalledOnce();
+  });
+
+  it("publishes an epoch transition through the protected transition call and notifies after commit", async () => {
+    const onEpochTransitionPublished = vi.fn();
+    const { definition, semanticPublishCall, semanticEpochTransitionPublishCall } = service({
+      context: "context:own",
+      onEpochTransitionPublished,
+    });
+    await definition.handler(workerContext(), "push", [
+      {
+        contextId: "context:own",
+        commandId: "command:epoch-push",
+        expectedCommittedEventId: "event:next",
+        expectedMainEventId: "event:main",
+        epochTransition: true,
+      },
+    ]);
+
+    expect(semanticPublishCall).not.toHaveBeenCalled();
+    expect(semanticEpochTransitionPublishCall).toHaveBeenCalledWith(
+      {
+        contextId: "context:own",
+        commandId: "command:epoch-push",
+        expectedCommittedEventId: "event:next",
+        expectedMainEventId: "event:main",
+      },
+      null,
+      expect.any(Object),
+      { class: "internal", externalKeys: [] }
+    );
+    expect(onEpochTransitionPublished).toHaveBeenCalledOnce();
+  });
+
+  it("does not request a handoff when epoch-transition publication fails", async () => {
+    const failure = new Error("candidate rejected");
+    const onEpochTransitionPublished = vi.fn();
+    const { definition } = service({
+      context: "context:own",
+      failure,
+      onEpochTransitionPublished,
+    });
+    await expect(
+      definition.handler(workerContext(), "push", [
+        {
+          contextId: "context:own",
+          commandId: "command:epoch-push-failed",
+          expectedCommittedEventId: "event:next",
+          expectedMainEventId: "event:main",
+          epochTransition: true,
+        },
+      ])
+    ).rejects.toBe(failure);
+    expect(onEpochTransitionPublished).not.toHaveBeenCalled();
   });
 
   it("carries an owned context's narrower case policy into protected publication", async () => {

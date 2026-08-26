@@ -668,6 +668,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.acquireForCurrentTask": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "authority.acquire",
+      rationale:
+        "Installed agent code may pre-acquire predictable operations only for its host-attested current task authority.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.acquireForTarget": {
     tier: {
       tier: "open",
@@ -5132,6 +5144,18 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "untrusted-execution",
       family: "runtime.read",
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "runtime.rebindAgentChannel": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "runtime.mutate",
+      rationale:
+        "A runtime owner may complete the authenticated identity transition for an agent entity it just cloned.",
     },
     capability: null,
     presentation: null,

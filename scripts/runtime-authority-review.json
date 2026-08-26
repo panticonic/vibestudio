@@ -1,7 +1,15 @@
 {
   "version": 1,
-  "censusDigest": "sha256:33a5d2ee51332bedc83710d43acfb7792997498074fe78289f18279769a85a81",
+  "censusDigest": "sha256:40e60f89a9427f681d343b69734067ae32ef57ca8ef6d1c618745ad46a67f039",
   "decisions": {
+    "host:authority.acquireForCurrentTask": {
+      "review": "host-attested-current-task-acquisition",
+      "change": "Lets installed agent code pre-acquire predictable operations only within the host-attested authority of its currently active task. The caller cannot name another task, user, or authority ceiling, and ordinary receiver-side authorization remains authoritative."
+    },
+    "host:runtime.rebindAgentChannel": {
+      "review": "owner-scoped-cloned-agent-channel-binding",
+      "change": "Completes the authenticated channel identity transition for an agent entity created by the invoking runtime owner. The receiver binds only that newly cloned entity and does not grant workspace operations or broaden the owner's existing authority."
+    },
     "host:authority.compileAuthorityPlan": {
       "review": "host-compiled-content-addressed-authority-plan",
       "change": "Accepts only semantic service-operation hints from installed code, resolves receiver-owned method contracts and resources in the host, and publishes an immutable launch-time acquisition plan. The plan is not a runtime allowlist or parallel authorization mechanism; callers cannot author capability names, tiers, grants, or executable policy."

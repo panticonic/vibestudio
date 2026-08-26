@@ -13,6 +13,11 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { WorkspaceEntry } from "./types.js";
+import type {
+  WorkspaceCreationDescriptor,
+  WorkspaceTemplatePin,
+} from "@vibestudio/workspace-contracts/types";
+import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import { IDENTITY_DATABASE_SCHEMA } from "@vibestudio/identity/identitySchema";
 
@@ -103,6 +108,12 @@ function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
   };
 }
 
+function parseWorkspaceCreationIntent(value: SQLOutputValue): WorkspaceCreationDescriptor | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new Error("Invalid workspace creation intent type");
+  return WorkspaceCreationDescriptorSchema.parse(JSON.parse(value));
+}
+
 function rowToHubProcessLease(row: Record<string, SQLOutputValue>): HubProcessLeaseRecord {
   return {
     ownerBootId: row["owner_boot_id"] as string,
@@ -182,12 +193,52 @@ export class CentralDataManager {
     return rowToWorkspace(row);
   }
 
+  /** Register one not-yet-initialized workspace without creating its directory. */
+  addWorkspaceCreation(
+    name: string,
+    rootTemplate: WorkspaceTemplatePin,
+    workspaceId = createWorkspaceId()
+  ): WorkspaceEntry {
+    const normalized = name.trim();
+    if (!normalized) throw new Error("Workspace name is required");
+    const intent = WorkspaceCreationDescriptorSchema.parse({
+      version: 1,
+      workspaceId,
+      rootTemplate,
+    });
+    const row = this.stmt(
+      `INSERT INTO workspaces (workspace_id, name, last_opened, creation_intent_json)
+       VALUES (?, ?, ?, ?) RETURNING *`
+    ).get(workspaceId, normalized, this.now(), JSON.stringify(intent));
+    if (!row) throw new Error(`Workspace creation registration returned no row: ${normalized}`);
+    return rowToWorkspace(row);
+  }
+
+  getWorkspaceCreationIntent(name: string): WorkspaceCreationDescriptor | null {
+    const row = this.stmt("SELECT creation_intent_json FROM workspaces WHERE name = ?").get(name);
+    if (!row) throw new Error(`Unknown workspace \"${name}\"`);
+    return parseWorkspaceCreationIntent(row["creation_intent_json"]!);
+  }
+
+  completeWorkspaceCreation(workspaceId: string): boolean {
+    return (
+      this.stmt(
+        `UPDATE workspaces SET creation_intent_json = NULL
+         WHERE workspace_id = ? AND creation_intent_json IS NOT NULL`
+      ).run(workspaceId).changes === 1
+    );
+  }
+
   /**
    * Atomically register the one disposable development workspace and its
    * crash-recovery marker. A persistent workspace can never be adopted or
    * overwritten as ephemeral.
    */
-  addEphemeralWorkspace(name: string, ownerBootId: string): EphemeralWorkspaceRecord {
+  addEphemeralWorkspace(
+    name: string,
+    ownerBootId: string,
+    rootTemplate: WorkspaceTemplatePin
+  ): EphemeralWorkspaceRecord {
     const normalized = name.trim();
     if (!normalized) throw new Error("Ephemeral workspace name is required");
     return this.transaction(() => {
@@ -201,10 +252,15 @@ export class CentralDataManager {
         throw new Error(`Cannot shadow persistent workspace "${normalized}" with ephemeral dev`);
       }
       const workspaceId = createWorkspaceId();
+      const intent = WorkspaceCreationDescriptorSchema.parse({
+        version: 1,
+        workspaceId,
+        rootTemplate,
+      });
       const row = this.stmt(
-        `INSERT INTO workspaces (workspace_id, name, last_opened)
-         VALUES (?, ?, ?) RETURNING *`
-      ).get(workspaceId, normalized, this.now());
+        `INSERT INTO workspaces (workspace_id, name, last_opened, creation_intent_json)
+         VALUES (?, ?, ?, ?) RETURNING *`
+      ).get(workspaceId, normalized, this.now(), JSON.stringify(intent));
       if (!row) throw new Error("Ephemeral workspace registration returned no row");
       this.stmt("INSERT INTO hub_preferences (key, value) VALUES (?, ?)").run(
         EPHEMERAL_WORKSPACE_KEY,

@@ -565,7 +565,7 @@ Authority principals: `code`, `host`, `user`
 | `vcs.registerExternalDelta` | Register one exact unapplied old-to-new external repository delta. |
 | `vcs.supersedeExternalDelta` | Retire one active external delta so it can no longer be merged. |
 | `vcs.finalizeExternalDelta` | Finalize one fully decided external delta and release its dedicated GC roots. |
-| `vcs.push` | Publish one exact already-committed event to protected main. |
+| `vcs.push` | Publish one exact already-committed event to protected main; epochTransition requests the reviewed host handoff for a foreign-epoch candidate. |
 | `vcs.status` | Return context pointers, clean state, main relation, and compact working counts. |
 | `vcs.compare` | Compare an exact target state with a committed source event or coordinator-owned external delta by semantic change. |
 | `vcs.inspect` | Inspect one typed semantic node and a bounded preview of its direct adjacency. |

@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import YAML from "yaml";
 import {
-  createAndRegisterWorkspace,
   createWorkspace,
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
@@ -389,29 +388,6 @@ describe("initWorkspace", () => {
     expect(fs.readFileSync(path.join(workspaceDir, "operator-data.txt"), "utf-8")).toBe("keep");
   });
 
-  it("compensates a failed registry write by removing the published directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const templateRoot = path.join(root, "template");
-    writeConfig(templateRoot, "initPanels: []\n");
-    const centralData = {
-      hasWorkspace: () => false,
-      addWorkspace: () => {
-        throw new Error("injected registry failure");
-      },
-    } as unknown as CentralDataManager;
-
-    expect(() =>
-      createAndRegisterWorkspace("registration-failure", centralData, {
-        rootTemplate: exactRoot,
-      })
-    ).toThrow(/injected registry failure/);
-
-    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
-    expect(fs.readdirSync(workspacesDir)).toEqual([]);
-  });
-
   it("restores the workspace directory when the registry deletion transaction fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
@@ -498,9 +474,8 @@ describe("initWorkspace", () => {
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
     const centralData = new CentralDataManager({ databasePath: path.join(root, "identity.db") });
-    const workspace = createAndRegisterWorkspace("cleanup-retry", centralData, {
-      rootTemplate: exactRoot,
-    });
+    initWorkspace("cleanup-retry", exactCreation("ws_cleanup_retry"));
+    const workspace = centralData.addWorkspace("cleanup-retry", "ws_cleanup_retry");
     const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
     const originalRmSync = fs.rmSync.bind(fs);
     const rm = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
@@ -616,9 +591,8 @@ describe("initWorkspace", () => {
     writeConfig(templateRoot, "initPanels: []\n");
     const databasePath = path.join(root, "identity.db");
     const centralData = new CentralDataManager({ databasePath });
-    const entry = createAndRegisterWorkspace("full-lifecycle", centralData, {
-      rootTemplate: exactRoot,
-    });
+    initWorkspace("full-lifecycle", exactCreation("ws_full_lifecycle"));
+    const entry = centralData.addWorkspace("full-lifecycle", "ws_full_lifecycle");
     const db = new DatabaseSync(databasePath);
     db.prepare(
       `INSERT INTO users (id, handle, display_name, role, created_at)

@@ -114,6 +114,7 @@ export interface ProtectedRefStore {
   readMainSemanticState(): { kind: "event"; eventId: string } | null;
   readMain(repoPath: string): MainRefRecord | null;
   listMains(): MainRefRecord[];
+  readHeadPublication(): AppliedPublication | null;
   updateMains(input: UpdateMainsInput): Promise<UpdateMainsResult>;
   readAppliedPublication(publicationId: string): AppliedPublication | null;
   acknowledgePublication(publicationId: string): void;
@@ -473,6 +474,13 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
       return [...mains.values()]
         .sort((a, b) => compareUtf16CodeUnits(a.repoPath, b.repoPath))
         .map((record) => ({ ...record }));
+    },
+
+    readHeadPublication() {
+      if (!headPublicationId) return null;
+      const publication = publications.get(headPublicationId);
+      if (!publication) throw new Error("Protected-ref head publication evidence is missing");
+      return { ...publication, entries: publication.entries.map((entry) => ({ ...entry })) };
     },
 
     readAppliedPublication(publicationId) {

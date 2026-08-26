@@ -421,6 +421,25 @@
       ]
     },
     "methods": {
+      "acquireForCurrentTask": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "authority.acquire",
+          "rationale": "Installed agent code may pre-acquire predictable operations only for its host-attested current task authority."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "acquireForTarget": {
         "authority": {
           "principals": [
@@ -8535,6 +8554,25 @@
           "residency": "untrusted-execution",
           "family": "runtime.read",
           "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "rebindAgentChannel": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "supervision",
+          "family": "runtime.mutate",
+          "rationale": "A runtime owner may complete the authenticated identity transition for an agent entity it just cloned."
         },
         "capability": null,
         "presentation": null

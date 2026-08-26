@@ -64,7 +64,7 @@ if (command === "setup") {
   if (args.length !== 0) throw new Error("usage: pnpm dev:base clear");
   clearDevelopmentBaseCheckout(repoRoot);
   console.log(
-    "Cleared the development Base checkout; pnpm dev will use the published Base release."
+    "Cleared the development Base checkout; pnpm start/dev now require setup or an explicit --production-base launch."
   );
 } else if (command === "path") {
   if (args.length !== 0) throw new Error("usage: pnpm dev:base path");
@@ -73,7 +73,7 @@ if (command === "setup") {
   if (args.length !== 0) throw new Error("usage: pnpm dev:base status");
   const checkout = configuredDevelopmentBaseCheckout(repoRoot);
   if (!checkout) {
-    console.log("Development Base: published release (no local checkout configured)");
+    console.log("Development Base: not configured (run `pnpm dev:base setup`)");
   } else {
     const head = developmentBaseHead(checkout);
     console.log(`Development Base: ${checkout}`);

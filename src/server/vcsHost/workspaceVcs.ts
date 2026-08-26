@@ -270,6 +270,7 @@ export type CallerPublicationGateContext = {
   via?: string;
   /** Host-composed exact candidate view, added by publishMain before gating. */
   candidateWorkspaceState?: string;
+  epochTransition?: true;
 };
 
 type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-initialization" };
@@ -582,6 +583,25 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           ingress: { causalParent, contextIntegrity },
         } satisfies SemanticRequest,
         { kind: "caller", caller, ...(signal ? { signal } : {}) }
+      )
+    );
+  }
+
+  semanticEpochTransitionPublishCall<T>(
+    input: unknown,
+    causalParent: RpcCausalParent | null,
+    caller: VerifiedCaller,
+    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"],
+    signal?: AbortSignal
+  ): Promise<T> {
+    return this.withProtectedMainMutation(() =>
+      this.semanticCall<T>(
+        "vcsPush",
+        {
+          input,
+          ingress: { causalParent, contextIntegrity },
+        } satisfies SemanticRequest,
+        { kind: "caller", caller, epochTransition: true, ...(signal ? { signal } : {}) }
       )
     );
   }

@@ -114,6 +114,14 @@ describe
           `${NPM_DESKTOP_PACKAGE_NAME}@2.0.0`,
         ]);
         expect(fs.existsSync(path.join(fixture.central, NPM_UPDATE_FILES.lock))).toBe(false);
+        expect(
+          JSON.parse(
+            fs.readFileSync(
+              path.join(fixture.central, "host-versions", "1", "workspace-host.json"),
+              "utf8"
+            )
+          )
+        ).toMatchObject({ systemEpoch: 1, appVersion: "1.0.0" });
       } finally {
         fixture.cleanup();
       }
@@ -157,9 +165,11 @@ function createInstallerFixture() {
   const invocationsPath = path.join(root, "npm-invocations.jsonl");
   fs.mkdirSync(path.join(packageRoot, "node_modules", "electron"), { recursive: true });
   fs.mkdirSync(path.join(packageRoot, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
   fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
   fs.mkdirSync(bin);
   writeManifest(packageRoot, "1.0.0");
+  fs.writeFileSync(path.join(packageRoot, "dist", "server.mjs"), "export {};\n");
   fs.writeFileSync(path.join(packageRoot, "scripts", "vibestudio-launcher.mjs"), "");
   const npm = path.join(bin, "npm");
   fs.writeFileSync(

@@ -385,6 +385,10 @@ describe("ProtectedRefStore", () => {
       resultHostRefsBasisDigest: EMPTY_BASIS,
       entries: [],
     });
+    expect(store.readHeadPublication()).toMatchObject({
+      publicationId: "publication:semantic-only",
+      entries: [],
+    });
     const replayGate = vi.fn(async () => undefined);
     const reopened = createProtectedRefStore({ statePath, gate: replayGate });
     await expect(reopened.updateMains(input)).resolves.toMatchObject({ replayed: true });

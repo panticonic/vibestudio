@@ -26,6 +26,19 @@ export interface WorkspaceConfigReader {
   readText(path: string): Promise<string | null>;
 }
 
+/** Forward-stable dispatch envelope; intentionally ignores every other field. */
+export function parseWorkspaceSystemEpochEnvelope(content: string): number {
+  const value: unknown = YAML.parse(content);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("meta/vibestudio.yml must contain a configuration mapping");
+  }
+  const systemEpoch = (value as Record<string, unknown>)["systemEpoch"];
+  if (!Number.isSafeInteger(systemEpoch) || (systemEpoch as number) < 0) {
+    throw new Error("meta/vibestudio.yml: `systemEpoch` must be a nonnegative integer");
+  }
+  return systemEpoch as number;
+}
+
 /**
  * Read the single runtime manifest published at one immutable workspace state.
  *
@@ -88,7 +101,7 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
 export function validateResolvedWorkspaceConfig(config: WorkspaceConfig): WorkspaceConfig {
   if (config.systemEpoch !== WORKSPACE_SYSTEM_EPOCH) {
     throw new Error(
-      `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} is incompatible with host runtime ABI ${WORKSPACE_SYSTEM_EPOCH}; recreate this pre-release workspace from the current Base`
+      `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} requires workspace host epoch ${config.systemEpoch}, but this process is epoch ${WORKSPACE_SYSTEM_EPOCH}; open it through the current hub or publish a prepared change with epochTransition`
     );
   }
   validateDeclaredUnits(config);

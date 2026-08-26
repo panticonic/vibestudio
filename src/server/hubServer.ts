@@ -7,7 +7,6 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { z } from "zod";
 import {
-  createAndRegisterWorkspace,
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
   recoverStagedWorkspaceDeletions,
@@ -15,8 +14,17 @@ import {
 import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import type { WorkspaceCreationDescriptor } from "@vibestudio/workspace-contracts/types";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
+import { readWorkspaceHostLaunchRecord } from "@vibestudio/workspace/hostLaunchRecord";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import {
+  resolveHistoricalWorkspaceHost,
+  semverMajor,
+  WORKSPACE_EPOCH_HANDOFF_EXIT_CODE,
+  type WorkspaceHostLaunchSet,
+} from "./historicalWorkspaceHost.js";
 import { TokenManager, type TokenEntry } from "@vibestudio/shared/tokenManager";
 import {
   DEVICE_ID_PATTERN,
@@ -72,6 +80,7 @@ import {
   WorkspaceChildGovernanceAppendInputSchema,
   WorkspaceChildGovernanceQueryInputSchema,
   WorkspaceChildPresenceReportInputSchema,
+  WorkspaceChildCreationCompleteInputSchema,
 } from "./workspaceChildHubPort.js";
 import { shellCallerId } from "./hostCore/auth/model.js";
 import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
@@ -362,6 +371,13 @@ function requireWorkspaceName(state: HubRuntimeState, workspaceId: string): stri
     .find((workspace) => workspace.workspaceId === workspaceId);
   if (!entry) throw new Error(`Unknown workspace id "${workspaceId}"`);
   return entry.name;
+}
+
+function currentCreationRootTemplate(appRoot: string) {
+  const developmentPin = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
+  return developmentPin
+    ? WorkspaceTemplatePinSchema.parse(JSON.parse(developmentPin))
+    : readBaseTemplateRelease(appRoot).baseTemplate;
 }
 
 /**
@@ -816,7 +832,11 @@ export function selectBootstrapWorkspace(
     return { name, lifecycle: "ephemeral" };
   }
   if (args.bootstrapWorkspace) {
-    return { name: normalizeWorkspaceName(args.bootstrapWorkspace), lifecycle: "register" };
+    const name = normalizeWorkspaceName(args.bootstrapWorkspace);
+    return {
+      name,
+      lifecycle: registered.some((entry) => entry.name === name) ? "existing" : "register",
+    };
   }
   const existing = registered[0];
   if (existing) {
@@ -1176,6 +1196,16 @@ async function handleInternalRoute(
       sendJson(res, 200, { updated });
       return;
     }
+    if (route === "workspace/creation-complete") {
+      WorkspaceChildCreationCompleteInputSchema.parse(rawBody);
+      const workspaceName = requireWorkspaceName(state, boundWorkspaceId);
+      sendJson(res, 200, {
+        completed: isWorkspaceEphemeral(state, workspaceName)
+          ? false
+          : state.centralData.completeWorkspaceCreation(boundWorkspaceId),
+      });
+      return;
+    }
     if (route === "agent-credential/revoke") {
       const body = WorkspaceChildAgentCredentialRevokeInputSchema.parse(rawBody);
       sendJson(res, 200, { revoked: state.deviceAuthStore.revokeAgentCredential(body.agentId) });
@@ -1339,9 +1369,7 @@ async function executeHubControl(
       ? WorkspaceTemplatePinSchema.parse(opts["rootTemplate"])
       : undefined;
     const selectedRoot = rootTemplate ?? readBaseTemplateRelease(state.appRoot).baseTemplate;
-    const entry = createAndRegisterWorkspace(name, state.centralData, {
-      rootTemplate: selectedRoot,
-    });
+    const entry = state.centralData.addWorkspaceCreation(name, selectedRoot);
     try {
       if (subject.role !== "root") {
         state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
@@ -1380,7 +1408,8 @@ async function executeHubControl(
     }
     const entry = state.centralData.addEphemeralWorkspace(
       EPHEMERAL_DEV_WORKSPACE_NAME,
-      state.serverBootId
+      state.serverBootId,
+      currentCreationRootTemplate(state.appRoot)
     );
     respond({
       workspaceId: entry.workspaceId,
@@ -2140,6 +2169,7 @@ export function buildWorkspaceChildEnv(input: {
   identityDbPath: string;
   workspaceChildToken: string;
   ephemeral: boolean;
+  creationIntent?: WorkspaceCreationDescriptor | null;
 }): NodeJS.ProcessEnv {
   const reach = workspaceReachPaths(input.advertisedWorkspaceName);
   const env: NodeJS.ProcessEnv = {
@@ -2169,9 +2199,18 @@ export function buildWorkspaceChildEnv(input: {
     VIBESTUDIO_WEBRTC_IDENTITY: reach.identityFile,
     VIBESTUDIO_PROCESS_ROLE: "workspace-child",
     VIBESTUDIO_HUB_URL: input.hubUrl,
+    // A historical child uses its own compiled epoch to interpret the
+    // workspace. This separate coordinate tells it which epoch the installed
+    // hub can take ownership of after an intentional transition.
+    VIBESTUDIO_CURRENT_SYSTEM_EPOCH: String(WORKSPACE_SYSTEM_EPOCH),
   };
   delete env["VIBESTUDIO_GATEWAY_PORT"];
   delete env["VIBESTUDIO_WORKSPACE_DIR"];
+  if (input.creationIntent) {
+    env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"] = JSON.stringify(input.creationIntent);
+  } else {
+    delete env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"];
+  }
   if (input.ephemeral) {
     env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] = "1";
   } else {
@@ -2258,6 +2297,7 @@ async function startWorkspaceRuntime(
 ): Promise<WorkspaceRuntime> {
   const isEphemeralDevWorkspace = isWorkspaceEphemeral(state, advertisedName);
   const workspaceId = requireWorkspaceId(state, advertisedName);
+  const creationIntent = state.centralData.getWorkspaceCreationIntent(advertisedName);
   // A new child instance owns a fresh report stream. Never retain endpoints
   // from a prior process while the replacement is starting.
   state.workspacePresence.delete(workspaceId);
@@ -2286,15 +2326,49 @@ async function startWorkspaceRuntime(
       childWorkspaceName
     );
   }
+  if (semverMajor(state.version) !== WORKSPACE_SYSTEM_EPOCH) {
+    throw new Error(
+      `Installed application ${state.version} does not match compiled workspace epoch ${WORKSPACE_SYSTEM_EPOCH}`
+    );
+  }
+  const launchRecord = readWorkspaceHostLaunchRecord(
+    path.join(getWorkspaceDir(childWorkspaceName), "state")
+  );
+  if (launchRecord && launchRecord.workspaceId !== workspaceId) {
+    throw new Error(`Workspace "${advertisedName}" launch record has the wrong identity`);
+  }
+  if (!launchRecord && !creationIntent) {
+    throw new Error(
+      `Workspace "${advertisedName}" has neither a host launch record nor a pending creation intent`
+    );
+  }
+  if (creationIntent && creationIntent.workspaceId !== workspaceId) {
+    throw new Error(`Workspace "${advertisedName}" creation intent has the wrong identity`);
+  }
+  const launchSet: WorkspaceHostLaunchSet =
+    !launchRecord || launchRecord.systemEpoch === WORKSPACE_SYSTEM_EPOCH
+      ? {
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          appVersion: state.version,
+          executable: process.execPath,
+          serverEntry: process.argv.slice(1, 2)[0] ?? "",
+          appRoot: state.appRoot,
+          historical: false,
+        }
+      : resolveHistoricalWorkspaceHost(
+          path.join(getCentralDataPath(), "host-versions"),
+          launchRecord.systemEpoch
+        );
+  if (!launchSet.serverEntry) throw new Error("Workspace child launch set has no server entry");
   const readyDir = fs.mkdtempSync(
     path.join(os.tmpdir(), `vibestudio-workspace-${advertisedName}-`)
   );
   const readyFile = path.join(readyDir, "ready.json");
   const publicUrl = workspaceEndpointUrl(state, advertisedName);
   const childArgs = buildWorkspaceChildArgs({
-    entry: process.argv.slice(1, 2)[0] ?? "",
+    entry: launchSet.serverEntry,
     workspaceName: childWorkspaceName,
-    appRoot: state.appRoot,
+    appRoot: launchSet.appRoot,
     readyFile,
     logLevel: state.args.logLevel,
     requireMobileReady: state.args.requireMobileReady,
@@ -2303,7 +2377,7 @@ async function startWorkspaceRuntime(
 
   const childEnv = buildWorkspaceChildEnv({
     baseEnv: process.env,
-    appRoot: state.appRoot,
+    appRoot: launchSet.appRoot,
     advertisedWorkspaceName: advertisedName,
     childWorkspaceName,
     workspaceId,
@@ -2311,20 +2385,25 @@ async function startWorkspaceRuntime(
     identityDbPath: state.identityDbPath,
     workspaceChildToken: randomBytes(32).toString("base64url"),
     ephemeral: isEphemeralDevWorkspace === true,
+    creationIntent,
   });
   const runtimeToken = childEnv["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"];
   if (!runtimeToken) throw new Error("Workspace child environment has no runtime identity token");
   state.workspaceChildTokens.set(runtimeToken, workspaceId);
 
-  const child = spawn(process.execPath, [...process.execArgv, ...childArgs], {
-    cwd: state.appRoot,
-    env: childEnv,
-    stdio: ["ignore", "pipe", "pipe"],
-    // The hub owns this complete runtime tree. A distinct POSIX process group
-    // lets graceful shutdown reach the child first and lets an explicit
-    // repeated signal stop workerd/extension-host descendants as one unit.
-    detached: process.platform !== "win32",
-  });
+  const child = spawn(
+    launchSet.executable,
+    [...(launchSet.historical ? [] : process.execArgv), ...childArgs],
+    {
+      cwd: launchSet.appRoot,
+      env: childEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+      // The hub owns this complete runtime tree. A distinct POSIX process group
+      // lets graceful shutdown reach the child first and lets an explicit
+      // repeated signal stop workerd/extension-host descendants as one unit.
+      detached: process.platform !== "win32",
+    }
+  );
   onSpawn(child);
 
   // A supervising CLI/PTY may close stdout while several workspace children
@@ -2499,6 +2578,7 @@ export async function handleWorkspaceChildExit(
   const current = state.runtimes.get(input.advertisedName);
   if (!current || current.child !== input.child) return;
   const wasReady = !("promise" in current);
+  const epochHandoff = input.code === WORKSPACE_EPOCH_HANDOFF_EXIT_CODE;
   state.runtimes.delete(input.advertisedName);
 
   const reaped = (deps.reap ?? reapWorkspaceChildProcessGroup)(input.child);
@@ -2510,13 +2590,20 @@ export async function handleWorkspaceChildExit(
     await reaped;
     return;
   }
-  console.error(
-    `[Hub] Workspace "${input.advertisedName}" exited unexpectedly (${exitDescription})`
-  );
+  if (epochHandoff) {
+    console.log(
+      `[Hub] Workspace "${input.advertisedName}" handed off to its new host (${exitDescription})`
+    );
+  } else {
+    console.error(
+      `[Hub] Workspace "${input.advertisedName}" exited unexpectedly (${exitDescription})`
+    );
+  }
 
   if (
     !wasReady ||
-    !(deps.shouldRestart ?? workspaceRuntimeIsDesired)(state, input.advertisedName)
+    (!epochHandoff &&
+      !(deps.shouldRestart ?? workspaceRuntimeIsDesired)(state, input.advertisedName))
   ) {
     await reaped;
     return;
@@ -2855,9 +2942,13 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const bootstrap = selectBootstrapWorkspace(args, centralData.listWorkspaces());
   const bootstrapWorkspace = bootstrap.name;
   if (bootstrap.lifecycle === "ephemeral") {
-    centralData.addEphemeralWorkspace(bootstrapWorkspace, serverBootId);
+    centralData.addEphemeralWorkspace(
+      bootstrapWorkspace,
+      serverBootId,
+      currentCreationRootTemplate(appRoot)
+    );
   } else if (bootstrap.lifecycle === "register") {
-    centralData.addWorkspace(bootstrapWorkspace);
+    centralData.addWorkspaceCreation(bootstrapWorkspace, currentCreationRootTemplate(appRoot));
   }
   const bootstrapWorkspaceId = centralData.getWorkspaceIdByName(bootstrapWorkspace);
   if (!bootstrapWorkspaceId) {

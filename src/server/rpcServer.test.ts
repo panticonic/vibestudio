@@ -1906,6 +1906,7 @@ describe("RpcServer relay behavior", () => {
       ["session-1"],
       { caller: { callerId: "panel:nav-a", callerKind: "panel" } }
     );
+    await Promise.resolve();
     const sent = ws.send.mock.calls
       .map((call) => JSON.parse(String(call[0])))
       .find(

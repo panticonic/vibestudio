@@ -67,7 +67,7 @@ describe("resolveDevelopmentBaseSelection", () => {
   });
 
   it("rejects an incompatible Base before creating a workspace runtime", async () => {
-    const { host, base, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH - 1);
+    const { host, base, checkpoint } = fixture(WORKSPACE_SYSTEM_EPOCH + 1);
 
     await expect(
       resolveDevelopmentBaseSelection({
@@ -76,7 +76,7 @@ describe("resolveDevelopmentBaseSelection", () => {
         explicitCheckout: base,
       })
     ).rejects.toThrow(
-      `declares systemEpoch ${WORKSPACE_SYSTEM_EPOCH - 1}, but this host requires ${WORKSPACE_SYSTEM_EPOCH}`
+      `declares systemEpoch ${WORKSPACE_SYSTEM_EPOCH + 1}, but this host requires ${WORKSPACE_SYSTEM_EPOCH}`
     );
   });
 });

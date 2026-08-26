@@ -1187,6 +1187,41 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     await expect(gate(batch([{ next }], { kind: "system" }))).rejects.toThrow(/no gate context/);
   });
 
+  it("uses the narrow validator for an epoch-transition publication", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const transitionValidator = vi.fn(async () => undefined);
+    const ordinaryValidator = vi.fn(async () => {
+      throw new Error("ordinary parser must not inspect a future manifest");
+    });
+    const transitionGate = createMainRefAdvanceGate({
+      blobsDir,
+      approvalGate: {
+        approve: async () => undefined,
+        approveSemanticAdvance: async () => undefined,
+        approveRepoDeletion: async () => undefined,
+      },
+      ensureStateMirrored: async () => undefined,
+      workspaceViewWithReposAt: async () => "state:future-workspace",
+      validateCandidateWorkspaceState: ordinaryValidator,
+      validateEpochTransitionCandidate: transitionValidator,
+    });
+    await transitionGate(
+      batch([], {
+        kind: "caller",
+        caller: panelCaller(),
+        epochTransition: true,
+      })
+    );
+
+    expect(transitionValidator).toHaveBeenCalledWith(
+      "state:future-workspace",
+      [],
+      undefined,
+      expect.any(Function)
+    );
+    expect(ordinaryValidator).not.toHaveBeenCalled();
+  });
+
   it("approves a content-identical semantic main advance", async () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
     const { gate, semanticAdvances } = refGateDeps(blobsDir);

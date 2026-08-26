@@ -213,6 +213,7 @@ export function stageNpmUpdateLauncherFiles(root) {
   for (const relative of [
     "scripts/npm-update-contract.mjs",
     "scripts/npm-update-launcher.mjs",
+    "scripts/historical-host-snapshot.mjs",
     "scripts/owned-process-tree.mjs",
   ]) {
     copyFile(relative, path.join(root, relative));

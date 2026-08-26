@@ -21,6 +21,7 @@ export const RUNTIME_METHOD_NAMES = [
   "setTitle",
   "createContext",
   "cloneContext",
+  "rebindAgentChannel",
   "destroyContext",
   "forkSemanticContext",
   "dropSemanticContext",

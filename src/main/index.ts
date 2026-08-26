@@ -180,16 +180,17 @@ import { resolveElectronViewCaller } from "./callerResolution.js";
 import { setMenuPanelLifecycle, setMenuPanelRegistry, setMenuEventService } from "./menu.js";
 import { getAppRoot } from "./paths.js";
 import { loadCentralEnv } from "@vibestudio/workspace/loader";
-import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import {
   resolveStartupMode,
   shouldRequestSingleInstanceLock,
   getPendingUserDataDir,
+  localShellUserDataDir,
   chooseConnectionRelaunchArgs,
   EPHEMERAL_DEV_WORKSPACE_NAME,
   ephemeralWorkspaceRelaunchArgs,
   resolveEphemeralDevStartupMode,
+  resolveLocalStartupMode,
   workspaceRelaunchArgs,
   type StartupMode,
   type ConnectedStartupMode,
@@ -332,7 +333,12 @@ if (startupMode.kind === "local") {
   workspaceId = startupMode.workspaceId;
   app.setPath(
     "userData",
-    path.join(startupMode.wsDir, IS_HEADLESS_HOST ? "state-headless-host" : "state")
+    localShellUserDataDir(startupMode, {
+      pendingCreation:
+        !startupMode.isEphemeral &&
+        centralData.getWorkspaceCreationIntent(startupMode.workspaceName) !== null,
+      headless: IS_HEADLESS_HOST,
+    })
   );
 } else {
   app.setPath(
@@ -1983,14 +1989,8 @@ app.on("ready", async () => {
         workspaceId = startupMode.workspaceId;
         log.info(`[bootstrap] Ephemeral workspace chosen: ${workspaceId}`);
       } else {
-        let startup: ReturnType<typeof resolveLocalWorkspaceStartup>;
         try {
-          startup = resolveLocalWorkspaceStartup({
-            appRoot: getAppRoot(),
-            centralData,
-            name: choice.name,
-            init: true,
-          });
+          startupMode = resolveLocalStartupMode(centralData, choice.name, "local", true);
         } catch (error) {
           bootstrapWorkspaceRpcReady = false;
           bootstrapStartupError = {
@@ -2002,15 +2002,6 @@ app.on("ready", async () => {
           pushBootstrapConnectionState();
           return;
         }
-        startupMode = {
-          kind: "local",
-          connectionIntent: "local",
-          wsDir: startup.resolved.wsDir,
-          workspaceName: startup.resolved.name,
-          workspaceId: startup.resolved.workspace.config.id,
-          isEphemeral: false,
-          ephemeralLifecycle: null,
-        };
         workspaceId = startupMode.workspaceId;
         log.info(`[bootstrap] Local workspace chosen: ${workspaceId} (${startupMode.wsDir})`);
       }

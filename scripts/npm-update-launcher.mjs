@@ -16,6 +16,7 @@ import {
   writePrivateJsonAtomic,
 } from "./npm-update-contract.mjs";
 import { terminateOwnedProcessTree } from "./owned-process-tree.mjs";
+import { publishHistoricalHostSnapshot, semverMajor } from "./historical-host-snapshot.mjs";
 
 const PROVENANCE_TIMEOUT_MS = 2_000;
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
@@ -271,6 +272,36 @@ export async function handleElectronUpdateExit({
   try {
     appendPhase(logPath, "lock-acquired", `target=${request.toVersion}`);
     appendPhase(logPath, "shutdown-confirmed", `from=${request.fromVersion}`);
+    if (semverMajor(request.toVersion) !== semverMajor(request.fromVersion)) {
+      try {
+        const retained = publishHistoricalHostSnapshot({
+          centralDataPath,
+          artifactRoot: launch.packageRoot,
+          appRoot: launch.packageRoot,
+          serverEntry: path.join(launch.packageRoot, "dist", "server.mjs"),
+          executable: systemNode,
+          appVersion: request.fromVersion,
+        });
+        appendPhase(logPath, "historical-host-retained", retained.destination);
+      } catch (error) {
+        const summary = `The outgoing workspace host could not be retained: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        appendPhase(logPath, "historical-host-retention-failed", summary);
+        writeResult(resultPath, request, {
+          outcome: "failed",
+          npmExitStatus: null,
+          summary,
+          installedVersion: readInstalledVersion(launch.packageRoot),
+          logPath,
+        });
+        return await relaunchInstalled({
+          packageRoot: launch.packageRoot,
+          resultPath,
+          systemNode,
+        });
+      }
+    }
     targetRun = await runNpmInstall(reproven, request.toVersion, logPath);
     const targetVersion = readInstalledVersion(launch.packageRoot);
     if (targetRun.code === 0 && targetVersion === request.toVersion) {

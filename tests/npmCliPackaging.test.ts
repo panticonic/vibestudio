@@ -45,6 +45,7 @@ describe("npm CLI packaging", () => {
     for (const relative of [
       "scripts/npm-update-contract.mjs",
       "scripts/npm-update-launcher.mjs",
+      "scripts/historical-host-snapshot.mjs",
       "scripts/owned-process-tree.mjs",
     ]) {
       expect(fs.existsSync(path.join(root, relative))).toBe(true);

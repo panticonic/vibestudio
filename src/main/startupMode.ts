@@ -12,7 +12,8 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
 import { resolveWorkspaceName } from "@vibestudio/workspace/loader";
-import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
+import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
+import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
@@ -80,6 +81,26 @@ export function getPendingUserDataDir(): string {
   const dir = path.join(getCentralConfigDirectory(), "bootstrap-state");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Chromium state cannot live inside a workspace directory until the workspace
+ * child has admitted and created that directory. Keep the first shell session
+ * in profile bootstrap state; later launches use the admitted workspace state.
+ */
+export function localShellUserDataDir(
+  mode: LocalStartupMode,
+  options: { pendingCreation: boolean; headless: boolean }
+): string {
+  if (mode.isEphemeral || options.pendingCreation) {
+    return path.join(
+      getPendingUserDataDir(),
+      "workspace-creation",
+      mode.workspaceId,
+      options.headless ? "headless" : "desktop"
+    );
+  }
+  return path.join(mode.wsDir, options.headless ? "state-headless-host" : "state");
 }
 
 /**
@@ -215,28 +236,35 @@ export function resolveEphemeralDevStartupMode(
 export function resolveLocalStartupMode(
   centralData: CentralDataManager,
   preferredName?: string,
-  connectionIntent: LocalStartupMode["connectionIntent"] = "local"
+  connectionIntent: LocalStartupMode["connectionIntent"] = "local",
+  createIfMissing = false
 ): LocalStartupMode {
-  // Local mode: resolve workspace from disk
-  const wsName = resolveWorkspaceName() ?? preferredName;
-  const appRoot = getAppRoot();
-  const startup = resolveLocalWorkspaceStartup({
-    appRoot,
-    centralData,
-    name: wsName ?? undefined,
-    ...(wsName ? { init: shouldCreateExplicitWorkspaceIfMissing() } : {}),
-  });
-  log.info(
-    `[Workspace] Loaded: ${startup.resolved.wsDir} (id: ${startup.resolved.workspace.config.id})`
-  );
-  const isEphemeral = startup.isEphemeral;
+  const explicitlyNamed = resolveWorkspaceName() ?? preferredName;
+  const name = explicitlyNamed ?? centralData.getLastOpenedWorkspace()?.name ?? "default";
+  let entry = centralData.getWorkspaceEntry(name);
+  if (!entry) {
+    const mayCreate =
+      explicitlyNamed === null ||
+      explicitlyNamed === undefined ||
+      createIfMissing ||
+      shouldCreateExplicitWorkspaceIfMissing();
+    if (!mayCreate) throw new Error(`Workspace "${name}" is not registered`);
+    entry = centralData.addWorkspaceCreation(
+      name,
+      readBaseTemplateRelease(getAppRoot()).baseTemplate
+    );
+    log.info(`[Workspace] Recorded pending creation for "${name}" (${entry.workspaceId})`);
+  } else {
+    centralData.touchWorkspace(name);
+    log.info(`[Workspace] Selected "${name}" (${entry.workspaceId})`);
+  }
   return {
     kind: "local",
     connectionIntent,
-    wsDir: startup.resolved.wsDir,
-    workspaceName: startup.resolved.name,
-    workspaceId: startup.resolved.workspace.config.id,
-    isEphemeral,
+    wsDir: getWorkspaceDir(name),
+    workspaceName: name,
+    workspaceId: entry.workspaceId,
+    isEphemeral: false,
     ephemeralLifecycle: null,
   };
 }

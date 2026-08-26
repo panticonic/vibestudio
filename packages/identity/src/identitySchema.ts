@@ -2,9 +2,9 @@ import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 10 is the only accepted schema. Every other shape is rejected.
+ * Version 11 is the only accepted schema. Every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 10;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 11;
 
 export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: IDENTITY_DATABASE_SCHEMA_VERSION,
@@ -115,7 +115,8 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE TABLE workspaces (
         workspace_id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
-        last_opened INTEGER NOT NULL
+        last_opened INTEGER NOT NULL,
+        creation_intent_json TEXT
       )`,
     },
     {

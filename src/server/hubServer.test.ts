@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { derivePairingRoom } from "@vibestudio/shared/connect";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
@@ -37,6 +38,7 @@ import {
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
+import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
 
 describe("hub control HTTP routing", () => {
   it("routes both RPC dispatch and pre-upgrade admission to the control server", () => {
@@ -88,6 +90,12 @@ describe("hub bootstrap workspace selection", () => {
     expect(() =>
       selectBootstrapWorkspace({ ephemeral: true, bootstrapWorkspace: "not-dev" }, [])
     ).toThrow("canonical dev workspace");
+  });
+
+  it("consumes an explicit bootstrap already registered by the desktop", () => {
+    expect(
+      selectBootstrapWorkspace({ bootstrapWorkspace: "dogfood" }, [{ name: "dogfood" }])
+    ).toEqual({ name: "dogfood", lifecycle: "existing" });
   });
 });
 
@@ -319,6 +327,37 @@ describe("workspace child exit reconciliation", () => {
 
     expect(reap).not.toHaveBeenCalled();
     expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("restarts an intentional epoch handoff even without ordinary route demand", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: WORKSPACE_EPOCH_HANDOFF_EXIT_CODE,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const state = runtimeState(child);
+    const replacement = {
+      ...(state.runtimes.get("dev") as WorkspaceRuntime),
+      child: Object.assign(new EventEmitter(), { pid: 8765 }) as unknown as ChildProcess,
+    };
+    const restart = vi.fn(async () => replacement);
+
+    await handleWorkspaceChildExit(
+      state,
+      {
+        advertisedName: "dev",
+        childWorkspaceName: "dev-deadbeef",
+        workspaceId: "ws_dev",
+        runtimeToken: "child-token",
+        child,
+        code: WORKSPACE_EPOCH_HANDOFF_EXIT_CODE,
+        signal: null,
+      },
+      { shouldRestart: () => false, reap: async () => undefined, restart }
+    );
+
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it("reaps a child that exits during startup without starting a competing replacement", async () => {
@@ -553,6 +592,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_PROCESS_ROLE"]).toBe("workspace-child");
     expect(env["VIBESTUDIO_HUB_URL"]).toBe("http://127.0.0.1:3030");
     expect(env["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"]).toBe("workspace-child-identity");
+    expect(env["VIBESTUDIO_CURRENT_SYSTEM_EPOCH"]).toBe(String(WORKSPACE_SYSTEM_EPOCH));
     expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
     expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
@@ -564,6 +604,25 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
     expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBe("/hub/runtime/internal-do.bundle.mjs");
     expect(env["PATH"]).toBe("/usr/bin");
+  });
+
+  it("passes the exact pending creation descriptor only to its child", () => {
+    const creationIntent = {
+      version: 1 as const,
+      workspaceId: "ws_base",
+      rootTemplate: {
+        url: "git+https://example.test/base.git",
+        ref: "refs/tags/v1",
+        commit: "a".repeat(40),
+        snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+      },
+    };
+    const env = buildWorkspaceChildEnv({
+      ...base,
+      childWorkspaceName: "base",
+      creationIntent,
+    });
+    expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"]!)).toEqual(creationIntent);
   });
 
   it("strips obsolete unattended startup policy from the child", () => {

@@ -85,6 +85,10 @@ export const WorkspaceChildPresenceReportInputSchema = z
   })
   .strict();
 export const WorkspaceChildPresenceReportResultSchema = z.object({ updated: z.boolean() }).strict();
+export const WorkspaceChildCreationCompleteInputSchema = z.object({}).strict();
+export const WorkspaceChildCreationCompleteResultSchema = z
+  .object({ completed: z.boolean() })
+  .strict();
 export const WorkspaceChildGovernanceAppendInputSchema = z
   .object({ record: ApprovalRecordSchema.omit({ workspaceId: true }) })
   .strict();
@@ -108,6 +112,7 @@ export interface WorkspaceChildHubPort {
     input: z.infer<typeof WorkspaceChildDeviceInviteInputSchema>
   ): Promise<z.infer<typeof WorkspaceChildDeviceInviteResultSchema>>;
   reportPresence(input: z.infer<typeof WorkspaceChildPresenceReportInputSchema>): Promise<boolean>;
+  completeWorkspaceCreation(): Promise<boolean>;
   appendApproval(record: ApprovalResolvedEvent): Promise<void>;
   queryGovernance(query?: z.infer<typeof governanceListQuerySchema>): Promise<GovernanceRecord[]>;
 }
@@ -131,6 +136,7 @@ export function createWorkspaceChildHubPort(
       | "device/touch"
       | "device/invite"
       | "presence/report"
+      | "workspace/creation-complete"
       | "governance/append-approval"
       | "governance/query",
     inputSchema: z.ZodType<TInput>,
@@ -211,6 +217,16 @@ export function createWorkspaceChildHubPort(
           input
         )
       ).updated;
+    },
+    async completeWorkspaceCreation() {
+      return (
+        await post(
+          "workspace/creation-complete",
+          WorkspaceChildCreationCompleteInputSchema,
+          WorkspaceChildCreationCompleteResultSchema,
+          {}
+        )
+      ).completed;
     },
     async appendApproval(record) {
       await post(

@@ -53,6 +53,8 @@ export interface VcsServiceDeps {
     ctx: ServiceContext,
     input: { contextId: string; sourceDeltaId: string }
   ) => Promise<void>;
+  /** Called only after the protected epoch-transition publication is durable. */
+  onEpochTransitionPublished?: () => void;
 }
 
 type CausalRequest<T> = {
@@ -304,6 +306,22 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             ingress.contextIntegrity
           );
     }
+    if (method === "vcsPushEpochTransition") {
+      return ctx.signal
+        ? deps.workspaceVcs.semanticEpochTransitionPublishCall<T>(
+            input,
+            ingress.causalParent,
+            effectCaller,
+            ingress.contextIntegrity,
+            ctx.signal
+          )
+        : deps.workspaceVcs.semanticEpochTransitionPublishCall<T>(
+            input,
+            ingress.causalParent,
+            effectCaller,
+            ingress.contextIntegrity
+          );
+    }
     return deps.workspaceVcs.semanticCall<T>(method, {
       input,
       ingress,
@@ -377,12 +395,24 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       parsed.input["visibilityContextIds"] = await reachableContextAuthorities(ctx, deps);
     }
 
-    const dispatchMethod = `vcs${method.charAt(0).toUpperCase()}${method.slice(1)}`;
+    const epochTransition =
+      method === "push" && isRecord(parsed.input) && parsed.input["epochTransition"] === true;
+    const semanticInput = epochTransition
+      ? Object.fromEntries(
+          Object.entries(parsed.input as Record<string, unknown>).filter(
+            ([key]) => key !== "epochTransition"
+          )
+        )
+      : parsed.input;
+    const dispatchMethod = epochTransition
+      ? "vcsPushEpochTransition"
+      : `vcs${method.charAt(0).toUpperCase()}${method.slice(1)}`;
     const effectCaller =
       method === "push" && primaryContextId !== null
         ? callerForContext(ctx, deps, primaryContextId)
         : ctx.caller;
-    const result = await invoke(ctx, dispatchMethod, parsed.input, effectCaller);
+    const result = await invoke(ctx, dispatchMethod, semanticInput, effectCaller);
+    if (epochTransition) deps.onEpochTransitionPublished?.();
     if (
       method === "merge" &&
       (parsed.input as { source?: { kind?: unknown; deltaId?: unknown } }).source?.kind ===

@@ -5,6 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CentralDataManager } from "./centralData.js";
 
+const ROOT_TEMPLATE = {
+  url: "git+https://example.test/base.git",
+  ref: "refs/tags/v1",
+  commit: "1".repeat(40),
+  snapshot: `v1-sha256:${"2".repeat(64)}` as const,
+};
+
 describe("CentralDataManager SQLite control store", () => {
   let tempRoot: string;
   let databasePath: string;
@@ -25,6 +32,21 @@ describe("CentralDataManager SQLite control store", () => {
   it("registers a caller-allocated id used by an external creation descriptor", () => {
     const central = manager();
     expect(central.addWorkspace("external", "ws_preallocated").workspaceId).toBe("ws_preallocated");
+    central.close();
+  });
+
+  it("persists and idempotently clears the exact child-owned creation intent", () => {
+    const central = manager();
+    const entry = central.addWorkspaceCreation("new-workspace", ROOT_TEMPLATE, "ws_pending");
+    expect(entry.workspaceId).toBe("ws_pending");
+    expect(central.getWorkspaceCreationIntent("new-workspace")).toEqual({
+      version: 1,
+      workspaceId: "ws_pending",
+      rootTemplate: ROOT_TEMPLATE,
+    });
+    expect(central.completeWorkspaceCreation("ws_pending")).toBe(true);
+    expect(central.completeWorkspaceCreation("ws_pending")).toBe(false);
+    expect(central.getWorkspaceCreationIntent("new-workspace")).toBeNull();
     central.close();
   });
 
@@ -113,7 +135,7 @@ describe("CentralDataManager SQLite control store", () => {
       ttlMs: 50,
     });
     first.addWorkspace("default");
-    const ephemeral = first.addEphemeralWorkspace("dev", "boot-first");
+    const ephemeral = first.addEphemeralWorkspace("dev", "boot-first", ROOT_TEMPLATE);
     expect(
       first.rotateEphemeralWorkspaceDiskName("boot-first", ephemeral.workspaceId, "dev-deadbeef")
     ).toBeNull();
@@ -168,7 +190,7 @@ describe("CentralDataManager SQLite control store", () => {
       ttlMs: 1_000,
     });
     central.addWorkspace("dev");
-    expect(() => central.addEphemeralWorkspace("dev", "boot-owner")).toThrow(
+    expect(() => central.addEphemeralWorkspace("dev", "boot-owner", ROOT_TEMPLATE)).toThrow(
       /Cannot shadow persistent/
     );
     expect(central.getWorkspaceEntry("dev")).not.toBeNull();
@@ -187,7 +209,7 @@ describe("CentralDataManager SQLite control store", () => {
         ttlMs: 100,
       })
     ).toBeNull();
-    const ephemeral = first.addEphemeralWorkspace("dev", "boot-live");
+    const ephemeral = first.addEphemeralWorkspace("dev", "boot-live", ROOT_TEMPLATE);
     first.rotateEphemeralWorkspaceDiskName("boot-live", ephemeral.workspaceId, "dev-deadbeef");
 
     expect(() =>

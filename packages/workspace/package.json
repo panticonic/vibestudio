@@ -12,6 +12,7 @@
     "./configComposition": "./src/configComposition.ts",
     "./contextProjections": "./src/contextProjections.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
+    "./hostLaunchRecord": "./src/hostLaunchRecord.ts",
     "./loader": "./src/loader.ts",
     "./pathPolicy": "./src/pathPolicy.ts",
     "./preparedConfig": "./src/preparedConfig.ts",

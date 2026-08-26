@@ -1070,6 +1070,7 @@ export const vcsPushInputSchema = z
     contextId,
     expectedCommittedEventId: id("Exact context commit to publish."),
     expectedMainEventId: id("Observed protected main event."),
+    epochTransition: z.literal(true).optional(),
   })
   .strict();
 export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;
@@ -1846,9 +1847,7 @@ export const vcsWalkResultSchema = z
     entries: z.array(vcsWalkEntrySchema).max(300),
     omitted: z
       .array(
-        z
-          .object({ label: nonEmptyText.max(200), count: z.number().int().nonnegative() })
-          .strict()
+        z.object({ label: nonEmptyText.max(200), count: z.number().int().nonnegative() }).strict()
       )
       .max(50),
     notes: z.array(nonEmptyText.max(400)).max(20),
@@ -1914,13 +1913,7 @@ export type VcsSearchInput = z.infer<typeof vcsSearchInputSchema>;
 export const vcsSearchHitSchema = z
   .object({
     node: vcsSemanticNodeRefSchema,
-    subjectKind: z.enum([
-      "work-unit",
-      "decision",
-      "event",
-      "external-delta",
-      "trajectory-message",
-    ]),
+    subjectKind: z.enum(["work-unit", "decision", "event", "external-delta", "trajectory-message"]),
     label: nonEmptyText.max(400),
     excerpt: nonEmptyText.max(600),
     intent: vcsIntentEvidenceSchema.optional(),
@@ -2670,7 +2663,8 @@ const vcsSemanticMethods = defineVcsMethods({
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    description: "Publish one exact already-committed event to protected main.",
+    description:
+      "Publish one exact already-committed event to protected main; epochTransition requests the reviewed host handoff for a foreign-epoch candidate.",
     args: z.tuple([vcsPushInputSchema]),
     returns: vcsPushResultSchema,
     access: WRITE_ACCESS,

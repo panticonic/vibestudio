@@ -14,15 +14,18 @@ import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
 const mockResolveWorkspaceName = vi.fn(() => null as string | null);
 const mockIsDev = vi.fn(() => false);
-const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
-  resolved: {
-    wsDir: "/tmp/vibestudio-test-workspace",
-    workspace: { config: { id: "test-workspace" } },
-    name: "test-workspace",
-    created: false,
-  },
-  isEphemeral: false,
+const mockGetLastOpenedWorkspace = vi.fn(() => ({ name: "test-workspace" }));
+const mockGetWorkspaceEntry = vi.fn(
+  (name: string): { name: string; workspaceId: string } | null => ({
+    name,
+    workspaceId: "test-workspace",
+  })
+);
+const mockAddWorkspaceCreation = vi.fn((name: string) => ({
+  name,
+  workspaceId: "created-workspace",
 }));
+const mockTouchWorkspace = vi.fn();
 
 vi.mock("@vibestudio/workspace/loader", () => ({
   resolveWorkspaceName: () => mockResolveWorkspaceName(),
@@ -31,8 +34,14 @@ vi.mock("@vibestudio/workspace/loader", () => ({
   },
 }));
 
-vi.mock("@vibestudio/workspace/startup", () => ({
-  resolveLocalWorkspaceStartup: (opts: unknown) => mockResolveLocalWorkspaceStartup(opts),
+vi.mock("@vibestudio/workspace/baseTemplateRelease", () => ({
+  readBaseTemplateRelease: () => ({
+    baseTemplate: { url: "https://example.test/base.git", ref: "v1", commit: "a".repeat(40) },
+  }),
+}));
+
+vi.mock("@vibestudio/env-paths", () => ({
+  getWorkspaceDir: (name: string) => `/tmp/workspaces/${name}`,
 }));
 
 vi.mock("./paths.js", () => ({
@@ -49,7 +58,12 @@ function setArgv(args: string[]) {
 }
 
 function testCentralData() {
-  return {} as never;
+  return {
+    getLastOpenedWorkspace: mockGetLastOpenedWorkspace,
+    getWorkspaceEntry: mockGetWorkspaceEntry,
+    addWorkspaceCreation: mockAddWorkspaceCreation,
+    touchWorkspace: mockTouchWorkspace,
+  } as never;
 }
 
 describe("resolveStartupMode interactive desktop policy", () => {
@@ -59,7 +73,15 @@ describe("resolveStartupMode interactive desktop policy", () => {
     setArgv([]);
     mockResolveWorkspaceName.mockReset();
     mockResolveWorkspaceName.mockReturnValue(null);
-    mockResolveLocalWorkspaceStartup.mockClear();
+    mockGetLastOpenedWorkspace.mockReset();
+    mockGetLastOpenedWorkspace.mockReturnValue({ name: "test-workspace" });
+    mockGetWorkspaceEntry.mockReset();
+    mockGetWorkspaceEntry.mockImplementation((name: string) => ({
+      name,
+      workspaceId: "test-workspace",
+    }));
+    mockAddWorkspaceCreation.mockClear();
+    mockTouchWorkspace.mockClear();
     mockIsDev.mockReset();
     mockIsDev.mockReturnValue(false);
     vi.resetModules();
@@ -82,7 +104,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
       connectionIntent: "local",
-      wsDir: "/tmp/vibestudio-test-workspace",
+      wsDir: "/tmp/workspaces/test-workspace",
       workspaceId: "test-workspace",
     });
   });
@@ -99,7 +121,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
       isEphemeral: true,
       ephemeralLifecycle: "replace",
     });
-    expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
+    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
   it("opens the chooser only when explicitly requested via --choose-connection", () => {
@@ -109,7 +131,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
       kind: "pending",
     });
-    expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
+    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
   it("opens the chooser when launched with a WebRTC pairing deep link", () => {
@@ -124,7 +146,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
       kind: "pending",
     });
-    expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
+    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
   it("does not treat WebRTC pairing deep links as a headless startup mode", () => {
@@ -132,7 +154,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
-      wsDir: "/tmp/vibestudio-test-workspace",
+      wsDir: "/tmp/workspaces/test-workspace",
     });
   });
 
@@ -192,7 +214,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
       isEphemeral: true,
       ephemeralLifecycle: "resume",
     });
-    expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
+    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
   it("rejects non-canonical names tagged as ephemeral", () => {
@@ -204,30 +226,27 @@ describe("resolveStartupMode interactive desktop policy", () => {
     );
   });
 
-  it("passes create-if-missing only for explicitly selected local workspace launches", () => {
+  it("records a creation intent only for an explicitly authorized missing workspace", () => {
     mockResolveWorkspaceName.mockReturnValue("default");
+    mockGetWorkspaceEntry.mockReturnValue(null);
     setArgv(["--workspace", "default", mod.WORKSPACE_CREATE_IF_MISSING_ARG]);
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
-      wsDir: "/tmp/vibestudio-test-workspace",
-      workspaceId: "test-workspace",
+      wsDir: "/tmp/workspaces/default",
+      workspaceId: "created-workspace",
     });
-    expect(mockResolveLocalWorkspaceStartup).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        name: "default",
-        init: true,
-      })
+    expect(mockAddWorkspaceCreation).toHaveBeenCalledWith(
+      "default",
+      expect.objectContaining({ commit: "a".repeat(40) })
     );
 
-    mockResolveLocalWorkspaceStartup.mockClear();
+    mockAddWorkspaceCreation.mockClear();
     setArgv(["--workspace", "default"]);
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
-      kind: "local",
-    });
-    expect(mockResolveLocalWorkspaceStartup).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ init: true })
+    expect(() => mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toThrow(
+      /not registered/
     );
+    expect(mockAddWorkspaceCreation).not.toHaveBeenCalled();
   });
 });
 
@@ -290,5 +309,27 @@ describe("shouldRequestSingleInstanceLock", () => {
         { isHeadlessHost: true, isDevelopment: false }
       )
     ).toBe(false);
+  });
+});
+
+describe("localShellUserDataDir", () => {
+  it("keeps Chromium out of a workspace until its child creates it", async () => {
+    const mod = await import("./startupMode.js");
+    const mode: import("./startupMode.js").LocalStartupMode = {
+      kind: "local",
+      connectionIntent: "local",
+      wsDir: "/tmp/workspaces/new-workspace",
+      workspaceName: "new-workspace",
+      workspaceId: "ws_new",
+      isEphemeral: false,
+      ephemeralLifecycle: null,
+    };
+
+    expect(mod.localShellUserDataDir(mode, { pendingCreation: true, headless: false })).toBe(
+      "/tmp/bootstrap-state/workspace-creation/ws_new/desktop"
+    );
+    expect(mod.localShellUserDataDir(mode, { pendingCreation: false, headless: false })).toBe(
+      "/tmp/workspaces/new-workspace/state"
+    );
   });
 });

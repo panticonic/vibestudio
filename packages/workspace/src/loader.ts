@@ -37,7 +37,6 @@ import type {
   WorkspaceCreationDescriptor,
 } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { createWorkspaceId } from "@vibestudio/shared/centralData";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type {
@@ -479,8 +478,8 @@ export interface ResolvedWorkspace {
 /**
  * Resolve a workspace by name or path, optionally creating from template.
  *
- * Used by both Electron main and headless server to share workspace
- * initialization logic.
+ * Used only inside the selected workspace child. The hub and Electron shell
+ * own catalog intents but never scaffold this directory.
  *
  * Throws if workspace doesn't exist and init is false.
  */
@@ -535,36 +534,6 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
 
   const workspace = createWorkspace(wsDir);
   return { wsDir, workspace, name, created };
-}
-
-/**
- * Create a new workspace and register it in the central data store.
- * Used for user-initiated workspace creation (UI wizard, CLI).
- * Fails if the workspace already exists in the registry.
- */
-export function createAndRegisterWorkspace(
-  name: string,
-  centralData: CentralDataManager,
-  opts: Pick<WorkspaceCreationOptions, "rootTemplate">
-): WorkspaceEntry {
-  if (centralData.hasWorkspace(name)) {
-    throw new Error(`Workspace "${name}" already exists`);
-  }
-  const workspaceId = createWorkspaceId();
-  initWorkspace(name, { rootTemplate: opts.rootTemplate, workspaceId });
-  try {
-    return centralData.addWorkspace(name, workspaceId);
-  } catch (error) {
-    try {
-      removeWorkspaceTree(getWorkspaceDir(name));
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        `Workspace "${name}" registration failed and its published directory could not be removed`
-      );
-    }
-    throw error;
-  }
 }
 
 interface StagedWorkspaceDeletion {

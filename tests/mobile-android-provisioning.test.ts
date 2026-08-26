@@ -27,11 +27,12 @@ describe("Android USB provisioning activity lifecycle", () => {
     );
   });
 
-  it("binds approval to canonical pairing fields across the workspace-bundle restart", () => {
+  it("binds approval to the carrier-independent compact pairing payload", () => {
     expect(provisioning).toContain("fun pairingApprovalDigest(pairUrl: String): String?");
-    for (const field of ["room", "fp", "code", "sig", "v", "ice"]) {
-      expect(provisioning).toContain(`\"${field}\"`);
-    }
+    expect(provisioning).toContain('uri.scheme?.lowercase() == "vibestudio"');
+    expect(provisioning).toContain('uri.scheme?.lowercase() == "https"');
+    expect(provisioning).toContain("MessageDigest.getInstance(\"SHA-256\")");
+    expect(provisioning).toContain("compactPayload.toByteArray(Charsets.US_ASCII)");
     expect(provisioning).not.toContain(".putString(PAIR_URL_DIGEST, digest(pairUrl))");
     expect(nativeHost).toContain("ProvisioningActivity.pairingApprovalDigest(pairUrl)");
   });

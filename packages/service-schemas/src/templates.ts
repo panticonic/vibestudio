@@ -477,17 +477,19 @@ export const templatesMethods = defineServiceMethods({
   },
   pull: {
     description:
-      "Resolve a tracked template's promoted release, merge its ordinary VCS deltas, and request one atomic protected-main review. Only the authenticated host may supply an exact shipped-release pin.",
+      "Resolve a tracked template's promoted release, optionally from a selected target epoch, merge its ordinary VCS deltas, and request one atomic protected-main review.",
     args: z.tuple([
       z
         .object({
           commandId,
           alias: z.string().trim().min(1),
           toRef: z.string().trim().min(1).optional(),
-          /** The authenticated host may pass the exact base-template pin
-           * shipped with its release. Composer still verifies, stages, and
-           * gates it normally; other callers are rejected. */
+          /** An explicitly selected exact release may replace the registry's
+           * promoted entry. Composer still verifies, stages, and gates it. */
           pin: WorkspaceTemplatePinSchema.optional(),
+          /** Select another compatibility generation's verified registry and
+           * publish the resulting composition through the epoch handoff. */
+          targetSystemEpoch: z.number().int().nonnegative().optional(),
         })
         .strict(),
     ]),
