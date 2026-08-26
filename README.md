@@ -27,6 +27,8 @@ A further question vibestudio is exploring: how do we create an environment to s
 
 This is alpha software. It is _not_ reliable or safe. Or possibly fit for your purposes. The architecture is subject to sudden and violent spasmodic changes. You have been warned.
 
+The agentic harness currently requires a [Codex](https://chatgpt.com/codex) subscription and has mainly been tested against it. Other providers may work but are not actively validated.
+
 ## Installation
 
 Requires **Node.js 22.19.0+**.
