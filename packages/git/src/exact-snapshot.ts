@@ -81,6 +81,7 @@ export interface DiscoverTrackedGitSnapshotOptions extends Omit<
 const FULL_OID = /^[0-9a-f]{40}$/i;
 const CANONICAL_REF = /^refs\/(?:heads|tags)\/[^\s~^:?*[\]\\]+$/;
 const TRACK_GLOB_META = /[*?]/u;
+const SNAPSHOT_CONTENT_STORE_CONCURRENCY = 8;
 
 function assertExactCoordinates(ref: string, commit: string): void {
   if (!CANONICAL_REF.test(ref) || ref === "HEAD") {
@@ -213,15 +214,25 @@ async function admitAndStore(
   }
   admitted.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
   const distinct = [...new Map(admitted.map((file) => [file.contentHash, file])).values()];
-  for (const file of distinct) {
-    const stored = await sink.put(file.bytes);
-    if (stored.digest !== file.contentHash || stored.size !== file.size) {
-      throw new Error(
-        `Cannot import ${label}: content store integrity mismatch for ${file.path} ` +
-          `(returned ${stored.digest}/${stored.size}, expected ${file.contentHash}/${file.size})`
-      );
-    }
-  }
+  let cursor = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(SNAPSHOT_CONTENT_STORE_CONCURRENCY, distinct.length) },
+      async () => {
+        for (;;) {
+          const file = distinct[cursor++];
+          if (!file) return;
+          const stored = await sink.put(file.bytes);
+          if (stored.digest !== file.contentHash || stored.size !== file.size) {
+            throw new Error(
+              `Cannot import ${label}: content store integrity mismatch for ${file.path} ` +
+                `(returned ${stored.digest}/${stored.size}, expected ${file.contentHash}/${file.size})`
+            );
+          }
+        }
+      }
+    )
+  );
   return {
     files: admitted.map(({ path, contentHash, size, mode }) => ({
       path,
@@ -248,7 +259,9 @@ export async function readExactGitSnapshot(
   if (!FULL_OID.test(options.commit)) {
     throw new Error(`Exact Git snapshot commit must be a full 40-character object id`);
   }
+  const startedAt = performance.now();
   const observedHead = await options.git.getCurrentCommit(options.dir);
+  const headReadAt = performance.now();
   if (observedHead?.toLowerCase() !== options.commit.toLowerCase()) {
     throw new Error(
       `Cannot import ${options.label}: Git HEAD advanced while resolving the snapshot ` +
@@ -260,6 +273,7 @@ export async function readExactGitSnapshot(
   // prohibitively expensive for a large template: local worktree changes
   // cannot influence readCommitTree(commit).
   const tree = await options.git.readCommitTree(options.dir, options.commit);
+  const treeReadAt = performance.now();
   const selected = selectSubtree(tree, options.subdir);
   const admitted = await admitAndStore(
     options.label,
@@ -267,6 +281,16 @@ export async function readExactGitSnapshot(
     options.sink,
     options.reservedPaths ?? "reject"
   );
+  const admittedAt = performance.now();
+  if (admittedAt - startedAt >= 100) {
+    console.log("[Perf] exact Git snapshot read", {
+      headMs: headReadAt - startedAt,
+      treeMs: treeReadAt - headReadAt,
+      admitAndStoreMs: admittedAt - treeReadAt,
+      totalMs: admittedAt - startedAt,
+      files: selected.length,
+    });
+  }
   if (options.expectedSnapshot && admitted.snapshot !== options.expectedSnapshot) {
     throw new Error(
       `Cannot import ${options.label}: canonical snapshot mismatch ` +

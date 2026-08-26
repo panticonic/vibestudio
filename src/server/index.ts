@@ -88,6 +88,8 @@ import {
   WORKSPACE_EPOCH_HANDOFF_EXIT_CODE,
 } from "./historicalWorkspaceHost.js";
 
+console.log(`[Perf] server module evaluated at ${Math.round(process.uptime() * 1000)}ms uptime`);
+
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
 
@@ -395,6 +397,9 @@ async function main() {
   const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
   const { ServiceContainer } = await import("@vibestudio/shared/serviceContainer");
   const { initBuildSystemV2 } = await import("./buildV2/index.js");
+  console.log(
+    `[Perf] server core imports ready at ${Math.round(process.uptime() * 1000)}ms uptime`
+  );
 
   loadCentralEnv();
 
@@ -1441,7 +1446,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, getBytes, putBytes } =
+  const { collectTreeReachableDigests, getBytes, putBootstrapBytes } =
     await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
@@ -1495,7 +1500,7 @@ async function main() {
     sourcePath: workspacePath,
     expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
     sink: {
-      put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
+      put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
     },
     acquire: async (pin) => {
       if (developmentRootTemplate && sameRootTemplatePin(developmentRootTemplate.pin, pin)) {
@@ -1505,7 +1510,7 @@ async function main() {
           pin,
           git: createRootTemplateGitClient(pin),
           sink: {
-            put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
+            put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
           },
         });
       }
@@ -1514,12 +1519,15 @@ async function main() {
         pin,
         git: createRootTemplateGitClient(pin),
         sink: {
-          put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
+          put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
         },
       });
     },
   });
   await rootTemplateBootstrap.prepareSource();
+  console.log(
+    `[Perf] root template source prepared at ${Math.round(process.uptime() * 1000)}ms uptime`
+  );
   // A freshly created external-root workspace initially contains only its
   // creation descriptor. Bootstrap must materialize the exact Base snapshot
   // before dependency discovery can require package/workspace metadata. Keep
@@ -2346,6 +2354,9 @@ async function main() {
   // the live workspace projection. All later bootstrap references use this
   // immutable value; they must not rediscover the mutable source directory.
   const bootstrapSnapshot = await bootstrapWorkspaceSource.seal();
+  console.log(
+    `[Perf] workspace bootstrap snapshot sealed at ${Math.round(process.uptime() * 1000)}ms uptime`
+  );
   trustedBootstrapStateHash = bootstrapSnapshot.stateHash;
   container.registerManaged({
     name: "bootstrapBuildSystem",
@@ -6657,6 +6668,9 @@ async function main() {
 
   // ── Start all services in dependency order ──
   await container.startAll();
+  console.log(
+    `[Perf] workspace service container started at ${Math.round(process.uptime() * 1000)}ms uptime`
+  );
   await panelExecutionReconciler.recoverPreparingPanels();
 
   // The webhook + credential services are built now, so their refs are set:
@@ -6959,6 +6973,9 @@ async function main() {
     })),
     totalMs: bootstrapReconciliationCompletedAt - bootstrapReconciliationStartedAt,
   });
+  console.log(
+    `[Perf] workspace reconciliation complete at ${Math.round(process.uptime() * 1000)}ms uptime`
+  );
 
   /**
    * The creation review (§7.1), held in the new workspace immediately after it

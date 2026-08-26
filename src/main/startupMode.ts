@@ -9,12 +9,15 @@
 import * as path from "path";
 import * as fs from "fs";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
 import { resolveWorkspaceName } from "@vibestudio/workspace/loader";
-import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
+import { readWorkspaceCreationTemplate } from "@vibestudio/workspace/baseTemplateRelease";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
-import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
+import {
+  EPHEMERAL_DEV_WORKSPACE_NAME,
+  EPHEMERAL_WORKSPACE_ARG,
+  RESUME_EPHEMERAL_WORKSPACE_ARG,
+} from "@vibestudio/workspace-contracts/ephemeral";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
@@ -22,12 +25,11 @@ const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
 export const WORKSPACE_CREATE_IF_MISSING_ARG = "--workspace-create-if-missing";
 /**
- * Marks a local launch as a disposable dev workspace: the workspace dir is deleted on exit
- * (see the will-quit cleanup). Paired with `--workspace <name>` so the same workspace is kept
- * across relaunches within a session rather than minting a new one each time.
+ * Starts a fresh disposable dev-workspace lifecycle. Internal Electron
+ * relaunches replace this with RESUME_EPHEMERAL_WORKSPACE_ARG so they retain
+ * the same lifecycle until ordinary quit removes it.
  */
-export const EPHEMERAL_WORKSPACE_ARG = "--ephemeral-workspace";
-export { EPHEMERAL_DEV_WORKSPACE_NAME };
+export { EPHEMERAL_DEV_WORKSPACE_NAME, EPHEMERAL_WORKSPACE_ARG, RESUME_EPHEMERAL_WORKSPACE_ARG };
 
 export type StartupMode =
   | {
@@ -121,14 +123,16 @@ export function resolveStartupMode(
     return { kind: "pending" };
   }
 
-  if (process.argv.includes(EPHEMERAL_WORKSPACE_ARG)) {
+  const freshEphemeral = process.argv.includes(EPHEMERAL_WORKSPACE_ARG);
+  const resumedEphemeral = process.argv.includes(RESUME_EPHEMERAL_WORKSPACE_ARG);
+  if (freshEphemeral || resumedEphemeral) {
     const requested = resolveWorkspaceName();
     if (requested && requested !== EPHEMERAL_DEV_WORKSPACE_NAME) {
       throw new Error(
         `Ephemeral development launches use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
       );
     }
-    return resolveEphemeralDevStartupMode("resume");
+    return resolveEphemeralDevStartupMode(freshEphemeral ? "replace" : "resume");
   }
 
   if (hasExplicitWorkspaceSelection()) {
@@ -140,13 +144,13 @@ export function resolveStartupMode(
     return { kind: "pending" };
   }
 
-  if (opts?.interactiveDesktop === true && isDev()) {
-    return resolveEphemeralDevStartupMode();
-  }
-
   // Pre-session startup has no authenticated user. Use the catalog's machine
-  // MRU as the local fallback; only an ordinary interactive launch may resume
-  // a saved remote connection. Headless hosts always own a local workspace.
+  // MRU as the local fallback in every build. Development and packaged desktop
+  // launches deliberately share this policy so the ordinary developer loop
+  // exercises the real persistent-workspace experience. Only an explicitly
+  // requested ephemeral lifecycle may select the disposable dev workspace.
+  // Ordinary interactive launches may resume a saved remote connection;
+  // headless hosts always own a local workspace.
   return resolveLocalStartupMode(
     centralData,
     undefined,
@@ -181,6 +185,7 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
     if (arg === DEV_WEBRTC_REMOTE_ARG) continue;
     if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
+    if (arg === RESUME_EPHEMERAL_WORKSPACE_ARG) continue;
     if (arg?.startsWith("vibestudio://connect") || arg?.startsWith("https://vibestudio.app/p#"))
       continue;
     if (arg?.startsWith("vibestudio://panel")) continue;
@@ -205,7 +210,7 @@ export function ephemeralWorkspaceRelaunchArgs(rawArgs = process.argv.slice(1)):
     ...stripStartupSelectionArgs(rawArgs),
     "--workspace",
     EPHEMERAL_DEV_WORKSPACE_NAME,
-    EPHEMERAL_WORKSPACE_ARG,
+    RESUME_EPHEMERAL_WORKSPACE_ARG,
   ];
 }
 
@@ -249,10 +254,7 @@ export function resolveLocalStartupMode(
       createIfMissing ||
       shouldCreateExplicitWorkspaceIfMissing();
     if (!mayCreate) throw new Error(`Workspace "${name}" is not registered`);
-    entry = centralData.addWorkspaceCreation(
-      name,
-      readBaseTemplateRelease(getAppRoot()).baseTemplate
-    );
+    entry = centralData.addWorkspaceCreation(name, readWorkspaceCreationTemplate(getAppRoot()));
     log.info(`[Workspace] Recorded pending creation for "${name}" (${entry.workspaceId})`);
   } else {
     centralData.touchWorkspace(name);

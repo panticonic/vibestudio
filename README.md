@@ -151,7 +151,7 @@ mode concurrently with other native-input work.
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev:base setup   # clone and remember the external Base checkout (one time)
 pnpm start           # build + start Electron in the source developer instance
-pnpm dev             # alias for the same supervised development launch
+pnpm dev             # launch a fresh disposable development workspace
 pnpm dev:production  # fresh disposable instance using the pinned production Base
 pnpm dev:webrtc      # build + start a local hub, then connect to a routed child over WebRTC
 pnpm cli --help      # run the CLI live from TypeScript
@@ -212,11 +212,13 @@ single-command overrides. They do not change the stored selection.
 See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
 `pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)
 
-`pnpm dev` opens a fresh, hub-owned ephemeral development workspace. If another
-local hub is still running, the desktop asks whether to start fresh, connect to
-it, or cancel; it never silently reuses one. Closing the app and choosing
-**Stop server** terminates the hub's complete process tree, including workspace
-children and extension hosts.
+`pnpm start` follows the same startup policy as the packaged app: it reopens the
+most recently used registered workspace, creating `default` only when the
+instance has no workspace yet. `pnpm dev` explicitly launches a fresh,
+hub-owned disposable workspace and always stops its hub on quit so the
+workspace checkout and catalog lifecycle are removed. Persistent and ephemeral
+launches therefore exercise the same application; only workspace ownership and
+lifetime differ.
 
 `pnpm server:live` remains the explicit persistent `source` instance for CLI
 and long-lived server work. Add `--instance NAME` for another persistent

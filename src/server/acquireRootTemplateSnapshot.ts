@@ -107,8 +107,10 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
       // commit-tree and snapshot verification used by ordinary acquisition.
       // Worktree dirt is harmless because readExactGitSnapshot reads the named
       // commit tree rather than filesystem bytes.
+      const startedAt = performance.now();
       await fs.cp(path.resolve(input.checkout), dir, { recursive: true });
-      return readExactGitSnapshot({
+      const copiedAt = performance.now();
+      const snapshot = await readExactGitSnapshot({
         git: input.git,
         dir,
         commit: input.pin.commit,
@@ -117,6 +119,15 @@ export function seedRootTemplateSnapshotFromCheckout(input: {
         sink: input.sink,
         reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
       });
+      const readAt = performance.now();
+      if (readAt - startedAt >= 100) {
+        console.log("[Perf] local root template seed", {
+          copyMs: copiedAt - startedAt,
+          readMs: readAt - copiedAt,
+          totalMs: readAt - startedAt,
+        });
+      }
+      return snapshot;
     },
   });
 }

@@ -105,8 +105,18 @@ export class WorkspaceRootTemplateBootstrap {
     if (this.validateMaterializedSource(descriptor.rootTemplate)) {
       return descriptor.rootTemplate;
     }
+    const startedAt = performance.now();
     this.preparedInitialization = await this.acquireInitialization(descriptor.rootTemplate);
+    const acquiredAt = performance.now();
     this.materializeExactSource(this.acquiredSnapshot!);
+    const materializedAt = performance.now();
+    if (materializedAt - startedAt >= 100) {
+      console.log("[Perf] root template preparation", {
+        acquireMs: acquiredAt - startedAt,
+        materializeMs: materializedAt - acquiredAt,
+        totalMs: materializedAt - startedAt,
+      });
+    }
     return this.preparedInitialization.pin;
   }
 

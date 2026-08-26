@@ -13,7 +13,6 @@ import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 // resetModules + re-import in each test.
 
 const mockResolveWorkspaceName = vi.fn(() => null as string | null);
-const mockIsDev = vi.fn(() => false);
 const mockGetLastOpenedWorkspace = vi.fn(() => ({ name: "test-workspace" }));
 const mockGetWorkspaceEntry = vi.fn(
   (name: string): { name: string; workspaceId: string } | null => ({
@@ -35,8 +34,10 @@ vi.mock("@vibestudio/workspace/loader", () => ({
 }));
 
 vi.mock("@vibestudio/workspace/baseTemplateRelease", () => ({
-  readBaseTemplateRelease: () => ({
-    baseTemplate: { url: "https://example.test/base.git", ref: "v1", commit: "a".repeat(40) },
+  readWorkspaceCreationTemplate: () => ({
+    url: "https://example.test/base.git",
+    ref: "v1",
+    commit: "a".repeat(40),
   }),
 }));
 
@@ -48,8 +49,6 @@ vi.mock("./paths.js", () => ({
   getAppRoot: () => "/tmp",
   getCentralConfigDirectory: () => "/tmp",
 }));
-
-vi.mock("./utils.js", () => ({ isDev: () => mockIsDev() }));
 
 const ORIGINAL_ARGV = process.argv.slice();
 
@@ -82,8 +81,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
     }));
     mockAddWorkspaceCreation.mockClear();
     mockTouchWorkspace.mockClear();
-    mockIsDev.mockReset();
-    mockIsDev.mockReturnValue(false);
     vi.resetModules();
     mod = await import("./startupMode.js");
   });
@@ -109,23 +106,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     });
   });
 
-  it("selects the canonical hub-owned ephemeral workspace in development", () => {
-    mockIsDev.mockReturnValue(true);
-
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
-      kind: "local",
-      connectionIntent: "local",
-      wsDir: "/tmp/workspaces/dev",
-      workspaceName: "dev",
-      workspaceId: "dev",
-      isEphemeral: true,
-      ephemeralLifecycle: "replace",
-    });
-    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
-  });
-
   it("opens the chooser only when explicitly requested via --choose-connection", () => {
-    mockIsDev.mockReturnValue(true);
     setArgv([mod.CHOOSE_CONNECTION_ARG]);
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
@@ -135,7 +116,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
   });
 
   it("opens the chooser when launched with a WebRTC pairing deep link", () => {
-    mockIsDev.mockReturnValue(true);
     mockResolveWorkspaceName.mockReturnValue("default");
     setArgv([
       "--workspace",
@@ -174,6 +154,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
         "old",
         mod.WORKSPACE_CREATE_IF_MISSING_ARG,
         mod.EPHEMERAL_WORKSPACE_ARG,
+        mod.RESUME_EPHEMERAL_WORKSPACE_ARG,
         mod.CHOOSE_CONNECTION_ARG,
       ])
     ).toEqual(["--foo", mod.CHOOSE_CONNECTION_ARG]);
@@ -198,12 +179,24 @@ describe("resolveStartupMode interactive desktop policy", () => {
         "old",
         mod.EPHEMERAL_WORKSPACE_ARG,
       ])
-    ).toEqual(["--foo", "--workspace", "dev", mod.EPHEMERAL_WORKSPACE_ARG]);
+    ).toEqual(["--foo", "--workspace", "dev", mod.RESUME_EPHEMERAL_WORKSPACE_ARG]);
   });
 
-  it("routes an --ephemeral-workspace relaunch through the hub-owned lifecycle", () => {
+  it("starts a fresh hub-owned lifecycle for --ephemeral-workspace", () => {
+    setArgv([mod.EPHEMERAL_WORKSPACE_ARG]);
+
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
+      kind: "local",
+      workspaceName: "dev",
+      isEphemeral: true,
+      ephemeralLifecycle: "replace",
+    });
+    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
+  });
+
+  it("resumes the hub-owned lifecycle only for an internal ephemeral relaunch", () => {
     mockResolveWorkspaceName.mockReturnValue("dev");
-    setArgv(["--workspace", "dev", mod.EPHEMERAL_WORKSPACE_ARG]);
+    setArgv(["--workspace", "dev", mod.RESUME_EPHEMERAL_WORKSPACE_ARG]);
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
       kind: "local",

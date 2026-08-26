@@ -15,7 +15,7 @@
     "build:infrastructure": "node scripts/build-infrastructure-packages.mjs",
     "bootstrap": "pnpm install",
     "bootstrap:frozen": "pnpm install --frozen-lockfile",
-    "dev": "tsx src/dev/runInstance.ts desktop",
+    "dev": "tsx src/dev/runInstance.ts desktop --ephemeral-workspace",
     "dev:production": "tsx src/dev/runInstance.ts desktop --production-base --ephemeral",
     "dev:base": "tsx scripts/dev-base.ts",
     "dev:webrtc": "NODE_ENV=development node scripts/dev-webrtc-remote.mjs",

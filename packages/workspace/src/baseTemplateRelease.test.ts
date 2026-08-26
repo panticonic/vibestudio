@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseBaseTemplateReleaseArtifact } from "./baseTemplateRelease.js";
+import {
+  parseBaseTemplateReleaseArtifact,
+  readWorkspaceCreationTemplate,
+} from "./baseTemplateRelease.js";
 
 const pin = {
   url: "git+https://example.test/base.git",
@@ -22,5 +25,23 @@ describe("Base release pointer", () => {
     expect(() =>
       parseBaseTemplateReleaseArtifact({ version: 1, baseTemplate: pin, systemNotes: [] })
     ).toThrow();
+  });
+
+  it("uses the sealed development Base for workspace creation", () => {
+    expect(
+      readWorkspaceCreationTemplate("/unused", {
+        NODE_ENV: "development",
+        VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(pin),
+      })
+    ).toEqual(pin);
+  });
+
+  it("rejects a development Base override outside development mode", () => {
+    expect(() =>
+      readWorkspaceCreationTemplate("/unused", {
+        NODE_ENV: "production",
+        VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(pin),
+      })
+    ).toThrow(/only select workspace creation in development mode/);
   });
 });

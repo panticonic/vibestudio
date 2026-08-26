@@ -28,6 +28,8 @@ function isStringArray(value) {
 let child = null;
 const activeChildren = new Set();
 let nextArgs = initialElectronArgs();
+let typeCheckStarted = false;
+let typeCheckChild = null;
 const shutdown = createRunnerShutdown({
   activeChildren,
   exit: (code) => process.exit(code),
@@ -39,6 +41,45 @@ const shutdown = createRunnerShutdown({
     electron.kill(signal);
   },
 });
+
+function startTypeCheck() {
+  if (typeCheckStarted) return;
+  typeCheckStarted = true;
+  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const current = spawn(pnpmCommand, ["type-check"], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+  typeCheckChild = current;
+  activeChildren.add(current);
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    activeChildren.delete(current);
+    if (typeCheckChild === current) typeCheckChild = null;
+    shutdown.childExited();
+  };
+  current.on("error", (error) => {
+    console.warn(`[dev] typecheck failed to start: ${error.message}`);
+    finish();
+  });
+  current.on("exit", finish);
+}
+
+async function stopTypeCheck() {
+  const current = typeCheckChild;
+  if (!current || current.exitCode !== null || current.signalCode !== null) return;
+  await new Promise((resolve) => {
+    const force = setTimeout(() => current.kill("SIGKILL"), 1_000);
+    current.once("exit", () => {
+      clearTimeout(force);
+      resolve();
+    });
+    current.kill("SIGTERM");
+  });
+}
 
 async function runElectron(args) {
   return new Promise((resolve) => {
@@ -66,6 +107,7 @@ async function runElectron(args) {
       if (message && message.type === "vibestudio:dev-relaunch" && isStringArray(message.args)) {
         relaunchArgs = message.args;
       }
+      if (message && message.type === "vibestudio:dev-ready") startTypeCheck();
     });
 
     currentChild.on("exit", (code, signal) => {
@@ -90,5 +132,6 @@ for (;;) {
   }
 
   const signal = shutdown.requestedSignal() ?? result.signal;
+  await stopTypeCheck();
   process.exit(signal ? signalExitCode(signal) : (result.code ?? 0));
 }

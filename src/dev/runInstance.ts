@@ -18,6 +18,10 @@ import {
 } from "./instanceRegistry.js";
 import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
+import {
+  EPHEMERAL_DEV_WORKSPACE_NAME,
+  EPHEMERAL_WORKSPACE_ARG,
+} from "@vibestudio/workspace-contracts/ephemeral";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -226,21 +230,17 @@ async function runServer(
   return supervisor.wait();
 }
 
-async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
+async function runDesktop(
+  forwarded: string[],
+  env: NodeJS.ProcessEnv,
+  instanceRoot: string
+): Promise<number> {
   await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   // Desktop launches share the repository host artifacts with parallel
   // developer instances. The coordinator waits for an in-flight build and
   // reuses its verified output; invoking build.mjs directly would clean the
   // shared dist/ while another instance is starting its workspace runtime.
   await run(process.execPath, ["scripts/ensure-host-build.mjs"], { env });
-  // Preserve the existing non-blocking developer typecheck, but make it an
-  // owned child of this instance instead of a leaked shell background job.
-  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const realTypeCheck = spawn(pnpmCommand, ["type-check"], {
-    cwd: process.cwd(),
-    env,
-    stdio: "inherit",
-  });
   const supervisor = new DevInstanceSupervisor({
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
@@ -249,12 +249,25 @@ async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<
     stdio: "inherit",
     forwardParentSignals: true,
   });
+  await supervisor.start();
   try {
-    await supervisor.start();
     return await supervisor.wait();
   } finally {
-    if (realTypeCheck.exitCode === null && realTypeCheck.signalCode === null) {
-      realTypeCheck.kill("SIGTERM");
+    if (hasFlag(forwarded, EPHEMERAL_WORKSPACE_ARG)) {
+      // The hub removes the semantic checkout and catalog row. The desktop
+      // launcher owns the remaining logical reach and Chromium profile, and
+      // removes them only after Electron and its hub have fully exited.
+      for (const target of [
+        path.join(instanceRoot, "workspaces", EPHEMERAL_DEV_WORKSPACE_NAME),
+        path.join(
+          instanceRoot,
+          "bootstrap-state",
+          "workspace-creation",
+          EPHEMERAL_DEV_WORKSPACE_NAME
+        ),
+      ]) {
+        fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
     }
   }
 }
@@ -354,7 +367,7 @@ async function main(): Promise<void> {
     process.exitCode =
       mode === "server"
         ? await runServer(parsed.forwarded, env, instance)
-        : await runDesktop(parsed.forwarded, env);
+        : await runDesktop(parsed.forwarded, env, root);
   } finally {
     if (!disposable) await prunePersistentInstanceBuildCache(root, id);
     fs.rmSync(checkpointTarget, { recursive: true, force: true });

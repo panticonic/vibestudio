@@ -3278,6 +3278,9 @@ app.on("ready", async () => {
       for (const entry of entries) {
         console.log(`[Perf] ${entry.name}: ${Math.round(entry.duration)}ms`);
       }
+      if (process.env["VIBESTUDIO_DEV_RUNNER_IPC"] === "1" && process.send) {
+        process.send({ type: "vibestudio:dev-ready" });
+      }
     }
 
     // Defer ad-block initialization (non-critical, ~500-1000ms).
@@ -3359,9 +3362,9 @@ app.on("window-all-closed", () => {
 // mid-turn — finishes and the next launch reattaches instantly) or stop it.
 // No activity guessing: the user decides, and can persist that choice with
 // "Remember my choice" (cleared by re-toggling in Settings / deleting the
-// `keepServerOnQuit` field). Ephemeral development hubs always ask because
-// retaining one must be explicit for that exact quit. Decided here, consumed
-// by the will-quit cleanup.
+// `keepServerOnQuit` field). Ephemeral development hubs always stop because
+// their workspace is command-owned disposable state. Decided here, consumed by
+// the will-quit cleanup.
 
 app.on("before-quit", (event) => {
   if (quitIntent.kind === "npm-update" || quitIntent.kind === "relaunch") return;
@@ -3393,9 +3396,7 @@ app.on("before-quit", (event) => {
         "The hub and its workspace children can keep running after you close the app so background " +
         "tasks (like agent runs) finish and the next launch reattaches instantly — " +
         "or stop it now. You can change this any time.",
-      // A disposable development hub may be retained for this exact quit, but
-      // must never silently inherit that choice on a later lifecycle.
-      ...(ephemeralLocalHub ? {} : { checkboxLabel: "Remember my choice" }),
+      checkboxLabel: "Remember my choice",
     });
     const keep = response === 0;
     if (checkboxChecked) centralData.setKeepServerOnQuit(keep);

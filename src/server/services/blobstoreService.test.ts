@@ -30,6 +30,7 @@ import {
   materializeTree,
   MerkleTreeComposer,
   mirrorWorktreeTree,
+  putBootstrapBytes,
   putBytes,
   putTree,
   readFileAtTree,
@@ -240,6 +241,30 @@ describe("blobstoreService", () => {
       await fsp.unlink(pathA);
       await expect(getBytes(workspaceA, storedA.digest)).resolves.toBeNull();
       await expect(getBytes(workspaceB, storedB.digest)).resolves.toEqual(bytes);
+    } finally {
+      if (previousGlobalCas === undefined) delete process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+      else process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = previousGlobalCas;
+    }
+  });
+
+  it("admits reconstructable bootstrap bytes through the shared CAS", async () => {
+    const previousGlobalCas = process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+    try {
+      const globalCas = path.join(rootDir, "bootstrap-global-cas");
+      const workspace = path.join(rootDir, "bootstrap-workspace", "blobs");
+      process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = globalCas;
+      const bytes = Buffer.from("reconstructable bootstrap content", "utf8");
+
+      const first = await putBootstrapBytes(workspace, bytes);
+      const second = await putBootstrapBytes(workspace, bytes);
+      const [workspaceStat, globalStat] = await Promise.all([
+        fsp.stat(blobPath(workspace, first.digest)),
+        fsp.stat(blobPath(globalCas, first.digest)),
+      ]);
+
+      expect(second).toEqual(first);
+      expect(await fsp.readFile(blobPath(workspace, first.digest))).toEqual(bytes);
+      expect(workspaceStat.ino).toBe(globalStat.ino);
     } finally {
       if (previousGlobalCas === undefined) delete process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
       else process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = previousGlobalCas;

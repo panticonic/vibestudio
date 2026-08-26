@@ -40,3 +40,21 @@ export function readBaseTemplateRelease(appRoot: string): ParsedBaseTemplateRele
   }
   throw new Error("This host build has no exact external Base release pointer");
 }
+
+/**
+ * Resolve the exact Base used when creating a workspace in this process.
+ * Development launchers may replace the packaged release with their sealed
+ * checkout snapshot; every host that records or consumes the creation intent
+ * must use this same coordinate.
+ */
+export function readWorkspaceCreationTemplate(
+  appRoot: string,
+  environment: NodeJS.ProcessEnv = process.env
+): WorkspaceTemplatePin {
+  const developmentPin = environment["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
+  if (!developmentPin) return readBaseTemplateRelease(appRoot).baseTemplate;
+  if (environment["NODE_ENV"] !== "development") {
+    throw new Error("A development Base may only select workspace creation in development mode");
+  }
+  return WorkspaceTemplatePinSchema.parse(JSON.parse(developmentPin));
+}

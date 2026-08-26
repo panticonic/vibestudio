@@ -44,7 +44,9 @@ import {
   centralBlobCasDir,
   ensureBlobCasLayout,
   linkBlobFile,
+  linkReconstructableBlobFile,
   putBlobBytes,
+  putReconstructableBlobBytes,
   verifyBlob,
 } from "../storage/blobCas.js";
 import { assertPresent } from "../../lintHelpers";
@@ -183,6 +185,37 @@ export async function putBytes(
   const stored = await putBlobBytes(backingDir, bytes);
   await ensureWorkspaceBlobReference(blobsDir, backingDir, stored.digest);
   return stored;
+}
+
+/**
+ * Admit root-template bytes whose workspace-local reference is reconstructable
+ * from the exact checked-out Base. Both CAS publication steps are atomically
+ * visible to the running process, but deliberately omit redundant fsync and
+ * rehash barriers. Any incomplete write still aborts workspace bootstrap.
+ */
+export async function putBootstrapBytes(
+  blobsDir: string,
+  bytes: Buffer
+): Promise<{ digest: string; size: number }> {
+  const backingDir = backingCasDir(blobsDir);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const size = bytes.byteLength;
+  const backingPath = blobCasPath(backingDir, digest);
+  let backingReady = false;
+  try {
+    const stat = await fsp.lstat(backingPath);
+    if (!stat.isFile() || stat.size !== size) {
+      throw new Error(`CAS object has invalid shape at ${backingPath}`);
+    }
+    backingReady = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (!backingReady) await putReconstructableBlobBytes(backingDir, digest, bytes);
+  if (path.resolve(blobsDir) !== path.resolve(backingDir)) {
+    await linkReconstructableBlobFile(blobsDir, digest, backingPath, size);
+  }
+  return { digest, size };
 }
 
 export async function getBytes(blobsDir: string, digest: string): Promise<Buffer | null> {

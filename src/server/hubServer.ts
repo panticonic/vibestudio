@@ -11,7 +11,10 @@ import {
   deleteUnregisteredWorkspace,
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
-import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
+import {
+  readBaseTemplateRelease,
+  readWorkspaceCreationTemplate,
+} from "@vibestudio/workspace/baseTemplateRelease";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceCreationDescriptor } from "@vibestudio/workspace-contracts/types";
@@ -374,10 +377,7 @@ function requireWorkspaceName(state: HubRuntimeState, workspaceId: string): stri
 }
 
 function currentCreationRootTemplate(appRoot: string) {
-  const developmentPin = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
-  return developmentPin
-    ? WorkspaceTemplatePinSchema.parse(JSON.parse(developmentPin))
-    : readBaseTemplateRelease(appRoot).baseTemplate;
+  return readWorkspaceCreationTemplate(appRoot);
 }
 
 /**

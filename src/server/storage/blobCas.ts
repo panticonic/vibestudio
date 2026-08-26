@@ -354,6 +354,51 @@ export async function putBlobBytes(
   });
 }
 
+/**
+ * Atomically install bytes that remain reconstructable from an exact bootstrap
+ * source. This deliberately omits fsync and a second digest pass: publication
+ * is atomic within the running system, while a failed write aborts bootstrap.
+ */
+export async function putReconstructableBlobBytes(
+  rootDir: string,
+  digest: string,
+  bytes: Buffer
+): Promise<{ digest: string; size: number }> {
+  validateBlobDigest(digest);
+  const filePath = blobCasPath(rootDir, digest);
+  return serializeByKey(installChains, filePath, async () => {
+    try {
+      const installed = await fsp.lstat(filePath);
+      assertRegularFileSize(installed, filePath, bytes.byteLength);
+      return { digest, size: bytes.byteLength };
+    } catch (error) {
+      if (!isErrorCode(error, "ENOENT")) throw error;
+    }
+
+    const tmpDir = path.join(rootDir, "tmp");
+    await Promise.all([
+      fsp.mkdir(tmpDir, { recursive: true }),
+      fsp.mkdir(path.dirname(filePath), { recursive: true }),
+    ]);
+    const tmpPath = path.join(tmpDir, `${process.pid}-${randomUUID()}.tmp`);
+    try {
+      await fsp.writeFile(tmpPath, bytes, { flag: "wx", mode: 0o600 });
+      try {
+        await fsp.link(tmpPath, filePath);
+      } catch (error) {
+        if (!isErrorCode(error, "EEXIST")) throw error;
+      }
+      const installed = await fsp.lstat(filePath);
+      assertRegularFileSize(installed, filePath, bytes.byteLength);
+      return { digest, size: bytes.byteLength };
+    } finally {
+      await fsp.unlink(tmpPath).catch(() => {
+        // Temp links have no authority; cleanup is best effort.
+      });
+    }
+  });
+}
+
 /** Register an already-hashed immutable file without copying its bytes. */
 export function linkBlobFileSync(rootDir: string, digest: string, sourcePath: string): string {
   const filePath = blobCasPath(rootDir, digest);
@@ -376,6 +421,34 @@ export async function linkBlobFile(
     assertRegularFile(sourceStat, sourcePath);
     if (await existingBlob(filePath, digest, sourceStat.size, sourceStat)) return filePath;
     await installHardlink(rootDir, digest, sourcePath, filePath);
+    return filePath;
+  });
+}
+
+/**
+ * Link a reconstructable bootstrap object without paying a durability barrier
+ * for the workspace-local reference. The source CAS object is already durable;
+ * callers still fail before publication if any link cannot be established.
+ */
+export async function linkReconstructableBlobFile(
+  rootDir: string,
+  digest: string,
+  sourcePath: string,
+  expectedSize: number
+): Promise<string> {
+  const filePath = blobCasPath(rootDir, digest);
+  return serializeByKey(installChains, filePath, async () => {
+    const sourceStat = await fsp.lstat(sourcePath);
+    assertRegularFileSize(sourceStat, sourcePath, expectedSize);
+    const finalDir = path.dirname(filePath);
+    await fsp.mkdir(finalDir, { recursive: true });
+    try {
+      await fsp.link(sourcePath, filePath);
+    } catch (error) {
+      if (!isErrorCode(error, "EEXIST")) throw error;
+    }
+    const installed = await fsp.lstat(filePath);
+    assertRegularFileSize(installed, filePath, expectedSize);
     return filePath;
   });
 }

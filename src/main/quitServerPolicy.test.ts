@@ -2,28 +2,28 @@ import { describe, expect, it } from "vitest";
 import { ordinaryQuitServerDecision } from "./quitServerPolicy.js";
 
 describe("ordinaryQuitServerDecision", () => {
-  it("always prompts before retaining or stopping a desktop-owned ephemeral hub", () => {
+  it("always stops a desktop-owned ephemeral hub", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
         ephemeralWorkspace: true,
         rememberedKeepServer: true,
       })
-    ).toBe("prompt");
+    ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
         ephemeralWorkspace: true,
         rememberedKeepServer: false,
       })
-    ).toBe("prompt");
+    ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
         ephemeralWorkspace: true,
         rememberedKeepServer: null,
       })
-    ).toBe("prompt");
+    ).toBe("stop");
   });
 
   it("uses the remembered policy for a persistent local hub", () => {
