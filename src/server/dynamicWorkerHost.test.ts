@@ -161,6 +161,7 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:dynamic-worker-host-test",
     workerdPrograms: compiledWorkerdPrograms,
+    getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-")),
     getProxyPort: () => 1,
@@ -186,7 +187,6 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
-    getInternalDoEnv: () => ({}),
   };
   const manager = new WorkerdManager(deps);
   manager.bindWorkspaceProvider(provider);

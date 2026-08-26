@@ -99,10 +99,11 @@ async function createWorkerdHarness(
   overrides: Partial<WorkerdManagerDeps> & {
     getBuild?: (source: string, ref?: string) => Promise<BuildResult>;
     mainRpc?: (method: string, args: unknown[], target: string) => Promise<unknown>;
+    bindWorkspaceProvider?: boolean;
   } = {}
 ) {
   const tokenManager = new TokenManager();
-  const { getBuild, mainRpc, ...managerOverrides } = overrides;
+  const { getBuild, mainRpc, bindWorkspaceProvider = true, ...managerOverrides } = overrides;
   const builds = new Map<string, BuildResult>();
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the loader-server closure can reference a `const` manager.
@@ -116,6 +117,7 @@ async function createWorkerdHarness(
     workspaceId: "workspace:internal-workerd-test",
     workerdPrograms: compiledWorkerdPrograms,
     internalDOBundle: compiledInternalDOBundle,
+    getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
     // Internal DO outbound RPCs route through the same loopback harness. The
@@ -153,9 +155,8 @@ async function createWorkerdHarness(
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
-    getInternalDoEnv: (): Record<string, string> => ({}),
   };
-  manager.bindWorkspaceProvider(provider);
+  if (bindWorkspaceProvider) manager.bindWorkspaceProvider(provider);
   const attestHostDoCall = createHostDoAuthorityAttester({
     manager,
     workspaceId: "workspace:internal-workerd-test",
@@ -656,12 +657,12 @@ describe("internal storage DOs under workerd", () => {
     expect(result["started_at"]).toBeDefined();
   }, 240_000);
 
-  it("starts workerd with EvalDO registered (UNSAFE_EVAL binding renders as `unsafeEval = void`)", async () => {
+  it("starts internal workerd before a workspace provider is attached", async () => {
     // Regression: the EvalDO binding was emitted as `unsafeEval = ()` (empty
     // struct), which workerd rejects with "Type mismatch; expected Void", so the
     // whole runtime failed to boot once EvalDO was registered. Other workerd tests
     // register only WorkspaceDO/BrowserVaultDO, so they never exercised this binding.
-    const harness = await createWorkerdHarness();
+    const harness = await createWorkerdHarness({ bindWorkspaceProvider: false });
     manager = harness.manager;
     // registerAllDOClasses writes the capnp config and (re)starts workerd; a
     // malformed config makes workerd exit before accepting HTTP and this rejects.

@@ -199,6 +199,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:universal-do-host-test",
     workerdPrograms: compiledWorkerdPrograms,
+    getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
     getProxyPort: () => 1,
@@ -230,7 +231,6 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
-    getInternalDoEnv: () => ({}),
   };
   const manager = new WorkerdManager(deps);
   manager.bindWorkspaceProvider(provider);

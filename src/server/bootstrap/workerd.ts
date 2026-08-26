@@ -252,13 +252,14 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     name: "workerdManager",
     // Workerd calls back into host RPC while activation work and lifecycle
     // release settle. Starting after RpcServer and stopping before it keeps
-    // that return path available for the whole sandbox generation.
-    dependencies: ["fsService", "rpcServer", "bootstrapBuildSystem"],
+    // that return path available for the whole sandbox generation. The general
+    // runtime owns only host-provided programs; workspace source is attached by
+    // workerdBootstrapWorkspace once its exact build provider is ready.
+    dependencies: ["fsService", "rpcServer"],
     async start(resolve) {
       const { WorkerdManager } = await import("../workerdManager.js");
       const { getWorkerdProgramSources } = await import("../workerdProgramLoader.js");
       const fsService = assertPresent(resolve<FsService>("fsService"));
-      const bootstrapBuildSystem = assertPresent(resolve<BuildSystemV2>("bootstrapBuildSystem"));
       const egressSecret = randomBytes(32).toString("hex");
       const manager: WorkerdManager = new WorkerdManager({
         tokenManager: deps.tokenManager,
@@ -273,6 +274,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         workspaceId: deps.workspaceId,
         workspacePath: deps.workspacePath,
         statePath: deps.statePath,
+        getInternalDoEnv: deps.getInternalDoEnv,
         executionPublicationPort: deps.executionPublicationPort,
         routeRegistry: deps.routeRegistry,
         getProxyPort: (caller) => deps.egressProxy.startForCaller(caller),
@@ -326,6 +328,27 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return registered ? deps.resolveEgressCaller(registered) : null;
       });
 
+      const { INTERNAL_DO_SOURCE } = await import("../internalDOs/internalDoLoader.js");
+      const { PRODUCT_BUILTIN_CATALOG } =
+        await import("@vibestudio/shared/productBuiltinCatalog.generated");
+      await manager.registerAllDOClasses(
+        PRODUCT_BUILTIN_CATALOG.filter((entry) => entry.workerd.bootstrapPhase === "first").map(
+          (entry) => ({ source: INTERNAL_DO_SOURCE, className: entry.className })
+        )
+      );
+      return manager;
+    },
+    async stop(instance: WorkerdManager | null) {
+      await instance?.shutdown();
+    },
+  });
+
+  deps.container.registerManaged({
+    name: "workerdBootstrapWorkspace",
+    dependencies: ["workerdManager", "bootstrapBuildSystem"],
+    async start(resolve) {
+      const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
+      const bootstrapBuildSystem = assertPresent(resolve<BuildSystemV2>("bootstrapBuildSystem"));
       manager.bindWorkspaceProvider({
         bindRuntimeImage: (unitPath, ref) => bootstrapBuildSystem.bindRuntimeImage(unitPath, ref),
         getBuildByKey: (key) => bootstrapBuildSystem.getBuildByKey(key),
@@ -341,28 +364,18 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           return node?.manifest.durable?.classes ?? [];
         },
         singletonRegistry: deps.workspaceDeclarations.singletons,
-        getInternalDoEnv: deps.getInternalDoEnv,
       });
-      const { INTERNAL_DO_SOURCE } = await import("../internalDOs/internalDoLoader.js");
-      const { PRODUCT_BUILTIN_CATALOG } =
-        await import("@vibestudio/shared/productBuiltinCatalog.generated");
-      await manager.registerAllDOClasses(
-        PRODUCT_BUILTIN_CATALOG.filter((entry) => entry.workerd.bootstrapPhase === "first").map(
-          (entry) => ({ source: INTERNAL_DO_SOURCE, className: entry.className })
-        )
-      );
       await deps.assertBootstrapSnapshotUnchanged();
-
       return manager;
-    },
-    async stop(instance: WorkerdManager | null) {
-      await instance?.shutdown();
     },
   });
 
   deps.container.registerManaged({
     name: "doDispatch",
-    dependencies: ["workerdManager", "rpcServer"],
+    // Workspace dispatch becomes visible only after the exact bootstrap
+    // provider is attached. The workerd process itself is already free to boot
+    // and host internal programs while that provider is being prepared.
+    dependencies: ["workerdManager", "rpcServer", "workerdBootstrapWorkspace"],
     async start(resolve) {
       const { DODispatch } = await import("../doDispatch.js");
       const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
@@ -432,7 +445,6 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           return node?.manifest.durable?.classes ?? [];
         },
         singletonRegistry: deps.workspaceDeclarations.singletons,
-        getInternalDoEnv: deps.getInternalDoEnv,
       };
       manager.replaceWorkspaceProvider(provider);
 

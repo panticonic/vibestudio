@@ -395,6 +395,8 @@ export interface WorkerdManagerDeps {
    * a concurrently running source server's authority program on disk.
    */
   readonly internalDOBundle?: InternalDOBundle;
+  /** Host-owned environment for immutable internal Durable Object programs. */
+  getInternalDoEnv(className: string): Record<string, string>;
   /** Workspace source root — used for WORKER_SOURCE binding. */
   workspacePath: string;
   /** State directory — used for DO storage (localDisk). */
@@ -460,7 +462,6 @@ export interface WorkerdWorkspaceProvider {
   getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
   getManifestDoClasses(source: string): ReadonlyArray<{ className: string }>;
   readonly singletonRegistry: SingletonRegistry;
-  getInternalDoEnv(className: string): Record<string, string>;
 }
 
 export type WorkerdStage = "control-plane" | "workspace";
@@ -2130,9 +2131,7 @@ export class WorkerdManager {
       // Manifest-declared provider bindings for this internal DO class
       // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO). Injected here so internal
       // DOs consume workspace unit identities only through the manifest.
-      const internalEnv = this.requireWorkspaceProvider(
-        `internal Durable Object environment for ${className}`
-      ).getInternalDoEnv(className);
+      const internalEnv = this.deps.getInternalDoEnv(className);
       for (const [name, text] of Object.entries(internalEnv)) {
         bindings.push({ name, text });
       }
