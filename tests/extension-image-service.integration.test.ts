@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
+import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import {
   developmentBaseSelectionEnv,
   resolveDevelopmentBaseSelection,
@@ -40,7 +42,7 @@ afterEach(async () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
     tempRoot = null;
   }
-});
+}, 20_000);
 
 maybeDescribe("image-service extension server smoke", () => {
   it("builds the declared extension then invokes it through the server RPC surface", async () => {
@@ -80,9 +82,10 @@ maybeDescribe("image-service extension server smoke", () => {
       const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
       const shellToken = await issueShellToken(ready);
 
-      // The exact Base snapshot is the product seed, so its declared extension is
-      // admitted directly. Wait for the source artifact rather than fabricating a
-      // user approval for a product-owned declaration.
+      // Development and packaged workspaces share the same trust semantics. A
+      // fresh Base therefore needs its ordinary workspace-creation review before
+      // any declared extension can be built.
+      await approveStartupInstallReviews(ready, shellToken);
       await waitForExtensionBuild(ready, shellToken, "@workspace-extensions/image-service");
 
       await expect(
@@ -101,6 +104,53 @@ maybeDescribe("image-service extension server smoke", () => {
     }
   }, 360_000);
 });
+
+async function approveStartupInstallReviews(
+  ready: ReadyPayload,
+  shellToken: string
+): Promise<void> {
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    const state = await rpc<
+      | { status: "preparing" | "not-required" | "resolved" | "unresolved" }
+      | { status: "pending"; approvalId: string; partCount: number }
+      | { status: "failed"; error: string }
+    >(ready, shellToken, "shellApproval.getWorkspaceCreationReviewState", []);
+    if (state.status === "resolved" || state.status === "not-required") return;
+    if (state.status === "failed") {
+      throw new Error(`Workspace creation review failed: ${state.error}`);
+    }
+    if (state.status === "unresolved") {
+      throw new Error("Workspace creation review was left unresolved");
+    }
+    if (state.status === "pending") {
+      const pending = await rpc<PendingUnitInstallReviewApproval[]>(
+        ready,
+        shellToken,
+        "shellApproval.listPending",
+        []
+      );
+      const approval = pending.find((candidate) => candidate.approvalId === state.approvalId);
+      if (!approval || approval.kind !== "unit-install-review") {
+        throw new Error(
+          `Workspace creation review ${state.approvalId} was not present in the approval queue`
+        );
+      }
+      await rpc(
+        ready,
+        shellToken,
+        "shellApproval.resolveInstallReview",
+        [approval.approvalId, defaultAcceptance(approval.mode, approval.parts)],
+        { timeoutMs: 180_000 }
+      );
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Workspace creation review did not settle: ${JSON.stringify(state)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
 
 async function waitForExtensionBuild(
   ready: ReadyPayload,

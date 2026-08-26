@@ -283,7 +283,7 @@ export async function readExactGitSnapshot(
   );
   const admittedAt = performance.now();
   if (admittedAt - startedAt >= 100) {
-    console.log("[Perf] exact Git snapshot read", {
+    console.error("[Perf] exact Git snapshot read", {
       headMs: headReadAt - startedAt,
       treeMs: treeReadAt - headReadAt,
       admitAndStoreMs: admittedAt - treeReadAt,

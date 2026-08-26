@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  approvePendingWorkspaceCreationReview,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   hasElectronDisplay,
   launchTestApp,
@@ -54,6 +55,7 @@ test.describe("command overlay", () => {
     // before the test API is exposed. Neither budget relaxes an assertion.
     testApp = await launchTestApp({ launchTimeout: 300_000 });
     await waitHostedShellReady(testApp);
+    await approvePendingWorkspaceCreationReview(testApp.app);
     await captureShellConsole(testApp);
   });
 
@@ -199,9 +201,7 @@ test.describe("command overlay", () => {
         intervals: [1000, 2000, 5000],
       })
       .toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("why is this panel laid out this way?"),
-        ])
+        expect.arrayContaining([expect.stringContaining("why is this panel laid out this way?")])
       );
 
     const snapshot = await probeCommandOverlay(testApp);

@@ -21,10 +21,6 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
-import {
-  WORKSPACE_SOURCE_DIRS,
-  WORKSPACE_STATE_DIRS,
-} from "@vibestudio/workspace-contracts/sourceDirs";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
@@ -41,8 +37,6 @@ import {
   DEV_ROOT_TEMPLATE_ENV,
   deriveE2eRootTemplate,
   requireE2eRootTemplate,
-  writeWorkspaceCreationDescriptor,
-  writeWorkspaceMaterializationReceipt,
 } from "./e2eRootTemplate.js";
 import { E2E_ARTIFACT_ROOT_ENV, E2E_TEMP_ROOT_ENV } from "./e2eRun.js";
 
@@ -217,44 +211,6 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
   };
 }
 
-function collectUnitDirs(root: string): string[] {
-  const result: string[] = [];
-  const visit = (dir: string) => {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === ".git" || entry.name === "node_modules" || entry.name === "dist") continue;
-      const child = path.join(dir, entry.name);
-      if (!entry.isDirectory()) continue;
-      if (fs.existsSync(path.join(child, "package.json"))) {
-        result.push(child);
-        continue;
-      }
-      visit(child);
-    }
-  };
-  visit(root);
-  return result;
-}
-
-function initializeUnitGitRepos(sourceRoot: string): void {
-  for (const unitDir of collectUnitDirs(sourceRoot)) {
-    execFileSync("git", ["init", "-b", "main"], { cwd: unitDir, stdio: "ignore" });
-    execFileSync("git", ["config", "user.email", "e2e@example.invalid"], {
-      cwd: unitDir,
-      stdio: "ignore",
-    });
-    execFileSync("git", ["config", "user.name", "Vibestudio E2E"], {
-      cwd: unitDir,
-      stdio: "ignore",
-    });
-    execFileSync("git", ["add", "-A"], { cwd: unitDir, stdio: "ignore" });
-    execFileSync("git", ["commit", "-m", "Initial e2e workspace snapshot"], {
-      cwd: unitDir,
-      stdio: "ignore",
-    });
-  }
-}
-
 export async function createManagedTestWorkspace(
   options: {
     configureSource?: (sourceRoot: string) => void;
@@ -287,8 +243,6 @@ export async function createManagedTestWorkspace(
   const env = getTestEnv(testRoot);
   const workspaceName = `e2e_${crypto.randomBytes(6).toString("hex")}`;
   const workspaceDir = path.join(getCentralDataDirFromEnv(env), "workspaces", workspaceName);
-  const sourceRoot = path.join(workspaceDir, "source");
-  const stateRoot = path.join(workspaceDir, "state");
 
   for (const dir of Object.values(env)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -299,34 +253,15 @@ export async function createManagedTestWorkspace(
   // latency or duplicate immutable installs.
   linkSharedMachineCaches(getCentralDataDirFromEnv(env));
 
-  fs.mkdirSync(sourceRoot, { recursive: true });
-  fs.mkdirSync(stateRoot, { recursive: true });
-
-  // A workspace is its exact root plus what happened to it since. Copy the
-  // run's already-materialized root rather than assembling a lookalike from
-  // the developer's worktree, so the source on disk really is the tree the
-  // creation descriptor names.
-  fs.cpSync(rootTemplate.materializedSource, sourceRoot, { recursive: true });
-  for (const dir of WORKSPACE_SOURCE_DIRS) {
-    fs.mkdirSync(path.join(sourceRoot, dir), { recursive: true });
-  }
-
-  initializeUnitGitRepos(sourceRoot);
-
-  for (const dir of WORKSPACE_STATE_DIRS) {
-    fs.mkdirSync(path.join(stateRoot, dir), { recursive: true });
-  }
-
   const centralData = new CentralDataManager({
     databasePath: path.join(getCentralDataDirFromEnv(env), "server-auth", "identity.db"),
   });
   try {
-    const registered = centralData.addWorkspace(workspaceName);
-    // The runtime refuses to start a workspace that cannot say which exact
-    // root it was created from, and refuses to trust a source it has no
-    // materialization receipt for.
-    writeWorkspaceCreationDescriptor(stateRoot, registered.workspaceId, rootTemplate.pin);
-    writeWorkspaceMaterializationReceipt(stateRoot, rootTemplate.pin);
+    // Use the product's one creation path: the hub owns an exact intent, then
+    // the selected child creates and admits the workspace. Pre-scaffolding the
+    // directory here bypasses launch-record dispatch and is no longer a valid
+    // first-run lifecycle.
+    centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
     // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
     // policy in this fixture's private identity database so Electron can take
     // its normal graceful shutdown path without opening an interactive dialog.
@@ -389,12 +324,15 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     throw new Error(ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
   }
 
-  // Build electron args - first arg is the app entry point
+  // Launch the application directory, as the development runner does. Passing
+  // dist/main.cjs directly makes Electron use its fallback `0.0` application
+  // version instead of the package SemVer, which cannot select a workspace
+  // host generation.
   const electronUserDataDir = path.join(workspaceInfo.testRoot, "electron-user-data");
   const args = [
     "--no-sandbox",
     `--user-data-dir=${electronUserDataDir}`,
-    mainPath,
+    projectRoot,
     `--workspace=${workspaceInfo.workspaceName}`,
   ];
   if (initialPanel) {
@@ -689,6 +627,36 @@ export async function approvePendingWorkspaceCreationReview(
       ).__testApi;
       if (!testApi) throw new Error("Test API not available");
 
+      let requested = requestedApprovalIds ? new Set(requestedApprovalIds) : null;
+      if (!requested) {
+        const deadline = Date.now() + 180_000;
+        for (;;) {
+          const state = (await testApi.rpcCall(
+            "shellApproval",
+            "getWorkspaceCreationReviewState",
+            []
+          )) as
+            | { status: "preparing" | "not-required" | "resolved" | "unresolved" }
+            | { status: "pending"; approvalId: string }
+            | { status: "failed"; error: string };
+          if (state.status === "not-required" || state.status === "resolved") return;
+          if (state.status === "failed") {
+            throw new Error(`Workspace creation review failed: ${state.error}`);
+          }
+          if (state.status === "unresolved") {
+            throw new Error("Workspace creation review was left unresolved");
+          }
+          if (state.status === "pending") {
+            requested = new Set([state.approvalId]);
+            break;
+          }
+          if (Date.now() >= deadline) {
+            throw new Error("Workspace creation review remained in preparation");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
       const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
         approvalId: string;
         kind: string;
@@ -700,9 +668,8 @@ export async function approvePendingWorkspaceCreationReview(
           everydayRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
         }>;
       }>;
-      const requested = requestedApprovalIds ? new Set(requestedApprovalIds) : null;
       for (const approval of pending) {
-        if (requested && !requested.has(approval.approvalId)) continue;
+        if (!requested.has(approval.approvalId)) continue;
         if (approval.kind !== "unit-install-review" || !approval.mode || !approval.parts) continue;
         const decision =
           approval.mode === "update"
