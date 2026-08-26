@@ -2,18 +2,18 @@
 
 ## An integrated personal software environment
 
-Vibestudio is a browser and light-weight sandbox for agents and custom, personalized apps. The goal is to blur the line between using and building software, using AI.
+Vibestudio is a browser and light-weight sandbox for agents and personalized apps. The goal is to blur the line between using and building software, using AI, while imposing hard barriers, with fine grained control over what your agents can access.
 
 Vibestudio takes a batteries-included approach: Build system, agentic harness, sandboxed file system, version control, credentials management and more are all included (mostly in a way so you can tweak them to your needs) and standardized to make one unified happy-path of composable components.
 
-Unlike many other agentic systems, vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
+Vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
 
 The vibestudio sandbox:
 
-- has a browser-style out-of-band approval system (similar to camera, microphone or storage access in normal browsers) and credential store for external providers.
+- has a browser-style out-of-band capability grant / approval system (similar to camera, microphone or storage access in normal browsers, just with many more capabilities) and credential store for external provider integrations (e.g. Google Workspace, OpenAI etc.).
 - includes a context-isolated file system per app / agent instance.
 - has facilities for building and debugging software within the system, including agents, apps and reusable packages.
-- is particularly light-weight because it is based on browser/JS isolates, the lightest, most wide-spread and battle-tested sandbox out there, instead of OS containers.
+- is particularly light-weight because it is based on browser/JS isolates, arguably the lightest, most wide-spread and battle-tested sandbox out there.
 - supports background processes and DB persistence via the included workerd service (the tech that drives CloudFlare workers).
 - has an extension system for native access node.js code.
 - has mobile, cli and desktop apps based on one sanbox runtime that you can customize yourself.
