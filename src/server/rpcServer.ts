@@ -99,6 +99,7 @@ import {
   RPC_CLIENT_LABEL_HEADER,
   normalizeRpcClientLabel,
   RPC_CLIENT_PLATFORM_HEADER,
+  RPC_OAUTH_CALLBACK_MODE_HEADER,
   RPC_WEBSOCKET_ADMISSION_PATH,
   decodeRpcClientLabelHeader,
   type RpcWebSocketAdmissionFailure,
@@ -144,6 +145,7 @@ import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import type {
   DeviceCredential,
+  OAuthCallbackMode,
   PairingContext,
   RpcAuthenticationFailureCode,
 } from "@vibestudio/rpc/protocol/wsProtocol";
@@ -335,12 +337,14 @@ interface RpcWebSocketAdmissionGrant {
   resolved: ResolvedRpcCredential;
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
+  oauthCallbackMode?: OAuthCallbackMode;
 }
 
 interface RpcPairingAdmissionReplay {
   resolved: ResolvedRpcCredential;
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
+  oauthCallbackMode?: OAuthCallbackMode;
   grant: string;
   expiresAt: number;
 }
@@ -1544,7 +1548,8 @@ export class RpcServer {
       if (
         upgradeAdmission &&
         (normalizeRpcClientLabel(msg.clientLabel) !== upgradeAdmission.clientLabel ||
-          msg.clientPlatform !== upgradeAdmission.clientPlatform)
+          msg.clientPlatform !== upgradeAdmission.clientPlatform ||
+          msg.oauthCallbackMode !== upgradeAdmission.oauthCallbackMode)
       ) {
         ws.close(4006, "RPC authentication metadata does not match admission grant");
         return;
@@ -1569,6 +1574,7 @@ export class RpcServer {
         normalizeRpcClientLabel(msg.clientLabel),
         msg.clientSessionId,
         msg.clientPlatform,
+        msg.oauthCallbackMode,
         upgradeAdmission?.resolved
       )
         .catch((error) => this.abortFailedAuthentication(ws, error))
@@ -1698,6 +1704,7 @@ export class RpcServer {
     clientLabel?: string,
     clientSessionId?: string,
     clientPlatform?: ClientPlatform,
+    oauthCallbackMode?: OAuthCallbackMode,
     preResolved?: ResolvedRpcCredential
   ): Promise<void> {
     if (this.isShuttingDown()) {
@@ -1890,6 +1897,7 @@ export class RpcServer {
       clientLabel,
       clientSessionId,
       clientPlatform,
+      oauthCallbackMode,
       uploadBodies: new WsUploadBodies(),
     };
 
@@ -4690,7 +4698,8 @@ export class RpcServer {
   private issueWsAdmissionGrant(
     resolved: ResolvedRpcCredential,
     clientLabel?: string,
-    clientPlatform?: ClientPlatform
+    clientPlatform?: ClientPlatform,
+    oauthCallbackMode?: OAuthCallbackMode
   ): RpcWebSocketAdmissionGrant {
     const grant = randomBytes(32).toString("hex");
     const admission: RpcWebSocketAdmissionGrant = {
@@ -4699,6 +4708,7 @@ export class RpcServer {
       resolved,
       ...(clientLabel !== undefined ? { clientLabel } : {}),
       ...(clientPlatform !== undefined ? { clientPlatform } : {}),
+      ...(oauthCallbackMode !== undefined ? { oauthCallbackMode } : {}),
     };
     this.wsAdmissionGrants.set(grant, admission);
     return admission;
@@ -4776,12 +4786,20 @@ export class RpcServer {
         : rawClientPlatform === undefined
           ? undefined
           : null;
+    const rawOAuthCallbackMode = req.headers[RPC_OAUTH_CALLBACK_MODE_HEADER];
+    const oauthCallbackMode =
+      rawOAuthCallbackMode === "client-loopback" || rawOAuthCallbackMode === "app-scheme"
+        ? rawOAuthCallbackMode
+        : rawOAuthCallbackMode === undefined
+          ? undefined
+          : null;
     if (
       credential.length === 0 ||
       clientLabel === null ||
       (clientLabel !== undefined &&
         Buffer.byteLength(clientLabel, "utf8") > RPC_WS_ADMISSION_MAX_CLIENT_LABEL_BYTES) ||
-      clientPlatform === null
+      clientPlatform === null ||
+      oauthCallbackMode === null
     ) {
       this.wsAdmissionFailure(res, 400, {
         ok: false,
@@ -4797,7 +4815,8 @@ export class RpcServer {
     if (pairingReplay) {
       if (
         pairingReplay.clientLabel !== clientLabel ||
-        pairingReplay.clientPlatform !== clientPlatform
+        pairingReplay.clientPlatform !== clientPlatform ||
+        pairingReplay.oauthCallbackMode !== oauthCallbackMode
       ) {
         this.wsAdmissionFailure(res, 400, {
           ok: false,
@@ -4810,7 +4829,8 @@ export class RpcServer {
       const admission = this.issueWsAdmissionGrant(
         pairingReplay.resolved,
         clientLabel,
-        clientPlatform
+        clientPlatform,
+        oauthCallbackMode
       );
       pairingReplay.grant = admission.grant;
       this.writeWsAdmissionResponse(res, 201, {
@@ -4873,12 +4893,18 @@ export class RpcServer {
         return;
       }
       const resolved = resolution.resolved;
-      const admission = this.issueWsAdmissionGrant(resolved, clientLabel, clientPlatform);
+      const admission = this.issueWsAdmissionGrant(
+        resolved,
+        clientLabel,
+        clientPlatform,
+        oauthCallbackMode
+      );
       if (resolved.deviceCredential) {
         this.pairingAdmissionReplays.set(pairingReplayDigest, {
           resolved,
           clientLabel,
           clientPlatform,
+          oauthCallbackMode,
           grant: admission.grant,
           expiresAt: Date.now() + RPC_WS_PAIRING_REPLAY_TTL_MS,
         });
@@ -5424,6 +5450,7 @@ export class RpcServer {
             clientLabel: frame.clientLabel,
             clientSessionId: frame.clientSessionId,
             clientPlatform: frame.clientPlatform,
+            oauthCallbackMode: frame.oauthCallbackMode,
           });
           return;
         }

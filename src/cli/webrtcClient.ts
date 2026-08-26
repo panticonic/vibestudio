@@ -152,6 +152,7 @@ export class WebRtcRpcClient {
         connectionId: this.config.connectionId ?? randomUUID(),
         clientLabel: this.config.clientLabel ?? "Vibestudio CLI",
         clientPlatform: "headless",
+        oauthCallbackMode: "client-loopback",
         platform: "headless",
         logPrefix: this.config.logPrefix ?? "[cli-webrtc]",
         ...(this.config.onPaired ? { onPaired: this.config.onPaired } : {}),

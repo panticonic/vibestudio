@@ -18,16 +18,21 @@ export type CredentialApprovalDecision = Extract<
  */
 export function credentialApprovalDecisions(
   identity: CredentialGrantIdentity,
-  options: { onceOnly?: boolean } = {}
+  options: { onceOnly?: boolean; preapprovesUse?: boolean } = {}
 ): CredentialApprovalDecision[] {
   if (options.onceOnly) return ["once", "deny"];
-  return ["once", "session", identity.agentId ? "agent" : "version", "deny"];
+  return [
+    ...(options.preapprovesUse ? [] : (["once"] as const)),
+    "session",
+    identity.agentId ? "agent" : "version",
+    "deny",
+  ];
 }
 
 export function assertCredentialApprovalDecision(
   identity: CredentialGrantIdentity,
   decision: ApprovalDecision,
-  options: { onceOnly?: boolean } = {}
+  options: { onceOnly?: boolean; preapprovesUse?: boolean } = {}
 ): asserts decision is CredentialApprovalDecision {
   if (
     !credentialApprovalDecisions(identity, options).includes(decision as CredentialApprovalDecision)

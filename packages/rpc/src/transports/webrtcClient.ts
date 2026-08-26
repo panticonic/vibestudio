@@ -106,7 +106,11 @@ import {
   encodeControlFrame,
 } from "../protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
-import type { DeviceCredential, PairingContext } from "../protocol/wsProtocol.js";
+import type {
+  DeviceCredential,
+  OAuthCallbackMode,
+  PairingContext,
+} from "../protocol/wsProtocol.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import type {
   PeerConnectionProvider,
@@ -238,6 +242,7 @@ export interface WebRtcSessionOptions {
   clientLabel?: string;
   clientSessionId?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
+  oauthCallbackMode?: OAuthCallbackMode;
   /**
    * Token provider for this session's one-time connection grant. Re-invoked on
    * every (re)open because grants are one-shot (rpcServer redeem consumes them).
@@ -2009,6 +2014,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
             clientSessionId: this.opts.clientSessionId,
             clientLabel: this.opts.clientLabel,
             clientPlatform: this.opts.clientPlatform,
+            oauthCallbackMode: this.opts.oauthCallbackMode,
           });
         } catch {
           // Pipe dropped between checks — recovery reopens every session on the

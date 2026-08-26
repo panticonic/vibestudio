@@ -114,7 +114,11 @@ export class WsRpcClient {
       reconnect: true,
       logPrefix: this.config.logPrefix ?? "[cli-ws]",
       ...(this.config.connectionId ? { connectionId: this.config.connectionId } : {}),
-      getAuthMessageFields: () => ({ clientLabel, clientPlatform: "headless" }),
+      getAuthMessageFields: () => ({
+        clientLabel,
+        clientPlatform: "headless",
+        oauthCallbackMode: "client-loopback",
+      }),
       adapter: {
         now: () => Date.now(),
         getAuthToken: async () => await this.config.getToken(),

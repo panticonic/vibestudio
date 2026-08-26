@@ -43,7 +43,11 @@
  */
 
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
-import type { DeviceCredential, PairingContext } from "../protocol/wsProtocol.js";
+import type {
+  DeviceCredential,
+  OAuthCallbackMode,
+  PairingContext,
+} from "../protocol/wsProtocol.js";
 import { createSignalingClient } from "./webrtcSignalingClient.js";
 import type {
   PeerConnectionProvider,
@@ -58,7 +62,11 @@ import {
   type WebRtcTransport,
 } from "./webrtcClient.js";
 
-export type { DeviceCredential, PairingContext } from "../protocol/wsProtocol.js";
+export type {
+  DeviceCredential,
+  OAuthCallbackMode,
+  PairingContext,
+} from "../protocol/wsProtocol.js";
 
 export interface CreatePairedConnectionOptions {
   /** Transport-level pairing: pinned server DTLS fingerprint + room + ICE policy. */
@@ -107,6 +115,7 @@ export interface CreatePairedConnectionOptions {
   clientLabel?: string;
   clientSessionId?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
+  oauthCallbackMode?: OAuthCallbackMode;
   /** Advertised in the hello preamble (informational). */
   platform?: "desktop" | "mobile" | "server" | "headless";
   logPrefix?: string;
@@ -252,6 +261,7 @@ export async function createPairedConnection(
     ...(options.clientLabel ? { clientLabel: options.clientLabel } : {}),
     ...(options.clientSessionId ? { clientSessionId: options.clientSessionId } : {}),
     ...(options.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),
+    ...(options.oauthCallbackMode ? { oauthCallbackMode: options.oauthCallbackMode } : {}),
     getToken: options.getShellToken,
     ...(runOnPaired ? { onPaired: runOnPaired } : {}),
     ...(options.onTerminalClose ? { onTerminalClose: options.onTerminalClose } : {}),

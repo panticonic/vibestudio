@@ -121,6 +121,7 @@ export async function createWebRtcServerClient(
     getShellToken: args.getShellToken,
     connectionId: args.connectionId ?? randomUUID(),
     clientPlatform: "desktop",
+    oauthCallbackMode: "client-loopback",
     platform: "desktop",
     ...(args.onPaired ? { onPaired: args.onPaired } : {}),
     // App-level recovery passthrough (subscriptions/state replay). Registered on
@@ -186,6 +187,7 @@ export async function createWebRtcServerClient(
     const session = transport.openSession({
       connectionId: randomUUID(),
       clientPlatform: "desktop",
+      oauthCallbackMode: "client-loopback",
       // Re-grant on EVERY (re)open: connection grants are one-shot, so pinning the
       // first grant's token would fail the redeem on reconnect — the auto-reopened
       // session would reject unhandled, once per app principal. Mirrors the main
@@ -250,6 +252,7 @@ export async function createWebRtcServerClient(
     const session = transport.openSession({
       connectionId,
       clientPlatform: "desktop",
+      oauthCallbackMode: "client-loopback",
       getToken: async () => (await authClient.grantConnection(runtimeEntityId)).token,
     });
     await session.ready?.();

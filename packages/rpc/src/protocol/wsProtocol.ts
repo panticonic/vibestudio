@@ -1,6 +1,7 @@
 import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
+export type OAuthCallbackMode = "client-loopback" | "app-scheme";
 
 /** Stable machine-readable authentication failures that clients can recover from. */
 export type RpcAuthenticationFailureCode =
@@ -34,6 +35,8 @@ export interface WsAuthMessage {
   clientSessionId?: string;
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
+  /** Native callback mechanism this exact authenticated client can complete. */
+  oauthCallbackMode?: OAuthCallbackMode;
 }
 
 export interface WsRpcMessage {

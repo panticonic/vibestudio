@@ -304,6 +304,7 @@ export async function establishServerSession(args: {
   const serverClient = await createServerClient(target.gatewayPort, target.authToken, {
     reconnect: true,
     clientPlatform: "desktop",
+    oauthCallbackMode: "client-loopback",
     getWsUrl: () => hubProcessManager.getCurrentWsUrl() ?? target.wsUrl,
     refreshAuthToken: async () => hubProcessManager.getAuthToken(),
     onConnectionStatusChanged: (status) => {
@@ -322,6 +323,7 @@ export async function establishServerSession(args: {
       {
         reconnect: true,
         clientPlatform: "desktop",
+        oauthCallbackMode: "client-loopback",
         getWsUrl: () => hubProcessManager.getHubWsUrl(),
         refreshAuthToken: () => hubProcessManager.getHubAuthToken(),
         onDisconnect: () => console.error("[App] Local hub control connection closed"),

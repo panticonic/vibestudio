@@ -34,4 +34,17 @@ describe("credentialApprovalDecisions", () => {
       "cannot be represented"
     );
   });
+
+  it("does not offer allow-once when connection approval also preapproves later use", () => {
+    expect(
+      credentialApprovalDecisions(
+        {
+          repoPath: "workers/agent-worker",
+          effectiveVersion: "ev-agent",
+          agentId: "agent:research",
+        },
+        { preapprovesUse: true }
+      )
+    ).toEqual(["session", "agent", "deny"]);
+  });
 });

@@ -42,6 +42,7 @@ import {
   type StoreUrlBoundCredentialParams,
 } from "@vibestudio/service-schemas/credentials";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
+import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
 import { CredentialLifecycleError } from "./credentialLifecycle.js";
 import { abortable, anySignal, delay, throwIfAborted } from "./credentialMechanisms/async.js";
 import {
@@ -91,6 +92,7 @@ interface BrowserHandoffTarget {
   deliveryCallerKind: BrowserDeliveryCallerKind;
   deliveryConnectionId?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
+  oauthCallbackMode?: OAuthCallbackMode;
   parentPanelId?: string;
 }
 
@@ -269,6 +271,7 @@ export interface CredentialConnectionCoordinatorDeps {
       caller: { runtime: { id: string; kind: string } };
       connectionId: string;
       clientPlatform?: "desktop" | "headless" | "mobile";
+      oauthCallbackMode?: OAuthCallbackMode;
     } | null;
   };
   sessionCredentialCapture?: SessionCredentialCapture;
@@ -303,6 +306,7 @@ export interface CredentialConnectionCoordinatorDeps {
       identity: { repoPath: string; effectiveVersion: string };
       metadata?: Record<string, string>;
       replacementCredentialLabel?: string;
+      preapprovesUse?: boolean;
       signal?: AbortSignal;
     }
   ): Promise<Exclude<GrantedDecision, "deny">>;
@@ -350,7 +354,7 @@ export function createCredentialConnectionCoordinator(
     eventService,
     findReplacementCandidate,
     loadActiveCredential,
-    requestCredentialApproval,
+    requestCredentialApproval: requestCredentialApprovalBase,
     resolveApprovalIdentity,
     runtimeInspector,
     sessionCredentialCapture,
@@ -359,6 +363,12 @@ export function createCredentialConnectionCoordinator(
     appendAudit,
   } = deps;
   const oauthTransactions = new Map<string, OAuthConnectionTransaction>();
+  const requestCredentialApproval: CredentialConnectionCoordinatorDeps["requestCredentialApproval"] =
+    (ctx, params) =>
+      requestCredentialApprovalBase(ctx, {
+        ...params,
+        preapprovesUse: true,
+      });
 
   function oauthRefreshMaterial(params: {
     refreshToken: string | undefined;
@@ -436,21 +446,17 @@ export function createCredentialConnectionCoordinator(
   /**
    * Decide which redirect strategy to use when the caller doesn't specify one.
    *
-   * Native desktop OAuth clients generally authorize loopback redirects, not the
-   * product relay's HTTPS URL. When the authenticated browser owner is a desktop
-   * (or headless desktop CLI), make its local callback listener the default. Mobile
-   * and unknown clients retain the relay default because a desktop loopback is not
-   * reachable there. An explicit strategy always wins.
+   * The authenticated browser owner declares the native callback mechanism it
+   * can complete. Internal browser requests carry their explicit server-loopback
+   * strategy. Clients without a native callback retain the public relay fallback.
    */
   function resolveDefaultRedirectStrategy(
     requested: OAuthRedirectStrategy | undefined,
     browser: "internal" | "external",
-    clientPlatform: BrowserHandoffTarget["clientPlatform"]
+    oauthCallbackMode: BrowserHandoffTarget["oauthCallbackMode"]
   ): OAuthRedirectStrategy {
     if (requested) return requested;
-    if (browser === "external" && (clientPlatform === "desktop" || clientPlatform === "headless")) {
-      return "client-loopback";
-    }
+    if (browser === "external" && oauthCallbackMode) return oauthCallbackMode;
     return "public";
   }
 
@@ -653,6 +659,8 @@ export function createCredentialConnectionCoordinator(
             targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
           clientPlatform:
             targetCallerId === ctx.caller.runtime.id ? ctx.wsClient?.clientPlatform : undefined,
+          oauthCallbackMode:
+            targetCallerId === ctx.caller.runtime.id ? ctx.wsClient?.oauthCallbackMode : undefined,
         },
         "not-required"
       );
@@ -666,6 +674,8 @@ export function createCredentialConnectionCoordinator(
             targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
           clientPlatform:
             targetCallerId === ctx.caller.runtime.id ? ctx.wsClient?.clientPlatform : undefined,
+          oauthCallbackMode:
+            targetCallerId === ctx.caller.runtime.id ? ctx.wsClient?.oauthCallbackMode : undefined,
         },
         "not-required"
       );
@@ -754,6 +764,7 @@ export function createCredentialConnectionCoordinator(
         deliveryCallerKind: "shell",
         deliveryConnectionId: shellConnection.connectionId,
         clientPlatform: shellConnection.clientPlatform,
+        oauthCallbackMode: shellConnection.oauthCallbackMode,
         parentPanelId,
       },
       "found"
@@ -2127,7 +2138,7 @@ export function createCredentialConnectionCoordinator(
     const redirectStrategy = resolveDefaultRedirectStrategy(
       redirect.type,
       openMode,
-      browserResolution.target?.clientPlatform
+      browserResolution.target?.oauthCallbackMode
     );
     let callback: HostOAuthCallback | null = null;
     let tx: OAuthConnectionTransaction | null = null;

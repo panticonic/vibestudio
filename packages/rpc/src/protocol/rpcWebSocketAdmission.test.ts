@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   RPC_CLIENT_LABEL_HEADER,
+  RPC_OAUTH_CALLBACK_MODE_HEADER,
   requestRpcWebSocketAdmission,
   rpcWebSocketAdmissionUrl,
 } from "./rpcWebSocketAdmission.js";
@@ -23,6 +24,7 @@ describe("RPC WebSocket admission protocol", () => {
       expect(init?.headers).toMatchObject({
         Authorization: "Bearer refresh:device:secret",
         [RPC_CLIENT_LABEL_HEADER]: "M%C3%BCnchen%20phone",
+        [RPC_OAUTH_CALLBACK_MODE_HEADER]: "client-loopback",
       });
       return new Response(JSON.stringify({ ok: true, grant: "a".repeat(64), expiresAt: 1234 }), {
         status: 201,
@@ -36,6 +38,7 @@ describe("RPC WebSocket admission protocol", () => {
         credential: "refresh:device:secret",
         clientLabel: "München phone",
         clientPlatform: "mobile",
+        oauthCallbackMode: "client-loopback",
       })
     ).resolves.toEqual({ ok: true, grant: "a".repeat(64), expiresAt: 1234 });
   });

@@ -46,6 +46,7 @@ import type {
   InvocationSnapshot,
   ResourceScope,
 } from "@vibestudio/rpc";
+import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
   createInvocationSnapshot,
   invocationSnapshotDigest,
@@ -355,6 +356,7 @@ export interface WsClientInfo {
   /** Host-recorded client metadata from the authenticated transport. */
   clientLabel?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
+  oauthCallbackMode?: OAuthCallbackMode;
 }
 
 export type ServiceContext = {

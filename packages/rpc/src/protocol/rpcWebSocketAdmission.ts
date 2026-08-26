@@ -1,8 +1,9 @@
-import type { ClientPlatform } from "./wsProtocol.js";
+import type { ClientPlatform, OAuthCallbackMode } from "./wsProtocol.js";
 
 export const RPC_WEBSOCKET_ADMISSION_PATH = "/rpc/ws-admission";
 export const RPC_CLIENT_LABEL_HEADER = "x-vibestudio-rpc-client-label";
 export const RPC_CLIENT_PLATFORM_HEADER = "x-vibestudio-rpc-client-platform";
+export const RPC_OAUTH_CALLBACK_MODE_HEADER = "x-vibestudio-rpc-oauth-callback-mode";
 export const RPC_WEBSOCKET_ADMISSION_TIMEOUT_MS = 10_000;
 
 export function encodeRpcClientLabelHeader(label: string): string {
@@ -31,6 +32,7 @@ export interface RpcWebSocketAdmissionRequest {
   credential: string;
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
+  oauthCallbackMode?: OAuthCallbackMode;
 }
 
 export interface RpcWebSocketAdmissionSuccess {
@@ -115,6 +117,9 @@ export async function requestRpcWebSocketAdmission(
           ? { [RPC_CLIENT_LABEL_HEADER]: encodeRpcClientLabelHeader(clientLabel) }
           : {}),
         ...(request.clientPlatform ? { [RPC_CLIENT_PLATFORM_HEADER]: request.clientPlatform } : {}),
+        ...(request.oauthCallbackMode
+          ? { [RPC_OAUTH_CALLBACK_MODE_HEADER]: request.oauthCallbackMode }
+          : {}),
       },
     });
   } catch (error) {

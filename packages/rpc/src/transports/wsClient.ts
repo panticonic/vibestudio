@@ -466,6 +466,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       clientLabel: requestedClientLabel,
       clientSessionId,
       clientPlatform,
+      oauthCallbackMode,
     } = requestedAuthFields;
     const clientLabel = normalizeRpcClientLabel(requestedClientLabel);
     const effectiveConnectionId =
@@ -476,6 +477,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       ...(clientLabel === undefined ? {} : { clientLabel }),
       ...(clientSessionId === undefined ? {} : { clientSessionId }),
       ...(clientPlatform === undefined ? {} : { clientPlatform }),
+      ...(oauthCallbackMode === undefined ? {} : { oauthCallbackMode }),
       connectionId: effectiveConnectionId,
     };
     admissionAbortController?.abort();
@@ -489,6 +491,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
           credential: token,
           ...(authFields?.clientLabel ? { clientLabel: authFields.clientLabel } : {}),
           ...(authFields?.clientPlatform ? { clientPlatform: authFields.clientPlatform } : {}),
+          ...(authFields?.oauthCallbackMode
+            ? { oauthCallbackMode: authFields.oauthCallbackMode }
+            : {}),
         },
         { signal: attemptAdmissionController.signal }
       );

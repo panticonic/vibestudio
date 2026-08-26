@@ -72,13 +72,15 @@ function verifiedTestCaller(
 
 function authorizingShellLookup(
   connectionId = "owner-conn",
-  clientPlatform?: "desktop" | "headless" | "mobile"
+  clientPlatform?: "desktop" | "headless" | "mobile",
+  oauthCallbackMode?: "client-loopback" | "app-scheme"
 ) {
   return {
     getAuthorizingShell: vi.fn(() => ({
       caller: { runtime: { id: "shell:owner", kind: "shell" } },
       connectionId,
       clientPlatform,
+      oauthCallbackMode,
     })),
   };
 }
@@ -247,7 +249,9 @@ function jwtWithPayload(payload: Record<string, unknown>): string {
   );
 }
 
-function approvingQueue(decision: "once" | "session" | "version" | "deny" = "version") {
+function approvingQueue(
+  decision: "once" | "session" | "agent" | "version" | "deny" = "version"
+) {
   return {
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
@@ -785,6 +789,44 @@ describe("credentialService", () => {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
         callerKind: "do",
         repoPath: "/owner",
+      })
+    );
+  });
+
+  it("attributes credential consent to a verified agent binding outside model execution", async () => {
+    const approvalQueue = approvingQueue("agent");
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      approvalQueue: approvalQueue as never,
+    });
+    const caller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:agent-1",
+      "do",
+      {
+        callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "agent-version-1",
+      },
+      {
+        entityId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        contextId: "context-1",
+        channelId: "channel-1",
+      }
+    );
+
+    await service.handler({ caller }, "storeCredential", [
+      {
+        label: "Agent model credential",
+        audience: [{ url: "https://api.example.test/", match: "origin" }],
+        injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+        material: { type: "bearer-token", token: "secret-token" },
+      },
+    ]);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["once", "session", "agent", "deny"],
       })
     );
   });
@@ -1336,15 +1378,14 @@ describe("credentialService", () => {
     );
   });
 
-  it("keeps mobile default OAuth on the hosted relay", async () => {
-    delete process.env["VIBESTUDIO_RELAY_URL"];
+  it("selects an app-scheme callback advertised by the authenticated browser owner", async () => {
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
     const register = vi.fn();
     const service = createCredentialService({
       credentialStore: store as never,
       eventService: targetedOpenEventService(emit) as never,
-      connectionLookup: authorizingShellLookup("mobile-owner", "mobile"),
+      connectionLookup: authorizingShellLookup("mobile-owner", "mobile", "app-scheme"),
       approvalQueue: approvingQueue("version") as never,
       relayOAuthRegistrar: { register },
     });
@@ -1363,26 +1404,30 @@ describe("credentialService", () => {
           scopes: ["read"],
         },
         credential: {
-          label: "Relay OAuth",
+          label: "Mobile OAuth",
           audience: [{ url: "https://api.example.test/v1", match: "path-prefix" }],
           injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
           accountIdentity: { email: "dev@example.test" },
+          metadata: { modelProviderId: "openai-codex" },
         },
       },
       { preserveDefaultRedirect: true }
     );
-    const redirect = new URL(started.redirectUri);
-    const transactionId = redirect.pathname.split("/").at(-1)!;
-
-    expect(redirect.origin).toBe("https://vibestudio.app");
-    expect(redirect.pathname).toBe(`/oauth/callback/${transactionId}`);
-    expect(register).toHaveBeenCalledWith(transactionId, "desktop");
-
-    await service.resolveRelayOAuthCallback({
-      transactionId,
-      state: started.state,
-      error: "access_denied",
-    });
+    expect(started.redirectUri).toBe("vibestudio://oauth/callback/openai-codex");
+    expect(register).not.toHaveBeenCalled();
+    const payload = emit.mock.calls.at(-1)?.[1] as {
+      oauthAppScheme: { transactionId: string };
+    };
+    await service.handler(
+      { caller: verifiedTestCaller("shell:owner", "shell") },
+      "forwardOAuthCallback",
+      [
+        {
+          transactionId: payload.oauthAppScheme.transactionId,
+          url: `vibestudio://oauth/callback/openai-codex?error=access_denied&state=${started.state}`,
+        },
+      ]
+    );
     await expect(started.pending).rejects.toMatchObject({
       code: "approval_denied",
       message: expect.stringMatching(/access_denied/i),
@@ -1648,6 +1693,7 @@ describe("credentialService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         credentialLabel: "Example OAuth",
+        allowedDecisions: ["session", "version", "deny"],
         oauthAuthorizeOrigin: "https://auth.example.test",
         oauthTokenOrigin: "https://auth.example.test",
       })
@@ -1774,14 +1820,28 @@ describe("credentialService", () => {
     );
   });
 
-  it("credentials.connect can open OAuth externally for a worker-requested panel handoff", async () => {
+  it("agent-owned connect preapproves use and opens OAuth through its panel handoff", async () => {
+    const store = new MemoryCredentialStore();
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
+    const approvalQueue = approvingQueue("agent");
+    const agentId = "do:workers/agent-worker:AiChatWorker:agent-1";
+    const caller = createVerifiedCaller(
+      agentId,
+      "do",
+      {
+        callerId: agentId,
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "agent-version-1",
+      },
+      { entityId: agentId, contextId: "context-1", channelId: "channel-1" }
+    );
     const service = createCredentialService({
-      credentialStore: new MemoryCredentialStore() as never,
+      credentialStore: store as never,
       eventService: eventService as never,
       connectionLookup: authorizingShellLookup("owner-conn"),
-      approvalQueue: approvingQueue() as never,
+      approvalQueue: approvalQueue as never,
     });
     vi.stubGlobal(
       "fetch",
@@ -1798,7 +1858,7 @@ describe("credentialService", () => {
     );
 
     const pending = service.handler(
-      { caller: verifiedTestCaller("worker:test", "worker") },
+      { caller },
       "connect",
       [
         {
@@ -1831,8 +1891,8 @@ describe("credentialService", () => {
         "owner-conn",
         "external-open:open",
         expect.objectContaining({
-          callerId: "worker:test",
-          callerKind: "worker",
+          callerId: agentId,
+          callerKind: "do",
         })
       )
     );
@@ -1844,7 +1904,20 @@ describe("credentialService", () => {
         state: authorizeUrl.searchParams.get("state")!,
       })
     );
-    await pending;
+    const completed = await pending;
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callerId: agentId,
+        allowedDecisions: ["session", "agent", "deny"],
+      })
+    );
+    expect((await store.loadUrlBound(completed.id))?.grants).toContainEqual(
+      expect.objectContaining({
+        scope: "agent",
+        agentId,
+        action: "use",
+      })
+    );
   });
 
   it("credentials.connect infers the owning panel handoff for direct DO OAuth connects", async () => {
@@ -2365,7 +2438,7 @@ describe("credentialService", () => {
     await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
   });
 
-  it("supports authenticated client-loopback callbacks from the browser handoff shell", async () => {
+  it("selects the authenticated client's loopback callback capability", async () => {
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
@@ -2378,7 +2451,7 @@ describe("credentialService", () => {
     const service = createCredentialService({
       credentialStore: store as never,
       eventService: eventService as never,
-      connectionLookup: authorizingShellLookup(),
+      connectionLookup: authorizingShellLookup("owner-conn", "mobile", "client-loopback"),
       approvalQueue: approvingQueue() as never,
       runtimeInspector: {
         listActiveEntities: vi.fn(() => []),
@@ -2419,7 +2492,6 @@ describe("credentialService", () => {
               injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
             },
             redirect: {
-              type: "client-loopback",
               host: "localhost",
               port: 1455,
               callbackPath: "/auth/callback",
@@ -2588,13 +2660,13 @@ describe("credentialService", () => {
     await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
   });
 
-  it("defaults desktop-owned external OAuth to a dynamic native loopback", async () => {
+  it("honors a desktop client's advertised dynamic loopback callback", async () => {
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
       eventService: eventService as never,
-      connectionLookup: authorizingShellLookup("owner-conn", "desktop"),
+      connectionLookup: authorizingShellLookup("owner-conn", "desktop", "client-loopback"),
       approvalQueue: approvingQueue() as never,
     });
     const actualRedirectUri = "http://127.0.0.1:43123/";

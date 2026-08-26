@@ -17,6 +17,7 @@ import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type {
   ClientPlatform,
   DeviceCredential,
+  OAuthCallbackMode,
   PairingContext,
 } from "@vibestudio/rpc/protocol/wsProtocol";
 import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/sessionNegotiation";
@@ -179,6 +180,7 @@ export interface ServerClientOptions {
   /** Host metadata bound into both WebSocket admission and session auth. */
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
+  oauthCallbackMode?: OAuthCallbackMode;
   /**
    * Dynamic WebSocket URL provider, consulted before each connect/reconnect.
    * Used by local mode to follow the child server's port across restarts; when
@@ -223,6 +225,7 @@ export async function createServerClient(
     getAuthMessageFields: () => ({
       ...(options?.clientLabel ? { clientLabel: options.clientLabel } : {}),
       ...(options?.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),
+      ...(options?.oauthCallbackMode ? { oauthCallbackMode: options.oauthCallbackMode } : {}),
     }),
     onRecovery: options?.onRecovery,
     onAuthResult: (msg) => {

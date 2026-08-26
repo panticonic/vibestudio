@@ -1132,11 +1132,12 @@ export const credentialsMethods = defineServiceMethods({
   connect: {
     capability: "accounts.connect",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.create",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The method only requests a host-owned protected connection flow; credential storage and initial use remain gated by the exact host approval",
     },
     presentation: {
       title: "Connect an account",

@@ -19,6 +19,7 @@ import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthPro
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import {
   RPC_CLIENT_LABEL_HEADER,
+  RPC_OAUTH_CALLBACK_MODE_HEADER,
   RPC_CLIENT_PLATFORM_HEADER,
   type RpcWebSocketAdmissionResponse,
 } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
@@ -280,7 +281,11 @@ async function postRpc(
 async function postWsAdmission(
   port: number,
   credential: string,
-  metadata?: { clientLabel?: string; clientPlatform?: "desktop" | "headless" | "mobile" }
+  metadata?: {
+    clientLabel?: string;
+    clientPlatform?: "desktop" | "headless" | "mobile";
+    oauthCallbackMode?: "client-loopback" | "app-scheme";
+  }
 ): Promise<{ status: number; body: RpcWebSocketAdmissionResponse }> {
   const response = await fetch(`http://127.0.0.1:${port}/rpc/ws-admission`, {
     method: "POST",
@@ -291,6 +296,9 @@ async function postWsAdmission(
         : {}),
       ...(metadata?.clientPlatform
         ? { [RPC_CLIENT_PLATFORM_HEADER]: metadata.clientPlatform }
+        : {}),
+      ...(metadata?.oauthCallbackMode
+        ? { [RPC_OAUTH_CALLBACK_MODE_HEADER]: metadata.oauthCallbackMode }
         : {}),
     },
   });
@@ -839,7 +847,10 @@ describe("RpcServer HTTP POST /rpc", () => {
       const redeemPairingCredential = vi.fn(
         async (
           token: string,
-          _ctx: { clientLabel?: string; clientPlatform?: "desktop" | "headless" | "mobile" }
+          _ctx: {
+            clientLabel?: string;
+            clientPlatform?: "desktop" | "headless" | "mobile";
+          }
         ) =>
           token === "PAIR-CODE-ONCE"
             ? {
@@ -866,6 +877,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const result = await postWsAdmission(port, "PAIR-CODE-ONCE", {
         clientLabel: "München phone",
         clientPlatform: "mobile",
+        oauthCallbackMode: "app-scheme",
       });
 
       expect(result.status).toBe(201);
@@ -878,6 +890,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const retried = await postWsAdmission(port, "PAIR-CODE-ONCE", {
         clientLabel: "München phone",
         clientPlatform: "mobile",
+        oauthCallbackMode: "app-scheme",
       });
       expect(retried.body.ok).toBe(true);
       if (!retried.body.ok) throw new Error(retried.body.message);
@@ -918,6 +931,7 @@ describe("RpcServer HTTP POST /rpc", () => {
                 token: retriedGrant,
                 clientLabel: "München phone",
                 clientPlatform: "mobile",
+                oauthCallbackMode: "app-scheme",
               })
             );
           });
@@ -941,6 +955,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const afterAuthResultLoss = await postWsAdmission(port, "PAIR-CODE-ONCE", {
         clientLabel: "München phone",
         clientPlatform: "mobile",
+        oauthCallbackMode: "app-scheme",
       });
       expect(afterAuthResultLoss.body.ok).toBe(true);
       expect(redeemPairingCredential).toHaveBeenCalledTimes(1);
@@ -1016,11 +1031,12 @@ describe("RpcServer HTTP POST /rpc", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("rejects first-frame metadata that disagrees with the admission headers", async () => {
+    it("binds the OAuth callback capability into the admission grant", async () => {
       const token = setup.tokenManager.ensureToken("worker:metadata-binding", "worker");
       const admission = await postWsAdmission(port, token, {
         clientLabel: "Expected",
         clientPlatform: "desktop",
+        oauthCallbackMode: "client-loopback",
       });
       expect(admission.body.ok).toBe(true);
       if (!admission.body.ok) throw new Error(admission.body.message);
@@ -1039,8 +1055,9 @@ describe("RpcServer HTTP POST /rpc", () => {
                 type: "ws:auth",
                 contractVersion: RPC_CONTRACT_VERSION,
                 token: admissionGrant,
-                clientLabel: "Different",
+                clientLabel: "Expected",
                 clientPlatform: "desktop",
+                oauthCallbackMode: "app-scheme",
               })
             );
           });

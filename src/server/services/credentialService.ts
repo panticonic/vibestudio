@@ -62,6 +62,7 @@ import {
 } from "@vibestudio/service-schemas/credentials";
 import type { EgressProxy } from "./egressProxy.js";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
+import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
 import { CredentialLifecycle } from "./credentialLifecycle.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import {
@@ -139,6 +140,7 @@ export interface CredentialServiceDeps {
       caller: { runtime: { id: string; kind: string } };
       connectionId: string;
       clientPlatform?: "desktop" | "headless" | "mobile";
+      oauthCallbackMode?: OAuthCallbackMode;
     } | null;
   };
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
@@ -962,9 +964,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const identity = ctx.caller.code;
     const entity = identity ? null : resolveRuntimeEntityForApproval(ctx.caller.runtime.id);
     const agentId =
-      ctx.caller.executionSession !== undefined
-        ? (identity?.evalOrigin?.ownerId ?? ctx.caller.agentBinding?.entityId)
-        : undefined;
+      ctx.caller.agentBinding?.entityId ??
+      (ctx.caller.executionSession !== undefined ? identity?.evalOrigin?.ownerId : undefined);
     return {
       callerId: identity?.callerId ?? entity?.id ?? ctx.caller.runtime.id,
       repoPath: identity?.repoPath ?? entity?.source.repoPath ?? ctx.caller.runtime.id,
@@ -996,6 +997,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       identity: { repoPath: string; effectiveVersion: string };
       metadata?: Record<string, string>;
       replacementCredentialLabel?: string;
+      preapprovesUse?: boolean;
       signal?: AbortSignal;
     }
   ): Promise<Exclude<GrantedDecision, "deny">> {
@@ -1011,6 +1013,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
     const approvalIdentity = resolveApprovalIdentity(ctx);
     const requesterUserId = verifiedInitiatingUserId(ctx);
+    const decisionOptions = { preapprovesUse: params.preapprovesUse };
     const decision = await approvalQueue.request({
       ...(params.signal ? { signal: params.signal } : {}),
       callerId: ctx.caller.runtime.id,
@@ -1018,7 +1021,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: params.identity.repoPath,
       effectiveVersion: params.identity.effectiveVersion,
-      allowedDecisions: credentialApprovalDecisions(approvalIdentity),
+      allowedDecisions: credentialApprovalDecisions(approvalIdentity, decisionOptions),
       credentialId: params.credentialId,
       credentialLabel: params.credentialLabel,
       audience: params.audience ?? [],
@@ -1037,6 +1040,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (decision === "deny" || decision === "dismiss") {
       throw new Error("Credential approval denied");
     }
+    assertCredentialApprovalDecision(approvalIdentity, decision, decisionOptions);
     return decision;
   }
 
@@ -1330,7 +1334,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   ): Promise<void> {
     const identity = resolveApprovalIdentity(ctx);
     const usageContexts = bindings.flatMap(preapprovedUseContextsForBinding);
-    if (decision === "once" || decision === "session") {
+    if (decision === "once") {
+      throw new Error("A connection approval that preapproves later use cannot be allow-once");
+    }
+    if (decision === "session") {
       for (const usage of usageContexts) {
         grantSessionCredentialUse(credential.id, identity, usage.sessionResource);
       }

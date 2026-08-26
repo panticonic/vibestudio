@@ -31,6 +31,7 @@ import type { AuthenticatedCaller, CallerKind, RpcEnvelope, RpcErrorKind } from 
 import type {
   ClientPlatform,
   DeviceCredential,
+  OAuthCallbackMode,
   PairingContext,
   RpcAuthenticationFailureCode,
 } from "./wsProtocol.js";
@@ -90,6 +91,7 @@ export interface SessionOpenFrame {
   clientSessionId?: string;
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
+  oauthCallbackMode?: OAuthCallbackMode;
 }
 
 /** Result of a session open — the per-session analog of `ws:auth-result`. */

@@ -21,9 +21,8 @@ export interface ProviderConnectPreset {
   flow: CredentialFlowSpec;
   /** How the stored credential injects auth into model API requests. */
   injection: CredentialInjection;
-  /** OAuth-only: redirect strategies + policy (agent selects at connect time). */
+  /** OAuth-only: in-process redirect used by the workspace browser. */
   redirect?: OAuthLoopbackRedirectStrategy;
-  clientLoopbackRedirect?: OAuthLoopbackRedirectStrategy;
   redirectPolicy?: "loopback-required";
   /** OAuth-only: JWT account-identity claim extraction (e.g. openai-codex). */
   accountIdentityJwtClaimRoot?: string;
@@ -72,12 +71,6 @@ export const PROVIDER_CONNECT_PRESETS: Record<string, ProviderConnectPreset> = {
     accountIdentityJwtClaimField: "chatgpt_account_id",
     redirectPolicy: "loopback-required",
     redirect: { type: "loopback", host: "localhost", port: 1455, callbackPath: "/auth/callback" },
-    clientLoopbackRedirect: {
-      type: "client-loopback",
-      host: "localhost",
-      port: 1455,
-      callbackPath: "/auth/callback",
-    },
     flow: {
       type: "oauth2-auth-code-pkce",
       authorizeUrl: "https://auth.openai.com/oauth/authorize",
@@ -219,12 +212,20 @@ export function toCredentialConnectRequest(
   const preset = getProviderConnectPreset(providerId);
   if (!preset) return null;
   const browser = opts?.browser ?? "internal";
-  // OAuth loopback flows: an external/system browser needs the client-loopback
-  // redirect; the internal browser uses the in-process loopback redirect.
+  // The workspace browser uses the server's in-process callback. For a system
+  // browser, omit the strategy: the host selects the callback advertised by
+  // the authenticated delivery client. Platform identity is intentionally not
+  // part of this decision.
   const redirect =
-    browser === "external" && preset.clientLoopbackRedirect
-      ? preset.clientLoopbackRedirect
-      : preset.redirect;
+    browser === "internal"
+      ? preset.redirect
+      : preset.redirect
+        ? {
+            host: preset.redirect.host,
+            port: preset.redirect.port,
+            callbackPath: preset.redirect.callbackPath,
+          }
+        : undefined;
   return {
     flow: preset.flow,
     credential: {
@@ -236,20 +237,6 @@ export function toCredentialConnectRequest(
     ...(redirect ? { redirect } : {}),
     browser,
   };
-}
-
-/** Build the panel-facing request from the same canonical provider policy. */
-export function toPanelConnectRequest(
-  providerId: string,
-  opts?: { browser?: "internal" | "external" }
-): ConnectCredentialRequest | null {
-  return toCredentialConnectRequest(providerId, {
-    ...opts,
-    // A panel's primary OAuth path is the system browser. Internal/workspace
-    // browsing remains an explicit user choice because it creates another
-    // workspace panel and uses that panel's isolated browser session.
-    browser: opts?.browser ?? "external",
-  });
 }
 
 /**
@@ -267,9 +254,6 @@ export function toAgentCredentialSetup(providerId: string): Record<string, unkno
       injection: preset.injection,
     },
     ...(preset.redirect ? { redirect: preset.redirect } : {}),
-    ...(preset.clientLoopbackRedirect
-      ? { clientLoopbackRedirect: preset.clientLoopbackRedirect }
-      : {}),
     ...(preset.redirectPolicy ? { redirectPolicy: preset.redirectPolicy } : {}),
     ...(preset.accountIdentityJwtClaimRoot
       ? { accountIdentityJwtClaimRoot: preset.accountIdentityJwtClaimRoot }

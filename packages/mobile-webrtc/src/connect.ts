@@ -23,6 +23,7 @@ import type { RpcClient } from "@vibestudio/rpc";
 import type { WebRtcTransport, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import {
   createPairedConnection,
+  type OAuthCallbackMode,
   type PairingContext,
 } from "@vibestudio/rpc/transports/pairedConnection";
 import { DEFAULT_CHUNK_SIZE } from "@vibestudio/rpc/transports/webrtcPeer";
@@ -255,6 +256,7 @@ function registerReconnectTriggers(transport: WebRtcTransport): () => void {
 export async function establishWebRtcConnection(
   pairing: StoredShellPairing,
   tokenProvider: ShellTokenProvider,
+  oauthCallbackMode: OAuthCallbackMode,
   handlers: WebRtcConnectionHandlers = {}
 ): Promise<WebRtcConnection> {
   const connectionId = randomRequestId("mobile-shell");
@@ -272,6 +274,7 @@ export async function establishWebRtcConnection(
     connectionId,
     clientLabel: "Mobile device",
     clientPlatform: "mobile",
+    oauthCallbackMode,
     platform: "mobile",
     chunkSize: DEFAULT_CHUNK_SIZE,
     logPrefix: "[mobile-rtc]",
@@ -321,6 +324,7 @@ export async function establishWebRtcConnection(
 /** Returning device: reconnect with the stored refresh secret over the same room. */
 export async function reconnectViaWebRtc(
   stored: StoredMobileConnection,
+  oauthCallbackMode: OAuthCallbackMode,
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>,
   reach: "workspace" | "control" = "workspace",
   onCredentialStored?: (stored: StoredMobileConnection) => void
@@ -338,7 +342,7 @@ export async function reconnectViaWebRtc(
   const initialCredential = stored.credential;
   const tokenProvider = makeReturningShellTokenProvider(initialCredential);
   const persistFailure: { current: Error | null } = { current: null };
-  const connection = await establishWebRtcConnection(pairing, tokenProvider, {
+  const connection = await establishWebRtcConnection(pairing, tokenProvider, oauthCallbackMode, {
     onPaired: async (credential) => {
       // The server may rotate the refresh secret on reconnect; persist the latest.
       // RETURNED (not void'd) so the shared bootstrap AWAITS it with retry — a
@@ -371,12 +375,14 @@ export async function reconnectViaWebRtc(
  */
 export async function reconnectMobileSession(
   stored: StoredMobileConnection,
+  oauthCallbackMode: OAuthCallbackMode,
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
 ): Promise<WebRtcConnection> {
   return resumeMobileConnection(stored, {
     connect: (current, reach, onCredentialStored) =>
       reconnectViaWebRtc(
         current,
+        oauthCallbackMode,
         reach === "workspace" ? onRecovery : undefined,
         reach,
         onCredentialStored
