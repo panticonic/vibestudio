@@ -2223,6 +2223,16 @@ export function buildWorkspaceChildEnv(input: {
   return env;
 }
 
+/** Keep the runtime selector local to historical launch sets. */
+export function applyWorkspaceHostRuntimeEnv(
+  env: NodeJS.ProcessEnv,
+  launchSet: Pick<WorkspaceHostLaunchSet, "historical" | "runtimeMode">
+): void {
+  if (!launchSet.historical) return;
+  if (launchSet.runtimeMode === "electron-node") env["ELECTRON_RUN_AS_NODE"] = "1";
+  else delete env["ELECTRON_RUN_AS_NODE"];
+}
+
 /** Rotate the ephemeral dev checkout at the point a replacement runtime is
  * actually started. A crashed child's disk stays available until then so its
  * durable test trajectories and logs remain inspectable; normal hub shutdown
@@ -2354,6 +2364,7 @@ async function startWorkspaceRuntime(
           serverEntry: process.argv.slice(1, 2)[0] ?? "",
           appRoot: state.appRoot,
           historical: false,
+          runtimeMode: "node",
         }
       : resolveHistoricalWorkspaceHost(
           path.join(getCentralDataPath(), "host-versions"),
@@ -2387,6 +2398,7 @@ async function startWorkspaceRuntime(
     ephemeral: isEphemeralDevWorkspace === true,
     creationIntent,
   });
+  applyWorkspaceHostRuntimeEnv(childEnv, launchSet);
   const runtimeToken = childEnv["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"];
   if (!runtimeToken) throw new Error("Workspace child environment has no runtime identity token");
   state.workspaceChildTokens.set(runtimeToken, workspaceId);

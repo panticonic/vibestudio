@@ -25,10 +25,11 @@ describe("historical workspace host", () => {
     fs.writeFileSync(
       path.join(root, "workspace-host.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         systemEpoch: 2,
         appVersion: "2.3.4",
         executable: "runtime/node",
+        runtimeMode: "node",
         serverEntry: "runtime/server.mjs",
         appRoot: "runtime",
       })

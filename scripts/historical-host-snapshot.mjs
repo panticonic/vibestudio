@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
 
@@ -26,6 +27,10 @@ export function defaultCentralDataPath(env = process.env, platform = process.pla
   return path.join(env["XDG_CONFIG_HOME"] ?? path.join(home, ".config"), "vibestudio");
 }
 
+export function artifactRootFromModuleUrl(moduleUrl = import.meta.url) {
+  return path.resolve(fileURLToPath(new URL("..", moduleUrl)));
+}
+
 function relativeInside(root, target, label) {
   const relative = path.relative(root, target);
   if (!relative || relative === ".") return ".";
@@ -35,11 +40,45 @@ function relativeInside(root, target, label) {
   return relative;
 }
 
+function pathIsInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function validateContainedSymlinks(source, excludedRoots) {
+  const pending = [source];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      const resolved = path.resolve(entryPath);
+      if (
+        excludedRoots.some(
+          (excluded) => resolved === excluded || resolved.startsWith(`${excluded}${path.sep}`)
+        )
+      ) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      const target = fs.realpathSync(entryPath);
+      if (!pathIsInside(source, target)) {
+        throw new Error(`Retained host symlink escapes its artifact root: ${entryPath}`);
+      }
+    }
+  }
+}
+
 function copyArtifactTree(source, destination, excludedRoots) {
+  validateContainedSymlinks(source, excludedRoots);
   fs.cpSync(source, destination, {
     recursive: true,
-    dereference: true,
+    dereference: false,
     preserveTimestamps: true,
+    verbatimSymlinks: true,
     filter: (entry) => {
       const resolved = path.resolve(entry);
       if (
@@ -56,6 +95,42 @@ function copyArtifactTree(source, destination, excludedRoots) {
   });
 }
 
+function bundledElectronExecutable(artifactRoot, platform) {
+  if (platform !== "darwin") return null;
+  const electronRoot = path.join(artifactRoot, "node_modules", "electron");
+  const pathFile = path.join(electronRoot, "path.txt");
+  if (!fs.existsSync(pathFile)) return null;
+  const relative = fs.readFileSync(pathFile, "utf8").trim();
+  if (!relative) throw new Error(`Bundled Electron path is empty: ${pathFile}`);
+  const executable = path.resolve(electronRoot, "dist", relative);
+  if (!pathIsInside(path.join(electronRoot, "dist"), executable) || !fs.existsSync(executable)) {
+    throw new Error(`Bundled Electron executable is invalid: ${relative}`);
+  }
+  return fs.realpathSync(executable);
+}
+
+function enclosingMacApp(executable) {
+  for (let cursor = executable; path.dirname(cursor) !== cursor; cursor = path.dirname(cursor)) {
+    if (cursor.endsWith(".app")) return cursor;
+  }
+  return null;
+}
+
+function verifyRetainedRuntime(executable, runtimeMode) {
+  const result = spawnSync(executable, ["--version"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...(runtimeMode === "electron-node" ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    },
+    timeout: 30_000,
+  });
+  if (result.error || result.status !== 0 || result.signal) {
+    const detail = result.error?.message ?? result.stderr?.trim() ?? `status ${result.status}`;
+    throw new Error(`Retained host runtime is not executable: ${detail}`);
+  }
+}
+
 /**
  * Publish one deliberately simple, self-contained historical launch set.
  * The application tree and runtime executable are copied; retained markers
@@ -65,6 +140,7 @@ export function publishHistoricalHostSnapshot(input) {
   const artifactRoot = fs.realpathSync(input.artifactRoot);
   const appRoot = fs.realpathSync(input.appRoot);
   const serverEntry = fs.realpathSync(input.serverEntry);
+  const platform = input.platform ?? process.platform;
   const executable = fs.realpathSync(input.executable);
   const systemEpoch = semverMajor(input.appVersion);
   relativeInside(artifactRoot, appRoot, "Application root");
@@ -78,17 +154,43 @@ export function publishHistoricalHostSnapshot(input) {
   try {
     const retainedApp = path.join(staging, "app");
     copyArtifactTree(artifactRoot, retainedApp, [path.resolve(input.centralDataPath), staging]);
-    const executableName = process.platform === "win32" ? "host.exe" : "host";
-    const retainedExecutable = path.join(staging, "runtime", executableName);
-    fs.mkdirSync(path.dirname(retainedExecutable), { recursive: true });
-    fs.copyFileSync(executable, retainedExecutable);
-    fs.chmodSync(retainedExecutable, 0o500);
+    const electronExecutable = bundledElectronExecutable(artifactRoot, platform);
+    let retainedExecutable;
+    let runtimeMode = "node";
+    if (electronExecutable) {
+      retainedExecutable = path.join(
+        retainedApp,
+        relativeInside(artifactRoot, electronExecutable, "Bundled Electron executable")
+      );
+      runtimeMode = "electron-node";
+    } else if (platform === "darwin") {
+      const sourceBundle = enclosingMacApp(executable);
+      if (!sourceBundle) {
+        throw new Error(
+          "A macOS historical host requires the bundled Electron runtime or a complete .app runtime bundle"
+        );
+      }
+      const retainedBundle = path.join(staging, "runtime", path.basename(sourceBundle));
+      copyArtifactTree(sourceBundle, retainedBundle, []);
+      retainedExecutable = path.join(
+        retainedBundle,
+        relativeInside(sourceBundle, executable, "macOS runtime executable")
+      );
+      runtimeMode = "electron-node";
+    } else {
+      const executableName = platform === "win32" ? "host.exe" : "host";
+      retainedExecutable = path.join(staging, "runtime", executableName);
+      fs.mkdirSync(path.dirname(retainedExecutable), { recursive: true });
+      fs.copyFileSync(executable, retainedExecutable);
+      fs.chmodSync(retainedExecutable, 0o500);
+    }
 
     const marker = {
-      version: 1,
+      version: 2,
       systemEpoch,
       appVersion: input.appVersion,
       executable: path.relative(staging, retainedExecutable),
+      runtimeMode,
       serverEntry: path.join("app", relativeInside(artifactRoot, serverEntry, "Server entry")),
       appRoot: path.join("app", relativeInside(artifactRoot, appRoot, "Application root")),
     };
@@ -97,6 +199,7 @@ export function publishHistoricalHostSnapshot(input) {
         throw new Error(`Retained host is incomplete: ${relative}`);
       }
     }
+    verifyRetainedRuntime(retainedExecutable, runtimeMode);
     fs.writeFileSync(
       path.join(staging, HISTORICAL_HOST_MARKER),
       `${JSON.stringify(marker, null, 2)}\n`,
@@ -137,9 +240,7 @@ function parseCli(argv) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const options = parseCli(process.argv.slice(2));
-  const repositoryRoot = path.resolve(
-    options["artifact-root"] ?? new URL("..", import.meta.url).pathname
-  );
+  const repositoryRoot = path.resolve(options["artifact-root"] ?? artifactRootFromModuleUrl());
   const manifest = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
   const result = publishHistoricalHostSnapshot({
     centralDataPath: path.resolve(options["central-data"] ?? defaultCentralDataPath()),

@@ -16,6 +16,7 @@ import { MembershipStore } from "@vibestudio/identity/membership";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { DeviceAuthStore } from "./hostCore/deviceAuthStore.js";
 import {
+  applyWorkspaceHostRuntimeEnv,
   buildHubReadyPayload,
   buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
@@ -649,6 +650,26 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     });
 
     expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
+  });
+});
+
+describe("historical workspace runtime environment", () => {
+  it("opts a retained Electron executable into Node mode", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyWorkspaceHostRuntimeEnv(env, { historical: true, runtimeMode: "electron-node" });
+    expect(env["ELECTRON_RUN_AS_NODE"]).toBe("1");
+  });
+
+  it("does not leak Electron's Node mode into a retained Node executable", () => {
+    const env: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "1" };
+    applyWorkspaceHostRuntimeEnv(env, { historical: true, runtimeMode: "node" });
+    expect(env["ELECTRON_RUN_AS_NODE"]).toBeUndefined();
+  });
+
+  it("leaves the current host environment unchanged", () => {
+    const env: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "caller-owned" };
+    applyWorkspaceHostRuntimeEnv(env, { historical: false, runtimeMode: "node" });
+    expect(env["ELECTRON_RUN_AS_NODE"]).toBe("caller-owned");
   });
 });
 

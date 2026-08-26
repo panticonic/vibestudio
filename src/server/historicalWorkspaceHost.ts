@@ -8,10 +8,11 @@ export const WORKSPACE_EPOCH_HANDOFF_EXIT_CODE = 75;
 
 const HistoricalWorkspaceHostMarkerSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     systemEpoch: z.number().int().nonnegative(),
     appVersion: z.string().refine((value) => semver.valid(value) !== null),
     executable: z.string().min(1),
+    runtimeMode: z.enum(["node", "electron-node"]),
     serverEntry: z.string().min(1),
     appRoot: z.string().min(1),
   })
@@ -24,6 +25,7 @@ export interface WorkspaceHostLaunchSet {
   serverEntry: string;
   appRoot: string;
   historical: boolean;
+  runtimeMode: "node" | "electron-node";
 }
 
 export function semverMajor(version: string): number {
@@ -66,5 +68,6 @@ export function resolveHistoricalWorkspaceHost(
     serverEntry: resolveInside(root, marker.serverEntry, "server entry"),
     appRoot: resolveInside(root, marker.appRoot, "app root"),
     historical: true,
+    runtimeMode: marker.runtimeMode,
   };
 }

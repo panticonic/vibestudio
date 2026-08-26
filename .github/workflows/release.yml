@@ -182,10 +182,7 @@ jobs:
       - name: Generate DMG checksums
         run: |
           cd release
-          find . -maxdepth 1 -type f -name "*.dmg" -print0 \
-            | sort -z \
-            | xargs -0 shasum -a 256 \
-            > SHA256SUMS-macos
+          shasum -a 256 ./*.dmg > SHA256SUMS-macos
           test -s SHA256SUMS-macos
 
       - name: Upload immutable macOS release candidate
