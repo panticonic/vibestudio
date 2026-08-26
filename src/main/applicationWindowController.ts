@@ -51,6 +51,7 @@ export interface ApplicationWindowControllerDeps {
   startElectronHostTargetLaunchLoop: (serverClient: SessionConnection["serverClient"]) => void;
   drainPendingReadyElectronLaunch: () => Promise<void>;
   initializePanelTreeOnce: (reason: string) => void;
+  onHostedShellReady?: () => void;
   onWindowClosed: () => void;
 }
 
@@ -301,6 +302,9 @@ export class ApplicationWindowController {
     viewManager.onNativeSlotFocused((payload) => {
       this.deps.eventService.emit("native-slot-focused", payload);
     });
+    if (this.deps.onHostedShellReady) {
+      viewManager.onHostedShellReady(this.deps.onHostedShellReady);
+    }
     const appOrchestrator = new AppOrchestrator({
       getPanelView: () => lifetime.panelView,
       statePath: services.serverSession.statePath,

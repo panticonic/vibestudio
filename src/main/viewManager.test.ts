@@ -560,6 +560,27 @@ describe("ViewManager", () => {
       expect(overlayView.webContents.focus).not.toHaveBeenCalled();
     });
 
+    it("reports the user-visible handoff when the hosted shell becomes ready", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const ready = vi.fn();
+      vm.onHostedShellReady(ready);
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+
+      expect(ready).toHaveBeenCalledTimes(1);
+    });
+
     it("retries surface navigation after the hosted-shell URL becomes available", () => {
       const vm = new ViewManager({
         window: mockWindow,

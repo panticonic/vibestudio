@@ -431,6 +431,50 @@ type QuitIntent =
 let quitIntent: QuitIntent = { kind: "ordinary", serverDecision: null };
 let npmUpdateController: NpmUpdateController | null = null;
 let npmUpdateResultConsumed = false;
+let presentedStartupFinished = false;
+let deferredStartupWork: (() => void) | null = null;
+
+function finishPresentedStartup(): void {
+  if (presentedStartupFinished) return;
+  presentedStartupFinished = true;
+  performance.mark("startup:desktop-visible");
+
+  if (isDev()) {
+    performance.measure("startup:total", "startup:ready", "startup:desktop-visible");
+    performance.measure("startup:bootstrap-window", "startup:ready", "startup:window-created");
+    performance.measure(
+      "startup:server-spawn",
+      "startup:server-spawn-begin",
+      "startup:server-spawned"
+    );
+    performance.measure(
+      "startup:server-connect",
+      "startup:server-spawned",
+      "startup:server-connected"
+    );
+    performance.measure(
+      "startup:post-connect",
+      "startup:server-connected",
+      "startup:workspace-window-attached"
+    );
+    performance.measure(
+      "startup:desktop-mount",
+      "startup:workspace-window-attached",
+      "startup:desktop-visible"
+    );
+    const entries = performance
+      .getEntriesByType("measure")
+      .filter((entry) => entry.name.startsWith("startup:"));
+    for (const entry of entries) {
+      console.log(`[Perf] ${entry.name}: ${Math.round(entry.duration)}ms`);
+    }
+    if (process.env["VIBESTUDIO_DEV_RUNNER_IPC"] === "1" && process.send) {
+      process.send({ type: "vibestudio:dev-ready" });
+    }
+  }
+
+  deferredStartupWork?.();
+}
 
 function relaunchWithIntent(opts: RelaunchOptions = {}): void {
   quitIntent = { kind: "relaunch", exitCode: opts.exitCode ?? 0 };
@@ -464,6 +508,7 @@ const applicationWindow = new ApplicationWindowController({
   startElectronHostTargetLaunchLoop,
   drainPendingReadyElectronLaunch,
   initializePanelTreeOnce,
+  onHostedShellReady: finishPresentedStartup,
   onWindowClosed: () => {
     panelTreeInitializationPromise = null;
     clearPanelInitializationFailure();
@@ -1155,10 +1200,12 @@ async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<
     .catch(() => undefined)
     .then(async () => {
       if (appliedElectronHostTargetKey === launchKey) return true;
-      // The shell's first tree query is its durable startup snapshot. Seed the
-      // manifest roots before exposing the shell so startup never depends on
-      // observing an edge emitted between its first query and event watch.
-      await initializePanelTreeOnce("electron-host-ready", {
+      // Panel-tree preparation and shell navigation are independent. The shell
+      // reads the durable tree and subscribes to a replayable invalidation
+      // snapshot, so preparation may populate panels before or after that read
+      // without losing state. Do not hold the entire desktop behind worker or
+      // storage latency encountered while preparing panels.
+      const panelTreeInitialization = initializePanelTreeOnce("electron-host-ready", {
         callerId: event.appId,
         callerKind: "app",
       });
@@ -1166,6 +1213,7 @@ async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<
       await appOrchestrator.applyAppAvailable(event);
       appliedElectronHostTargetKey = launchKey;
       appliedElectronHostAppId = event.appId;
+      void panelTreeInitialization.catch(() => undefined);
       return true;
     });
   electronHostTargetApplications.set(launchKey, application);
@@ -2663,6 +2711,24 @@ app.on("ready", async () => {
     setMenuEventService(eventService);
 
     const adBlockManager = new AdBlockManager();
+    deferredStartupWork = () => {
+      npmUpdateController?.start();
+      if (!npmUpdateResultConsumed) {
+        npmUpdateResultConsumed = true;
+        consumeNpmUpdateResult(eventService);
+      }
+
+      // These are useful background services, but neither belongs on the path
+      // to the first usable workspace frame.
+      setTimeout(async () => {
+        try {
+          await adBlockManager.initialize();
+          console.log("[AdBlock] Initialized for active browser environments");
+        } catch (error) {
+          console.warn("[AdBlock] Failed to initialize (non-fatal):", error);
+        }
+      }, 100);
+    };
 
     // Autofill manager — password auto-fill for browser panels
     const { FormFillManager } = await import("./autofill/formFillManager.js");
@@ -3247,52 +3313,7 @@ app.on("ready", async () => {
     applicationWindow.create();
 
     performance.mark("startup:workspace-window-attached");
-    npmUpdateController?.start();
-    if (!npmUpdateResultConsumed) {
-      npmUpdateResultConsumed = true;
-      consumeNpmUpdateResult(eventService);
-    }
-
-    // Log startup timing in dev mode
-    if (isDev()) {
-      performance.measure("startup:total", "startup:ready", "startup:workspace-window-attached");
-      performance.measure("startup:bootstrap-window", "startup:ready", "startup:window-created");
-      performance.measure(
-        "startup:server-spawn",
-        "startup:server-spawn-begin",
-        "startup:server-spawned"
-      );
-      performance.measure(
-        "startup:server-connect",
-        "startup:server-spawned",
-        "startup:server-connected"
-      );
-      performance.measure(
-        "startup:post-connect",
-        "startup:server-connected",
-        "startup:workspace-window-attached"
-      );
-      const entries = performance
-        .getEntriesByType("measure")
-        .filter((e) => e.name.startsWith("startup:"));
-      for (const entry of entries) {
-        console.log(`[Perf] ${entry.name}: ${Math.round(entry.duration)}ms`);
-      }
-      if (process.env["VIBESTUDIO_DEV_RUNNER_IPC"] === "1" && process.send) {
-        process.send({ type: "vibestudio:dev-ready" });
-      }
-    }
-
-    // Defer ad-block initialization (non-critical, ~500-1000ms).
-    // The onBeforeRequest handler has a !this.engine fast path that passes requests through.
-    setTimeout(async () => {
-      try {
-        await adBlockManager.initialize();
-        console.log("[AdBlock] Initialized for active browser environments");
-      } catch (error) {
-        console.warn("[AdBlock] Failed to initialize (non-fatal):", error);
-      }
-    }, 100);
+    if (IS_HEADLESS_HOST) finishPresentedStartup();
   } catch (error) {
     console.error("[App] Startup failed:", error);
 

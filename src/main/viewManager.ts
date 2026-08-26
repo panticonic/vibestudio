@@ -330,6 +330,8 @@ export class ViewManager {
   private nativeSlotFocusedCallbacks: Array<
     (payload: { nativeSlotId: string; panelId: string }) => void
   > = [];
+  /** Callbacks invoked once the workspace shell has taken over from the launch gate. */
+  private hostedShellReadyCallbacks: Array<() => void> = [];
   private readonly compositorRecovery: CompositorRecovery;
 
   constructor(options: {
@@ -1200,6 +1202,7 @@ export class ViewManager {
       this.setViewVisible(ownerViewId, true);
       this.shellContentOverlay.prewarm("quickfire");
       this.reconcileNativeLayerOrder();
+      for (const callback of this.hostedShellReadyCallbacks) callback();
       return;
     }
 
@@ -1927,6 +1930,14 @@ export class ViewManager {
     return () => {
       const idx = this.nativeSlotFocusedCallbacks.indexOf(callback);
       if (idx !== -1) this.nativeSlotFocusedCallbacks.splice(idx, 1);
+    };
+  }
+
+  onHostedShellReady(callback: () => void): () => void {
+    this.hostedShellReadyCallbacks.push(callback);
+    return () => {
+      const index = this.hostedShellReadyCallbacks.indexOf(callback);
+      if (index !== -1) this.hostedShellReadyCallbacks.splice(index, 1);
     };
   }
 
@@ -2995,6 +3006,7 @@ export class ViewManager {
     this.viewOrderChangedCallbacks.length = 0;
     this.viewHiddenCallbacks.length = 0;
     this.nativeSlotFocusedCallbacks.length = 0;
+    this.hostedShellReadyCallbacks.length = 0;
     this.crashCallbacks.length = 0;
   }
 
