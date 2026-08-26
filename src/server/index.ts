@@ -17,7 +17,7 @@ import { resolveRequiredAppRoot } from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
-import { createHash, randomBytes, randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import {
   canonicalEntityId,
   type EntityActivationInput as EntityActivateInput,
@@ -42,6 +42,7 @@ import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { retireRoutedReach } from "./routedReachRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
+import { canonicalWorkspaceObjectContextId } from "./bootstrap/workspaceObjectIdentity.js";
 import type { PreparedCodeIncarnation, RuntimeEntityHooks } from "./services/runtimeService.js";
 import {
   releaseDurableObjectRelaySeal,
@@ -2616,29 +2617,6 @@ async function main() {
     },
   });
 
-  // Prepare a bounded post-ready build queue. The shell's New Panel launcher
-  // goes first; lower-priority eval libraries follow sequentially so they do
-  // not saturate the build lane during the first interactive panel open.
-  // cdp-client remains lazy because eval only needs it for explicit CDP work.
-  container.registerManaged({
-    name: "postReadyBuildWarmup",
-    dependencies: ["buildSystem"],
-    async start(resolve) {
-      const buildSystem = assertPresent(
-        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-      );
-      const { createPostReadyBuildWarmup } = await import("./services/postReadyBuildWarmup.js");
-      return createPostReadyBuildWarmup({
-        buildSystem,
-        evalEngineSource: workspaceConfig.providers?.evalEngine?.source,
-        evalRuntimeSource: workspaceConfig.providers?.evalRuntime?.source,
-      });
-    },
-    async stop(instance: import("./services/postReadyBuildWarmup.js").PostReadyBuildWarmup) {
-      await instance.stop();
-    },
-  });
-
   // ── RPC-only services (replacing serverServiceRegistry.ts) ──
 
   const { createBuildService } = await import("./services/buildService.js");
@@ -3803,21 +3781,6 @@ async function main() {
           doDispatch,
           workspaceId,
           presentationDispatch: dispatchPresentation,
-          getUnitDecoration: async (source, ref) => {
-            const { resolvePanelMetadata } = await import("./services/buildService.js");
-            const metadata = await resolvePanelMetadata(
-              assertPresent(buildSystemInstance),
-              source,
-              ref
-            );
-            return metadata
-              ? {
-                  icon: metadata.icon,
-                  iconVersion: metadata.iconVersion,
-                  iconState: metadata.iconState,
-                }
-              : undefined;
-          },
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
           ).createPanelAccessPermissionDeps({
@@ -5664,9 +5627,7 @@ async function main() {
     const contextId =
       ref.contextId ??
       existing?.contextId ??
-      createHash("sha256")
-        .update(`${workspaceId}\x00${source}\x00${className}\x00${objectKey}`)
-        .digest("hex");
+      canonicalWorkspaceObjectContextId(workspaceId, { source, className, key: objectKey });
     const prepared = await workerdManagerInst.ensureDurableObjectEntity({
       source,
       className,
@@ -5928,20 +5889,17 @@ async function main() {
       objectKey: semanticWorkspaceService.objectKey,
     },
     bootstrapStateHash: bootstrapSnapshot.stateHash,
-    publishBootstrapEntity: async (
-      _manager,
-      {
-        targetId,
-        source,
-        className,
-        objectKey,
-        effectiveVersion,
-        buildKey,
-        executionDigest,
-        authority,
-        contextId,
-      }
-    ) => {
+    publishWorkspaceSourceEntity: async ({
+      targetId,
+      source,
+      className,
+      objectKey,
+      effectiveVersion,
+      buildKey,
+      executionDigest,
+      authority,
+      contextId,
+    }) => {
       const store = ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
       );
@@ -6865,65 +6823,10 @@ async function main() {
     );
   }
 
-  // 4. Singleton reconciliation against vibestudio.yml.singletonObjects.
-  // Preparing an image may restart workerd, so all preparations complete
-  // before any activation request is admitted.
-  const { canonicalSingletonContextId, reconcileSingletons, singletonEntityActivationInput } =
-    await import("./bootstrap/singletonReconciliation.js");
-  const singletonPlans = workspaceDecls.singletons.all().map((decl) => ({
-    decl,
-    contextId: decl.contextId ?? canonicalSingletonContextId(workspaceId, decl),
-  }));
-  const singletonPreparationMs = new Map<string, number>();
-  const singletonActivationMs = new Map<string, number>();
-  const singletonLabel = ({ decl }: (typeof singletonPlans)[number]) =>
-    `${decl.source}:${decl.className}:${decl.key}`;
-  await reconcileSingletons({
-    items: singletonPlans,
-    prepare: async (plan) => {
-      const { decl, contextId } = plan;
-      const startedAt = Date.now();
-      try {
-        return await workerdManager.ensureDurableObjectEntity({
-          source: decl.source,
-          className: decl.className,
-          key: decl.key,
-          contextId,
-          ref: decl.contextId ? undefined : "main",
-        });
-      } finally {
-        singletonPreparationMs.set(singletonLabel(plan), Date.now() - startedAt);
-      }
-    },
-    activate: async ({ decl, contextId }, prepared) => {
-      const label = `${decl.source}:${decl.className}:${decl.key}`;
-      const startedAt = Date.now();
-      const activation = singletonEntityActivationInput(
-        {
-          source: decl.source,
-          className: decl.className,
-          key: decl.key,
-          contextId,
-        },
-        prepared,
-        SYSTEM_SUBJECT.userId
-      );
-      const store = getEntityStore();
-      try {
-        const existing = await store.resolveRecord(prepared.targetId);
-        return await (existing ? store.advanceExecution(activation) : store.activate(activation));
-      } finally {
-        singletonActivationMs.set(label, Date.now() - startedAt);
-      }
-    },
-    onActivated: () => undefined,
-  });
-  const singletonReconciliationCompletedAt = Date.now();
-
-  // The bootstrap build system compiled from the filesystem snapshot only to
-  // start the semantic source provider. After singleton reconciliation, every
-  // active entity has a semantic-main execution identity; discard leftover
-  // snapshot builds so their non-CAS roots cannot poison the first GC epoch.
+  // 4. No optional singleton is compiled from the bootstrap snapshot. VCS
+  // durability has already promoted the one bootstrap source provider to
+  // semantic main, so unreferenced bootstrap builds can leave the steady-state
+  // store before its first content-GC epoch.
   const protectedBuildKeys = new Set(
     entityCache
       .listActive()
@@ -6956,14 +6859,8 @@ async function main() {
   console.info("[StartupBootstrap] Reconciliation barrier", {
     durableReconciliationMs: durableReconciliationCompletedAt - bootstrapReconciliationStartedAt,
     runtimeRecoveryMs: runtimeRecoveryStartedAt - durableReconciliationCompletedAt,
-    singletonReconciliationMs: singletonReconciliationCompletedAt - runtimeRecoveryStartedAt,
-    bootstrapBuildDiscardMs: bootstrapBuildDiscardCompletedAt - singletonReconciliationCompletedAt,
+    bootstrapBuildDiscardMs: bootstrapBuildDiscardCompletedAt - runtimeRecoveryStartedAt,
     cleanupReaperMs: bootstrapReconciliationCompletedAt - bootstrapBuildDiscardCompletedAt,
-    singletons: singletonPlans.map((plan) => ({
-      singleton: singletonLabel(plan),
-      prepareMs: singletonPreparationMs.get(singletonLabel(plan)) ?? null,
-      activateMs: singletonActivationMs.get(singletonLabel(plan)) ?? null,
-    })),
     totalMs: bootstrapReconciliationCompletedAt - bootstrapReconciliationStartedAt,
   });
   console.log(
@@ -7282,12 +7179,6 @@ async function main() {
       });
     }
   }
-
-  // Every workspace warms the shell-critical launcher. Persistent workspaces
-  // then warm eval libraries; everything else remains demand-driven.
-  void container
-    .get<import("./services/postReadyBuildWarmup.js").PostReadyBuildWarmup>("postReadyBuildWarmup")
-    .start({ includeEvalLibraries: !workspaceIsEphemeral });
 
   // ===========================================================================
   // Graceful shutdown — container.stopAll() handles everything

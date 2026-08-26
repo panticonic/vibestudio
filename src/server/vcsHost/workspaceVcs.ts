@@ -913,6 +913,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     effect: SemanticEffect,
     gateContext: PublicationGateContext
   ): Promise<Record<string, unknown>> {
+    const profileStartedAt = performance.now();
     const repositories = effect.payload["repositories"];
     if (!Array.isArray(repositories)) {
       throw new Error("publication effect lacks exact repository manifests");
@@ -920,6 +921,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const roots = await this.materializer.contentRoots(
       repositories as WorkspaceMaterializationRepository[]
     );
+    const contentRootsCompletedAt = performance.now();
     const current = this.deps.refs.listMains();
     const currentByPath = new Map(current.map((entry) => [entry.repoPath, entry.contentRoot]));
     const targetByPath = new Map(roots.map((entry) => [entry.repoPath, entry.contentRoot]));
@@ -932,6 +934,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         stateHash: targetByPath.get(repoPath) ?? null,
       }))
     );
+    const candidateStateCompletedAt = performance.now();
     const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
     if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
     // BuildV2 seals execution identity while the ref gate validates this
@@ -960,8 +963,21 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       gateContext:
         gateContext.kind === "caller" ? { ...gateContext, candidateWorkspaceState } : gateContext,
     });
+    const refsCompletedAt = performance.now();
     const publication = this.deps.refs.readAppliedPublication(effect.effectId);
     if (!publication) throw new Error(`protected publication ${effect.effectId} was not recorded`);
+    const profileCompletedAt = performance.now();
+    if (profileCompletedAt - profileStartedAt >= 100) {
+      console.info("[VcsProfile] protected main publication", {
+        repositories: repositories.length,
+        changedRepositories: changedPaths.length,
+        contentRootsMs: contentRootsCompletedAt - profileStartedAt,
+        candidateStateMs: candidateStateCompletedAt - contentRootsCompletedAt,
+        updateRefsMs: refsCompletedAt - candidateStateCompletedAt,
+        receiptMs: profileCompletedAt - refsCompletedAt,
+        totalMs: profileCompletedAt - profileStartedAt,
+      });
+    }
     return {
       applied: true,
       appliedAt: new Date(publication.appliedAt).toISOString(),
@@ -1256,6 +1272,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceInitializationReceipt
   > {
     return this.withProtectedMainMutation(async () => {
+      const startedAt = performance.now();
+      let providerMs = 0;
+      let effectMs = 0;
+      const effects: Record<string, { count: number; totalMs: number }> = {};
+      const providerSteps: Array<{
+        step: number;
+        elapsedMs: number;
+        state: string;
+        pendingEffect: string | null;
+      }> = [];
       const provider = this.workspaceSourceProvider();
       const request = {
         commandId: `workspace-source:${prepared.pin.commit}:${prepared.pin.snapshot}`,
@@ -1282,12 +1308,39 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         | import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceEffectAcknowledgement
         | undefined;
       for (let step = 0; step < 1_000; step += 1) {
+        const providerStartedAt = performance.now();
         const inspection = await provider.initializeExactSnapshot({
           ...request,
           ...(acknowledgement ? { acknowledgement } : {}),
         });
+        const providerElapsedMs = performance.now() - providerStartedAt;
+        providerMs += providerElapsedMs;
+        providerSteps.push({
+          step,
+          elapsedMs: providerElapsedMs,
+          state: inspection.state,
+          pendingEffect:
+            inspection.state === "initializing" ? (inspection.pendingEffect?.kind ?? null) : null,
+        });
         acknowledgement = undefined;
-        if (inspection.state === "ready") return inspection.receipt;
+        if (inspection.state === "ready") {
+          const totalMs = performance.now() - startedAt;
+          if (totalMs >= 100) {
+            console.info("[VcsProfile] exact workspace initialization", {
+              repositories: prepared.repositories.length,
+              files: prepared.repositories.reduce(
+                (count, repository) => count + repository.files.length,
+                0
+              ),
+              providerMs,
+              providerSteps,
+              effectMs,
+              effects,
+              totalMs,
+            });
+          }
+          return inspection.receipt;
+        }
         if (inspection.state === "failed") {
           throw new Error(`Workspace source initialization failed: ${inspection.failure.message}`);
         }
@@ -1296,9 +1349,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         }
         const effect = inspection.pendingEffect;
         if (!effect) continue;
+        const effectStartedAt = performance.now();
         const receipt = await this.executeSemanticEffect(effect, {
           kind: "workspace-initialization",
         });
+        const elapsedMs = performance.now() - effectStartedAt;
+        effectMs += elapsedMs;
+        const effectProfile = effects[effect.kind] ?? { count: 0, totalMs: 0 };
+        effectProfile.count += 1;
+        effectProfile.totalMs += elapsedMs;
+        effects[effect.kind] = effectProfile;
         if (effect.kind === "publish-main") {
           this.deps.refs.acknowledgePublication(effect.effectId);
         }

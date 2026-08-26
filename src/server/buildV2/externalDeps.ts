@@ -1111,6 +1111,56 @@ export interface ExternalDependencyEnvironment {
 }
 
 /**
+ * Use dependencies already shipped with the host whenever the complete named
+ * closure satisfies the workspace's declared ranges. Exact versions therefore
+ * remain exact while ordinary semver ranges can reuse a compatible installed
+ * graph. A source patch still requires isolation because it changes bytes.
+ */
+export function resolveHostDependencyProjection(
+  dependencies: Readonly<Record<string, string>>,
+  _dependencyOverrides: Readonly<Record<string, string>>,
+  patches: readonly ExternalDependencyPatch[],
+  hostNodeModules: readonly string[]
+): { nodeModulesDir: string; nodePaths: string[] } | null {
+  if (
+    Object.keys(dependencies).length === 0 ||
+    patches.length > 0 ||
+    hostNodeModules.length === 0
+  ) {
+    return null;
+  }
+  const usedRoots = new Set<string>();
+  for (const [name, requested] of Object.entries(dependencies)) {
+    let matchedRoot: string | null = null;
+    for (const root of hostNodeModules) {
+      const manifestPath = path.join(root, ...name.split("/"), "package.json");
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+          name?: unknown;
+          version?: unknown;
+        };
+        if (
+          manifest.name === name &&
+          typeof manifest.version === "string" &&
+          semver.satisfies(manifest.version, requested, { includePrerelease: true })
+        ) {
+          matchedRoot = root;
+          break;
+        }
+      } catch {
+        // Try the next explicit host root. A missing or malformed package is
+        // simply not a usable projection; the isolated installer remains the
+        // authoritative fallback.
+      }
+    }
+    if (!matchedRoot) return null;
+    usedRoots.add(matchedRoot);
+  }
+  const nodePaths = [...usedRoots];
+  return { nodeModulesDir: nodePaths[0] ?? "", nodePaths };
+}
+
+/**
  * Provision the one dependency environment shared by bundling and typechecking.
  * Keeping this closure canonical prevents the compiler from reporting modules
  * that the bundler can resolve, or falling through to an ambient checkout.
@@ -1132,13 +1182,28 @@ export async function prepareExternalDependencyEnvironment(
     appNodeModules
   );
   const dependencyPatches = await collectTransitiveDependencyPatches(unit, graph, sourceRoot);
-  const borrowed = await acquireExternalDeps(externalDeps, dependencyOverrides, {
-    appRoot,
-    patches: dependencyPatches,
-  });
+  const hostProjection = resolveHostDependencyProjection(
+    externalDeps,
+    dependencyOverrides,
+    dependencyPatches,
+    appNodeModules
+  );
+  const borrowed = hostProjection
+    ? null
+    : await acquireExternalDeps(externalDeps, dependencyOverrides, {
+        appRoot,
+        patches: dependencyPatches,
+      });
+  if (hostProjection) {
+    console.log(
+      `[externalDeps] Reusing ${Object.keys(externalDeps).length} fingerprinted host dependencies for ${unit.name}`
+    );
+  }
   return {
-    nodeModulesDir: borrowed.nodeModulesDir,
-    nodePaths: [...(borrowed.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules],
+    nodeModulesDir: hostProjection?.nodeModulesDir ?? borrowed?.nodeModulesDir ?? "",
+    nodePaths: hostProjection
+      ? hostProjection.nodePaths
+      : [...(borrowed?.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules],
     externalDeps,
     providedPeers: closure.providedPeers,
     optionalProvidedPeers: closure.optionalProvidedPeers,
@@ -1146,7 +1211,7 @@ export async function prepareExternalDependencyEnvironment(
     peerConflicts: closure.peerConflicts,
     dependencyOverrides,
     dependencyPatches,
-    release: () => borrowed.release(),
+    release: () => borrowed?.release(),
   };
 }
 

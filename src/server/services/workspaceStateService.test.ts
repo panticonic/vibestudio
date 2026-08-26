@@ -39,10 +39,6 @@ function makeService(opts: {
   dispatchReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
   presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
-  getUnitDecoration?: (
-    source: string,
-    ref?: string
-  ) => Promise<{ icon?: string; iconVersion?: string; iconState?: string } | undefined>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
@@ -69,7 +65,6 @@ function makeService(opts: {
         })
       )(method, args);
     },
-    ...(opts.getUnitDecoration ? { getUnitDecoration: opts.getUnitDecoration } : {}),
     panelAccess: {
       contextExists: () => false,
       resolveCallerContext: async () => null,
@@ -173,7 +168,7 @@ describe("workspaceStateService — topology authority", () => {
     ]);
   });
 
-  it("composes Base-owned titles and exact-ref icons into addressed panel detail", async () => {
+  it("keeps addressed panel detail independent of build-owned decoration", async () => {
     const detail = {
       revision: 1,
       slot: { slot_id: "panel:chat" },
@@ -188,15 +183,12 @@ describe("workspaceStateService — topology authority", () => {
       dispatchReturns: { panelTreeDetail: detail },
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
-      getUnitDecoration: async (source, ref) =>
-        source === "panels/chat" && ref === "event:chat" ? { icon: "💬" } : undefined,
     });
 
     await expect(
       svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
     ).resolves.toEqual({
       ...detail,
-      icon: "💬",
       slot: { ...detail.slot, current_entity_title: "Chat" },
     });
   });
@@ -233,8 +225,7 @@ describe("workspaceStateService — topology authority", () => {
     });
   });
 
-  it("composes fresh icons and strict current placement at the one service boundary", async () => {
-    const iconRequests: Array<{ source: string; ref?: string }> = [];
+  it("composes titles and strict current placement without awaiting decoration", async () => {
     const page = {
       revision: 1,
       group: { kind: "roots" as const, ownerUserId: null },
@@ -258,14 +249,6 @@ describe("workspaceStateService — topology authority", () => {
       dispatchReturns: { panelTreePage: page },
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Agentic Chat" } : undefined,
-      getUnitDecoration: async (source, ref) => {
-        iconRequests.push({ source, ...(ref ? { ref } : {}) });
-        return {
-          icon: "./assets/icon.svg",
-          iconVersion: "b".repeat(64),
-          iconState: "a".repeat(64),
-        };
-      },
     });
 
     await expect(
@@ -276,46 +259,11 @@ describe("workspaceStateService — topology authority", () => {
       nodes: [
         {
           title: "Agentic Chat",
-          icon: "./assets/icon.svg",
-          iconVersion: "b".repeat(64),
-          iconState: "a".repeat(64),
           ref: "ctx:chat",
           placement: { disposition: "side", preferredWidth: 420 },
         },
       ],
     });
-    expect(iconRequests).toEqual([{ source: "panels/chat", ref: "ctx:chat" }]);
-  });
-
-  it("uses the durable context coordinate when panel history has no explicit ref", async () => {
-    const getUnitDecoration = vi.fn(async () => ({ icon: "🧭" }));
-    const { svc } = makeService({
-      dispatchReturns: {
-        panelTreePage: {
-          revision: 1,
-          group: { kind: "roots" as const, ownerUserId: null },
-          nodes: [
-            {
-              slotId: "panel:new-app",
-              parentSlotId: null,
-              ownerUserId: null,
-              source: "panels/new-app",
-              contextId: "context-new-app",
-              createdAt: 1,
-              childCount: 0,
-            },
-          ],
-          nextCursor: null,
-        },
-      },
-      getUnitDecoration,
-    });
-
-    await svc.handler(makeCtx() as never, "panelTree.page", [
-      { group: { kind: "roots", ownerUserId: null } },
-    ]);
-
-    expect(getUnitDecoration).toHaveBeenCalledWith("panels/new-app", "ctx:context-new-app");
   });
 
   it("rejects malformed current presentation options instead of hiding them", async () => {

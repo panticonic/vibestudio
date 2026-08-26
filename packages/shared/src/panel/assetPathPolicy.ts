@@ -94,7 +94,8 @@ export function isPanelReachableGatewayPathname(pathname: string): boolean {
 // `fetch()` will actually send to the gateway.
 const PARSE_BASE = "http://panel-gateway.invalid";
 
-const VERSIONED_UNIT_ICON_PATH = /^\/__vibestudio\/unit-icon\?(?:.*&)?v=[0-9a-f]{8,64}(?:&|$)/u;
+const IMMUTABLE_UNIT_ICON_PATH =
+  /^\/__vibestudio\/unit-icon\?(?:[^&]*&)*(?:v=[0-9a-f]{8,64}|s=[0-9a-f]{64})(?:&|$)/u;
 const VERSIONED_RUNTIME_HELPER_PATH = /\/(?:__loader|__transport)\.js$/u;
 const PANEL_BUILD_KEY = /^[0-9a-f]{64}$/u;
 const PINNED_ENTRY_REPRESENTATION = /^\/.*\/\?buildKey=[0-9a-f]{64}$/u;
@@ -166,10 +167,10 @@ export function panelAssetCacheKey(
   ) {
     return representationPath;
   }
-  // A unit icon carrying a `v` that names its content is immutable for the same
-  // reason, and its whole point is to be storable — keying it by header digest
+  // A unit icon carrying a content version or exact workspace state is
+  // immutable, and its whole point is to be storable — keying it by header digest
   // would split one glyph across every `accept` a client happens to send.
-  if (VERSIONED_UNIT_ICON_PATH.test(representationPath)) return representationPath;
+  if (IMMUTABLE_UNIT_ICON_PATH.test(representationPath)) return representationPath;
   const vary = Object.entries(forwardHeaders)
     // Authorization admits the request but does not select the immutable
     // representation. Workspace credentials are rotated when the server

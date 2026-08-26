@@ -197,6 +197,17 @@ describe("unit icon targets", () => {
     expect(panelAssetCacheKey(target, {})).toBe(target);
   });
 
+  it("keys an exact-state icon independently of forwarded headers", () => {
+    const target = `/${unitIconTarget(
+      SOURCE,
+      "./assets/icon.svg",
+      undefined,
+      "a".repeat(64)
+    )}`;
+    expect(panelAssetCacheKey(target, { accept: "image/svg+xml" })).toBe(target);
+    expect(panelAssetCacheKey(target, { accept: "image/webp" })).toBe(target);
+  });
+
   it("still separates an unversioned icon by header, since it is not immutable", () => {
     const target = `/${unitIconTarget(SOURCE, "./assets/icon.svg")}`;
     expect(panelAssetCacheKey(target, { accept: "image/svg+xml" })).not.toBe(

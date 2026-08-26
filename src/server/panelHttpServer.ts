@@ -444,10 +444,7 @@ export class PanelHttpServer {
         res.end("Invalid unit icon version");
         return;
       }
-      if (
-        (state !== null && !/^[0-9a-f]{64}$/u.test(state)) ||
-        (state !== null && (version === null || version.length !== 64))
-      ) {
+      if (state !== null && !/^[0-9a-f]{64}$/u.test(state)) {
         res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Invalid unit icon state");
         return;
@@ -469,13 +466,14 @@ export class PanelHttpServer {
           return;
         }
         const etag = `"${icon.contentHash}"`;
-        // `v` names the verified content bytes. `s`, when present, selects the
-        // immutable workspace state from which those bytes must be read. This is
+        // `v` names verified content bytes. `s` selects the immutable workspace
+        // state from which those bytes must be read. Either coordinate is enough
+        // to make the response immutable. This is
         // the difference between a client storing the icon once and re-fetching
         // every unit's icon on every launcher render. Measured on a phone, the
         // revalidating form was 20 of 57 round trips for one panel open.
         //
-        const versioned = version !== null;
+        const versioned = version !== null || state !== null;
         const headers = {
           "Cache-Control": versioned ? "public, max-age=31536000, immutable" : "private, no-cache",
           ETag: etag,

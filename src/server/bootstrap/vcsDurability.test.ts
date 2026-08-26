@@ -5,7 +5,7 @@ import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { WorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import type { WorkerdManager } from "../workerdManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
-import { canonicalSingletonContextId } from "./singletonReconciliation.js";
+import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
 
 function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
   services: ManagedService[];
@@ -28,7 +28,7 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
     },
     workspaceId: "workspace-1",
     bootstrapStateHash: `state:${"d".repeat(64)}`,
-    publishBootstrapEntity: vi.fn(async () => undefined),
+    publishWorkspaceSourceEntity: vi.fn(async () => undefined),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -44,7 +44,7 @@ describe("wireVcsDurability", () => {
       { name: "vcsAttach", dependencies: ["doDispatch", "workerdManager"] },
       {
         name: "semanticWorkspace",
-        dependencies: ["vcsAttach"],
+        dependencies: ["vcsAttach", "workerdManager"],
       },
       {
         name: "gcEpochCoordinator",
@@ -73,10 +73,10 @@ describe("wireVcsDurability", () => {
       }),
       attachWorkspaceSourceProvider: vi.fn(),
     } as unknown as WorkspaceVcs;
-    const publishBootstrapEntity = vi.fn(async () => undefined);
+    const publishWorkspaceSourceEntity = vi.fn(async () => undefined);
     const { services } = captureServices({
       workspaceVcs,
-      publishBootstrapEntity,
+      publishWorkspaceSourceEntity,
     });
     const attach = services.find((service) => service.name === "vcsAttach");
     const resolve = <D>(name: string): D | undefined =>
@@ -91,7 +91,7 @@ describe("wireVcsDurability", () => {
       className: "GadWorkspaceDO",
       objectKey: "workspace",
     };
-    const contextId = canonicalSingletonContextId("workspace-1", {
+    const contextId = canonicalWorkspaceObjectContextId("workspace-1", {
       source: gadRef.source,
       className: gadRef.className,
       key: gadRef.objectKey,
@@ -103,7 +103,7 @@ describe("wireVcsDurability", () => {
       key: gadRef.objectKey,
       contextId,
     });
-    expect(publishBootstrapEntity).toHaveBeenCalledWith(manager, {
+    expect(publishWorkspaceSourceEntity).toHaveBeenCalledWith({
       ...gadRef,
       targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
       effectiveVersion: "a".repeat(64),
@@ -120,13 +120,50 @@ describe("wireVcsDurability", () => {
   });
 
   it("does not release semanticWorkspace until initialization completes", async () => {
-    const workspaceVcs = {} as WorkspaceVcs;
+    const workspaceVcs = {
+      attachGad: vi.fn(async () => undefined),
+      attachWorkspaceSourceProvider: vi.fn(),
+    } as unknown as WorkspaceVcs;
+    const manager = {
+      ensureDurableObjectEntity: vi.fn(async () => ({
+        targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
+        effectiveVersion: "a".repeat(64),
+        buildKey: "c".repeat(64),
+        executionDigest: "e".repeat(64),
+        authority: { provides: [], requests: [] },
+      })),
+    } as unknown as WorkerdManager;
     const activateSemanticWorkspace = vi.fn(async () => undefined);
-    const { services } = captureServices({ workspaceVcs, activateSemanticWorkspace });
+    const publishWorkspaceSourceEntity = vi.fn(async () => undefined);
+    const { services } = captureServices({
+      workspaceVcs,
+      activateSemanticWorkspace,
+      publishWorkspaceSourceEntity,
+    });
     const semantic = services.find((service) => service.name === "semanticWorkspace");
 
-    const resolve = <D>() => workspaceVcs as D;
+    const resolve = <D>(name: string) =>
+      ({ vcsAttach: workspaceVcs, workerdManager: manager })[
+        name as "vcsAttach" | "workerdManager"
+      ] as D;
+    // The managed dependency guarantees that vcsAttach has established the
+    // bootstrap identity before semanticWorkspace starts.
+    const attach = services.find((service) => service.name === "vcsAttach");
+    const bootstrapResolve = <D>(name: string): D | undefined =>
+      ({
+        doDispatch: { dispatch: vi.fn() } as unknown as DODispatch,
+        workerdManager: manager,
+      })[name as "doDispatch" | "workerdManager"] as D | undefined;
+    await attach?.start?.(bootstrapResolve);
     await expect(semantic?.start?.(resolve)).resolves.toBe(workspaceVcs);
     expect(activateSemanticWorkspace).toHaveBeenCalledWith(workspaceVcs);
+    expect(manager.ensureDurableObjectEntity).toHaveBeenLastCalledWith({
+      source: "workers/workspace-source",
+      ref: "main",
+      className: "GadWorkspaceDO",
+      key: "workspace",
+      contextId: expect.stringMatching(/^object-/u),
+    });
+    expect(publishWorkspaceSourceEntity).toHaveBeenCalledTimes(2);
   });
 });

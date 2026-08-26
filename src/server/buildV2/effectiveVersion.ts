@@ -315,7 +315,9 @@ function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo
   throw new Error("Build dependency roots were not configured");
 }
 
-async function fullHash(data: crypto.webcrypto.BufferSource): Promise<string> {
+async function fullHash(
+  data: Parameters<typeof crypto.webcrypto.subtle.digest>[1]
+): Promise<string> {
   return Buffer.from(await crypto.webcrypto.subtle.digest("SHA-256", data)).toString("hex");
 }
 

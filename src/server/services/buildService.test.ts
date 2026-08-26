@@ -248,15 +248,6 @@ describe("build service extension diagnostics", () => {
         manifest: { title: "Hello Svelte", icon: "./assets/icon.svg" },
       },
     ]);
-    vi.mocked(buildSystem.getUnitIcon).mockResolvedValue({
-      source: "panels/hello-svelte",
-      path: "assets/icon.svg",
-      stateHash: `state:${"a".repeat(64)}`,
-      effectiveVersion: "ev-1",
-      contentHash: "b".repeat(64),
-      contentType: "image/svg+xml",
-      body: Buffer.alloc(538),
-    });
     const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
@@ -267,14 +258,9 @@ describe("build service extension diagnostics", () => {
     ).resolves.toMatchObject({
       source: "panels/hello-svelte",
       icon: "./assets/icon.svg",
-      iconVersion: "b".repeat(64),
       iconState: "a".repeat(64),
     });
-    expect(buildSystem.getUnitIcon).toHaveBeenCalledWith(
-      "panels/hello-svelte",
-      "assets/icon.svg",
-      `state:${"a".repeat(64)}`
-    );
+    expect(buildSystem.getUnitIcon).not.toHaveBeenCalled();
   });
 
   it("runs retention diagnostics without accepting caller-maintained roots", async () => {

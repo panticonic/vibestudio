@@ -32,8 +32,8 @@ let failed = false;
 try {
   projectCheckoutSource(temporaryRoot, projection.units);
   projectNodeModules(temporaryRoot, [
-    path.join(appRoot, "node_modules"),
     projection.nodeModulesDir,
+    path.join(appRoot, "node_modules"),
   ]);
 
   for (const configName of [

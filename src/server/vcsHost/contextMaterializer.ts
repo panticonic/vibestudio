@@ -38,6 +38,7 @@ import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDir
 
 const CONTENT_HASH = /^[0-9a-f]{64}$/;
 const CONTENT_ROOT = /^state:[0-9a-f]{64}$/;
+const CONTENT_ROOT_DERIVATION_CONCURRENCY = 16;
 
 export interface MaterializedRepository {
   repositoryId: string;
@@ -559,15 +560,24 @@ export class ContextMaterializer {
       ): repository is Extract<WorkspaceMaterializationRepository, { presence: "present" }> =>
         repository.presence === "present"
     );
-    const roots: MaterializedRepository[] = [];
-    for (const repository of present) {
-      const contentRoot = await this.deriveRepositoryContentRoot(repository);
-      roots.push({
-        repositoryId: repository.repositoryId,
-        repoPath: repository.repoPath,
-        contentRoot,
-      });
-    }
+    const roots = new Array<MaterializedRepository>(present.length);
+    const pending = present.entries();
+    const deriveNext = async (): Promise<void> => {
+      for (const [index, repository] of pending) {
+        const contentRoot = await this.deriveRepositoryContentRoot(repository);
+        roots[index] = {
+          repositoryId: repository.repositoryId,
+          repoPath: repository.repoPath,
+          contentRoot,
+        };
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(CONTENT_ROOT_DERIVATION_CONCURRENCY, present.length) },
+        deriveNext
+      )
+    );
     return roots.sort((left, right) =>
       compareUtf16CodeUnits(left.repositoryId, right.repositoryId)
     );

@@ -64,6 +64,7 @@ import {
   dependencyPatchesForExternalRoots,
   acquireExternalDeps,
   mergeExternalDependencySpecs,
+  resolveHostDependencyProjection,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
@@ -106,6 +107,38 @@ function makeNode(
 function patchDigest(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
+
+describe("resolveHostDependencyProjection", () => {
+  it("reuses explicitly supplied host packages only within their declared ranges", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-projection-"));
+    try {
+      for (const [name, version] of [
+        ["react", "19.2.4"],
+        ["@scope/tool", "3.1.0"],
+      ] as const) {
+        const packageRoot = path.join(root, ...name.split("/"));
+        fs.mkdirSync(packageRoot, { recursive: true });
+        fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name, version }));
+      }
+
+      expect(
+        resolveHostDependencyProjection(
+          { react: "19.2.4", "@scope/tool": "^3.0.0" },
+          {},
+          [],
+          [root]
+        )
+      ).toEqual({ nodeModulesDir: root, nodePaths: [root] });
+      expect(resolveHostDependencyProjection({ react: "18.0.0" }, {}, [], [root])).toBeNull();
+      expect(
+        resolveHostDependencyProjection({ react: "^19.0.0" }, { react: "19.2.3" }, [], [root])
+      ).toEqual({ nodeModulesDir: root, nodePaths: [root] });
+      expect(resolveHostDependencyProjection({ missing: "1.0.0" }, {}, [], [root])).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("collectExternalDependencyClosure", () => {
   it("keeps a peer nobody owns out of the unit's own dependencies", () => {

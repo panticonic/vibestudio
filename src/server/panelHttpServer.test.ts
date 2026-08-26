@@ -698,9 +698,22 @@ describe("PanelHttpServer build cache", () => {
     expect(revalidated.statusCodeWritten).toBe(304);
     expect(revalidated.body).toBeUndefined();
 
-    // A `v` selects exact workspace content and makes the URL immutable, so a remote client can
+    // An exact state selects immutable workspace content, so a remote client can
     // store the glyph instead of re-fetching every unit's icon on every
     // launcher render — measured at 20 of 57 round trips for one panel open.
+    const stateOnly = await handlePanelRequest(
+      server,
+      `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&s=${"a".repeat(64)}`
+    );
+    expect(getUnitIcon).toHaveBeenLastCalledWith(
+      "workers/mail",
+      "assets/icon.svg",
+      `state:${"a".repeat(64)}`
+    );
+    expect(stateOnly.statusCodeWritten).toBe(200);
+    expect(stateOnly.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
+
+    // A content version can additionally verify the bytes selected by that state.
     const versioned = await handlePanelRequest(
       server,
       `/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg&v=${contentHash}&s=${"a".repeat(64)}`

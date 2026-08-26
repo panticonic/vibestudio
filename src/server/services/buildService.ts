@@ -12,7 +12,7 @@ export interface ResolvedPanelMetadata {
   icon?: string;
   /** Immutable workspace state that owns a relative icon declaration. */
   iconState?: string;
-  /** Content digest of a relative icon's exact bytes. */
+  /** Optional content digest when already known by the caller. */
   iconVersion?: string;
   description?: string;
   hiddenInLauncher: boolean;
@@ -34,15 +34,12 @@ export async function resolvePanelMetadata(
   const stateDigest = node.stateHash.startsWith("state:")
     ? node.stateHash.slice(6)
     : node.stateHash;
-  const resolvedIcon = declaredIcon?.startsWith("./")
-    ? await buildSystem.getUnitIcon(node.unitPath, declaredIcon.slice(2), node.stateHash)
-    : null;
   return {
     source: node.unitPath,
     title: node.manifest.title ?? node.unitName,
     icon: declaredIcon,
-    ...(resolvedIcon && /^[0-9a-f]{64}$/u.test(stateDigest)
-      ? { iconState: stateDigest, iconVersion: resolvedIcon.contentHash }
+    ...(declaredIcon?.startsWith("./") && /^[0-9a-f]{64}$/u.test(stateDigest)
+      ? { iconState: stateDigest }
       : {}),
     description: node.manifest.description,
     hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,

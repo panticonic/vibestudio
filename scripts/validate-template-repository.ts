@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import semver from "semver";
 import {
   canonicalTemplateYaml,
   parseTemplateManifestContent,
@@ -23,9 +24,7 @@ function walkFiles(root: string, relative = ""): string[] {
     .sort();
 }
 
-const EXACT_NPM_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-
-export function validateExactExternalDependencies(root: string, files: readonly string[]): void {
+export function validateExternalDependencySpecifiers(root: string, files: readonly string[]): void {
   for (const relativePath of files.filter(
     (candidate) => candidate === "package.json" || candidate.endsWith("/package.json")
   )) {
@@ -34,14 +33,17 @@ export function validateExactExternalDependencies(root: string, files: readonly 
       string,
       unknown
     >;
-    // Dependencies and devDependencies select bytes installed into the
-    // published template, so their coordinates must be exact. Peer
-    // dependencies select no bytes: they describe compatibility with the
-    // consuming app's already-exact dependency graph and may legitimately be
-    // ranges (for example one shared package consumed by React Native 19.0 and
-    // the desktop React 19 renderer). Treating peers as acquisition inputs
-    // makes that honest cross-renderer contract impossible.
-    for (const field of ["dependencies", "devDependencies"] as const) {
+    // Published workspace manifests describe compatibility. The host reuses a
+    // shipped dependency when it satisfies the declared range and otherwise
+    // performs the ordinary isolated install. Keep this boundary deliberately
+    // small: registry semver ranges and workspace packages are supported;
+    // paths, URLs, Git refs, and package-manager aliases are not.
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+    ] as const) {
       const declarations = packageJson[field];
       if (!declarations || typeof declarations !== "object" || Array.isArray(declarations))
         continue;
@@ -49,12 +51,10 @@ export function validateExactExternalDependencies(root: string, files: readonly 
         if (typeof rawSpecifier !== "string") {
           throw new Error(`${relativePath} ${field}.${name} must be a string`);
         }
-        if (rawSpecifier === "workspace:*") continue;
-        if (!EXACT_NPM_VERSION.test(rawSpecifier)) {
-          throw new Error(
-            `${relativePath} ${field}.${name} must use an exact version or workspace:*; got ${rawSpecifier}`
-          );
-        }
+        if (rawSpecifier === "workspace:*" || semver.validRange(rawSpecifier)) continue;
+        throw new Error(
+          `${relativePath} ${field}.${name} must use a registry semver range or workspace:*; got ${rawSpecifier}`
+        );
       }
     }
   }
@@ -102,12 +102,7 @@ export function validateTemplateRepository(
         `\nOr delete the paths if they are scratch files.`
     );
   }
-  // Exact-version pinning is a PUBLISHING policy for a template being released,
-  // not something a workspace needs in order to boot — a caret range in a peer
-  // dependency runs fine. `bootOnly` is for callers (the mobile smoke preflight)
-  // asking the narrower question "can a workspace start from this checkout?",
-  // which must not fail on policy a running workspace never consults.
-  if (!options.bootOnly) validateExactExternalDependencies(root, files);
+  if (!options.bootOnly) validateExternalDependencySpecifiers(root, files);
   const runtimePath = path.join(root, "meta/vibestudio.yml");
   if (manifest.dependencies.length === 0) {
     if (!fs.existsSync(runtimePath))

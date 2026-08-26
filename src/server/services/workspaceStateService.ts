@@ -56,10 +56,6 @@ export interface WorkspaceStateServiceDeps {
   /** Mechanical transport to Base's single workspace-presentation owner. */
   presentationDispatch(method: string, args: unknown[]): Promise<unknown>;
   /** Resolve compact unit decoration from the exact source coordinate in panel history. */
-  getUnitDecoration?: (
-    source: string,
-    ref?: string
-  ) => Promise<{ icon?: string; iconVersion?: string; iconState?: string } | undefined>;
   /**
    * Notify the server's AlarmDriver that a DO's wake schedule changed, so it
    * can re-arm its timer. Called after `alarmSet`/`alarmClear` persist.
@@ -140,39 +136,26 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     slotIds.length === 0
       ? Promise.resolve({} as Record<string, string>)
       : (deps.presentationDispatch("titlesForSlots", [slotIds]) as Promise<Record<string, string>>);
-  const resolveDecoration = async (
-    source: string | undefined,
-    contextId: string | undefined,
-    options: ReturnType<typeof presentationOptions>
-  ): Promise<{ icon?: string; iconVersion?: string; iconState?: string } | undefined> => {
-    if (!source || source.startsWith("browser:") || !deps.getUnitDecoration) return undefined;
-    const ref = options.ref ?? (contextId ? `ctx:${contextId}` : undefined);
-    return deps.getUnitDecoration(source, ref ?? undefined);
-  };
   const presentNodes = async (nodes: RawTreeNode[]): Promise<PanelTreeNode[]> => {
     const titles = await titlesForSlots(nodes.map((node) => node.slotId));
-    return Promise.all(
-      nodes.map(async ({ options, ...node }) => {
-        const parsedOptions = presentationOptions(options);
-        const decoration = await resolveDecoration(node.source, node.contextId, parsedOptions);
-        return {
-          ...node,
-          // A slot id is an address, not a name. Slots created before titles were
-          // recorded with the binding, and any node whose title write is still in
-          // flight, fall back to the source they present — never to their id.
-          title: titles[node.slotId] ?? node.source ?? node.slotId,
-          ...decoration,
-          ...(node.source
-            ? {
-                kind: node.source.startsWith("browser:")
-                  ? ("browser" as const)
-                  : ("workspace" as const),
-              }
-            : {}),
-          ...parsedOptions,
-        };
-      })
-    );
+    return nodes.map(({ options, ...node }) => {
+      const parsedOptions = presentationOptions(options);
+      return {
+        ...node,
+        // A slot id is an address, not a name. Slots created before titles were
+        // recorded with the binding, and any node whose title write is still in
+        // flight, fall back to the source they present — never to their id.
+        title: titles[node.slotId] ?? node.source ?? node.slotId,
+        ...(node.source
+          ? {
+              kind: node.source.startsWith("browser:")
+                ? ("browser" as const)
+                : ("workspace" as const),
+            }
+          : {}),
+        ...parsedOptions,
+      };
+    });
   };
   const presentPage = async (page: RawTreePage): Promise<WorkspacePanelTreePage> => ({
     ...page,
@@ -183,12 +166,6 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
   ): Promise<WorkspacePanelDetail | null> => {
     if (!detail) return null;
     const titles = await titlesForSlots([detail.slot.slot_id]);
-    const parsedOptions = presentationOptions(detail.currentHistory.options);
-    const decoration = await resolveDecoration(
-      detail.currentHistory.source,
-      detail.currentHistory.context_id,
-      parsedOptions
-    );
     return {
       ...detail,
       slot: {
@@ -196,7 +173,6 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         current_entity_title:
           titles[detail.slot.slot_id] ?? detail.currentHistory.source ?? detail.slot.slot_id,
       },
-      ...decoration,
     };
   };
   const panelTarget = async (slotId: string): Promise<PanelAccessPermissionTarget> => {
