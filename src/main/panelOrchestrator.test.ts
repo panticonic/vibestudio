@@ -2143,6 +2143,35 @@ describe("PanelOrchestrator.initializePanelTree", () => {
 });
 
 describe("PanelOrchestrator.readPanelProjection", () => {
+  it("hydrates exact-state icon decoration at the asynchronous presentation boundary", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/decorated", [], {
+      snapshot: {
+        source: "panels/chat",
+        contextId: "chat-context",
+        options: { ref: "event:chat" },
+      },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, serverClient, shellCore } = createOrchestrator(registry);
+    serverClient.call.mockResolvedValueOnce({
+      icon: "./assets/icon.svg",
+      iconState: "a".repeat(64),
+    } as never);
+
+    await expect(orchestrator.readPanelProjection(panel.id)).resolves.toMatchObject({
+      id: panel.id,
+      icon: "./assets/icon.svg",
+      iconState: "a".repeat(64),
+    });
+
+    expect(serverClient.call).toHaveBeenCalledWith("build", "getPanelMetadata", [
+      "panels/chat",
+      "event:chat",
+    ]);
+    expect(shellCore.getPanel).not.toHaveBeenCalled();
+  });
+
   it("returns an existing hosted projection without refreshing or converging it", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/ready", [], {

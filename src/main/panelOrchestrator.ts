@@ -1304,16 +1304,33 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
 
   async readPanelProjection(panelId: string): Promise<Panel | null> {
-    const local = this.registry.getPanel(panelId);
-    if (local) return local;
+    let panel = this.registry.getPanel(panelId);
 
     // Presentation reads expose the Electron host's materialized projection.
     // They must not refresh an existing slot from durable query state: that
     // can replace a newer hosted `ready` view with an older `pending` snapshot.
     // A missing slot is the one legitimate read-through case (for example,
     // when shell startup wins the race with registry hydration).
-    await this.shellCore.getPanel(asPanelSlotId(panelId));
-    return this.registry.getPanel(panelId) ?? null;
+    if (!panel) {
+      await this.shellCore.getPanel(asPanelSlotId(panelId));
+      panel = this.registry.getPanel(panelId);
+    }
+    if (!panel) return null;
+
+    const snapshot = getCurrentSnapshot(panel);
+    if (browserUrlFromPanelSource(snapshot.source) !== null) return panel;
+    const ref = getPanelRef(panel) ?? `ctx:${snapshot.contextId}`;
+    const metadata = (await this.serverClient.call("build", "getPanelMetadata", [
+      snapshot.source,
+      ref,
+    ])) as { icon?: string; iconVersion?: string; iconState?: string } | null | undefined;
+    if (!metadata) return panel;
+    return {
+      ...panel,
+      icon: metadata.icon,
+      iconVersion: metadata.iconVersion,
+      iconState: metadata.iconState,
+    };
   }
 
   async applyPanelExecutionActivated(
