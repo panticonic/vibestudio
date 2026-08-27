@@ -36,6 +36,7 @@ import {
   type CredentialSessionGrantResource,
 } from "./credentialSessionGrants.js";
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
+import { credentialGrantAgentId } from "./credentialGrantIdentity.js";
 import {
   assertCredentialApprovalDecision,
   credentialApprovalDecisions,
@@ -1826,6 +1827,7 @@ export class EgressProxy {
         "unknown-caller"
       );
     }
+    const agentId = credentialGrantAgentId(caller, identity);
     return {
       kind: "code",
       callerId: identity.callerId,
@@ -1835,9 +1837,7 @@ export class EgressProxy {
       executionDigest: identity.executionDigest,
       requested: identity.requested,
       policyKey: `${identity.repoPath}:${identity.callerId}`,
-      ...(caller.executionSession
-        ? { agentId: identity.evalOrigin?.ownerId ?? caller.agentBinding?.entityId }
-        : {}),
+      ...(agentId ? { agentId } : {}),
     };
   }
 

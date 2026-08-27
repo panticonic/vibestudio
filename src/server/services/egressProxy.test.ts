@@ -2726,6 +2726,53 @@ describe("EgressProxy", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("honors an agent-scoped connection grant for direct agent egress", async () => {
+    const agentId = "do:workers/agent-worker:AiChatWorker:conversation-1";
+    const credential = createCredential({
+      grants: [
+        {
+          bindingId: "api",
+          use: "fetch",
+          resource: "https://api.example.test/v1",
+          action: "use",
+          scope: "agent",
+          agentId,
+          grantedAt: 1,
+          grantedBy: "agent",
+        },
+      ],
+    });
+    const approvalQueue = createApprovalQueueMock("version");
+    const proxy = createProxy(credential, new MemoryAuditLog(), { approvalQueue });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
+    );
+    const caller = createVerifiedCaller(
+      agentId,
+      "do",
+      {
+        callerId: agentId,
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "agent-version-1",
+        executionDigest: "a".repeat(64),
+        requested: [],
+      },
+      { entityId: agentId, contextId: "ctx-agent", channelId: "conversation-1" }
+    );
+
+    await proxy.forwardProxyFetch({
+      caller,
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("keys session grants to the concrete caller identity", async () => {
     const credential = createCredential({ grants: [] });
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));

@@ -77,6 +77,7 @@ import {
 } from "./credentialApprovalDecisions.js";
 import { assertPresent } from "../../lintHelpers";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
+import { credentialGrantAgentId } from "./credentialGrantIdentity.js";
 import { serializeGitHttpResponse } from "./gitHttpRpc.js";
 import { normalizeRemoteUrl } from "@vibestudio/workspace/remotes";
 import { throwIfAborted } from "./credentialMechanisms/async.js";
@@ -963,9 +964,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   } {
     const identity = ctx.caller.code;
     const entity = identity ? null : resolveRuntimeEntityForApproval(ctx.caller.runtime.id);
-    const agentId =
-      ctx.caller.agentBinding?.entityId ??
-      (ctx.caller.executionSession !== undefined ? identity?.evalOrigin?.ownerId : undefined);
+    const agentId = credentialGrantAgentId(ctx.caller, identity);
     return {
       callerId: identity?.callerId ?? entity?.id ?? ctx.caller.runtime.id,
       repoPath: identity?.repoPath ?? entity?.source.repoPath ?? ctx.caller.runtime.id,
