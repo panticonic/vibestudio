@@ -110,7 +110,7 @@ describe
           "install",
           "--global",
           "--prefix",
-          fixture.prefix,
+          fs.realpathSync(fixture.prefix),
           `${NPM_DESKTOP_PACKAGE_NAME}@2.0.0`,
         ]);
         expect(fs.existsSync(path.join(fixture.central, NPM_UPDATE_FILES.lock))).toBe(false);
