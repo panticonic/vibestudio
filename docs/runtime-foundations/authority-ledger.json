@@ -12651,11 +12651,11 @@
       "rpcPlane": "host-service",
       "owner": "credentials",
       "method": "connect",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "secret",
       "mechanismFamily": "credentials.create",
-      "reviewRationale": "G2: credential mediation; §2 default {code, session} family",
+      "reviewRationale": "The method only requests a host-owned protected connection flow; credential storage and initial use remain gated by the exact host approval",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:credentials.connect"

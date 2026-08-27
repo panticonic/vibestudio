@@ -38,6 +38,7 @@ describe("historical host snapshots", () => {
       serverEntry: path.join(input.app, "dist", "server.mjs"),
       executable: input.executable,
       appVersion: "2.4.1",
+      platform: "linux",
     });
 
     expect(result.destination).toBe(path.join(input.central, "host-versions", "2"));
@@ -161,6 +162,7 @@ describe("historical host snapshots", () => {
         serverEntry: path.join(input.app, "dist", "server.mjs"),
         executable: input.executable,
         appVersion: version,
+        platform: "linux",
       });
     publish("2.4.1");
     fs.writeFileSync(path.join(input.app, "dist", "server.mjs"), "final");

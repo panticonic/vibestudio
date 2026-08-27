@@ -171,6 +171,16 @@ function createInstallerFixture() {
   writeManifest(packageRoot, "1.0.0");
   fs.writeFileSync(path.join(packageRoot, "dist", "server.mjs"), "export {};\n");
   fs.writeFileSync(path.join(packageRoot, "scripts", "vibestudio-launcher.mjs"), "");
+  const electronRoot = path.join(packageRoot, "node_modules", "electron");
+  const electronRelative = path.join("Electron.app", "Contents", "MacOS", "Electron");
+  const electronExecutable = path.join(electronRoot, "dist", electronRelative);
+  fs.mkdirSync(path.dirname(electronExecutable), { recursive: true });
+  fs.writeFileSync(
+    electronExecutable,
+    "#!/usr/bin/env node\nprocess.stdout.write(process.version);\n"
+  );
+  fs.chmodSync(electronExecutable, 0o755);
+  fs.writeFileSync(path.join(electronRoot, "path.txt"), electronRelative);
   const npm = path.join(bin, "npm");
   fs.writeFileSync(
     npm,

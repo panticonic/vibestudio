@@ -2350,11 +2350,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "credentials.connect": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.create",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The method only requests a host-owned protected connection flow; credential storage and initial use remain gated by the exact host approval",
     },
     capability: "accounts.connect",
     presentation: {
@@ -4171,7 +4172,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change a mobile runtime",
       action: "build the Android app",
-      description: "Build the installed Vibestudio Android shell for testing.",
+      description: "Build the internal Vibestudio Android shell for development testing.",
       group: "runtime",
       authorityCategory: {
         domain: "people",

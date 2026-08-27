@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:6cf4a4d004ef82760b6f3aa504e72ba2763abc03b019e29937e4be60412aa06b",
+  "censusDigest": "sha256:4a0eb1434dcbb044a75f939c9e9f44677b5fd856f7e49c6263be9f584ba58ef8",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",

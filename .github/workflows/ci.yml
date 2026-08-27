@@ -80,6 +80,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build infrastructure packages
+        run: pnpm build:infrastructure
+
       - name: Exercise macOS-sensitive host paths
         run: >-
           pnpm vitest run
