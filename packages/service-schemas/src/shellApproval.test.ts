@@ -4,6 +4,28 @@ import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/prompt
 import { shellApprovalMethods, templateInstallResolutionSchema } from "./shellApproval.js";
 
 describe("shellApproval service contract", () => {
+  it("carries popup permission approvals across listPending", () => {
+    const approval = {
+      approvalId: "approval-popup",
+      callerId: "panel:browser",
+      callerKind: "panel" as const,
+      repoPath: "panels/browser",
+      effectiveVersion: "browser:test",
+      requestedAt: 0,
+      kind: "browser-permission" as const,
+      ownerUserId: "user-1",
+      workspaceId: "workspace-1",
+      environmentKey: "browser-default",
+      panelId: "panel:browser",
+      origin: "https://claude.ai",
+      topLevelUrl: "https://claude.ai/login",
+      capabilities: ["popups" as const],
+      deviceLabel: "Desktop",
+    };
+
+    expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
+  });
+
   it("carries every registered authority prompt card across listPending", () => {
     const approvals = AUTHORITY_PROMPT_CARD_TYPES.map((cardType, index) => ({
       approvalId: `approval-${index}`,

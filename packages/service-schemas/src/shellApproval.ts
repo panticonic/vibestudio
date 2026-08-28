@@ -28,6 +28,7 @@ import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/promptRegistry";
 import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
 import { authorityRowSchema } from "./authority.js";
+import { BrowserPermissionCapabilitySchema } from "./browserPermissions.js";
 export { authorityRowSchema } from "./authority.js";
 
 export const shellApprovalValuesSchema = z
@@ -739,7 +740,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       panelId: z.string(),
       origin: z.string().url(),
       topLevelUrl: z.string().url(),
-      capabilities: z.array(z.enum(["camera", "microphone", "geolocation", "notifications"])),
+      capabilities: z.array(BrowserPermissionCapabilitySchema),
       deviceLabel: z.string(),
     })
     .strict(),

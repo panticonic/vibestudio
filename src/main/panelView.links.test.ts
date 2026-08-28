@@ -85,6 +85,7 @@ function createHarness(
     navigatePanel: vi.fn(async () => ({ id: panelId, title: "Navigated" })),
     replaceCurrentSnapshot: vi.fn(async () => undefined),
     updatePanelTitle: vi.fn(async () => undefined),
+    closePanel: vi.fn(async () => undefined),
   };
   const sendPanelEvent = vi.fn();
   const openExternal = vi.fn(async () => undefined);
@@ -427,6 +428,45 @@ describe("PanelView plain panel links", () => {
       );
     });
     expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+  });
+
+  it("opens browser window popups as child panels", async () => {
+    const { panelId, panelView, windowOpen, panelOrchestrator } = createHarness();
+    await panelView.createViewForBrowser(
+      panelId,
+      "https://claude.ai/",
+      "ctx-current",
+      "persist:browser-test"
+    );
+
+    expect(windowOpen({ url: "https://accounts.google.com/", disposition: "new-window" })).toEqual({
+      action: "deny",
+    });
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
+        panelId,
+        "https://accounts.google.com/",
+        { focus: true, placement: "child" },
+        undefined
+      );
+    });
+  });
+
+  it("closes the durable panel when a popup closes its own window", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness();
+    await panelView.createViewForBrowser(
+      panelId,
+      "https://accounts.google.com/",
+      "ctx-current",
+      "persist:browser-test"
+    );
+
+    webContents.emit("destroyed");
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.closePanel).toHaveBeenCalledWith(panelId);
+    });
   });
 
   it("hands OS protocol links to the confirmed external-open path", async () => {

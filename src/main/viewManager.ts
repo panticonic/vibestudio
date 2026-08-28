@@ -205,6 +205,7 @@ interface ManagedView {
       validatedURL: string,
       isMainFrame: boolean
     ) => void;
+    destroyed: () => void;
   };
 }
 
@@ -679,6 +680,7 @@ export class ViewManager {
     }
 
     const view = new WebContentsView({ webPreferences });
+    const webContentsId = view.webContents.id;
     if (runtimeMustRemainSchedulable) {
       // Enforce the lifecycle scheduling policy on the live WebContents as
       // well as at construction.
@@ -765,6 +767,14 @@ export class ViewManager {
           `[renderer:${config.id}] main-frame load failed: ${errorDescription} (${errorCode}) ${validatedURL}`
         );
       },
+      destroyed: () => {
+        // A page may close its own WebContents (OAuth popups commonly do this).
+        // Electron then invalidates WebContentsView.webContents, so the managed
+        // registry must stop exposing the native wrapper immediately.
+        if (this.views.get(config.id) !== managed) return;
+        this.unregisterView(managed, webContentsId, false);
+        if (!this.window.isDestroyed()) this.window.contentView.removeChildView(view);
+      },
     };
 
     managed.handlers = handlers;
@@ -779,6 +789,7 @@ export class ViewManager {
     view.webContents.on("render-process-gone", handlers.renderProcessGone);
     view.webContents.on("console-message", handlers.consoleMessage);
     view.webContents.on("did-fail-load", handlers.didFailLoad);
+    view.webContents.once("destroyed", handlers.destroyed);
 
     // Apply protection if this view is in the protected set
     // (handles case where view is recreated after crash while still protected)
@@ -953,44 +964,51 @@ export class ViewManager {
       return;
     }
 
+    const contents = managed.view.webContents;
     if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === id) {
       this.setHostedShellReady(id, false);
     }
-    if (managed.type === "panel") {
-      const nativeSlotId = this.nativePanelSlots.panelToSlot.get(id);
-      if (nativeSlotId) {
-        // Remember the binding so a recreated view for the same panel is
-        // re-slotted automatically — the hosted shell still believes the
-        // panel is bound and will not issue another bind on its own.
-        const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
-        if (slot) this.declaredPanelSlots.set(id, { ...slot, bounds: { ...slot.bounds } });
-        this.clearPanelSlotInternal(nativeSlotId, { notifyHidden: false });
-      }
-    }
-
-    this.webContentsIdToViewId.delete(managed.view.webContents.id);
-    this.compositorRecovery.forgetView(id);
 
     // View destruction is a normal operation - no need to log
 
     // Remove only our specific handlers (not others' listeners)
-    if (managed.handlers && !managed.view.webContents.isDestroyed()) {
-      managed.view.webContents.off("dom-ready", managed.handlers.domReady);
-      managed.view.webContents.off("context-menu", managed.handlers.contextMenu);
-      managed.view.webContents.off("render-process-gone", managed.handlers.renderProcessGone);
-      managed.view.webContents.off("console-message", managed.handlers.consoleMessage);
-      managed.view.webContents.off("did-fail-load", managed.handlers.didFailLoad);
+    if (managed.handlers && !contents.isDestroyed()) {
+      contents.off("dom-ready", managed.handlers.domReady);
+      contents.off("context-menu", managed.handlers.contextMenu);
+      contents.off("render-process-gone", managed.handlers.renderProcessGone);
+      contents.off("console-message", managed.handlers.consoleMessage);
+      contents.off("did-fail-load", managed.handlers.didFailLoad);
+      contents.off("destroyed", managed.handlers.destroyed);
     }
+
+    this.unregisterView(managed, contents.id, true);
 
     // Remove from window
     this.window.contentView.removeChildView(managed.view);
 
     // Close the webContents
-    if (!managed.view.webContents.isDestroyed()) {
-      managed.view.webContents.close();
+    if (!contents.isDestroyed()) {
+      contents.close();
+    }
+  }
+
+  private unregisterView(managed: ManagedView, webContentsId: number, rememberSlot: boolean): void {
+    const { id } = managed;
+    const nativeSlotId =
+      managed.type === "panel" ? this.nativePanelSlots.panelToSlot.get(id) : undefined;
+    if (rememberSlot && nativeSlotId) {
+      // Preserve an intentional destroy/recreate binding. A page-initiated
+      // close is terminal and must not leave a declaration for a dead panel.
+      const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+      if (slot) this.declaredPanelSlots.set(id, { ...slot, bounds: { ...slot.bounds } });
+    } else if (!rememberSlot) {
+      this.declaredPanelSlots.delete(id);
     }
 
     this.views.delete(id);
+    this.webContentsIdToViewId.delete(webContentsId);
+    this.compositorRecovery.forgetView(id);
+    if (nativeSlotId) this.clearPanelSlotInternal(nativeSlotId, { notifyHidden: false });
   }
 
   /**

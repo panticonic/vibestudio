@@ -86,6 +86,7 @@ interface PanelOrchestratorLike {
     stateArgs?: Record<string, unknown>
   ): Promise<void>;
   updatePanelTitle(panelId: string, title: string): Promise<void>;
+  closePanel(panelId: string): Promise<unknown>;
 }
 
 type PanelLinkCaller = { callerId: string; callerKind: "app" };
@@ -720,7 +721,17 @@ export class PanelView implements PanelViewLike {
       this.browserStateCleanup.delete(panelId);
     };
 
-    const destroyedHandler = () => cleanup();
+    const destroyedHandler = () => {
+      cleanup();
+      // window.close() is the normal completion path for OAuth popups. The
+      // native view is already gone, so close its durable panel tree entry too.
+      if (!this.panelRegistry.getPanel(panelId)) return;
+      void this.panelOrchestrator
+        .closePanel(panelId)
+        .catch((error: unknown) =>
+          console.warn(`[PanelView] Failed to close self-destroyed panel ${panelId}:`, error)
+        );
+    };
     contents.once("destroyed", destroyedHandler);
     this.browserStateCleanup.set(panelId, { cleanup, destroyedHandler });
   }
@@ -1004,12 +1015,10 @@ export class PanelView implements PanelViewLike {
   ): Promise<void> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
     const background = disposition === "background-tab";
-    const placement =
-      disposition === "new-window" || disposition === "foreground-tab" ? "sibling" : "child";
     const result = await this.panelOrchestrator.createBrowserUrlPanel(
       sourceViewId,
       url,
-      { focus: !background, placement },
+      { focus: !background, placement: "child" },
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });

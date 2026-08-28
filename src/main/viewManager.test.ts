@@ -1766,6 +1766,23 @@ describe("ViewManager", () => {
     it("destroyView is safe to call on non-existent view", () => {
       expect(() => vm.destroyView("non-existent")).not.toThrow();
     });
+
+    it("unregisters a view when its webContents destroys itself", () => {
+      const view = vm.createView({
+        id: "oauth-popup",
+        type: "panel",
+      });
+      const destroyedHandler = (view.webContents.once as Mock).mock.calls.find(
+        ([event]) => event === "destroyed"
+      )?.[1] as (() => void) | undefined;
+
+      expect(destroyedHandler).toBeDefined();
+      destroyedHandler?.();
+
+      expect(vm.hasView("oauth-popup")).toBe(false);
+      expect(vm.getWebContents("oauth-popup")).toBeNull();
+      expect(mockWindow.contentView.removeChildView).toHaveBeenCalledWith(view);
+    });
   });
 
   describe("view bounds and visibility", () => {
