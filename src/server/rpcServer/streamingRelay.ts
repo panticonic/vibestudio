@@ -6,7 +6,6 @@ import {
   type RpcEnvelope,
   type RpcStreamRequest,
 } from "@vibestudio/rpc";
-import type { FrameType as StreamFrameType } from "@vibestudio/rpc/protocol/streamCodec";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -66,7 +65,7 @@ export interface StreamingRelayDeps {
     targetId: string,
     method: string
   ): RelayAuthorization;
-  createWsContext(
+  createSessionContext(
     client: WsClientState,
     request: RpcStreamRequest,
     caller: VerifiedCaller,
@@ -83,7 +82,6 @@ export interface StreamingRelayDeps {
     causalParent: RpcCausalParent | undefined,
     signal: AbortSignal
   ): Promise<Response>;
-  sendWs(client: WsClientState, message: WsServerMessage): void;
 }
 
 type ProxyFetchParams = {
@@ -105,19 +103,19 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 
 /** Owns streaming RPC admission, framing, proxy dispatch, and cancellation. */
 export class StreamingRelay {
-  private readonly wsStreamAborts = new WeakMap<WsClientState, Map<string, AbortController>>();
+  private readonly sessionStreamAborts = new WeakMap<WsClientState, Map<string, AbortController>>();
   private readonly httpStreamAborts = new Set<AbortController>();
 
   constructor(private readonly deps: StreamingRelayDeps) {}
 
   cancel(client: WsClientState, requestId: string): void {
-    this.wsStreamAborts.get(client)?.get(requestId)?.abort();
+    this.sessionStreamAborts.get(client)?.get(requestId)?.abort();
   }
 
   abortConnection(client: WsClientState): void {
-    const streams = this.wsStreamAborts.get(client);
+    const streams = this.sessionStreamAborts.get(client);
     if (!streams) return;
-    this.wsStreamAborts.delete(client);
+    this.sessionStreamAborts.delete(client);
     for (const controller of streams.values()) {
       controller.abort();
     }
@@ -307,12 +305,12 @@ export class StreamingRelay {
     }
   }
 
-  async handleWsRequest(
+  async handleSessionRequest(
     client: WsClientState,
     request: RpcStreamRequest,
     envelope: RpcEnvelope
   ): Promise<void> {
-    const emitFrame = this.wsFrameWriter(client, request, envelope);
+    const emitFrame = this.sessionFrameWriter(client, request, envelope);
     const inboundBody = client.uploadBodies?.take(request.requestId);
     // The socket authenticates the resident runtime. Evaluated execution is a
     // narrower, per-run admission carried by the individual request, so resolve
@@ -351,10 +349,7 @@ export class StreamingRelay {
       });
       return;
     }
-    const shim = client.ws as unknown as {
-      takeInboundBody?: (requestId: string) => ReadableStream<Uint8Array> | undefined;
-    };
-    const effectiveInboundBody = inboundBody ?? shim.takeInboundBody?.(request.requestId);
+    const effectiveInboundBody = inboundBody ?? client.ws.takeInboundBody(request.requestId);
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
     const targetId = envelope.target;
@@ -417,7 +412,7 @@ export class StreamingRelay {
     if (parsed && request.method !== "credentials.proxyFetch") {
       const abortController = this.register(client, request.requestId);
       try {
-        const context = this.deps.createWsContext(client, request, invocationCaller, {
+        const context = this.deps.createSessionContext(client, request, invocationCaller, {
           ...(request.requestId ? { requestId: request.requestId } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(readOnly ? { readOnly: true } : {}),
@@ -484,7 +479,7 @@ export class StreamingRelay {
       return;
     }
 
-    const context = this.deps.createWsContext(client, request, invocationCaller, {
+    const context = this.deps.createSessionContext(client, request, invocationCaller, {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
@@ -649,10 +644,10 @@ export class StreamingRelay {
   }
 
   private register(client: WsClientState, requestId: string): AbortController {
-    let streams = this.wsStreamAborts.get(client);
+    let streams = this.sessionStreamAborts.get(client);
     if (!streams) {
       streams = new Map();
-      this.wsStreamAborts.set(client, streams);
+      this.sessionStreamAborts.set(client, streams);
     }
     streams.get(requestId)?.abort();
     const controller = new AbortController();
@@ -661,10 +656,10 @@ export class StreamingRelay {
   }
 
   private unregister(client: WsClientState, requestId: string, controller: AbortController): void {
-    const streams = this.wsStreamAborts.get(client);
+    const streams = this.sessionStreamAborts.get(client);
     if (streams?.get(requestId) !== controller) return;
     streams.delete(requestId);
-    if (streams.size === 0) this.wsStreamAborts.delete(client);
+    if (streams.size === 0) this.sessionStreamAborts.delete(client);
   }
 
   private async httpFrameWriter(
@@ -701,39 +696,21 @@ export class StreamingRelay {
     };
   }
 
-  private wsFrameWriter(
+  private sessionFrameWriter(
     client: WsClientState,
     request: RpcStreamRequest,
     envelope: RpcEnvelope
   ): (frame: StreamFrame) => Promise<void> | void {
-    const sendTextFrame = (frameType: number, payload: string): void => {
-      this.deps.sendWs(client, {
-        type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "stream-frame",
-          requestId: request.requestId,
-          fromId: "main",
-          frameType,
-          payload,
-        }),
-      });
-    };
-    const shim = client.ws as unknown as {
-      hasBulkStream?: (requestId: string) => boolean;
-      sendStreamFrame?: (
-        requestId: string,
-        frameType: StreamFrameType,
-        payload: Uint8Array
-      ) => Promise<void> | false;
-    };
-    // A desktop panel can originate a body-less stream through its ordinary
-    // envelope bridge. Such a request has no `stream-open` bulk id even though
-    // its host-side socket is a Iroh shim; its frames must return over the
-    // same envelope lane. Bulk-opened streams retain the raw-byte hot path.
-    const sendBinaryFrame =
-      shim.hasBulkStream?.(request.requestId) === false
-        ? undefined
-        : shim.sendStreamFrame?.bind(shim);
+    const fallbackMessage = (frameType: number, payload: string): WsServerMessage => ({
+      type: "ws:rpc",
+      envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
+        type: "stream-frame",
+        requestId: request.requestId,
+        fromId: "main",
+        frameType,
+        payload,
+      }),
+    });
     const utf8Json = (value: unknown): Uint8Array =>
       new TextEncoder().encode(JSON.stringify(value));
 
@@ -744,67 +721,47 @@ export class StreamingRelay {
           new Error("Streaming RPC response completed before its request body settled")
         );
       }
-      if (sendBinaryFrame) {
-        let result: Promise<void> | false;
-        if (frame.kind === "head") {
-          result = sendBinaryFrame(
-            request.requestId,
-            FRAME_HEAD,
-            utf8Json({
-              status: frame.status,
-              statusText: frame.statusText,
-              headerPairs: frame.headerPairs,
-              finalUrl: frame.finalUrl,
-            })
-          );
-        } else if (frame.kind === "chunk") {
-          result = sendBinaryFrame(request.requestId, FRAME_DATA, frame.bytes);
-        } else if (frame.kind === "end") {
-          result = sendBinaryFrame(
-            request.requestId,
-            FRAME_END,
-            utf8Json({ bytesIn: frame.bytesIn })
-          );
-        } else {
-          result = sendBinaryFrame(
-            request.requestId,
-            FRAME_ERROR,
-            utf8Json({
-              status: frame.status,
-              message: frame.message,
-              code: frame.code,
-              errorKind: frame.errorKind,
-              ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
-            })
-          );
-        }
-        return result === false ? undefined : result;
-      }
-
       if (frame.kind === "head") {
-        sendTextFrame(
+        const value = {
+          status: frame.status,
+          statusText: frame.statusText,
+          headerPairs: frame.headerPairs,
+          finalUrl: frame.finalUrl,
+        };
+        return client.ws.sendStreamFrame(
+          request.requestId,
           FRAME_HEAD,
-          JSON.stringify({
-            status: frame.status,
-            statusText: frame.statusText,
-            headerPairs: frame.headerPairs,
-            finalUrl: frame.finalUrl,
-          })
+          utf8Json(value),
+          fallbackMessage(FRAME_HEAD, JSON.stringify(value))
         );
       } else if (frame.kind === "chunk") {
-        sendTextFrame(FRAME_DATA, Buffer.from(frame.bytes).toString("base64"));
+        return client.ws.sendStreamFrame(
+          request.requestId,
+          FRAME_DATA,
+          frame.bytes,
+          fallbackMessage(FRAME_DATA, Buffer.from(frame.bytes).toString("base64"))
+        );
       } else if (frame.kind === "end") {
-        sendTextFrame(FRAME_END, JSON.stringify({ bytesIn: frame.bytesIn }));
+        const value = { bytesIn: frame.bytesIn };
+        return client.ws.sendStreamFrame(
+          request.requestId,
+          FRAME_END,
+          utf8Json(value),
+          fallbackMessage(FRAME_END, JSON.stringify(value))
+        );
       } else {
-        sendTextFrame(
+        const value = {
+          status: frame.status,
+          message: frame.message,
+          code: frame.code,
+          errorKind: frame.errorKind,
+          ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
+        };
+        return client.ws.sendStreamFrame(
+          request.requestId,
           FRAME_ERROR,
-          JSON.stringify({
-            status: frame.status,
-            message: frame.message,
-            code: frame.code,
-            errorKind: frame.errorKind,
-            ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
-          })
+          utf8Json(value),
+          fallbackMessage(FRAME_ERROR, JSON.stringify(value))
         );
       }
     };

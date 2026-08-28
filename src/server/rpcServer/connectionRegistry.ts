@@ -1,17 +1,13 @@
 import type { RpcClient } from "@vibestudio/rpc";
 import type { CallerKind, WsClientInfo } from "@vibestudio/shared/serviceDispatcher";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
-import { WebSocket } from "ws";
-import type { IrohRpcSessionSocket } from "../irohRpcSessionSocket.js";
-import type { WsServerTransportInternal } from "../wsServerTransport.js";
+import type { SessionServerTransportInternal } from "../sessionServerTransport.js";
 import type { WsUploadBodies } from "./wsUploadBodies.js";
-
-/** Physical session surface shared by loopback WebSocket and remote Iroh. */
-export type RpcSessionSocket = WebSocket | IrohRpcSessionSocket;
+import type { RpcSessionChannel } from "./sessionChannel.js";
 
 /** Server-side state for one connected RPC session. */
 export interface WsClientState extends WsClientInfo {
-  ws: RpcSessionSocket;
+  ws: RpcSessionChannel;
   authenticatedAt: number;
   /**
    * Owning user — a denormalized, non-null mirror of
@@ -37,10 +33,10 @@ export interface ConnectionRegistryOptions {
  * this registry only keeps those independently indexed views coherent.
  */
 export class ConnectionRegistry {
-  private clients = new Map<RpcSessionSocket, WsClientState>();
+  private clients = new Map<RpcSessionChannel, WsClientState>();
   private callerConnections = new Map<string, Map<string, WsClientState>>();
   private bridges = new Map<string, Map<string, RpcClient>>();
-  private transports = new Map<string, Map<string, WsServerTransportInternal>>();
+  private transports = new Map<string, Map<string, SessionServerTransportInternal>>();
   /**
    * Routing repeatedly asks for the oldest live connection. Keep that derived
    * index coherent at admission/removal instead of allocating and sorting the
@@ -57,13 +53,13 @@ export class ConnectionRegistry {
 
   constructor(private readonly options: ConnectionRegistryOptions) {}
 
-  getBySocket(ws: RpcSessionSocket): WsClientState | undefined {
+  getBySocket(ws: RpcSessionChannel): WsClientState | undefined {
     return this.clients.get(ws);
   }
 
   getConnection(callerId: string, connectionId: string): WsClientState | undefined {
     const client = this.callerConnections.get(callerId)?.get(connectionId);
-    return client?.ws.readyState === WebSocket.OPEN ? client : undefined;
+    return client?.ws.readyState === client?.ws.OPEN ? client : undefined;
   }
 
   isActiveClient(client: WsClientState): boolean {
@@ -74,7 +70,7 @@ export class ConnectionRegistry {
 
   getCallerConnections(callerId: string): WsClientState[] {
     return [...(this.callerConnections.get(callerId)?.values() ?? [])].filter(
-      (client) => client.ws.readyState === WebSocket.OPEN
+      (client) => client.ws.readyState === client.ws.OPEN
     );
   }
 
@@ -85,7 +81,8 @@ export class ConnectionRegistry {
   pickPrimary(callerId: string): WsClientState | undefined {
     const cached = this.primaryConnections.get(callerId);
     if (
-      cached?.ws.readyState === WebSocket.OPEN &&
+      cached !== undefined &&
+      cached.ws.readyState === cached.ws.OPEN &&
       this.callerConnections.get(callerId)?.get(cached.connectionId) === cached
     ) {
       return cached;
@@ -93,7 +90,7 @@ export class ConnectionRegistry {
 
     let primary: WsClientState | undefined;
     for (const client of this.callerConnections.get(callerId)?.values() ?? []) {
-      if (client.ws.readyState !== WebSocket.OPEN) continue;
+      if (client.ws.readyState !== client.ws.OPEN) continue;
       if (!primary || this.comparePrimary(client, primary) < 0) primary = client;
     }
     if (primary) this.primaryConnections.set(callerId, primary);
@@ -116,7 +113,7 @@ export class ConnectionRegistry {
     this.clients.set(client.ws, client);
     callerClients.set(client.connectionId, client);
     const primary = this.primaryConnections.get(client.caller.runtime.id);
-    if (!primary || primary.ws.readyState !== WebSocket.OPEN) {
+    if (!primary || primary.ws.readyState !== primary.ws.OPEN) {
       this.primaryConnections.delete(client.caller.runtime.id);
       this.pickPrimary(client.caller.runtime.id);
     } else if (this.comparePrimary(client, primary) < 0) {
@@ -165,7 +162,7 @@ export class ConnectionRegistry {
   /** All active OPEN connections authorized for `userId`. */
   getUserConnections(userId: string): WsClientState[] {
     return [...(this.usersByUserId.get(userId) ?? [])].filter(
-      (client) => client.ws.readyState === WebSocket.OPEN && this.isActiveClient(client)
+      (client) => client.ws.readyState === client.ws.OPEN && this.isActiveClient(client)
     );
   }
 
@@ -193,7 +190,7 @@ export class ConnectionRegistry {
     callerId: string,
     connectionId: string,
     bridge: RpcClient,
-    transport: WsServerTransportInternal
+    transport: SessionServerTransportInternal
   ): void {
     let bridges = this.bridges.get(callerId);
     if (!bridges) {
@@ -219,7 +216,7 @@ export class ConnectionRegistry {
     return primary ? this.getBridge(callerId, primary.connectionId) : undefined;
   }
 
-  getTransport(callerId: string, connectionId: string): WsServerTransportInternal | undefined {
+  getTransport(callerId: string, connectionId: string): SessionServerTransportInternal | undefined {
     return this.transports.get(callerId)?.get(connectionId);
   }
 
@@ -245,7 +242,7 @@ export class ConnectionRegistry {
     let count = 0;
     for (const callerClients of this.callerConnections.values()) {
       for (const client of callerClients.values()) {
-        if (kinds.has(client.caller.runtime.kind) && client.ws.readyState === WebSocket.OPEN) {
+        if (kinds.has(client.caller.runtime.kind) && client.ws.readyState === client.ws.OPEN) {
           count++;
         }
       }

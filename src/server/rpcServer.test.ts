@@ -11,6 +11,8 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { awaitRpcAdmissionResolution, RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer/connectionRegistry.js";
+import type { RpcSessionChannel } from "./rpcServer/sessionChannel.js";
+import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   createVerifiedCaller,
   type CallerKind,
@@ -181,7 +183,7 @@ type TestRpcServer = {
   >;
   handleAuth(ws: unknown, token: string | null, connectionId: string): Promise<void>;
   handleConnection(ws: unknown): void;
-  handleMessage(client: WsClientState, data: Buffer): void;
+  handleMessage(client: WsClientState, message: WsClientMessage): void;
   handleRoute(
     client: WsClientState,
     targetId: string,
@@ -252,7 +254,7 @@ type TestRpcServer = {
     targetId: string,
     method?: string
   ): { ok: boolean; reason?: string };
-  sendToWs(ws: unknown, msg: unknown): void;
+  sendToSession(ws: unknown, msg: unknown): void;
   resolveCausalParent(
     caller: ReturnType<typeof createVerifiedCaller>,
     message: {
@@ -355,6 +357,27 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
 }
 
 function createClient(callerId = "panel:nav-a"): WsClientState {
+  const channel = {
+    OPEN: WebSocket.OPEN,
+    readyState: WebSocket.OPEN,
+    bufferedAmount: 0,
+    transportBinding: { kind: "local" } as const,
+    sendMessage: vi.fn(),
+    takeInboundBody: vi.fn(() => undefined),
+    sendStreamFrame: vi.fn(
+      async (
+        _requestId: string,
+        _frameType: number,
+        _payload: Uint8Array,
+        fallbackMessage: WsServerMessage
+      ) => channel.sendMessage(fallbackMessage)
+    ),
+    close: vi.fn(),
+    terminate: vi.fn(),
+    onMessage: vi.fn(() => () => undefined),
+    onClose: vi.fn(() => () => undefined),
+    onError: vi.fn(() => () => undefined),
+  };
   return {
     caller: createVerifiedCaller(callerId, "panel"),
     connectionId: "conn-1",
@@ -363,13 +386,7 @@ function createClient(callerId = "panel:nav-a"): WsClientState {
     // Mirror of caller.subject?.userId (WsClientState, WP4 §2.1), stamped at
     // admission. These panel connections model one owning user in these tests.
     userId: "user-1",
-    ws: {
-      readyState: WebSocket.OPEN,
-      send: vi.fn(),
-      close: vi.fn(),
-      on: vi.fn(),
-      off: vi.fn(),
-    } as unknown as WebSocket,
+    ws: channel as RpcSessionChannel,
   };
 }
 
@@ -439,21 +456,51 @@ function handleRpc(server: RpcServer, client: WsClientState, message: RpcMessage
 
 function createTestWs() {
   const handlers = new Map<string, (...args: unknown[]) => void>();
+  const messageHandlers = new Set<(message: WsClientMessage, encodedBytes: number) => void>();
+  const closeHandlers = new Set<(code: number, reason: string) => void>();
+  const errorHandlers = new Set<(error: unknown) => void>();
+  const send = vi.fn();
   return {
     OPEN: WebSocket.OPEN as number,
     readyState: WebSocket.OPEN as number,
-    send: vi.fn(),
+    bufferedAmount: 0,
+    transportBinding: { kind: "local" } as const,
+    send,
+    sendMessage: vi.fn((message: WsServerMessage) => send(JSON.stringify(message))),
+    takeInboundBody: vi.fn(() => undefined),
+    sendStreamFrame: vi.fn(
+      async (
+        _requestId: string,
+        _frameType: number,
+        _payload: Uint8Array,
+        fallbackMessage: WsServerMessage
+      ) => send(JSON.stringify(fallbackMessage))
+    ),
     close: vi.fn(),
+    terminate: vi.fn(),
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       handlers.set(event, handler);
     }),
     off: vi.fn(),
+    onMessage(handler: (message: WsClientMessage, encodedBytes: number) => void) {
+      messageHandlers.add(handler);
+      return () => messageHandlers.delete(handler);
+    },
+    onClose(handler: (code: number, reason: string) => void) {
+      closeHandlers.add(handler);
+      return () => closeHandlers.delete(handler);
+    },
+    onError(handler: (error: unknown) => void) {
+      errorHandlers.add(handler);
+      return () => errorHandlers.delete(handler);
+    },
     emitMessage(message: unknown) {
-      handlers.get("message")?.(Buffer.from(JSON.stringify(message)));
+      const encodedBytes = Buffer.byteLength(JSON.stringify(message));
+      for (const handler of messageHandlers) handler(message as WsClientMessage, encodedBytes);
     },
     emitClose(code = 1006, reason = "network") {
       this.readyState = WebSocket.CLOSED;
-      handlers.get("close")?.(code, Buffer.from(reason));
+      for (const handler of closeHandlers) handler(code, reason);
     },
   };
 }
@@ -480,13 +527,16 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
   }
 
   function sentStreamFrames(client: WsClientState) {
-    return (client.ws.send as ReturnType<typeof vi.fn>).mock.calls
-      .map((call) => JSON.parse(String(call[0])))
-      .filter((msg) => msg.envelope?.message?.type === "stream-frame")
-      .map((msg) => msg.envelope.message as { frameType: number; payload: string });
+    return (client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[0] as { envelope?: { message?: RpcMessage } })
+      .flatMap((msg) =>
+        msg.envelope?.message?.type === "stream-frame"
+          ? [msg.envelope.message as { frameType: number; payload: string }]
+          : []
+      );
   }
 
-  it("uses the binary sendStreamFrame surface (raw bytes, no base64) when the transport exposes it", async () => {
+  it("uses raw bytes when the session channel is backed by an Iroh request stream", async () => {
     const { server, dispatcher } = setupStreamingServer();
     dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
 
@@ -514,7 +564,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     expect(sentStreamFrames(client)).toHaveLength(0);
   });
 
-  it("keeps the base64-JSON path when the transport has no sendStreamFrame (plain WS unchanged)", async () => {
+  it("lets the loopback session channel encode streaming frames as bounded messages", async () => {
     const { server, dispatcher } = setupStreamingServer();
     dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
 
@@ -569,7 +619,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     await done;
   });
 
-  it("registers parsed-service streams in wsStreamAborts — a client stream-cancel stops the service read", async () => {
+  it("registers parsed-service streams in sessionStreamAborts — a client stream-cancel stops the service read", async () => {
     const { server, dispatcher } = setupStreamingServer();
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({
@@ -831,8 +881,8 @@ describe("RpcServer relay behavior", () => {
       },
     });
 
-    expect(target.ws.send).toHaveBeenCalledTimes(1);
-    expect(JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toEqual({
+    expect(target.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect((target.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toEqual({
       type: "ws:routed",
       envelope: {
         from: "panel:nav-a",
@@ -925,7 +975,7 @@ describe("RpcServer relay behavior", () => {
       },
     });
 
-    expect(target.ws.send).not.toHaveBeenCalled();
+    expect(target.ws.sendMessage).not.toHaveBeenCalled();
     const rejection = sourceWs.send.mock.calls
       .map(([raw]) => JSON.parse(String(raw)))
       .find(
@@ -972,7 +1022,7 @@ describe("RpcServer relay behavior", () => {
       },
     });
 
-    expect(target.ws.send).not.toHaveBeenCalled();
+    expect(target.ws.sendMessage).not.toHaveBeenCalled();
     await vi.waitFor(() =>
       expect(
         sourceWs.send.mock.calls
@@ -1406,25 +1456,13 @@ describe("RpcServer relay behavior", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("rejects distinct live panel runtime connections for the same caller", () => {
+  it("rejects distinct live panel runtime connections for the same caller", async () => {
     const { server, grantPanel } = createServer();
-    const ws1 = {
-      readyState: WebSocket.OPEN,
-      send: vi.fn(),
-      close: vi.fn(),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    const ws2 = {
-      readyState: WebSocket.OPEN,
-      send: vi.fn(),
-      close: vi.fn(),
-      on: vi.fn(),
-      off: vi.fn(),
-    };
+    const ws1 = createTestWs();
+    const ws2 = createTestWs();
 
-    testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
-    testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-2");
+    await testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
+    await testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-2");
 
     expect(ws1.close).not.toHaveBeenCalled();
     expect(ws2.close).toHaveBeenCalledWith(4090, "Panel runtime lease denied");
@@ -1635,11 +1673,9 @@ describe("RpcServer relay behavior", () => {
       payload: { ok: true },
     });
 
-    expect(target1.ws.send).toHaveBeenCalledTimes(1);
-    expect(target2.ws.send).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse((target1.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
-    ).toMatchObject({
+    expect(target1.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect(target2.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect((target1.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
       type: "ws:routed",
       envelope: {
         from: "panel:nav-a",
@@ -1664,7 +1700,7 @@ describe("RpcServer relay behavior", () => {
       method: "test.method",
       args: [],
     });
-    (target.ws.send as ReturnType<typeof vi.fn>).mockClear();
+    (target.ws.sendMessage as ReturnType<typeof vi.fn>).mockClear();
 
     handleRoute(server, target, "panel:nav-a", {
       type: "response",
@@ -1673,11 +1709,9 @@ describe("RpcServer relay behavior", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(origin1.ws.send).not.toHaveBeenCalled();
-    expect(origin2.ws.send).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse((origin2.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
-    ).toMatchObject({
+    expect(origin1.ws.sendMessage).not.toHaveBeenCalled();
+    expect(origin2.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect((origin2.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
       type: "ws:routed",
       envelope: {
         from: "panel:nav-b",
@@ -1723,7 +1757,7 @@ describe("RpcServer relay behavior", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(origin1.ws.send).not.toHaveBeenCalled();
+      expect(origin1.ws.sendMessage).not.toHaveBeenCalled();
       const routedCall = reconnectedWs.send.mock.calls
         .map(([raw]) => JSON.parse(raw as string))
         .find((msg) => msg.type === "ws:routed");
@@ -1756,13 +1790,13 @@ describe("RpcServer relay behavior", () => {
         args: [],
       });
       // Delivered to the callee — inbox replay / re-drive can no longer help.
-      expect(target.ws.send).toHaveBeenCalledTimes(1);
+      expect(target.ws.sendMessage).toHaveBeenCalledTimes(1);
 
       testServer(server).handleClose(target, 1006, "network");
       await vi.advanceTimersByTimeAsync(3001);
 
-      const originMessages = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        ([raw]) => JSON.parse(raw as string) as { type: string }
+      const originMessages = (origin.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([message]) => message as { type: string }
       );
       expect(originMessages.filter((m) => m.type === "ws:routed-response-error")).toHaveLength(1);
       expect(originMessages.find((m) => m.type === "ws:routed-response-error")).toMatchObject({
@@ -1781,12 +1815,12 @@ describe("RpcServer relay behavior", () => {
         result: { ok: true },
       });
       await vi.advanceTimersByTimeAsync(1);
-      const originAfter = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        ([raw]) => JSON.parse(raw as string) as { type: string }
+      const originAfter = (origin.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([message]) => message as { type: string }
       );
       expect(originAfter.filter((m) => m.type === "ws:routed")).toHaveLength(0);
-      const responderBounce = (target.ws.send as ReturnType<typeof vi.fn>).mock.calls
-        .map(([raw]) => JSON.parse(raw as string) as { type: string })
+      const responderBounce = (target.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+        .map(([message]) => message as { type: string })
         .find((m) => m.type === "ws:routed-response-error");
       expect(responderBounce).toMatchObject({ errorCode: "TARGET_NOT_REACHABLE" });
     } finally {
@@ -1810,7 +1844,7 @@ describe("RpcServer relay behavior", () => {
         method: "test.method",
         args: [],
       });
-      expect(target.ws.send).toHaveBeenCalledTimes(1);
+      expect(target.ws.sendMessage).toHaveBeenCalledTimes(1);
 
       // Transient pipe-down: the callee resumes the SAME connectionId within
       // the grace window (resubscribe) — the pending must be left alone.
@@ -1824,8 +1858,8 @@ describe("RpcServer relay behavior", () => {
       testServer(server).handleAuth(reconnectedWs, grantPanel("panel:nav-b"), "target-conn");
       await vi.advanceTimersByTimeAsync(3001);
 
-      const originMessages = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        ([raw]) => JSON.parse(raw as string) as { type: string }
+      const originMessages = (origin.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([message]) => message as { type: string }
       );
       expect(originMessages.filter((m) => m.type === "ws:routed-response-error")).toHaveLength(0);
 
@@ -1836,8 +1870,8 @@ describe("RpcServer relay behavior", () => {
         result: { ok: true },
       });
       await vi.advanceTimersByTimeAsync(1);
-      const routed = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls
-        .map(([raw]) => JSON.parse(raw as string) as { type: string })
+      const routed = (origin.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+        .map(([message]) => message as { type: string })
         .find((m) => m.type === "ws:routed");
       expect(routed).toMatchObject({
         type: "ws:routed",
@@ -1877,8 +1911,8 @@ describe("RpcServer relay behavior", () => {
       });
       await vi.advanceTimersByTimeAsync(3001);
 
-      const originMessages = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        ([raw]) => JSON.parse(raw as string) as { type: string }
+      const originMessages = (origin.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([message]) => message as { type: string }
       );
       expect(originMessages.filter((m) => m.type === "ws:routed")).toHaveLength(1);
       expect(originMessages.filter((m) => m.type === "ws:routed-response-error")).toHaveLength(0);
@@ -1900,11 +1934,9 @@ describe("RpcServer relay behavior", () => {
       payload: { ok: true },
     });
 
-    expect(client.ws.send).not.toHaveBeenCalled();
-    expect(target.ws.send).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
-    ).toMatchObject({
+    expect(client.ws.sendMessage).not.toHaveBeenCalled();
+    expect(target.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect((target.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
       type: "ws:routed",
       envelope: {
         from: "panel:nav-a",
@@ -1959,10 +1991,13 @@ describe("RpcServer relay behavior", () => {
     expect(relayTargetStream.mock.calls[0]?.[1].target).toBe(
       "do:workers/pubsub-channel:PubSubChannel:chat-a"
     );
-    const frames = (client.ws.send as ReturnType<typeof vi.fn>).mock.calls
-      .map(([raw]) => JSON.parse(String(raw)))
-      .filter((message) => message.envelope?.message?.type === "stream-frame")
-      .map((message) => message.envelope.message as { frameType: number; payload: string });
+    const frames = (client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map(([message]) => message as { envelope?: { message?: RpcMessage } })
+      .flatMap((message) =>
+        message.envelope?.message?.type === "stream-frame"
+          ? [message.envelope.message as { frameType: number; payload: string }]
+          : []
+      );
     expect(frames.map((frame) => frame.frameType)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
     expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("streamed");
   });
@@ -3320,7 +3355,7 @@ describe("RpcServer relay behavior", () => {
     });
 
     expect(cancel).toHaveBeenCalledWith(client, "routed-stream-1");
-    expect(client.ws.send).not.toHaveBeenCalled();
+    expect(client.ws.sendMessage).not.toHaveBeenCalled();
   });
 
   it("routes stable panel slot events to the current runtime entity connection", () => {
@@ -3341,10 +3376,8 @@ describe("RpcServer relay behavior", () => {
       payload: { ok: true },
     });
 
-    expect(target.ws.send).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
-    ).toMatchObject({
+    expect(target.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect((target.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
       type: "ws:routed",
       envelope: {
         from: "panel:nav-a",
@@ -3504,10 +3537,8 @@ describe("RpcServer relay behavior", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(client.ws.send).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse((client.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
-    ).toMatchObject({
+    expect(client.ws.sendMessage).toHaveBeenCalledTimes(1);
+    expect((client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
       type: "ws:routed-response-error",
       targetId: "panel:nav-b",
       requestId: "req-123",
@@ -3539,15 +3570,10 @@ describe("RpcServer live caller gate", () => {
         method: "fs.stat",
         args: ["ctx_1", "/x"],
       };
-      testServer(server).handleMessage(
-        client,
-        Buffer.from(
-          JSON.stringify({
-            type: "ws:rpc",
-            envelope: clientEnvelope(client, "main", request),
-          })
-        )
-      );
+      testServer(server).handleMessage(client, {
+        type: "ws:rpc",
+        envelope: clientEnvelope(client, "main", request),
+      });
 
       expect(dispatcher.dispatch).not.toHaveBeenCalled();
       expect(client.ws.close).toHaveBeenLastCalledWith(
@@ -3704,8 +3730,8 @@ describe("RpcServer caller identity", () => {
     });
 
     expect(dispatcher.dispatch).not.toHaveBeenCalled();
-    const messages = (client.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(([raw]) =>
-      JSON.parse(String(raw))
+    const messages = (client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([message]) => message as WsServerMessage
     );
     expect(messages).toEqual(
       expect.arrayContaining([
@@ -3742,9 +3768,10 @@ describe("RpcServer caller identity", () => {
   }
 
   function sentResponse(client: WsClientState) {
-    const calls = (client.ws.send as ReturnType<typeof vi.fn>).mock.calls;
-    const raw = calls[calls.length - 1]![0] as string;
-    return JSON.parse(raw) as { envelope: { message: { result?: unknown; error?: string } } };
+    const calls = (client.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    return calls[calls.length - 1]![0] as {
+      envelope: { message: { result?: unknown; error?: string } };
+    };
   }
 
   it("indexes shared-app connections by their concrete authorized user", () => {
@@ -4305,7 +4332,7 @@ describe("RpcServer caller retirement", () => {
       handle: "user1",
     });
     const order: string[] = [];
-    client.ws.send = vi.fn(() => order.push("response"));
+    client.ws.sendMessage = vi.fn(() => order.push("response"));
     client.ws.close = vi.fn(() => order.push("close"));
     registerClient(server, client);
     const dispatcher = testServer(server).dispatcher;
@@ -4374,7 +4401,7 @@ describe("RpcServer caller retirement", () => {
       method: "hubControl.revokeDevice",
       args: [],
     });
-    expect(active.ws.send).toHaveBeenCalledOnce();
+    expect(active.ws.sendMessage).toHaveBeenCalledOnce();
     expect(active.ws.close).toHaveBeenCalledWith(4001, "Token revoked");
 
     const retired = server.retireCaller(callerId);
@@ -4491,7 +4518,7 @@ describe("RpcServer terminal lifecycle", () => {
 
     expect(upgrade).toHaveBeenCalledOnce();
     expect(internal.wss.options.maxPayload).toBe(RPC_WEBSOCKET_MAX_PAYLOAD_BYTES);
-    expect(testServer(server).pendingAuthentications.has(waitingSocket)).toBe(true);
+    expect(testServer(server).pendingAuthentications.size).toBe(1);
   });
 
   it("rejects RPC upgrades without a credential before ws allocates a receiver", () => {
@@ -4739,16 +4766,11 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     const request = streamRequest("sr-ws-upload", "gateway.fetch", [
       { path: "/x", method: "POST" },
     ]);
-    testServer(server).handleMessage(
-      client,
-      Buffer.from(
-        JSON.stringify({
-          type: "ws:rpc",
-          envelope: clientEnvelope(client, "main", request),
-          streamBody: true,
-        })
-      )
-    );
+    testServer(server).handleMessage(client, {
+      type: "ws:rpc",
+      envelope: clientEnvelope(client, "main", request),
+      streamBody: true,
+    });
     await client.uploadBodies.push({
       requestId: "sr-ws-upload",
       seq: 0,
@@ -4825,7 +4847,7 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     expect(new TextDecoder().decode(sends[0]!.payload)).toContain("exactly one");
   });
 
-  it("plain WS (no takeInboundBody) dispatches with no ctx.body — wire unchanged", async () => {
+  it("a loopback session without an upload dispatches with no request body", async () => {
     const { server, dispatcher } = setupStreamingServer();
     let seenBody: unknown = "unset";
     dispatcher.dispatch.mockImplementation(async (ctx: { body?: unknown }) => {

@@ -15,8 +15,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot, getServerProcessBuildId } from "./paths.js";
 import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
-import { createIrohServerClient } from "./irohServerClient.js";
-import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
@@ -36,18 +35,8 @@ import {
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
 import { serverAuthRouteUrl } from "@vibestudio/shared/connect";
-import {
-  EndpointGenerationOwner,
-  assertIrohReach,
-  type ConnectPairing,
-  type IrohReach,
-} from "@vibestudio/iroh-transport";
-import {
-  createNodeEndpointBinding,
-  loadIrohNodeBinding,
-  type NodePhysicalConnection,
-  type NodePhysicalEndpoint,
-} from "@vibestudio/iroh-transport/node";
+import { assertIrohReach, type ConnectPairing, type IrohReach } from "@vibestudio/iroh-transport";
+import { DesktopIrohConnectionSupervisor } from "./desktopIrohConnectionSupervisor.js";
 import {
   FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
   LOCAL_STARTUP_CONNECTION_PHASES,
@@ -182,26 +171,6 @@ function buildServerInfo(
  * here, along with the shell-token provider derived from the persisted device
  * credential.
  */
-export function connectRemoteViaIroh(
-  reach: IrohReach,
-  endpointOwner: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>,
-  options: {
-    /** The shell's caller id, e.g. `shell:<deviceId>`. */
-    callerId: string;
-    /** Device-credential → short-lived shell token (re-invoked per session open). */
-    getShellToken: () => Promise<string> | string;
-    connectionId?: string;
-    /** Fired when a fresh device is paired — persist the returned credential. */
-    onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
-    onConnectionStatusChanged?: (status: ConnectionStatus) => void;
-    onReconnectProgress?: (progress: IrohReconnectProgress) => void;
-    onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
-    onMainSessionTerminalClose?: (error: Error) => void;
-  }
-): Promise<ServerClient> {
-  return createIrohServerClient({ reach, endpointOwner, ...options });
-}
-
 export interface IrohReconnectProgress {
   attempt: number;
   phase: "scheduled" | "failed";
@@ -428,17 +397,11 @@ type RemoteConnectArgs = {
   onMainSessionTerminalClose?: (error: Error) => void;
 };
 
-function createDesktopEndpointOwner(
+function createDesktopIrohSupervisor(
   endpointSecret: Uint8Array,
   relays: readonly string[]
-): EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint> {
-  if (endpointSecret.byteLength !== 32) throw new Error("Stored Iroh endpoint identity is invalid");
-  return new EndpointGenerationOwner(
-    createNodeEndpointBinding({
-      secretKey: loadIrohNodeBinding().SecretKey.fromBytes([...endpointSecret]),
-      relayUrls: relays,
-    })
-  );
+): DesktopIrohConnectionSupervisor {
+  return new DesktopIrohConnectionSupervisor(endpointSecret, relays);
 }
 
 /**
@@ -463,7 +426,7 @@ async function establishRemoteSession(
     saveDeviceCredential(current);
   };
   const auth = () => `refresh:${current.deviceId}:${current.refreshToken}`;
-  const endpointOwner = createDesktopEndpointOwner(
+  const supervisor = createDesktopIrohSupervisor(
     Buffer.from(stored.endpointSecret, "base64url"),
     stored.controlPairing.relays
   );
@@ -477,12 +440,12 @@ async function establishRemoteSession(
   // the control and workspace dials are independent and run concurrently.
   phase("connect-server-and-workspace");
   const dials = await Promise.allSettled([
-    connectRemoteViaIroh(stored.controlPairing, endpointOwner, {
+    supervisor.connect(stored.controlPairing, {
       callerId: `shell:${stored.deviceId}`,
       getShellToken: auth,
       onPaired: rotate,
     }),
-    connectRemoteViaIroh(stored.workspacePairing, endpointOwner, {
+    supervisor.connect(stored.workspacePairing, {
       callerId: `shell:${stored.deviceId}`,
       getShellToken: auth,
       onPaired: rotate,
@@ -502,20 +465,7 @@ async function establishRemoteSession(
           : new Error("unreachable");
     return throwAfterOwnedCleanup(
       failure,
-      [
-        ...(workspaceDial.status === "fulfilled"
-          ? [
-              {
-                label: "remote workspace client",
-                close: () => workspaceDial.value.close(),
-              },
-            ]
-          : []),
-        ...(hubDial.status === "fulfilled"
-          ? [{ label: "remote hub control client", close: () => hubDial.value.close() }]
-          : []),
-        { label: "remote Iroh endpoint", close: () => endpointOwner.close() },
-      ],
+      [{ label: "remote Iroh connection supervisor", close: () => supervisor.close() }],
       "Returning remote session establishment"
     );
   }
@@ -527,18 +477,14 @@ async function establishRemoteSession(
       serverClient,
       hubControlClient,
       stored.workspaceName,
-      () => endpointOwner.close()
+      () => supervisor.close()
     );
     log.info(`[Server] Shell client connected over Iroh (${origin})`);
     return connection;
   } catch (error) {
     return throwAfterOwnedCleanup(
       error,
-      [
-        { label: "remote workspace client", close: serverClient.close.bind(serverClient) },
-        { label: "remote hub control client", close: () => hubControlClient.close() },
-        { label: "remote Iroh endpoint", close: () => endpointOwner.close() },
-      ],
+      [{ label: "remote Iroh connection supervisor", close: () => supervisor.close() }],
       "Returning remote session establishment"
     );
   }
@@ -557,7 +503,7 @@ async function establishFreshPairSession(
   assertIrohReach(pairing);
   const endpointSecretBytes = randomBytes(32);
   const endpointSecret = endpointSecretBytes.toString("base64url");
-  const endpointOwner = createDesktopEndpointOwner(endpointSecretBytes, pairing.relays);
+  const supervisor = createDesktopIrohSupervisor(endpointSecretBytes, pairing.relays);
   const paired: {
     current: {
       credential: { deviceId: string; refreshToken: string };
@@ -577,7 +523,7 @@ async function establishFreshPairSession(
   phase("redeem-pairing-link");
   let controlClient: ServerClient;
   try {
-    controlClient = await connectRemoteViaIroh(pairing, endpointOwner, {
+    controlClient = await supervisor.connect(pairing, {
       // The server assigns the real `shell:<deviceId>` principal when it redeems the
       // one-time code; we don't know that id yet, so dial with a stable selfId. (If
       // the resolved id is ever threaded back, swap it in here.)
@@ -609,7 +555,7 @@ async function establishFreshPairSession(
       },
     });
   } catch (error) {
-    await endpointOwner.close().catch(() => undefined);
+    await supervisor.close().catch(() => undefined);
     throw error;
   }
   let workspaceClient: ServerClient | null = null;
@@ -651,7 +597,7 @@ async function establishFreshPairSession(
       return `refresh:${active.deviceId}:${active.refreshToken}`;
     };
     phase("connect-workspace");
-    workspaceClient = await connectRemoteViaIroh(currentStored.workspacePairing, endpointOwner, {
+    workspaceClient = await supervisor.connect(currentStored.workspacePairing, {
       callerId: `shell:${currentStored.deviceId}`,
       getShellToken: auth,
       onPaired: (credential) => {
@@ -674,25 +620,14 @@ async function establishFreshPairSession(
       workspaceClient,
       controlClient,
       currentStored.workspaceName,
-      () => endpointOwner.close()
+      () => supervisor.close()
     );
     log.info("[Server] Shell client connected over Iroh (fresh pairing)");
     return connection;
   } catch (error) {
     return throwAfterOwnedCleanup(
       error,
-      [
-        ...(workspaceClient
-          ? [
-              {
-                label: "fresh workspace client",
-                close: workspaceClient.close.bind(workspaceClient),
-              },
-            ]
-          : []),
-        { label: "fresh hub control client", close: () => controlClient.close() },
-        { label: "fresh Iroh endpoint", close: () => endpointOwner.close() },
-      ],
+      [{ label: "fresh Iroh connection supervisor", close: () => supervisor.close() }],
       "Fresh remote session establishment"
     );
   }
@@ -727,7 +662,7 @@ async function buildRemoteSessionConnection(
   serverClient: ServerClient,
   hubControlClient: ServerClient,
   workspaceName: string,
-  closeEndpoint: () => Promise<void>
+  closeRemote: () => Promise<void>
 ): Promise<SessionConnection> {
   const protocol = "http" as const;
   const externalHost = "localhost";
@@ -736,7 +671,8 @@ async function buildRemoteSessionConnection(
   // origin (buildPanelUrl → http://127.0.0.1:{gatewayPort}/{source}/), so stand
   // up an assets-only façade that proxies each request to the remote server's
   // own gateway over the pipe (gateway.fetch RPC). The façade lives for the
-  // whole session and is closed with both RPC clients by SessionConnection.close.
+  // whole session and is closed alongside the connection supervisor by
+  // SessionConnection.close.
   // Persist the façade's asset cache + stable loopback port under userData so the
   // content-addressed cache and the webview HTTP cache both survive restarts.
   const facade = await startPanelAssetFacade(serverClient, {
@@ -790,10 +726,8 @@ async function buildRemoteSessionConnection(
       hubControlClient,
       serverClient,
       close: ownSessionResources([
-        { label: "remote workspace client", close: () => serverClient.close() },
-        { label: "remote hub control client", close: () => hubControlClient.close() },
         { label: "remote panel asset facade", close: () => facade.close() },
-        { label: "remote Iroh endpoint", close: closeEndpoint },
+        { label: "remote Iroh connection supervisor", close: closeRemote },
       ]),
       hubProcessManager: null,
       panelHttpServer,

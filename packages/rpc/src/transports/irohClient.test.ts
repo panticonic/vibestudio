@@ -5,6 +5,7 @@ import {
   readFrame,
   readIrohStreamPreamble,
   writeFrame,
+  writeIrohStreamPreamble,
 } from "@vibestudio/iroh-transport";
 import {
   bindNodeEndpoint,
@@ -103,6 +104,32 @@ describe("Iroh RPC client over real local QUIC", () => {
         MAX_CONTROL_FRAME_BYTES
       );
 
+      // A server-opened stream can stall before its bounded preamble is
+      // complete. It must not head-of-line block a later independent event
+      // stream admitted on the same QUIC connection.
+      const stalled = await server.openBi();
+      await stalled.send.writeAll([0, 0, 0, 16]);
+      const eventStream = await server.openBi();
+      await writeIrohStreamPreamble(eventStream.send, {
+        k: "envelope",
+        sid: "shell",
+        v: IROH_WIRE_VERSION,
+      });
+      await writeFrame(
+        eventStream.send,
+        new TextEncoder().encode(
+          JSON.stringify({
+            from: "main",
+            target: "shell:device",
+            delivery: { caller: { callerId: "main", callerKind: "shell" } },
+            provenance: [],
+            message: { type: "event", fromId: "main", event: "ready", payload: "independent" },
+          } satisfies RpcEnvelope)
+        ),
+        MAX_ENVELOPE_FRAME_BYTES
+      );
+      await eventStream.send.finish();
+
       const requestStream = await server.acceptBi();
       expect(await readIrohStreamPreamble(requestStream.recv)).toEqual({
         k: "envelope",
@@ -127,6 +154,10 @@ describe("Iroh RPC client over real local QUIC", () => {
         MAX_ENVELOPE_FRAME_BYTES
       );
       await requestStream.send.finish();
+      await Promise.all([
+        stalled.send.reset(0x202n).catch(() => undefined),
+        stalled.recv.stop(0x202n).catch(() => undefined),
+      ]);
     })();
 
     const pipe = createIrohClientPipe(client, {
@@ -140,12 +171,22 @@ describe("Iroh RPC client over real local QUIC", () => {
       endpointGeneration: 3,
     });
     const session = pipe.openSession({ sid: "shell", getToken: () => "token" });
+    const independentEvent = new Promise<RpcEnvelope>((resolve) => {
+      session.onMessage((envelope) => {
+        if (envelope.message.type === "event" && envelope.message.event === "ready") {
+          resolve(envelope);
+        }
+      });
+    });
     const rpc = createRpcClient({
       selfId: "shell:device",
       callerKind: "shell",
       transport: session,
     });
     await expect(rpc.call("main", "echo", ["hello"])).resolves.toBe("hello");
+    await expect(independentEvent).resolves.toMatchObject({
+      message: { type: "event", event: "ready", payload: "independent" },
+    });
     await serverTask;
     await pipe.close();
   });

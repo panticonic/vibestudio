@@ -1,22 +1,33 @@
 import { describe, it, expect } from "vitest";
 import { createRpcClient, envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
-import type { WebSocket } from "ws";
+import type { RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import {
-  createWsServerTransport,
+  createSessionServerTransport,
   CONNECTION_LOST_CODE,
-  type WsServerTransportInternal,
-} from "./wsServerTransport.js";
+  type SessionServerTransportInternal,
+} from "./sessionServerTransport.js";
 
 /** Minimal fake of the `ws` WebSocket the transport needs. */
 class FakeWs {
   static readonly OPEN = 1;
   readonly OPEN = 1;
   readyState = 1;
+  readonly bufferedAmount = 0;
+  readonly transportBinding = { kind: "local" } as const;
   sent: string[] = [];
   private closeHandlers = new Set<() => void>();
 
   send(data: string): void {
     this.sent.push(data);
+  }
+
+  sendMessage(message: Parameters<RpcSessionChannel["sendMessage"]>[0]): void {
+    this.send(JSON.stringify(message));
+  }
+
+  onClose(handler: () => void): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
   }
 
   on(event: string, handler: () => void): this {
@@ -29,6 +40,14 @@ class FakeWs {
     return this;
   }
 
+  close(): void {
+    this.emitClose();
+  }
+
+  terminate(): void {
+    this.emitClose();
+  }
+
   emitClose(): void {
     this.readyState = 3;
     for (const handler of this.closeHandlers) handler();
@@ -36,7 +55,7 @@ class FakeWs {
 }
 
 /** Wrap the server transport in an RpcClient bridge, as RpcServer does. */
-function makeBridge(transport: WsServerTransportInternal) {
+function makeBridge(transport: SessionServerTransportInternal) {
   return createRpcClient({
     selfId: "server",
     callerKind: "server",
@@ -61,11 +80,11 @@ function makeBridge(transport: WsServerTransportInternal) {
   });
 }
 
-describe("createWsServerTransport", () => {
+describe("createSessionServerTransport", () => {
   it("rejects an in-flight bridge.call when the WebSocket closes", async () => {
     const ws = new FakeWs();
-    const transport = createWsServerTransport({
-      ws: ws as unknown as WebSocket,
+    const transport = createSessionServerTransport({
+      ws: ws as unknown as RpcSessionChannel,
       clientId: "panel:1:conn-a",
     });
     const bridge = makeBridge(transport);
@@ -81,8 +100,8 @@ describe("createWsServerTransport", () => {
 
   it("rejects in-flight calls when close() is invoked directly (removeBridge path)", async () => {
     const ws = new FakeWs();
-    const transport = createWsServerTransport({
-      ws: ws as unknown as WebSocket,
+    const transport = createSessionServerTransport({
+      ws: ws as unknown as RpcSessionChannel,
       clientId: "panel:2:conn-b",
     });
     const bridge = makeBridge(transport);
@@ -95,8 +114,8 @@ describe("createWsServerTransport", () => {
 
   it("throws CONNECTION_LOST when sending after the socket is closed", async () => {
     const ws = new FakeWs();
-    const transport = createWsServerTransport({
-      ws: ws as unknown as WebSocket,
+    const transport = createSessionServerTransport({
+      ws: ws as unknown as RpcSessionChannel,
       clientId: "panel:3:conn-c",
     });
     const bridge = makeBridge(transport);
@@ -109,8 +128,8 @@ describe("createWsServerTransport", () => {
 
   it("does not double-settle a call that already got a real response", async () => {
     const ws = new FakeWs();
-    const transport = createWsServerTransport({
-      ws: ws as unknown as WebSocket,
+    const transport = createSessionServerTransport({
+      ws: ws as unknown as RpcSessionChannel,
       clientId: "panel:4:conn-d",
     });
     const bridge = makeBridge(transport);
@@ -134,8 +153,8 @@ describe("createWsServerTransport", () => {
 
   it("includes delivery metadata when the bridge sends a call envelope", async () => {
     const ws = new FakeWs();
-    const transport = createWsServerTransport({
-      ws: ws as unknown as WebSocket,
+    const transport = createSessionServerTransport({
+      ws: ws as unknown as RpcSessionChannel,
       clientId: "panel:5:conn-e",
     });
     const bridge = makeBridge(transport);

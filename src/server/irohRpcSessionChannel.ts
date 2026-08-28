@@ -23,12 +23,11 @@ import {
 } from "@vibestudio/rpc/protocol/irohSession";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
+import type { RpcSessionChannel, RpcSessionTransportBinding } from "./rpcServer/sessionChannel.js";
 
 const OPEN = 1;
 const CLOSED = 3;
 const STREAM_CANCEL_CODE = 0x202n;
-
-type SessionHandler = (...args: any[]) => void;
 
 interface RequestRoute {
   stream: IrohPhysicalBiStream;
@@ -37,7 +36,7 @@ interface RequestRoute {
   headSent: boolean;
 }
 
-export interface IrohRpcSessionSocketOptions {
+export interface IrohRpcSessionChannelOptions {
   sid: string;
   connection: IrohPhysicalConnection;
   writeControl(frame: IrohSessionControlFrame): Promise<void>;
@@ -51,19 +50,25 @@ export interface IrohRpcSessionSocketOptions {
  * connection control stream; every RPC envelope and response stays on its own
  * QUIC stream.
  */
-export class IrohRpcSessionSocket {
+export class IrohRpcSessionChannel implements RpcSessionChannel {
   readonly CONNECTING = 0;
   readonly OPEN = OPEN;
   readonly CLOSING = 2;
   readonly CLOSED = CLOSED;
   private state = OPEN;
-  private readonly messageHandlers = new Set<SessionHandler>();
-  private readonly closeHandlers = new Set<SessionHandler>();
+  private readonly messageHandlers = new Set<
+    (message: WsClientMessage, encodedBytes: number) => void
+  >();
+  private readonly closeHandlers = new Set<(code: number, reason: string) => void>();
   private readonly requests = new Map<string, RequestRoute>();
   private readonly inboundBodies = new Map<string, ReadableStream<Uint8Array>>();
   private pendingBytes = 0;
 
-  constructor(private readonly options: IrohRpcSessionSocketOptions) {}
+  readonly transportBinding: RpcSessionTransportBinding;
+
+  constructor(private readonly options: IrohRpcSessionChannelOptions) {
+    this.transportBinding = { kind: "iroh", endpointId: options.connection.peerEndpointId };
+  }
 
   get peerEndpointId(): string {
     return this.options.connection.peerEndpointId;
@@ -77,34 +82,22 @@ export class IrohRpcSessionSocket {
     return this.pendingBytes;
   }
 
-  on(event: string, handler: SessionHandler): this {
-    if (event === "message") this.messageHandlers.add(handler);
-    else if (event === "close") this.closeHandlers.add(handler);
-    return this;
+  onMessage(handler: (message: WsClientMessage, encodedBytes: number) => void): () => void {
+    this.messageHandlers.add(handler);
+    return () => this.messageHandlers.delete(handler);
   }
 
-  once(event: string, handler: SessionHandler): this {
-    return this.on(event, handler);
+  onClose(handler: (code: number, reason: string) => void): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
   }
 
-  off(event: string, handler: SessionHandler): this {
-    if (event === "message") this.messageHandlers.delete(handler);
-    else if (event === "close") this.closeHandlers.delete(handler);
-    return this;
+  onError(_handler: (error: unknown) => void): () => void {
+    return () => undefined;
   }
 
-  removeListener(event: string, handler: SessionHandler): this {
-    return this.off(event, handler);
-  }
-
-  send(data: string): void {
+  sendMessage(message: WsServerMessage): void {
     if (this.state !== OPEN) return;
-    let message: WsServerMessage;
-    try {
-      message = JSON.parse(data) as WsServerMessage;
-    } catch {
-      return;
-    }
     void this.translateOutbound(message).catch((error) => {
       this.options.log?.(
         `Iroh session ${this.options.sid} outbound failure: ${
@@ -180,14 +173,17 @@ export class IrohRpcSessionSocket {
   sendStreamFrame(
     requestId: string,
     frameType: FrameType,
-    payload: Uint8Array
-  ): Promise<void> | false {
+    payload: Uint8Array,
+    _fallbackMessage: WsServerMessage
+  ): Promise<void> {
     const route = this.requests.get(requestId);
-    if (!route || !route.streaming || route.settled || this.state !== OPEN) return false;
+    if (!route || !route.streaming || route.settled || this.state !== OPEN) {
+      throw new Error(`Iroh response stream ${requestId} is not open`);
+    }
     if (frameType === FRAME_HEAD) {
       if (route.headSent) {
         void route.stream.send.reset(STREAM_CANCEL_CODE).catch(() => undefined);
-        return false;
+        throw new Error(`Iroh response stream ${requestId} already sent its head`);
       }
       route.headSent = true;
       const written = writeFrame(
@@ -228,7 +224,9 @@ export class IrohRpcSessionSocket {
       this.inboundBodies.delete(requestId);
       return route.stream.send.finish();
     }
-    if (!route.headSent) return false;
+    if (!route.headSent) {
+      throw new Error(`Iroh response stream ${requestId} received body data before its head`);
+    }
     return this.writeMetered(route.stream, payload);
   }
 
@@ -238,8 +236,8 @@ export class IrohRpcSessionSocket {
 
   private deliver(message: WsClientMessage): void {
     if (this.state !== OPEN) return;
-    const bytes = Buffer.from(JSON.stringify(message));
-    for (const handler of [...this.messageHandlers]) handler(bytes);
+    const encodedBytes = Buffer.byteLength(JSON.stringify(message));
+    for (const handler of [...this.messageHandlers]) handler(message, encodedBytes);
   }
 
   private async translateOutbound(message: WsServerMessage): Promise<void> {
@@ -398,8 +396,7 @@ export class IrohRpcSessionSocket {
     }
     this.requests.clear();
     this.inboundBodies.clear();
-    const reasonBytes = Buffer.from(reason ?? "");
-    for (const handler of [...this.closeHandlers]) handler(code ?? 1006, reasonBytes);
+    for (const handler of [...this.closeHandlers]) handler(code ?? 1006, reason ?? "");
     this.options.onClosed(this.options.sid);
   }
 }

@@ -50,14 +50,13 @@ describe("StreamingRelay HTTP response ownership", () => {
       }),
       verifiedCaller: () => caller,
       authorizeRelay: () => ({ ok: true }),
-      createWsContext: () => {
+      createSessionContext: () => {
         throw new Error("WebSocket context was not expected");
       },
       resolveCausalParent: async () => undefined,
       relayTargetStream: async () => {
         throw new Error("Target relay was not expected");
       },
-      sendWs: () => undefined,
     });
 
     let handled!: () => void;
@@ -141,14 +140,13 @@ describe("StreamingRelay HTTP response ownership", () => {
       }),
       verifiedCaller: () => evaluated,
       authorizeRelay: () => ({ ok: true }),
-      createWsContext: () => {
+      createSessionContext: () => {
         throw new Error("WebSocket context was not expected");
       },
       resolveCausalParent: async () => undefined,
       relayTargetStream: async () => {
         throw new Error("Target relay was not expected");
       },
-      sendWs: () => undefined,
     });
 
     const server = http.createServer((req, res) => {

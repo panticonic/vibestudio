@@ -8,12 +8,13 @@
  * by the client.
  *
  * Message flow:
- * - send(): serializes RpcMessage into a ws:rpc envelope and calls ws.send()
+ * - send(): wraps RpcMessage in the session protocol and sends it through the
+ *   authenticated carrier
  * - deliver(): called by RpcServer when an incoming message from the client
  *   is identified as a response, event, or stream frame for a server-initiated call
  */
 
-import type { RpcSessionSocket } from "./rpcServer/connectionRegistry.js";
+import type { RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import type { RpcEnvelope, RpcMessage, RpcTransport } from "@vibestudio/rpc";
 import { createHandlerRegistry, envelopeFromMessage } from "@vibestudio/rpc";
 
@@ -27,14 +28,14 @@ function connectionLostError(clientId: string): Error {
   );
 }
 
-export interface WsServerTransportOptions {
-  /** The server-side WebSocket for this client */
-  ws: RpcSessionSocket;
+export interface SessionServerTransportOptions {
+  /** The authenticated server-side session channel for this client. */
+  ws: RpcSessionChannel;
   /** Identifier for this client (used in logging) */
   clientId: string;
 }
 
-export interface WsServerTransportInternal extends RpcTransport {
+export interface SessionServerTransportInternal extends RpcTransport {
   /**
    * Send a full envelope to the connected client. Used by the server-side
    * RpcClient bridge so envelope delivery metadata (readOnly, idempotencyKey)
@@ -55,9 +56,9 @@ export interface WsServerTransportInternal extends RpcTransport {
   close(): void;
 }
 
-export function createWsServerTransport(
-  options: WsServerTransportOptions
-): WsServerTransportInternal {
+export function createSessionServerTransport(
+  options: SessionServerTransportOptions
+): SessionServerTransportInternal {
   const { ws, clientId } = options;
   const registry = createHandlerRegistry({ context: `server→${clientId}` });
 
@@ -87,11 +88,10 @@ export function createWsServerTransport(
   };
 
   // Listen for WebSocket close to mark transport as closed and settle pending.
-  const onClose = () => {
+  const removeCloseListener = ws.onClose(() => {
     closed = true;
     failPendingRequests();
-  };
-  ws.on("close", onClose);
+  });
 
   const sendFrame = async (message: RpcMessage, envelope: RpcEnvelope): Promise<void> => {
     if (closed || ws.readyState !== ws.OPEN) {
@@ -102,10 +102,10 @@ export function createWsServerTransport(
     if (message.type === "request" || message.type === "stream-request") {
       inFlightRequests.add(message.requestId);
     }
-    ws.send(JSON.stringify({ type: "ws:rpc", envelope }));
+    ws.sendMessage({ type: "ws:rpc", envelope });
   };
 
-  const transport: WsServerTransportInternal = {
+  const transport: SessionServerTransportInternal = {
     async send(targetId: string, message: RpcMessage): Promise<void> {
       await sendFrame(
         message,
@@ -143,7 +143,7 @@ export function createWsServerTransport(
       // A3: settle pending requests on explicit close (removeBridge path) too,
       // not only on the WS "close" event.
       failPendingRequests();
-      ws.off("close", onClose);
+      removeCloseListener();
     },
   };
 

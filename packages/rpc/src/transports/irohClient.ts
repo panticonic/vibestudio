@@ -48,6 +48,7 @@ import type {
 const IROH_PROTOCOL_CLOSE_CODE = 0x200n;
 const IROH_SESSION_CLOSE_CODE = 0x201n;
 const IROH_CANCEL_CODE = 0x202n;
+const IROH_STREAM_ADMISSION_TIMEOUT_MS = 10_000;
 
 function randomId(): string {
   return (
@@ -699,22 +700,57 @@ class ClientPipe implements IrohClientPipe {
   private async acceptStreams(): Promise<void> {
     while (this.statusValue !== "disconnected") {
       const stream = await this.connection.acceptBi();
+      // QUIC streams are independent. Never wait for one peer-opened stream's
+      // preamble or envelope in the admission loop: a stalled stream would
+      // otherwise head-of-line block every later server event despite QUIC's
+      // multiplexing. The connection's negotiated bidirectional-stream limit
+      // bounds the number of concurrent handlers.
+      void this.acceptStream(stream).catch(() => {
+        // A peer-created request stream is an isolation boundary. Reject only
+        // this malformed or stalled stream; the control stream and unrelated
+        // sessions remain healthy.
+        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+      });
+    }
+  }
+
+  private async acceptStream(stream: IrohPhysicalBiStream): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const admission = (async (): Promise<void> => {
       const preamble = await readIrohStreamPreamble(stream.recv);
       if (preamble.k === "control") throw new Error("Duplicate Iroh control stream");
       const session = this.sessions.get(preamble.sid);
       if (!session) {
         await stream.recv.stop(IROH_SESSION_CLOSE_CODE);
         await stream.send.reset(IROH_SESSION_CLOSE_CODE);
-        continue;
+        return;
       }
       if (preamble.k === "stream") {
         await stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE);
         await stream.send.reset(IROH_PROTOCOL_CLOSE_CODE);
-        continue;
+        return;
       }
       const value = decodeJsonFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
       assertEnvelope(value);
       await session.acceptEnvelope(stream, value);
+    })();
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        reject(
+          new Error(
+            `Iroh peer stream did not provide a complete header within ${IROH_STREAM_ADMISSION_TIMEOUT_MS}ms`
+          )
+        );
+      }, IROH_STREAM_ADMISSION_TIMEOUT_MS);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
+    try {
+      await Promise.race([admission, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

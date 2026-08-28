@@ -2,14 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { RpcClient } from "@vibestudio/rpc";
 import { createVerifiedCaller, type CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { WebSocket } from "ws";
-import type { WsServerTransportInternal } from "../wsServerTransport.js";
+import type { SessionServerTransportInternal } from "../sessionServerTransport.js";
 import { ConnectionRegistry, type WsClientState } from "./connectionRegistry.js";
+import type { RpcSessionChannel } from "./sessionChannel.js";
 
-function createSocket(readyState = WebSocket.OPEN): WebSocket {
+function createSocket(readyState = WebSocket.OPEN): RpcSessionChannel {
   return {
+    OPEN: WebSocket.OPEN,
     readyState,
+    bufferedAmount: 0,
+    transportBinding: { kind: "local" },
+    sendMessage: vi.fn(),
     close: vi.fn(),
-  } as unknown as WebSocket;
+    terminate: vi.fn(),
+    on: vi.fn(),
+    off: vi.fn(),
+  } as unknown as RpcSessionChannel;
 }
 
 function createClient(options: {
@@ -18,7 +26,7 @@ function createClient(options: {
   userId: string;
   authenticatedAt: number;
   callerKind?: CallerKind;
-  ws?: WebSocket;
+  ws?: RpcSessionChannel;
 }): WsClientState {
   return {
     ws: options.ws ?? createSocket(),
@@ -111,7 +119,7 @@ describe("ConnectionRegistry", () => {
       userId: "user-new",
       authenticatedAt: 2,
     });
-    const transport = { close: vi.fn() } as unknown as WsServerTransportInternal;
+    const transport = { close: vi.fn() } as unknown as SessionServerTransportInternal;
     const bridge = {} as RpcClient;
     registry.addClient(oldClient);
     registry.setBridge("panel-a", "conn-a", bridge, transport);
@@ -159,8 +167,8 @@ describe("ConnectionRegistry", () => {
       authenticatedAt: 2,
       callerKind: "shell",
     });
-    const panelTransport = { close: vi.fn() } as unknown as WsServerTransportInternal;
-    const shellTransport = { close: vi.fn() } as unknown as WsServerTransportInternal;
+    const panelTransport = { close: vi.fn() } as unknown as SessionServerTransportInternal;
+    const shellTransport = { close: vi.fn() } as unknown as SessionServerTransportInternal;
     registry.addClient(panel);
     registry.addClient(shell);
     registry.setBridge("panel-a", "panel-conn", {} as RpcClient, panelTransport);

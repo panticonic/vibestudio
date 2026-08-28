@@ -80,7 +80,8 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     configureNodeConnection(serverNative);
     configureNodeConnection(clientNative);
 
-    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+    const clientConnection = new NodePhysicalConnection(clientNative);
+    const pipe = createIrohClientPipe(clientConnection);
     await Promise.all([
       server.attachIrohConnection(new NodePhysicalConnection(serverNative)),
       pipe.ready(),
@@ -91,6 +92,12 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       callerKind: "shell",
       transport: session,
     });
+
+    // A peer can open a stream and then stall halfway through its bounded
+    // preamble. That stream consumes one negotiated stream slot, but it must
+    // not block admission and dispatch of an independent later RPC stream.
+    const stalled = await clientConnection.openBi();
+    await stalled.send.writeAll([0, 0, 0, 16]);
 
     const result = rpc.call("main", "test.echo", ["through-iroh"]);
     await vi.waitFor(() => expect(dispatcher.dispatch).toHaveBeenCalled(), { timeout: 2_000 });
@@ -112,6 +119,10 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       "echo",
       ["through-iroh"]
     );
+    await Promise.all([
+      stalled.send.reset(0x202n).catch(() => undefined),
+      stalled.recv.stop(0x202n).catch(() => undefined),
+    ]);
     await pipe.close();
   });
 });

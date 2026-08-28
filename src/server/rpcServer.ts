@@ -1,12 +1,12 @@
 /**
- * RPC WebSocket Server — handles caller-scoped app, panel, worker, extension,
- * shell-host and server communication.
+ * RPC session server — handles caller-scoped app, panel, worker, extension,
+ * shell-host and server communication over loopback WebSocket or remote Iroh.
  *
- * Replaces Electron IPC with a single WebSocket transport.
- * Auth is unified through TokenManager. Events use owned streaming responses.
+ * Auth and dispatch are transport-neutral. Each carrier owns only admission,
+ * delivery, streaming, and close mechanics.
  */
 
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocketServer } from "ws";
 import { createHmac, randomBytes, randomUUID } from "crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -39,7 +39,10 @@ import type {
   InternalRpcStreamRequest,
 } from "@vibestudio/rpc/internal";
 import { verifiedExternalContextFor } from "@vibestudio/rpc/internal";
-import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
+import {
+  createSessionServerTransport,
+  type SessionServerTransportInternal,
+} from "./sessionServerTransport.js";
 import { SESSION_NOT_OPEN_CLOSE_CODE } from "@vibestudio/rpc/protocol/remoteSession";
 import { FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
@@ -50,6 +53,7 @@ import {
   readFrame,
   readIrohStreamPreamble,
   writeFrame,
+  type IrohPhysicalBiStream,
   type IrohPhysicalConnection,
 } from "@vibestudio/iroh-transport";
 import {
@@ -63,7 +67,8 @@ import {
   type IrohSessionControlFrame,
 } from "@vibestudio/rpc/protocol/irohSession";
 import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
-import { IrohRpcSessionSocket } from "./irohRpcSessionSocket.js";
+import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
+import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -98,7 +103,6 @@ import {
   RPC_WS_ADMISSION_RETRY_AFTER_MS,
   RPC_WS_PAIRING_REPLAY_TTL_MS,
   RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
-  rawWebSocketDataByteLength,
 } from "./ingressLimits.js";
 import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import {
@@ -145,11 +149,7 @@ export async function awaitRpcAdmissionResolution<T>(
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
-import {
-  ConnectionRegistry,
-  type RpcSessionSocket,
-  type WsClientState,
-} from "./rpcServer/connectionRegistry.js";
+import { ConnectionRegistry, type WsClientState } from "./rpcServer/connectionRegistry.js";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
@@ -271,7 +271,9 @@ function envelopeForWsDelivery(
   });
 }
 
-function envelopeTransportFromWsServer(transport: WsServerTransportInternal): EnvelopeRpcTransport {
+function envelopeTransportFromSessionServer(
+  transport: SessionServerTransportInternal
+): EnvelopeRpcTransport {
   return {
     async send(envelope) {
       await transport.sendEnvelope(envelope);
@@ -296,7 +298,7 @@ interface PendingToolCall {
   resolve: (result: ToolExecutionResult) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
-  clientWs: RpcSessionSocket;
+  clientWs: RpcSessionChannel;
 }
 
 interface ResolvedRpcCredential {
@@ -513,7 +515,7 @@ export class RpcServer {
   private readonly eventSessionReleases = new WeakMap<WsClientState, () => void>();
   private disposeTokenRevocationListener: (() => void) | null = null;
   private readonly pendingAuthentications = new Map<
-    RpcSessionSocket,
+    RpcSessionChannel,
     ReturnType<typeof setTimeout> | null
   >();
   private pendingWsAdmissionResolutions = 0;
@@ -521,10 +523,10 @@ export class RpcServer {
   private readonly pairingAdmissionReplayKey = randomBytes(32);
   private readonly pairingAdmissionReplays = new Map<string, RpcPairingAdmissionReplay>();
   /** Requests whose response still has to be queued before revocation may close the socket. */
-  private readonly activeInboundRequests = new Map<RpcSessionSocket, number>();
+  private readonly activeInboundRequests = new Map<RpcSessionChannel, number>();
   /** Exact unary requests owned by each authenticated socket. */
   private readonly inboundRequestControllers = new WeakMap<
-    RpcSessionSocket,
+    RpcSessionChannel,
     Map<string, AbortController>
   >();
   /** Terminal caller teardown, shared by token revocation and explicit reach cleanup. */
@@ -533,7 +535,7 @@ export class RpcServer {
     {
       promise: Promise<void>;
       resolve: () => void;
-      pendingSockets: Set<RpcSessionSocket>;
+      pendingSockets: Set<RpcSessionChannel>;
       callerKind?: CallerKind;
       settled: boolean;
     }
@@ -895,11 +897,10 @@ export class RpcServer {
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
       resolveCausalParent: (caller, request) => this.resolveCausalParent(caller, request),
-      createWsContext: (client, request, caller, extras) =>
+      createSessionContext: (client, request, caller, extras) =>
         this.serviceContextForRpcMessage(client, request, extras, caller),
       relayTargetStream: (caller, envelope, request, causalParent, signal) =>
         this.relayTargetStream(caller, envelope, request, causalParent, signal),
-      sendWs: (client, message) => this.sendToWs(client.ws, message),
     });
     this.httpRpc = new HttpRpcHandler({
       maxBodyBytes: resolveRpcMaxBodyBytes(process.env["VIBESTUDIO_RPC_MAX_BODY_BYTES"]),
@@ -1397,7 +1398,7 @@ export class RpcServer {
     const routedTargetId = this.resolveRoutableTargetId(targetId);
     const client = this.getConnection(routedTargetId, connectionId);
     return Boolean(
-      client?.ws.readyState === WebSocket.OPEN &&
+      client?.ws.readyState === client?.ws.OPEN &&
       this.connections.getBridge(routedTargetId, connectionId)
     );
   }
@@ -1406,7 +1407,7 @@ export class RpcServer {
     callerId: string,
     connectionId: string,
     bridge: RpcClient,
-    transport: WsServerTransportInternal
+    transport: SessionServerTransportInternal
   ): void {
     this.connections.setBridge(callerId, connectionId, bridge, transport);
   }
@@ -1473,7 +1474,7 @@ export class RpcServer {
   private handlersInitialized = false;
 
   private handleConnection(
-    ws: RpcSessionSocket,
+    ws: RpcSessionChannel,
     upgradeAdmission?: RpcWebSocketAdmissionGrant
   ): void {
     if (this.isShuttingDown()) {
@@ -1484,8 +1485,8 @@ export class RpcServer {
       ws.close(1013, "Too many pending RPC authentications; retry shortly");
       return;
     }
-    ws.on("error", (error) => {
-      log.warn("RPC WebSocket transport error", {
+    ws.onError((error) => {
+      log.warn("RPC session transport error", {
         cause: error instanceof Error ? error.message : String(error),
       });
     });
@@ -1495,27 +1496,19 @@ export class RpcServer {
     }, 10000);
     this.pendingAuthentications.set(ws, authTimeout);
 
-    const onFirstMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
+    let removeFirstMessageListener = (): void => undefined;
+    const onFirstMessage = (msg: WsClientMessage, authFrameBytes: number) => {
       if (authTimeout) {
         clearTimeout(authTimeout);
         authTimeout = null;
         this.pendingAuthentications.set(ws, null);
       }
-      ws.off("message", onFirstMessage);
+      removeFirstMessageListener();
 
       // This is a protocol-shape check. Every gateway WebSocket credential was
       // resolved by the bounded HTTP admission exchange before upgrade.
-      const authFrameBytes = rawWebSocketDataByteLength(data);
       if (authFrameBytes > AUTHENTICATION_FRAME_MAX_BYTES) {
         ws.close(1009, `RPC authentication frame exceeds ${AUTHENTICATION_FRAME_MAX_BYTES} bytes`);
-        return;
-      }
-
-      let msg: WsClientMessage;
-      try {
-        msg = JSON.parse(data.toString()) as WsClientMessage;
-      } catch {
-        ws.close(4004, "Invalid message");
         return;
       }
 
@@ -1549,7 +1542,7 @@ export class RpcServer {
           contractVersion: RPC_CONTRACT_VERSION,
           error: `Incompatible RPC contract: peer ${String(msg.contractVersion)}; server requires ${RPC_CONTRACT_VERSION}`,
         };
-        ws.send(JSON.stringify(result));
+        ws.sendMessage(result);
         ws.close(4005, "Incompatible RPC contract");
         return;
       }
@@ -1570,8 +1563,8 @@ export class RpcServer {
         });
     };
 
-    ws.on("message", onFirstMessage);
-    ws.on("close", () => {
+    removeFirstMessageListener = ws.onMessage(onFirstMessage);
+    ws.onClose(() => {
       if (authTimeout) {
         clearTimeout(authTimeout);
         authTimeout = null;
@@ -1691,7 +1684,7 @@ export class RpcServer {
   }
 
   private async handleAuth(
-    ws: RpcSessionSocket,
+    ws: RpcSessionChannel,
     token: unknown,
     requestedConnectionId?: string,
     clientLabel?: string,
@@ -1704,23 +1697,16 @@ export class RpcServer {
       ws.close(1001, "Server shutting down");
       return;
     }
-    if (ws.readyState !== WebSocket.OPEN) return;
+    if (ws.readyState !== ws.OPEN) return;
     const resolutionOrPromise = preResolved
       ? ({ ok: true, resolved: preResolved } as const)
-      : this.resolveRpcCredential(
-          token,
-          clientLabel,
-          clientPlatform,
-          ws instanceof IrohRpcSessionSocket
-            ? { kind: "iroh", endpointId: ws.peerEndpointId }
-            : { kind: "local" }
-        );
+      : this.resolveRpcCredential(token, clientLabel, clientPlatform, ws.transportBinding);
     const resolution =
       resolutionOrPromise instanceof Promise ? await resolutionOrPromise : resolutionOrPromise;
     // Pairing redemption crosses the child→hub boundary. The unauthenticated
     // socket may disappear while that durable operation is in flight; never
     // create session/lease/bridge state for a transport that is already gone.
-    if (this.isShuttingDown() || ws.readyState !== WebSocket.OPEN) return;
+    if (this.isShuttingDown() || ws.readyState !== ws.OPEN) return;
     if (!resolution.ok) {
       // Fail-loud observability: a device/panel/agent presented a token that
       // matched no grant, bearer, or pairing/refresh credential. Log the device
@@ -1735,7 +1721,7 @@ export class RpcServer {
         error: resolution.message,
         errorCode: resolution.code,
       };
-      ws.send(JSON.stringify(msg));
+      ws.sendMessage(msg);
       ws.close(4006, resolution.message);
       return;
     }
@@ -1750,7 +1736,7 @@ export class RpcServer {
         success: false,
         error: 'callerId:"shell" cannot authenticate over WebSocket',
       };
-      ws.send(JSON.stringify(msg));
+      ws.sendMessage(msg);
       ws.close(4006, 'callerId:"shell" cannot authenticate over WebSocket');
       return;
     }
@@ -1774,7 +1760,7 @@ export class RpcServer {
           success: false,
           error: auth?.reason ?? "Panel runtime coordinator is unavailable",
         };
-        ws.send(JSON.stringify(msg));
+        ws.sendMessage(msg);
         ws.close(4090, "Panel runtime lease denied");
         return;
       }
@@ -1789,7 +1775,7 @@ export class RpcServer {
         success: false,
         error: "Caller has been revoked",
       };
-      ws.send(JSON.stringify(msg));
+      ws.sendMessage(msg);
       ws.close(4001, "Token revoked");
       return;
     }
@@ -1823,7 +1809,7 @@ export class RpcServer {
           success: false,
           error: auth?.reason ?? "Panel runtime coordinator is unavailable",
         };
-        ws.send(JSON.stringify(msg));
+        ws.sendMessage(msg);
         ws.close(4090, "Panel runtime lease denied");
         return;
       }
@@ -1852,7 +1838,7 @@ export class RpcServer {
           success: false,
           error: reason,
         };
-        ws.send(JSON.stringify(msg));
+        ws.sendMessage(msg);
         ws.close(4403, reason);
         return;
       }
@@ -1872,8 +1858,8 @@ export class RpcServer {
     }
     const verifiedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
     const caller: VerifiedCaller =
-      ws instanceof IrohRpcSessionSocket
-        ? { ...verifiedCaller, remoteEndpointId: ws.peerEndpointId }
+      ws.transportBinding.kind === "iroh"
+        ? { ...verifiedCaller, remoteEndpointId: ws.transportBinding.endpointId }
         : verifiedCaller;
     // Denormalize the host-verified owning user once, at admission (WP4 §2.1).
     // Defensive invariant: only the in-process server can synthesize a subject;
@@ -1884,7 +1870,7 @@ export class RpcServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const msg: WsServerMessage = { type: "ws:auth-result", success: false, error: message };
-      ws.send(JSON.stringify(msg));
+      ws.sendMessage(msg);
       ws.close(4006, "Unattributed caller");
       return;
     }
@@ -1902,15 +1888,15 @@ export class RpcServer {
       clientSessionId,
       clientPlatform,
       oauthCallbackMode,
-      uploadBodies: new WsUploadBodies(),
+      ...(ws.transportBinding.kind === "local" ? { uploadBodies: new WsUploadBodies() } : {}),
     };
 
     this.connections.addClient(client);
     // Install teardown immediately after registry admission. Any exception in
     // the remaining setup is rolled back by abortFailedAuthentication; a real
     // network close from this point onward must run the normal close path.
-    ws.on("message", (data) => this.handleMessage(client, data));
-    ws.on("close", (code, reason) => this.handleClose(client, code, reason.toString()));
+    ws.onMessage((message) => this.handleMessage(client, message));
+    ws.onClose((code, reason) => this.handleClose(client, code, reason));
 
     if (callerKind === "panel") {
       this.deps.runtimeCoordinator?.markConnected(callerId, connectionId);
@@ -1932,11 +1918,14 @@ export class RpcServer {
     }
 
     // Create per-client RPC client for server→client calls
-    const transport = createWsServerTransport({ ws, clientId: `${callerId}:${connectionId}` });
+    const transport = createSessionServerTransport({
+      ws,
+      clientId: `${callerId}:${connectionId}`,
+    });
     const bridge = createRpcClient({
       selfId: "server",
       callerKind: "server",
-      transport: envelopeTransportFromWsServer(transport),
+      transport: envelopeTransportFromSessionServer(transport),
     });
     this.setBridge(callerId, connectionId, bridge, transport);
     if (this.deps.eventService) {
@@ -1946,7 +1935,7 @@ export class RpcServer {
         connectionId,
         userId,
         send: (event, payload) => {
-          this.sendToWs(ws, {
+          this.sendToSession(ws, {
             type: "ws:rpc",
             envelope: envelopeFromMessage({
               selfId: "main",
@@ -1980,13 +1969,13 @@ export class RpcServer {
       ...(deviceCredential ? { deviceCredential } : {}),
       ...(pairingContext ? { pairingContext } : {}),
     };
-    ws.send(JSON.stringify(authResult));
+    ws.sendMessage(authResult);
 
     if (sessionDirty) {
       this.sessions.clearInbox(callerId);
     } else {
       for (const queued of this.sessions.takeInbox(callerId)) {
-        this.sendToWs(ws, {
+        this.sendToSession(ws, {
           type: "ws:routed",
           envelope: queued.envelope,
         });
@@ -1994,7 +1983,7 @@ export class RpcServer {
     }
   }
 
-  private abortFailedAuthentication(ws: RpcSessionSocket, error: unknown): void {
+  private abortFailedAuthentication(ws: RpcSessionChannel, error: unknown): void {
     const client = this.connections.getBySocket(ws);
     if (client) this.releaseEventSession(client);
     if (client && this.connections.removeClient(client)) {
@@ -2017,14 +2006,14 @@ export class RpcServer {
     log.error("authentication task failed", {
       cause: error instanceof Error ? error.message : String(error),
     });
-    if (ws.readyState !== WebSocket.OPEN) return;
+    if (ws.readyState !== ws.OPEN) return;
     try {
       const message: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
         error: "Authentication failed",
       };
-      ws.send(JSON.stringify(message));
+      ws.sendMessage(message);
     } catch {
       // The close below is the authoritative failure signal.
     }
@@ -2176,7 +2165,7 @@ export class RpcServer {
     }
     this.activeInboundRequests.delete(client.ws);
     const retirement = this.callerRetirements.get(client.caller.runtime.id);
-    if (retirement?.pendingSockets.has(client.ws) && client.ws.readyState === WebSocket.OPEN) {
+    if (retirement?.pendingSockets.has(client.ws) && client.ws.readyState === client.ws.OPEN) {
       client.ws.close(4001, "Token revoked");
     }
   }
@@ -2198,20 +2187,8 @@ export class RpcServer {
     return callerKindForPrincipalKind(kind);
   }
 
-  private handleMessage(client: WsClientState, data: Buffer | ArrayBuffer | Buffer[]): void {
+  private handleMessage(client: WsClientState, msg: WsClientMessage): void {
     if (!this.connections.isActiveClient(client)) return;
-
-    let msg: WsClientMessage;
-    try {
-      msg = JSON.parse(data.toString()) as WsClientMessage;
-    } catch (error) {
-      log.warn("malformed ws frame", {
-        callerId: client.caller.runtime.id,
-        callerKind: client.caller.runtime.kind,
-        cause: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
 
     // Authentication is admission, not a lifetime grant. Account/device/agent
     // revocation and workspace membership changes are read from their live
@@ -2309,7 +2286,7 @@ export class RpcServer {
       }
       case "ws:stream-body-chunk": {
         if (!client.uploadBodies) {
-          this.sendToWs(client.ws, {
+          this.sendToSession(client.ws, {
             type: "ws:stream-body-ack",
             requestId: msg.requestId,
             seq: msg.seq,
@@ -2321,7 +2298,7 @@ export class RpcServer {
         void uploadBodies
           .push(msg)
           .then(() =>
-            this.sendToWs(client.ws, {
+            this.sendToSession(client.ws, {
               type: "ws:stream-body-ack",
               requestId: msg.requestId,
               seq: msg.seq,
@@ -2330,7 +2307,7 @@ export class RpcServer {
           .catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
             uploadBodies.fail(msg.requestId, new Error(message));
-            this.sendToWs(client.ws, {
+            this.sendToSession(client.ws, {
               type: "ws:stream-body-ack",
               requestId: msg.requestId,
               seq: msg.seq,
@@ -2351,7 +2328,7 @@ export class RpcServer {
     envelope: RpcEnvelope
   ): Promise<void> {
     if (message.type === "stream-request") {
-      await this.streamingRelay.handleWsRequest(client, message, envelope);
+      await this.streamingRelay.handleSessionRequest(client, message, envelope);
       return;
     }
     if (message.type === "stream-cancel") {
@@ -2377,7 +2354,7 @@ export class RpcServer {
     const parsed = parseServiceMethod(request.method);
 
     if (!parsed) {
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:rpc",
         envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
@@ -2412,7 +2389,7 @@ export class RpcServer {
         this.callerWithCausalAttribution(client.caller, causal)
       );
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:rpc",
         envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
@@ -2422,7 +2399,7 @@ export class RpcServer {
       });
     } catch (error) {
       const errorCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:rpc",
         envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
@@ -2434,7 +2411,7 @@ export class RpcServer {
         }),
       });
     } finally {
-      // `sendToWs` above synchronously queues the response. A concurrent token
+      // `sendToSession` above synchronously queues the response. A concurrent token
       // revocation may close this connection only after that ordering point.
       this.finishInboundRequest(client, request.requestId, abort);
     }
@@ -2472,7 +2449,7 @@ export class RpcServer {
     // ordinary unary route below silently drops them when the target is a DO
     // (there is deliberately no target WebSocket to forward to).
     if (message.type === "stream-request") {
-      await this.streamingRelay.handleWsRequest(client, message, routeEnvelope);
+      await this.streamingRelay.handleSessionRequest(client, message, routeEnvelope);
       return;
     }
     if (message.type === "stream-cancel") {
@@ -2538,7 +2515,7 @@ export class RpcServer {
       this.routedRequestOrigins.delete(message.requestId);
       void this.resolveWsRelayTarget(origin.callerId, origin.connectionId).then(
         (originClient) => {
-          this.sendToWs(originClient.ws, {
+          this.sendToSession(originClient.ws, {
             type: "ws:routed",
             envelope: routeEnvelope,
           });
@@ -2571,7 +2548,7 @@ export class RpcServer {
     }
 
     const targetClient = this.pickRoutableTarget(targetId, targetConnectionId);
-    if (!targetClient || targetClient.ws.readyState !== WebSocket.OPEN) {
+    if (!targetClient || targetClient.ws.readyState !== targetClient.ws.OPEN) {
       // Target not connected via WS — try HTTP relay for workers/DOs; panel
       // and shell targets fail fast when unreachable.
       if (message.type === "request") {
@@ -2637,7 +2614,7 @@ export class RpcServer {
       });
     }
 
-    this.sendToWs(targetClient.ws, {
+    this.sendToSession(targetClient.ws, {
       type: "ws:routed",
       envelope: routeEnvelope,
     });
@@ -2661,7 +2638,7 @@ export class RpcServer {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorCode = getErrorCode(err);
     if (message.type === "request") {
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:routed",
         envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
           type: "response",
@@ -2676,7 +2653,7 @@ export class RpcServer {
     }
 
     if (message.type === "stream-request") {
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:routed",
         envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
           type: "stream-frame",
@@ -2705,7 +2682,7 @@ export class RpcServer {
         errorKind: rpcErrorKindOf(err, "transport"),
         errorCode,
       });
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:routed-response-error",
         targetId,
         requestId: message.requestId,
@@ -2730,7 +2707,7 @@ export class RpcServer {
         error: errorMessage,
         errorCode,
       });
-      this.sendToWs(client.ws, {
+      this.sendToSession(client.ws, {
         type: "ws:routed-event-error",
         targetId,
         event: eventMessage.event,
@@ -2769,7 +2746,7 @@ export class RpcServer {
       });
     }
 
-    this.sendToWs(client.ws, {
+    this.sendToSession(client.ws, {
       type: "ws:routed-response-error",
       targetId: "server",
       requestId: message.requestId,
@@ -2805,7 +2782,7 @@ export class RpcServer {
     message: RpcResponse
   ): Promise<void> {
     const originClient = await this.resolveWsRelayTarget(origin.callerId, origin.connectionId);
-    this.sendToWs(originClient.ws, {
+    this.sendToSession(originClient.ws, {
       type: "ws:routed",
       envelope: envelopeForWsDelivery(fromId, "unknown", origin.callerId, message),
     });
@@ -3016,7 +2993,7 @@ export class RpcServer {
       // it into a rejecting response, settling the pending.
       void this.resolveWsRelayTarget(origin.callerId, origin.connectionId).then(
         (originClient) => {
-          this.sendToWs(originClient.ws, {
+          this.sendToSession(originClient.ws, {
             type: "ws:routed-response-error",
             targetId: callee.targetId,
             requestId,
@@ -3056,7 +3033,7 @@ export class RpcServer {
   /** Send a message to a specific caller by ID */
   sendToClient(callerId: string, msg: WsServerMessage): void {
     for (const client of this.getCallerConnections(callerId)) {
-      this.sendToWs(client.ws, msg);
+      this.sendToSession(client.ws, msg);
     }
   }
 
@@ -3318,7 +3295,7 @@ export class RpcServer {
     }
 
     const client = this.pickPrimary(targetId);
-    if (client?.ws.readyState === WebSocket.OPEN) {
+    if (client && client.ws.readyState === client.ws.OPEN) {
       return { kind: "reconnected", client };
     }
 
@@ -3360,7 +3337,7 @@ export class RpcServer {
 
   async streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response> {
     const wsClient = this.pickRoutableTarget(targetId);
-    if (wsClient?.ws.readyState !== WebSocket.OPEN) {
+    if (!wsClient || wsClient.ws.readyState !== wsClient.ws.OPEN) {
       throw createRelayError(`Target not reachable: ${targetId}`, "TARGET_NOT_REACHABLE");
     }
     const routedTargetId = this.resolveRoutableTargetId(targetId);
@@ -3398,7 +3375,7 @@ export class RpcServer {
       const options = relayCallOptions(meta);
       const routedTargetId = this.resolveRoutableTargetId(targetId);
       const wsClient = this.pickRoutableTarget(targetId, targetConnectionId);
-      if (wsClient?.ws.readyState === WebSocket.OPEN) {
+      if (wsClient && wsClient.ws.readyState === wsClient.ws.OPEN) {
         const bridge = this.connections.getBridge(routedTargetId, wsClient.connectionId);
         if (bridge) {
           return await bridge.call(routedTargetId, method, args, options);
@@ -4439,7 +4416,7 @@ export class RpcServer {
         throw createRelayError(`Target not reachable: ${targetId}`, "TARGET_NOT_REACHABLE");
       }
       for (const wsClient of wsClients) {
-        this.sendToWs(wsClient.ws, {
+        this.sendToSession(wsClient.ws, {
           type: "ws:routed",
           envelope: envelopeForWsDelivery(fromId, fromKind, routedTargetId, {
             type: "event",
@@ -4543,7 +4520,7 @@ export class RpcServer {
     const wsClient = connectionId
       ? this.getConnection(targetId, connectionId)
       : this.pickPrimary(targetId);
-    if (wsClient?.ws.readyState === WebSocket.OPEN) {
+    if (wsClient && wsClient.ws.readyState === wsClient.ws.OPEN) {
       return wsClient;
     }
 
@@ -4609,9 +4586,10 @@ export class RpcServer {
    */
   private static readonly MAX_SESSIONS_PER_PIPE = 64;
   private static readonly IROH_PREAUTH_TIMEOUT_MS = 10_000;
+  private static readonly IROH_STREAM_ADMISSION_TIMEOUT_MS = 10_000;
 
-  private sendToWs(ws: RpcSessionSocket, msg: WsServerMessage): void {
-    if (ws.readyState !== WebSocket.OPEN) return;
+  private sendToSession(ws: RpcSessionChannel, msg: WsServerMessage): void {
+    if (ws.readyState !== ws.OPEN) return;
     const buffered = ws.bufferedAmount;
     if (buffered > RpcServer.WS_BACKPRESSURE_HARD_LIMIT) {
       log.warn(
@@ -4620,7 +4598,7 @@ export class RpcServer {
       ws.terminate();
       return;
     }
-    ws.send(JSON.stringify(msg));
+    ws.sendMessage(msg);
   }
 
   // ===========================================================================
@@ -4911,7 +4889,9 @@ export class RpcServer {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => this.handleConnection(ws, admission));
+    wss.handleUpgrade(req, socket, head, (ws) =>
+      this.handleConnection(new WebSocketSessionChannel(ws), admission)
+    );
   }
 
   /**
@@ -4967,7 +4947,7 @@ export class RpcServer {
       contractVersion: RPC_CONTRACT_VERSION,
     });
 
-    const sessions = new Map<string, IrohRpcSessionSocket>();
+    const sessions = new Map<string, IrohRpcSessionChannel>();
     let stopped = false;
     const closeAll = (reason: string): void => {
       if (stopped) return;
@@ -5003,7 +4983,7 @@ export class RpcServer {
               continue;
             }
             sessions.get(frame.sid)?.remoteClosed(4000, "superseded by re-open");
-            const session = new IrohRpcSessionSocket({
+            const session = new IrohRpcSessionChannel({
               sid: frame.sid,
               connection,
               writeControl,
@@ -5037,9 +5017,14 @@ export class RpcServer {
       }
     };
 
-    const streamLoop = async (): Promise<void> => {
-      while (!stopped) {
-        const stream = await connection.acceptBi();
+    const fail = (error: unknown): void => {
+      const reason = error instanceof Error ? error.message : String(error);
+      closeAll(reason);
+      connection.close(0x200n, new TextEncoder().encode(reason));
+    };
+    const handleStream = async (stream: IrohPhysicalBiStream): Promise<void> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const admission = (async (): Promise<void> => {
         const streamPreamble = await readIrohStreamPreamble(stream.recv);
         if (streamPreamble.k === "control") {
           throw new Error("Duplicate Iroh control stream");
@@ -5051,7 +5036,7 @@ export class RpcServer {
             stream.send.reset(0x201n).catch(() => undefined),
             refuseUnknownSession(streamPreamble.sid),
           ]);
-          continue;
+          return;
         }
         const envelope = JSON.parse(
           new TextDecoder("utf-8", { fatal: true }).decode(
@@ -5063,14 +5048,45 @@ export class RpcServer {
             ? irohReceiveStreamBody(stream.recv)
             : undefined;
         session.deliverEnvelope(envelope, stream, body);
+      })();
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          void stream.recv.stop(0x200n).catch(() => undefined);
+          void stream.send.reset(0x200n).catch(() => undefined);
+          reject(
+            new Error(
+              `Iroh peer stream did not provide a complete header within ${RpcServer.IROH_STREAM_ADMISSION_TIMEOUT_MS}ms`
+            )
+          );
+        }, RpcServer.IROH_STREAM_ADMISSION_TIMEOUT_MS);
+        timer.unref();
+      });
+      try {
+        await Promise.race([admission, timeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const streamLoop = async (): Promise<void> => {
+      while (!stopped) {
+        const stream = await connection.acceptBi();
+        // Reading one stream's bounded preamble/envelope must not block
+        // admission of independent later streams. Native QUIC configuration
+        // caps peer-opened bidirectional streams at the measured product limit,
+        // so this task fan-out remains bounded without a second scheduler.
+        void handleStream(stream).catch((error) => {
+          // QUIC request streams are independent failure domains. A bad or
+          // partial stream is reset without discarding healthy logical
+          // sessions on the physical connection.
+          void stream.recv.stop(0x200n).catch(() => undefined);
+          void stream.send.reset(0x200n).catch(() => undefined);
+          log.warn("Rejected Iroh RPC stream", {
+            cause: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
     };
 
-    const fail = (error: unknown): void => {
-      const reason = error instanceof Error ? error.message : String(error);
-      closeAll(reason);
-      connection.close(0x200n, new TextEncoder().encode(reason));
-    };
     void controlLoop().catch(fail);
     void streamLoop().catch(fail);
     void connection.closed().then(closeAll);
