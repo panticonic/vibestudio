@@ -13,9 +13,9 @@ import {
   isLocalSystemTestHelpCommand,
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
-  SYSTEM_TEST_IROH_RELAYS,
   systemTestInstanceEnvironment,
 } from "./systemTestInstance.js";
+import { DEFAULT_IROH_RELAYS } from "../server/irohRelayConfig.js";
 
 describe("self-provisioning system-test instance", () => {
   let tempDir: string;
@@ -81,11 +81,11 @@ describe("self-provisioning system-test instance", () => {
     expect(isLocalSystemTestHelpCommand([])).toBe(false);
   });
 
-  it("owns a working Phase-0 Iroh relay topology instead of inheriting product defaults", () => {
+  it("owns the public Phase-0 Iroh relay topology instead of inheriting overrides", () => {
     expect(
       systemTestInstanceEnvironment({ VIBESTUDIO_IROH_RELAYS: "https://stale.invalid/" })
     ).toEqual({
-      VIBESTUDIO_IROH_RELAYS: SYSTEM_TEST_IROH_RELAYS.join(","),
+      VIBESTUDIO_IROH_RELAYS: DEFAULT_IROH_RELAYS.join(","),
     });
   });
 

@@ -13,14 +13,11 @@ import {
   type DevInstanceReadyRecord,
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
+import { DEFAULT_IROH_RELAYS } from "../server/irohRelayConfig.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
-export const SYSTEM_TEST_IROH_RELAYS = [
-  "https://use1-1.relay.n0.iroh.link/",
-  "https://euc1-1.relay.n0.iroh.link/",
-] as const;
 // Cold managed workspaces may need to seal npm-backed runtime dependencies
 // before they can publish semantic readiness. Keep the outer self-provisioner
 // on the same finite budget as the child supervisor; a shorter competing
@@ -47,9 +44,9 @@ export function systemTestInstanceEnvironment(
 ): NodeJS.ProcessEnv {
   return {
     ...base,
-    // Managed tests own their network topology. Phase 0 deliberately uses
-    // Iroh's public relays until Vibestudio's production relay fleet exists.
-    VIBESTUDIO_IROH_RELAYS: SYSTEM_TEST_IROH_RELAYS.join(","),
+    // Managed tests own their network topology and must not inherit a caller's
+    // relay override. Use the same public Phase-0 topology as the product default.
+    VIBESTUDIO_IROH_RELAYS: DEFAULT_IROH_RELAYS.join(","),
   };
 }
 
