@@ -1,0 +1,44 @@
+name: Iroh remote e2e (nightly)
+
+# Real native Iroh coverage: QUIC endpoints, production ingress/session/auth
+# adapters, pairing and refresh lifecycles, concurrent devices, streaming, and
+# the pinned stock relay fixture. The explicit suite owns native sockets and is
+# intentionally separate from broad Vitest discovery.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  iroh-remote-e2e:
+    name: Iroh remote (native + relay + operational)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Iroh remote transport and lifecycle suites
+        run: pnpm test:remote-transport
+
+      - name: Pinned Iroh relay fixture
+        run: pnpm test:iroh-relay-fixture

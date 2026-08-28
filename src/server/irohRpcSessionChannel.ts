@@ -159,7 +159,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     }
     this.deliver(
       envelope.target === "main" || envelope.target === "server"
-        ? { type: "ws:rpc", envelope, ...(body ? { streamBody: true as const } : {}) }
+        ? { type: "ws:rpc", envelope }
         : { type: "ws:route", envelope }
     );
   }
