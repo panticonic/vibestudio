@@ -78,7 +78,7 @@ never a reuse of it.
 
 The second load-bearing finding: **multi-workspace already exists — as process
 multiplication.** A loopback-only **hub** process spawns **one child server process per
-workspace**, each with its own workerd, state dir, WebRTC ingress, and device-auth store
+workspace**, each with its own workerd, state dir, Iroh ingress, and device-auth store
 (`src/server/hubServer.ts:55-75,710-856`; child bind at `src/server/index.ts:341-387`).
 The plan keeps that isolation model and **elevates the hub into the multi-user control
 plane** rather than collapsing everything into one risky in-process multi-tenant server
@@ -180,8 +180,8 @@ a workspace, users are mutually transparent by design.
 ```
                          ┌─────────────────────────────────────────────┐
                          │  HUB = multi-user CONTROL PLANE (one server)  │
-   remote clients ──────►│  • WebRTC ingress (all remote reach)          │
-   (WebRTC, per user)    │  • User/Account registry (root + invited)     │
+   remote clients ──────►│  • Iroh ingress (all remote reach)          │
+   (Iroh, per user)    │  • User/Account registry (root + invited)     │
                          │  • Device→User binding, refresh, invites      │
                          │  • Workspace registry + membership            │
                          │  • Routes an authenticated (user, workspace)  │
@@ -264,8 +264,8 @@ holding the connection.
 The hub becomes the single multi-user, remote-facing front door.
 
 - **The hub is an identity/pairing/routing _director_, not a media relay.** Each workspace
-  child **keeps its own WebRTC ingress** (the hub-as-answerer design was rejected —
-  `webrtc-rpc-v2-plan.md:382-385` — and one `RpcServer` must own its DTLS pipe end to end,
+  child **keeps its own Iroh ingress** (the hub-as-answerer design was rejected —
+  `iroh-rpc-v2-plan.md:382-385` — and one `RpcServer` must own its Endpoint ID pipe end to end,
   `rpcServer.ts:3292`). What makes a client pair **once, to the server (hub), as a user** —
   not per-workspace — is a **user-scoped device credential** validated against the hub-owned
   **shared identity DB** at whichever child the client reaches. The hub owns pairing/invites
@@ -443,12 +443,12 @@ Replace the current binary "paired = fully trusted" + machine-admin-token-as-roo
 
 The hub holds **all users, all devices, all memberships** in one hub-owned **shared identity
 DB** (`~/.config/vibestudio/server-auth/identity.db`), which children open **read-only**.
-Children keep their own WebRTC ingress and DTLS identity (WP1 pivot — no ingress relocation,
+Children keep their own Iroh ingress and Endpoint ID identity (WP1 pivot — no ingress relocation,
 no single shared `identity.pem`). Because hub and children are **host processes on one
 trusted machine** (§0.0), the hub↔child relationship needs **no** cryptographic grant
 machinery: identity crosses by the child reading the shared DB and re-validating the device
-credential it already understands. The external security boundary (WebRTC with the pinned
-DTLS fingerprint; the blind signaling relay; the credential/approval gate on external access)
+credential it already understands. The external security boundary (Iroh with the pinned
+Endpoint ID fingerprint; the blind signaling relay; the credential/approval gate on external access)
 is unchanged and stays first-class. Notes for implementers:
 
 - The shared identity DB is `0700`/`0600`, hub-owned; the hub is the sole writer, children
@@ -702,7 +702,7 @@ Each WP has a detailed, grounded implementation spec:
 **→ Detailed implementation spec: [`docs/multi-user-wp0-user-identity-spec.md`](./multi-user-wp0-user-identity-spec.md).**
 
 **WP1 — Hub as control plane (director, not relay).** Hub owns pairing/invites + the shared
-identity DB; **children keep their own WebRTC ingress** (no relocation, no HMAC grant);
+identity DB; **children keep their own Iroh ingress** (no relocation, no HMAC grant);
 user-scoped device credentials so one pairing reaches every member workspace; invite-a-user
 vs pair-a-device split via `hubControl`; `listWorkspaces`/`routeWorkspace` with the membership
 entry gate enforced at the child; retire admin-token-as-root.
@@ -802,7 +802,7 @@ invite) — no data-preservation shims, no back-compat readers for old formats.
   succeeds cross-user.
 - **Handles/presence:** two humans in a channel render distinct account handles; presence
   aggregates across a user's two devices; `ask_user` targets the addressed user.
-- **Control plane:** the existing WebRTC pairing + smoke ladder (`pnpm smoke:full`,
+- **Control plane:** the existing Iroh pairing + smoke ladder (`pnpm smoke:full`,
   `remote-overhaul` gates) extended for multi-user pair → select-workspace → attach.
 
 ---

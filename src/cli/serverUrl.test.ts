@@ -7,8 +7,8 @@ describe("server URL normalization", () => {
     expect(normalizeServerBaseUrl("https://host.example/_workspace/rpc")).toBe(
       "https://host.example/_workspace/rpc"
     );
-    expect(normalizeServerBaseUrl("webrtc://room/_workspace/dev")).toBe(
-      "webrtc://room/_workspace/dev"
+    expect(normalizeServerBaseUrl("iroh://endpoint/_workspace/dev")).toBe(
+      "iroh://endpoint/_workspace/dev"
     );
     expect(() => normalizeServerBaseUrl("ws://127.0.0.1:5000/rpc")).toThrow(
       /Unsupported server URL protocol/

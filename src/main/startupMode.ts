@@ -1,7 +1,7 @@
 /**
  * StartupMode — discriminated union for the desktop shell's startup target.
  *
- * Remote topology is now WebRTC (paired by QR via the remoteCred flow, not a
+ * Remote topology is Iroh (paired by QR via the remoteCred flow, not a
  * startup mode), so startup resolves only local-vs-pending; the shell always
  * spawns its own loopback server. Includes `resolveStartupMode()`.
  */
@@ -19,7 +19,7 @@ import {
   RESUME_EPHEMERAL_WORKSPACE_ARG,
 } from "@vibestudio/workspace-contracts/ephemeral";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
-import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
+import { DEV_IROH_REMOTE_ARG } from "./startupInvocation.js";
 
 const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
@@ -58,7 +58,7 @@ export type StartupMode =
 export type LocalStartupMode = Extract<StartupMode, { kind: "local" }>;
 /**
  * A startup mode that establishes a server session. Remote topology is now
- * WebRTC (paired by QR via the remoteCred flow, not a startup mode), so the only
+ * Iroh (paired by QR via the remoteCred flow, not a startup mode), so the only
  * connected startup mode is local — the shell always spawns its own loopback
  * server. (`§8c` deleted the `kind: "remote"` arm + its env/stored-credential
  * resolution.)
@@ -108,7 +108,7 @@ export function localShellUserDataDir(
 /**
  * Resolve the startup mode from environment and CLI args.
  *
- * Resolves local-vs-pending only. Remote is paired live via WebRTC (remoteCred /
+ * Resolves local-vs-pending only. Remote is paired live via Iroh (remoteCred /
  * QR), never a startup env URL or stored-remote relaunch (§8c).
  */
 export function resolveStartupMode(
@@ -117,9 +117,9 @@ export function resolveStartupMode(
 ): StartupMode {
   // Startup resolves local-vs-pending: resume the last/default local workspace
   // unless the user explicitly asked to choose a connection (which surfaces the
-  // chooser to open a local workspace or pair a remote server via WebRTC QR).
+  // chooser to open a local workspace or pair a remote server via Iroh QR).
   if (opts?.interactiveDesktop === true && hasConnectDeepLinkArg()) {
-    log.info("[Workspace] Waiting for WebRTC pairing link opened at launch");
+    log.info("[Workspace] Waiting for Iroh pairing link opened at launch");
     return { kind: "pending" };
   }
 
@@ -183,7 +183,7 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg?.startsWith("--workspace=")) continue;
     if (arg === CHOOSE_CONNECTION_ARG) continue;
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
-    if (arg === DEV_WEBRTC_REMOTE_ARG) continue;
+    if (arg === DEV_IROH_REMOTE_ARG) continue;
     if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
     if (arg === RESUME_EPHEMERAL_WORKSPACE_ARG) continue;
     if (arg?.startsWith("vibestudio://connect") || arg?.startsWith("https://vibestudio.app/p#"))

@@ -43,15 +43,9 @@ describe("DeviceAuthStore", () => {
     const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
 
     const invite = store.createPairingInvite(undefined, { workspaceId, userId });
-    expect(store.listControlRooms()).toEqual([
-      {
-        kind: "invite",
-        room: invite.room,
-        codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-        expiresAt: invite.expiresAt,
-      },
-    ]);
+    expect(invite.code).toMatch(/^[A-Za-z0-9_-]{32}$/);
     const credential = store.completePairing({
+      transport: { kind: "local" },
       code: invite.code,
       label: "Phone",
       platform: "mobile",
@@ -59,12 +53,10 @@ describe("DeviceAuthStore", () => {
     expect(credential.deviceId).toMatch(/^dev_/);
     expect(credential.refreshToken).toBeTruthy();
     expect(credential.userId).toBe(userId);
-    expect(credential.controlRoom).toBe(invite.room);
     expect(credential.workspaceId).toBe(workspaceId);
-    expect(store.listControlRooms()).toEqual([
-      { kind: "device", room: invite.room, deviceId: credential.deviceId },
-    ]);
-    expect(() => store.completePairing({ code: invite.code })).toThrow(/invalid or expired/i);
+    expect(() =>
+      store.completePairing({ transport: { kind: "local" }, code: invite.code })
+    ).toThrow(/invalid or expired/i);
 
     // The server id lives in the JSON sibling. The durable device row keeps only
     // the sha256 refresh-token hash; the clear token is returned once and is not
@@ -77,7 +69,9 @@ describe("DeviceAuthStore", () => {
 
     const reloaded = new DeviceAuthStore({ db, serverIdPath, now: () => now });
     now = 2000;
-    const device = reloaded.validateRefresh(credential.deviceId, credential.refreshToken);
+    const device = reloaded.validateRefresh(credential.deviceId, credential.refreshToken, {
+      kind: "local",
+    });
     expect(device.label).toBe("Phone");
     expect(reloaded.listDevices()[0]!.lastUsedAt).toBe(2000);
   });
@@ -88,42 +82,76 @@ describe("DeviceAuthStore", () => {
 
     const expiredInvite = store.createPairingInvite(10, { workspaceId, userId });
     now = 1011;
-    expect(() => store.completePairing({ code: expiredInvite.code })).toThrow(
-      /invalid or expired/i
-    );
-    expect(store.listControlRooms()).toEqual([]);
+    expect(() =>
+      store.completePairing({ transport: { kind: "local" }, code: expiredInvite.code })
+    ).toThrow(/invalid or expired/i);
 
-    const credential = store.issueDevice({ userId, label: "Desktop", platform: "electron" });
-    expect(() => store.validateRefresh(credential.deviceId, "wrong-refresh-token")).toThrow(
-      /invalid/i
-    );
+    const credential = store.issueDevice({
+      transport: { kind: "local" },
+      userId,
+      label: "Desktop",
+      platform: "electron",
+    });
+    expect(() =>
+      store.validateRefresh(credential.deviceId, "wrong-refresh-token", { kind: "local" })
+    ).toThrow(/invalid/i);
 
     expect(store.revokeDevice(credential.deviceId)).toBe(true);
     expect(store.revokeDevice(credential.deviceId)).toBe(false);
-    expect(() => store.validateRefresh(credential.deviceId, credential.refreshToken)).toThrow(
-      /not paired/i
-    );
+    expect(() =>
+      store.validateRefresh(credential.deviceId, credential.refreshToken, { kind: "local" })
+    ).toThrow(/not paired/i);
+  });
+
+  it("requires the live Iroh Endpoint ID bound when the credential was issued", () => {
+    const { store, userId } = makeStore();
+    const endpointId = "a".repeat(64);
+    const credential = store.issueDevice({
+      userId,
+      label: "Remote laptop",
+      transport: { kind: "iroh", endpointId },
+    });
+
+    expect(() =>
+      store.validateRefresh(credential.deviceId, credential.refreshToken, { kind: "local" })
+    ).toThrow(/transport identity/i);
+    expect(() =>
+      store.validateRefresh(credential.deviceId, credential.refreshToken, {
+        kind: "iroh",
+        endpointId: "b".repeat(64),
+      })
+    ).toThrow(/transport identity/i);
+    expect(
+      store.validateRefresh(credential.deviceId, credential.refreshToken, {
+        kind: "iroh",
+        endpointId,
+      }).transport
+    ).toEqual({ kind: "iroh", endpointId });
   });
 
   it("throttles lastUsedAt persistence for a churny reconnecting device", () => {
     let now = 1000;
     const { store, db, userId } = makeStore(() => now);
-    const credential = store.issueDevice({ userId, label: "Desktop" });
+    const credential = store.issueDevice({
+      transport: { kind: "local" },
+      userId,
+      label: "Desktop",
+    });
     const touch = vi.spyOn(db, "touchDevice");
 
     // First refresh persists (previous lastUsedAt was unset).
     now = 100_000;
-    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    store.validateRefresh(credential.deviceId, credential.refreshToken, { kind: "local" });
     expect(touch).toHaveBeenCalledTimes(1);
 
     // A reconnect within the persist interval updates memory but NOT disk.
     now = 101_000;
-    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    store.validateRefresh(credential.deviceId, credential.refreshToken, { kind: "local" });
     expect(touch).toHaveBeenCalledTimes(1);
 
     // Past the interval it persists again.
     now = 200_000;
-    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    store.validateRefresh(credential.deviceId, credential.refreshToken, { kind: "local" });
     expect(touch).toHaveBeenCalledTimes(2);
   });
 
@@ -143,13 +171,15 @@ describe("DeviceAuthStore", () => {
 
     const invite = store.createPairingInvite(undefined, { workspaceId, userId });
     now += DEFAULT_PAIRING_CODE_TTL_MS - 1;
-    expect(store.completePairing({ code: invite.code }).userId).toBe(userId);
+    expect(store.completePairing({ transport: { kind: "local" }, code: invite.code }).userId).toBe(
+      userId
+    );
 
     const expiredInvite = store.createPairingInvite(undefined, { workspaceId, userId });
     now += DEFAULT_PAIRING_CODE_TTL_MS + 1;
-    expect(() => store.completePairing({ code: expiredInvite.code })).toThrow(
-      /invalid or expired/i
-    );
+    expect(() =>
+      store.completePairing({ transport: { kind: "local" }, code: expiredInvite.code })
+    ).toThrow(/invalid or expired/i);
   });
 
   it("keeps pending pairing codes and their absolute deadline across hub restart", () => {
@@ -157,17 +187,12 @@ describe("DeviceAuthStore", () => {
     const invite = store.createPairingInvite(60_000, { workspaceId, userId });
 
     const restarted = new DeviceAuthStore({ db, serverIdPath, now: () => 2000 });
-    expect(restarted.listControlRooms()).toEqual([
-      {
-        kind: "invite",
-        room: invite.room,
-        codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-        expiresAt: invite.expiresAt,
-      },
-    ]);
-    const credential = restarted.completePairing({ code: invite.code });
+    expect(restarted.hasLivePairingInvite()).toBe(true);
+    const credential = restarted.completePairing({
+      transport: { kind: "local" },
+      code: invite.code,
+    });
     expect(credential.userId).toBe(userId);
-    expect(credential.controlRoom).toBe(invite.room);
     expect(credential.workspaceId).toBe(workspaceId);
   });
 
@@ -176,6 +201,7 @@ describe("DeviceAuthStore", () => {
     const { store, db, userId, workspaceId, serverIdPath } = makeStore(() => now);
     const invite = store.createPairingInvite(60_000, { workspaceId, userId });
     const first = store.completePairing({
+      transport: { kind: "local" },
       code: invite.code,
       label: "Phone",
     });
@@ -183,18 +209,16 @@ describe("DeviceAuthStore", () => {
     const restarted = new DeviceAuthStore({ db, serverIdPath, now: () => now });
     expect(() =>
       restarted.completePairing({
+        transport: { kind: "local" },
         code: invite.code,
         label: "Phone after retry",
       })
     ).toThrow(/invalid or expired/i);
     expect(restarted.listDevices()).toHaveLength(1);
-    expect(first.controlRoom).toBe(invite.room);
     expect(first.workspaceId).toBe(workspaceId);
-
-    expect(restarted.listControlRooms()).toEqual([
-      { kind: "device", room: invite.room, deviceId: first.deviceId },
-    ]);
-    expect(restarted.validateRefresh(first.deviceId, first.refreshToken).userId).toBe(userId);
+    expect(
+      restarted.validateRefresh(first.deviceId, first.refreshToken, { kind: "local" }).userId
+    ).toBe(userId);
   });
 
   it("creates root only after consuming a live root-bootstrap code", () => {
@@ -212,9 +236,9 @@ describe("DeviceAuthStore", () => {
       return users.createRoot({ handle: "root", displayName: "Root" }).id;
     };
 
-    expect(() => store.completePairing({ code: "not-a-code", createRootUser })).toThrow(
-      /invalid or expired/i
-    );
+    expect(() =>
+      store.completePairing({ transport: { kind: "local" }, code: "not-a-code", createRootUser })
+    ).toThrow(/invalid or expired/i);
     expect(createCalls).toBe(0);
     expect(db.hasUsers()).toBe(false);
 
@@ -222,9 +246,13 @@ describe("DeviceAuthStore", () => {
       workspaceId,
       intent: "pair-device",
     });
-    expect(() => store.completePairing({ code: wrongIntent.code, createRootUser })).toThrow(
-      /not bound/i
-    );
+    expect(() =>
+      store.completePairing({
+        transport: { kind: "local" },
+        code: wrongIntent.code,
+        createRootUser,
+      })
+    ).toThrow(/not bound/i);
     expect(createCalls).toBe(0);
     expect(db.hasUsers()).toBe(false);
 
@@ -234,6 +262,7 @@ describe("DeviceAuthStore", () => {
     });
     expect(() =>
       store.completePairing({
+        transport: { kind: "local" },
         code: invite.code,
         createRootUser: () => {
           users.createRoot({ handle: "root", displayName: "Root" });
@@ -242,28 +271,15 @@ describe("DeviceAuthStore", () => {
       })
     ).toThrow("injected device-issuance boundary failure");
     expect(db.hasUsers()).toBe(false);
-    expect(store.listControlRooms()).toHaveLength(2);
-    expect(store.listControlRooms()).toEqual(
-      expect.arrayContaining([
-        {
-          kind: "invite",
-          room: invite.room,
-          codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-          expiresAt: invite.expiresAt,
-        },
-        {
-          kind: "invite",
-          room: wrongIntent.room,
-          codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-          expiresAt: wrongIntent.expiresAt,
-        },
-      ])
-    );
+    expect(db.listPairingCodes()).toHaveLength(2);
 
-    const credential = store.completePairing({ code: invite.code, createRootUser });
+    const credential = store.completePairing({
+      transport: { kind: "local" },
+      code: invite.code,
+      createRootUser,
+    });
     expect(createCalls).toBe(1);
     expect(users.getUser(credential.userId)?.role).toBe("root");
-    expect(credential.controlRoom).toBe(invite.room);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -282,14 +298,11 @@ describe("DeviceAuthStore", () => {
       intent: "invite-user",
     });
 
-    expect(store.cancelPairingInvite(invite.code)).toEqual({
-      kind: "invite",
-      room: invite.room,
-      codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-      expiresAt: invite.expiresAt,
-    });
-    expect(store.listControlRooms()).toEqual([]);
-    expect(() => store.completePairing({ code: invite.code })).toThrow(/invalid or expired/i);
+    expect(store.cancelPairingInvite(invite.code)).toBe(true);
+    expect(store.cancelPairingInvite(invite.code)).toBe(false);
+    expect(() =>
+      store.completePairing({ transport: { kind: "local" }, code: invite.code })
+    ).toThrow(/invalid or expired/i);
     expect(users.rollbackInvite(invited.id)).toBe(true);
     expect(users.getByHandle("mara")).toBeNull();
     expect(
@@ -429,14 +442,16 @@ describe("DeviceAuthStore hub/child ownership", () => {
     const hubDb = new IdentityDb({ path: dbPath, readOnly: false });
     const userId = new UserStore(hubDb).createRoot({ handle: "root", displayName: "Root" }).id;
     const hub = new DeviceAuthStore({ db: hubDb, serverIdPath });
-    const device = hub.issueDevice({ userId, label: "Laptop" });
+    const device = hub.issueDevice({ transport: { kind: "local" }, userId, label: "Laptop" });
     const agent = hub.mintAgentCredential({
       entityId: "session:one",
     });
 
     const childDb = new IdentityDb({ path: dbPath, readOnly: true });
     const child = new DeviceAuthStore({ db: childDb, serverIdPath });
-    expect(child.validateRefresh(device.deviceId, device.refreshToken).userId).toBe(userId);
+    expect(
+      child.validateRefresh(device.deviceId, device.refreshToken, { kind: "local" }).userId
+    ).toBe(userId);
     const [, agentId, secret] = agent.agentToken.split(":");
     expect(child.validateAgentToken(agentId!, secret!)).toMatchObject({
       entityId: "session:one",

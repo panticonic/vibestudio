@@ -6,7 +6,7 @@ consent, or non-interactive deployment flows.
 
 ## Default mobile OAuth path: the callback relay
 
-The server binds loopback only and remote clients reach it over WebRTC, so there
+The server binds loopback only and remote clients reach it over Iroh, so there
 is no per-server public URL for OAuth providers to redirect to. Provider redirect
 URIs that need a public HTTPS endpoint resolve through the **callback relay**
 (`apps/webhook-relay`, plan §7): the relay owns the stable
@@ -22,7 +22,7 @@ There is no Tailscale Serve / MagicDNS / `--host tailscale` step anymore — tha
 HTTPS-ingress path was decommissioned with remote-mode public ingress.
 
 The bootstrap and registration flow is described in
-[webrtc-rpc-transport.md](./webrtc-rpc-transport.md) (§7 callback relay).
+[iroh-rpc-transport.md](./iroh-rpc-transport.md) (§7 callback relay).
 
 ## Target Domain
 

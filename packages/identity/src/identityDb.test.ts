@@ -43,11 +43,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 11/
+      /schema version is 0, expected 13/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 11/
+      /schema version is 0, expected 13/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 
@@ -111,8 +111,8 @@ describe("identity package schema cut", () => {
     restarted.close();
   });
 
-  it("owns invite and promoted device control rooms in the pairing transaction", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-control-rooms-"));
+  it("consumes an invite and persists the device's exact Iroh Endpoint ID atomically", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-iroh-pairing-"));
     roots.push(root);
     const databasePath = path.join(root, "identity.db");
     const central = new CentralDataManager({ databasePath });
@@ -120,80 +120,36 @@ describe("identity package schema cut", () => {
     central.close();
     const identity = new IdentityDb({ path: databasePath, readOnly: false, now: () => 1_000 });
     identity.insertUser({
-      id: "usr_alice",
-      handle: "alice",
-      displayName: "Alice",
-      role: "member",
-      createdAt: 1,
+      id: "usr_alice", handle: "alice", displayName: "Alice", role: "member", createdAt: 1,
     });
     const codeHash = "a".repeat(64);
     identity.insertPairingInvite({
-      code: codeHash,
-      room: "control-room",
-      userId: "usr_alice",
-      workspaceId,
-      intent: "pair-device",
-      createdAt: 1_000,
-      expiresAt: 61_000,
+      code: codeHash, userId: "usr_alice", workspaceId, intent: "pair-device",
+      createdAt: 1_000, expiresAt: 61_000,
     });
-    expect(identity.getInviteControlRoom(codeHash)).toEqual({
-      kind: "invite",
-      room: "control-room",
-      codeHash,
-      expiresAt: 61_000,
-    });
-    const conflictingCodeHash = "e".repeat(64);
-    expect(() =>
-      identity.insertPairingInvite({
-        code: conflictingCodeHash,
-        room: "control-room",
-        userId: "usr_alice",
-        workspaceId,
-        intent: "pair-device",
-        createdAt: 1_000,
-        expiresAt: 61_000,
-      })
-    ).toThrow();
-    expect(identity.getPairingCode(conflictingCodeHash)).toBeNull();
-
     const device = {
       deviceId: `dev_${"d".repeat(24)}`,
       refreshTokenHash: "b".repeat(64),
+      transport: { kind: "iroh" as const, endpointId: "c".repeat(64) },
       userId: "usr_alice",
       label: "Phone",
       createdAt: 1_000,
     };
-    const refreshToken = "r".repeat(43);
     const completed = identity.completePairing({
       code: codeHash,
-      createDevice: () => ({ device, refreshToken }),
+      createDevice: () => ({ device, refreshToken: "r".repeat(43) }),
     });
-    expect(completed).toEqual({
-      device,
-      refreshToken,
-      controlRoom: "control-room",
-      workspaceId,
-    });
+    expect(completed).toMatchObject({ device, workspaceId });
     expect(identity.getPairingCode(codeHash)).toBeNull();
-    expect(identity.listControlRooms()).toEqual([
-      { kind: "device", room: "control-room", deviceId: device.deviceId },
-    ]);
-    expect(
-      identity.completePairing({
-        code: codeHash,
-        createDevice: () => {
-          throw new Error("a consumed code must not issue another credential");
-        },
-      })
-    ).toBeNull();
-
-    expect(identity.revokeDevice(device.deviceId, 2_000)?.revokedAt).toBe(2_000);
-    expect(identity.listControlRooms()).toEqual([]);
+    expect(identity.getDeviceForEndpoint(device.transport.endpointId)?.deviceId).toBe(device.deviceId);
+    expect(identity.completePairing({ code: codeHash, createDevice: () => {
+      throw new Error("consumed code must not issue twice");
+    } })).toBeNull();
     identity.close();
   });
 
-  it("expires a pairing code and its invite room together", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-control-expiry-"));
+  it("expires pairing capabilities without leaving transport routing state", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pairing-expiry-"));
     roots.push(root);
     const databasePath = path.join(root, "identity.db");
     const central = new CentralDataManager({ databasePath });
@@ -202,19 +158,12 @@ describe("identity package schema cut", () => {
     const identity = new IdentityDb({ path: databasePath, readOnly: false });
     const codeHash = "d".repeat(64);
     identity.insertPairingInvite({
-      code: codeHash,
-      room: "expiring-room",
-      workspaceId,
-      intent: "root-bootstrap",
-      createdAt: 1,
-      expiresAt: 10,
+      code: codeHash, workspaceId, intent: "root-bootstrap", createdAt: 1, expiresAt: 10,
     });
-
     expect(identity.deleteExpiredPairingInvites(10)).toEqual([
-      { kind: "invite", room: "expiring-room", codeHash, expiresAt: 10 },
+      { code: codeHash, workspaceId, intent: "root-bootstrap", createdAt: 1, expiresAt: 10 },
     ]);
     expect(identity.getPairingCode(codeHash)).toBeNull();
-    expect(identity.listControlRooms()).toEqual([]);
     identity.close();
   });
 });

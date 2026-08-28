@@ -76,10 +76,10 @@ pnpm -C apps/mobile type-check
 pnpm -C apps/mobile lint
 ```
 
-For Android WebRTC pairing and local relay testing, see
-[docs/webrtc-local-e2e.md](../../docs/webrtc-local-e2e.md) and
-[docs/webrtc-deployment.md](../../docs/webrtc-deployment.md).
+For Android Iroh pairing and local relay testing, see
+[docs/Iroh-local-e2e.md](../../docs/Iroh-local-e2e.md) and
+[docs/Iroh-deployment.md](../../docs/Iroh-deployment.md).
 
 The shipped native host exposes only reset/clear plus streamed bundle
 activation. Pairing, credential refresh, bootstrap fetch, and bundle delivery
-run through `@vibestudio/mobile-webrtc` over the active WebRTC pipe.
+run through `@vibestudio/mobile-iroh` over the active Iroh pipe.

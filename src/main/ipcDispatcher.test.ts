@@ -121,6 +121,7 @@ function makeDispatcher(opts: {
       })),
     isConnected: vi.fn(() => true),
     getConnectionStatus: vi.fn(() => "connected" as const),
+    transportDiagnostics: vi.fn(() => null),
     onDirectEvent: vi.fn(() => () => {}),
     close: vi.fn(async () => {}),
   };

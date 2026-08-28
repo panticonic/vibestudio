@@ -11,11 +11,7 @@ import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
 import { PAIR_CONFIRMED_ARG } from "../startupInvocation.js";
-import {
-  createConnectDeepLink,
-  normalizeFingerprint,
-  parseConnectLink,
-} from "@vibestudio/shared/connect";
+import { createConnectDeepLink, parseConnectLink } from "@vibestudio/iroh-transport";
 import {
   clearStoredRemotePairing as clearStoredRemotePairingInStore,
   loadStoredRemotePairing as loadStoredRemotePairingFromStore,
@@ -52,7 +48,7 @@ function persistOrWarn(description: string, persist: () => void): void {
   }
 }
 
-/** Read the encrypted WebRTC pairing used by serverSession auto-reconnect. */
+/** Read the encrypted Iroh pairing used by serverSession auto-reconnect. */
 export function loadStoredRemotePairing(): StoredRemote | null {
   return loadStoredRemotePairingFromStore();
 }
@@ -80,7 +76,7 @@ export function persistRotatedRemoteCredential(credential: {
   );
 }
 
-/** Persist a freshly paired WebRTC device using Electron safeStorage. */
+/** Persist a freshly paired Iroh device using Electron safeStorage. */
 export function saveStoredRemote(value: StoredRemote): void {
   if (remoteCredentialPersistenceDisabled()) return;
   persistOrWarn("could not persist remote pairing", () => saveDeviceCredential(value));
@@ -95,11 +91,9 @@ export function persistStoredRemoteWorkspaceRoute(rawRoute: HubWorkspaceRoute): 
     throw new Error("Workspace route changed the paired server identity");
   }
   const storedReach = (reach: HubWorkspaceRoute["workspaceReach"]) => ({
-    room: reach.room,
-    fp: normalizeFingerprint(reach.fp),
-    sig: reach.sig,
+    endpointId: reach.endpointId,
+    relays: [...reach.relays],
     v: reach.v,
-    ice: reach.ice,
   });
   saveDeviceCredential({
     ...existing,
@@ -132,7 +126,7 @@ export function createRemoteCredService(deps: {
 
   return {
     name: "remoteCred",
-    description: "Manage this desktop's encrypted WebRTC device pairing",
+    description: "Manage this desktop's encrypted Iroh device pairing",
     authority: { principals: ["user", "code"] },
     methods: remoteCredMethods,
     handler: defineServiceHandler("remoteCred", remoteCredMethods, {

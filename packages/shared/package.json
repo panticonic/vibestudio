@@ -134,6 +134,7 @@
     "@vibestudio/env-paths": "workspace:*",
     "@vibestudio/vcs-path-policy": "workspace:*",
     "@vibestudio/identity": "workspace:*",
+    "@vibestudio/iroh-transport": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/sqlite": "workspace:*",
     "@vibestudio/types": "workspace:*",

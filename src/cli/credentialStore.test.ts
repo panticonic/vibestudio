@@ -7,40 +7,38 @@ import {
   credentialPath,
   loadCliCredentials,
   saveCliCredentials,
-  type CliAgentCredentials,
-  type CliCredentials,
+  type CliIrohAgentCredentials,
+  type CliIrohDeviceCredentials,
 } from "./credentialStore.js";
 
-const CURRENT: CliCredentials = {
-  schemaVersion: 4,
+const CURRENT: CliIrohDeviceCredentials = {
+  schemaVersion: 5,
   kind: "device",
-  url: "webrtc://room-current/_workspace/dev",
+  url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "workspace-dev",
   workspaceName: "dev",
   serverId: `srv_${"s".repeat(24)}`,
   deviceId: `dev_${"d".repeat(24)}`,
   refreshToken: "r".repeat(43),
+  transport: "iroh",
+  endpointSecret: "E".repeat(43),
   controlPairing: {
-    room: "room-control",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "aa".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4,
   },
   workspacePairing: {
-    room: "room-current",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "bb".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4,
   },
   pairedAt: 1,
 };
 
-const AGENT: CliAgentCredentials = {
-  schemaVersion: 1,
+const AGENT: CliIrohAgentCredentials = {
+  schemaVersion: 2,
   kind: "agent",
-  url: "webrtc://room-current/_workspace/dev",
+  url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "workspace-dev",
   workspaceName: "dev",
   serverId: `srv_${"s".repeat(24)}`,
@@ -48,6 +46,8 @@ const AGENT: CliAgentCredentials = {
   contextId: "context-one",
   agentId: `agt_${"a".repeat(24)}`,
   agentToken: `agent:agt_${"a".repeat(24)}:${"t".repeat(43)}`,
+  transport: "iroh",
+  endpointSecret: "F".repeat(43),
   workspacePairing: CURRENT.workspacePairing,
   signedInAt: 2,
 };
@@ -92,7 +92,6 @@ describe("CLI persisted device credential", () => {
 
   it("returns null for truncated, unreadable, old, ambiguous, or non-canonical records", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const colonFingerprint = Array.from({ length: 32 }, () => "AA").join(":");
     for (const invalid of [
       "{truncated",
       null,
@@ -104,7 +103,7 @@ describe("CLI persisted device credential", () => {
       { ...CURRENT, serverId: "srv_old" },
       { ...CURRENT, deviceId: "dev_old" },
       { ...CURRENT, refreshToken: "old-token" },
-      { ...CURRENT, url: "webrtc://room-current/_workspace/other" },
+      { ...CURRENT, url: `iroh://${"bb".repeat(32)}/_workspace/other` },
       { ...CURRENT, workspaceName: "../dev" },
       { ...CURRENT, pairedAt: 1.5 },
       {
@@ -113,20 +112,41 @@ describe("CLI persisted device credential", () => {
       },
       { ...CURRENT, controlPairing: undefined },
       { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, v: undefined } },
-      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, ice: undefined } },
-      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, fp: colonFingerprint } },
-      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, fp: "aa".repeat(32) } },
+      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, relays: undefined } },
       {
         ...CURRENT,
-        workspacePairing: { ...CURRENT.workspacePairing, sig: "wss://signal.example" },
+        workspacePairing: { ...CURRENT.workspacePairing, endpointId: "AA".repeat(32) },
+      },
+      { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, endpointId: "aa" } },
+      {
+        ...CURRENT,
+        workspacePairing: { ...CURRENT.workspacePairing, relays: ["http://relay.example/"] },
       },
       { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, srv: "server" } },
       { ...AGENT, agentId: `agt_${"b".repeat(24)}` },
       { ...AGENT, agentToken: `agent:agt_${"a".repeat(24)}:short` },
       { ...AGENT, deviceId: CURRENT.deviceId },
-      { ...AGENT, workspacePairing: undefined, url: "https://server.example/arbitrary" },
-      { ...AGENT, workspacePairing: undefined, url: "https://server.example/_workspace/other" },
-      { ...AGENT, workspacePairing: undefined, url: "https://user@server.example/" },
+      {
+        ...AGENT,
+        transport: "local",
+        workspacePairing: undefined,
+        endpointSecret: undefined,
+        url: "https://server.example/arbitrary",
+      },
+      {
+        ...AGENT,
+        transport: "local",
+        workspacePairing: undefined,
+        endpointSecret: undefined,
+        url: "https://server.example/_workspace/other",
+      },
+      {
+        ...AGENT,
+        transport: "local",
+        workspacePairing: undefined,
+        endpointSecret: undefined,
+        url: "https://user@server.example/",
+      },
     ]) {
       write(invalid);
       expect(loadCliCredentials()).toBeNull();
@@ -159,7 +179,7 @@ describe("CLI persisted device credential", () => {
     expect(() =>
       saveCliCredentials({
         ...CURRENT,
-        workspacePairing: { ...CURRENT.workspacePairing, sig: "wss://signal.example" },
+        workspacePairing: { ...CURRENT.workspacePairing, relays: ["http://relay.example/"] },
       })
     ).toThrow(/non-canonical CLI credential/u);
     expect(fs.readFileSync(credentialPath())).toEqual(before);
@@ -185,8 +205,8 @@ describe("CLI persisted device credential", () => {
       workspaceId: "workspace-other",
       workspaceName: "other",
       refreshToken: "n".repeat(43),
-      url: "webrtc://room-other/_workspace/other",
-      workspacePairing: { ...CURRENT.workspacePairing, room: "room-other" },
+      url: `iroh://${"cc".repeat(32)}/_workspace/other`,
+      workspacePairing: { ...CURRENT.workspacePairing, endpointId: "cc".repeat(32) },
     };
 
     saveCliCredentials(rotated);

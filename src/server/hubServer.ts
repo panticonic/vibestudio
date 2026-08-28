@@ -36,15 +36,19 @@ import {
   SERVER_ID_PATTERN,
 } from "@vibestudio/shared/deviceCredentials";
 import { resolveHostConfig } from "@vibestudio/shared/hostConfig";
+import { selectedWorkspaceUrl, WORKSPACE_ROUTE_PREFIX } from "@vibestudio/shared/connect";
+import {
+  createNodeEndpointBinding,
+  loadOrCreateNodeEndpointSecret,
+} from "@vibestudio/iroh-transport/node";
 import {
   createConnectDeepLink,
   createConnectPairUrl,
+  IROH_REACH_VERSION,
   PAIRING_CODE_PATTERN,
-  PAIRING_PROTOCOL_VERSION,
-  selectedWorkspaceUrl,
-  WORKSPACE_ROUTE_PREFIX,
-  type ReconnectReach,
-} from "@vibestudio/shared/connect";
+  assertIrohReach,
+  type IrohReach,
+} from "@vibestudio/iroh-transport";
 import {
   hubControlMethods,
   HubReadyPayloadSchema,
@@ -88,11 +92,7 @@ import {
 import { shellCallerId } from "./hostCore/auth/model.js";
 import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
-import {
-  RoutedRoomStore,
-  routedRoomStatePath,
-  workspaceReachPaths,
-} from "./hostCore/routedRoomStore.js";
+import { workspaceIrohReachPaths } from "./hostCore/irohReachPaths.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { getInternalDOBundle } from "./internalDOs/internalDoLoader.js";
 import { ServiceDispatcher, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
@@ -101,6 +101,7 @@ import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
+import { resolveIrohRelayUrls } from "./irohRelayConfig.js";
 
 declare const __filename: string;
 
@@ -211,8 +212,8 @@ export interface HubRuntimeState {
 }
 
 interface HubControlTransport {
-  ingress: import("./webrtcIngress.js").WebRtcIngress;
-  pairing: Omit<ReconnectReach, "room">;
+  ingress: import("./irohIngress.js").IrohIngress;
+  pairing: IrohReach;
   rpcServer: import("./rpcServer.js").RpcServer;
   grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   inviteExpiryTimers: Map<string, NodeJS.Timeout>;
@@ -249,10 +250,9 @@ const WorkspaceChildReadySchema = z
     adminToken: z.string().min(1),
     pairing: z
       .object({
-        fp: z.string().min(1),
-        sig: z.string().min(1),
-        v: z.literal(PAIRING_PROTOCOL_VERSION),
-        ice: z.enum(["all", "relay"]),
+        endpointId: z.string().regex(/^[0-9a-f]{64}$/),
+        relays: z.array(z.string().url()).min(1).max(8),
+        v: z.literal(IROH_REACH_VERSION),
       })
       .strict(),
     serverId: z.string().regex(SERVER_ID_PATTERN),
@@ -316,7 +316,7 @@ function bearerToken(req: http.IncomingMessage): string | null {
 /**
  * Hub-side acting-user subject (WP2 §3) — `UserSubject` plus the host-resolved
  * role for the management gates, and the authenticated device (when the caller
- * is a device-backed shell) so routing can hand back its signaling room.
+ * is a device-backed shell) so routing can hand back its Iroh reach.
  */
 export interface HubSubject {
   userId: string;
@@ -642,7 +642,7 @@ function subjectForDeviceCredential(
 ): HubSubject {
   const deviceId = payload["deviceId"];
   const refreshToken = payload["refreshToken"];
-  state.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+  state.deviceAuthStore.validateRefresh(deviceId, refreshToken, { kind: "local" });
   const userId = state.deviceAuthStore.userFor(deviceId);
   const user = userId ? state.userStore.getUser(userId) : null;
   if (!user || user.revokedAt !== undefined) {
@@ -795,7 +795,7 @@ function resolveInviteWorkspace(state: HubRuntimeState, viewer: HubSubject, raw:
   throw new Error(
     workspaces.length === 0
       ? "No workspace is configured; pass { workspace } after creating one."
-      : "Multiple workspaces are configured; pass { workspace } to mint a workspace-scoped WebRTC invite."
+      : "Multiple workspaces are configured; pass { workspace } to mint a workspace-scoped Iroh invite."
   );
 }
 
@@ -890,15 +890,15 @@ function pairingTtl(raw: unknown): number {
   return ttlMs;
 }
 
-type ChildReach = ReconnectReach;
+type ChildReach = IrohReach;
 
 function requireControlTransport(state: HubRuntimeState): HubControlTransport {
   if (!state.controlTransport) throw new Error("Hub control ingress is not ready");
   return state.controlTransport;
 }
 
-function reachFromControlTransport(transport: HubControlTransport, room: string): ChildReach {
-  return { room, ...transport.pairing };
+function reachFromControlTransport(transport: HubControlTransport): ChildReach {
+  return transport.pairing;
 }
 
 function clearControlInviteExpiry(transport: HubControlTransport, codeHash: string): void {
@@ -916,11 +916,7 @@ function scheduleControlInviteExpiry(
   clearControlInviteExpiry(transport, codeHash);
   const expire = (): void => {
     transport.inviteExpiryTimers.delete(codeHash);
-    for (const room of state.deviceAuthStore.cleanupControlRooms(Date.now())) {
-      void transport.ingress.disarmRoom(room.room).catch((error) => {
-        console.warn(`[Hub] Failed to disarm expired control room ${room.room}:`, error);
-      });
-    }
+    state.deviceAuthStore.cleanupPairingInvites(Date.now());
   };
   const remainingMs = expiresAt - Date.now();
   if (remainingMs <= 0) {
@@ -934,42 +930,38 @@ function scheduleControlInviteExpiry(
 
 async function armControlInvite(
   state: HubRuntimeState,
-  invite: { code: string; room: string; expiresAt: number }
+  invite: { code: string; expiresAt: number }
 ): Promise<ChildReach> {
   const transport = requireControlTransport(state);
-  await transport.ingress.armRoom(invite.room, {});
   scheduleControlInviteExpiry(state, hashSecret(invite.code), invite.expiresAt);
-  return reachFromControlTransport(transport, invite.room);
+  return reachFromControlTransport(transport);
 }
 
 async function disarmControlInvite(state: HubRuntimeState, code: string): Promise<void> {
   const transport = requireControlTransport(state);
   const codeHash = hashSecret(code);
   clearControlInviteExpiry(transport, codeHash);
-  const room = state.deviceAuthStore.cancelPairingInvite(code);
-  if (room) await transport.ingress.disarmRoom(room.room);
+  state.deviceAuthStore.cancelPairingInvite(code);
 }
 
 /** Stop stable hub reach only after the revoked caller's final response drains. */
-function retireDeviceControlReach(
-  state: HubRuntimeState,
-  deviceId: string,
-  controlRoom: string | null
-): void {
+function retireDeviceControlReach(state: HubRuntimeState, deviceId: string): void {
   const transport = state.controlTransport;
-  if (!transport || !controlRoom) return;
+  if (!transport) return;
   const retired = transport.rpcServer.retireCaller(shellCallerId(deviceId));
-  void retired
-    .then(() => transport.ingress.disarmRoom(controlRoom))
-    .catch((error) => {
-      console.warn(`[Hub] Failed to disarm revoked device control room ${controlRoom}:`, error);
-    });
+  void retired.catch((error) => {
+    console.warn(`[Hub] Failed to retire revoked device ${deviceId}:`, error);
+  });
 }
 
 async function completeControlPairing(
   state: HubRuntimeState,
   code: string,
-  input: { label?: string; platform?: string }
+  input: {
+    label?: string;
+    platform?: string;
+    transport: import("@vibestudio/identity/identityDb").DeviceTransportBinding;
+  }
 ): Promise<PairedDeviceCredential> {
   const transport = requireControlTransport(state);
   const codeHash = hashSecret(code);
@@ -984,9 +976,9 @@ async function completeControlPairing(
       : {}),
     label: input.label ?? "Vibestudio client",
     platform: input.platform,
+    transport: input.transport,
   });
   clearControlInviteExpiry(transport, codeHash);
-  await transport.ingress.armRoom(credential.controlRoom, { deviceId: credential.deviceId });
   if (bootstrapRoot) state.onRootBootstrapCompleted?.();
   return credential;
 }
@@ -1015,22 +1007,17 @@ async function armChildReach(
         : `Workspace route failed with HTTP ${response.status}`
     );
   }
-  if (
-    typeof body["room"] !== "string" ||
-    typeof body["fp"] !== "string" ||
-    typeof body["sig"] !== "string" ||
-    body["v"] !== PAIRING_PROTOCOL_VERSION ||
-    (body["ice"] !== "all" && body["ice"] !== "relay")
-  ) {
+  const reach = {
+    endpointId: body["endpointId"],
+    relays: body["relays"],
+    v: body["v"],
+  } as IrohReach;
+  try {
+    assertIrohReach(reach);
+  } catch {
     throw new Error(`Workspace "${runtime.advertisedName}" returned invalid reach coordinates`);
   }
-  return {
-    room: body["room"],
-    fp: body["fp"],
-    sig: body["sig"],
-    v: PAIRING_PROTOCOL_VERSION as typeof PAIRING_PROTOCOL_VERSION,
-    ice: body["ice"],
-  };
+  return reach;
 }
 
 function pairingInviteFromReach(
@@ -1039,17 +1026,16 @@ function pairingInviteFromReach(
   expiresAt: number,
   reach: ChildReach
 ): HubPairingInvite {
-  const pairing: import("@vibestudio/shared/connect").ConnectPairing = {
-    room: reach.room,
-    fp: reach.fp,
-    sig: reach.sig,
-    ice: reach.ice,
-    v: PAIRING_PROTOCOL_VERSION,
+  const pairing: import("@vibestudio/iroh-transport").ConnectPairing = {
+    endpointId: reach.endpointId,
+    relays: [...reach.relays],
+    v: reach.v,
     code,
     exp: expiresAt,
   };
   return {
     ...pairing,
+    relays: [...pairing.relays],
     deepLink: createConnectDeepLink(pairing),
     pairUrl: createConnectPairUrl(pairing),
     expiresInMs: Math.max(1, expiresAt - Date.now()),
@@ -1090,14 +1076,19 @@ async function handleAuthRoute(
     }
     if (route === "complete-pairing") {
       const body = HubCompletePairingBodySchema.parse(await readJson(req));
-      const credential = await completeControlPairing(state, body.code, body);
+      const credential = await completeControlPairing(state, body.code, {
+        ...body,
+        transport: { kind: "local" },
+      });
       sendJson(res, 200, responseForCredential(state, credential));
       return;
     }
 
     if (route === "refresh-shell") {
       const { deviceId, refreshToken } = HubDeviceCredentialBodySchema.parse(await readJson(req));
-      const device = state.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+      const device = state.deviceAuthStore.validateRefresh(deviceId, refreshToken, {
+        kind: "local",
+      });
       sendJson(res, 200, {
         shellToken: state.tokenManager.ensureToken(shellCallerId(deviceId), "shell"),
         callerId: shellCallerId(deviceId),
@@ -1268,14 +1259,11 @@ export async function revokeHubUser(
   if (target.role === "root") state.userStore.revokeUser(target.id);
 
   const deviceIds = state.identityDb.listDevicesForUser(target.id).map((device) => device.deviceId);
-  const controlRooms = new Map(
-    deviceIds.map((deviceId) => [deviceId, state.deviceAuthStore.getDeviceControlRoom(deviceId)])
-  );
   const workspaceIds = state.centralData.listWorkspaces().map((entry) => entry.workspaceId);
   const revoked = state.userStore.revokeUser(target.id, workspaceIds);
   for (const deviceId of deviceIds) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
-    retireDeviceControlReach(state, deviceId, controlRooms.get(deviceId) ?? null);
+    retireDeviceControlReach(state, deviceId);
   }
   await ensureRevocationGovernance(state, {
     actor: subject,
@@ -1300,11 +1288,10 @@ export async function revokeHubDevice(
   const device = state.identityDb.getDevice(deviceId);
   if (!device) throw new Error("Unknown device");
   if (device.userId !== subject.userId) requireRole(subject, "admin");
-  const controlRoom = state.deviceAuthStore.getDeviceControlRoom(deviceId);
   const revoked = state.deviceAuthStore.revokeDevice(deviceId);
   if (revoked) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
-    retireDeviceControlReach(state, deviceId, controlRoom);
+    retireDeviceControlReach(state, deviceId);
   }
   const closedSessions = revoked ? await closeDeviceSessionsAcrossChildren(state, deviceId) : 0;
   return { revoked, closedSessions };
@@ -1336,7 +1323,7 @@ async function executeHubControl(
   if (method === "routeWorkspace") {
     // WP1 §5 / WP2 §4: membership pre-filter, spawn/attach the child, and
     // return the coordinates for the client to reach the CHILD's ingress
-    // directly — the hub never relays media/RPC (child owns its DTLS pipe).
+    // directly — the hub never relays RPC (the child owns its Iroh endpoint).
     const opts = asRecord(args[0]) ?? {};
     const workspaceId = typeof opts["workspaceId"] === "string" ? opts["workspaceId"] : "";
     const name = requireWorkspaceName(state, workspaceId);
@@ -1793,7 +1780,7 @@ async function startHubControlTransport(
   state: HubRuntimeState,
   configDir: string
 ): Promise<HubControlTransport> {
-  const reachRoot = path.join(configDir, "server-auth", "webrtc");
+  const reachRoot = path.join(configDir, "server-auth", "iroh");
 
   const dispatcher = new ServiceDispatcher();
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
@@ -1879,36 +1866,25 @@ async function startHubControlTransport(
   });
   rpcServer.initHandlers();
 
-  const { resolveSignalingUrl } = await import("@vibestudio/shared/connect");
-  const signalUrl = resolveSignalingUrl({ env: process.env }).url;
-  const { ensurePersistentCert } = await import("../node/webrtc/cert.js");
-  const { assertNodeDatachannelAvailable } = await import("../node/webrtc/nodeDatachannelPeer.js");
-  assertNodeDatachannelAvailable();
-  const identityFile = path.join(reachRoot, "identity.pem");
-  const cert = ensurePersistentCert({ identityPemFile: identityFile });
-  const clientIce: import("@vibestudio/shared/connect").TurnPolicy =
-    process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
-  const serverIce: import("@vibestudio/shared/connect").TurnPolicy =
-    process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "relay"
-      ? "relay"
-      : process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "all"
-        ? "all"
-        : clientIce;
-  const { startWebRtcIngress } = await import("./webrtcIngress.js");
-  const ingress = startWebRtcIngress({
-    rpcServer,
-    signalUrl,
-    certificatePemFile: cert.certificatePemFile,
-    keyPemFile: cert.keyPemFile,
-    iceTransportPolicy: serverIce,
+  const relayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+  const secretKey = loadOrCreateNodeEndpointSecret(path.join(reachRoot, "endpoint.key"));
+  const { startIrohIngress } = await import("./irohIngress.js");
+  const ingress = startIrohIngress({
+    binding: createNodeEndpointBinding({ secretKey, relayUrls }),
+    admitPeer: (endpointId) =>
+      state.identityDb.getDeviceForEndpoint(endpointId) !== null ||
+      state.deviceAuthStore.hasLivePairingInvite(),
+    attach: (connection) => rpcServer.attachIrohConnection(connection),
+    waitUntilOnline: (endpoint) => endpoint.native.online(),
+    log: (message) => console.warn(`[iroh-hub] ${message}`),
   });
+  await ingress.ready;
   const transport: HubControlTransport = {
     ingress,
     pairing: {
-      fp: cert.fingerprint,
-      sig: signalUrl,
-      v: PAIRING_PROTOCOL_VERSION,
-      ice: clientIce,
+      endpointId: ingress.endpointId,
+      relays: relayUrls,
+      v: IROH_REACH_VERSION,
     },
     rpcServer,
     grantStore,
@@ -1916,14 +1892,9 @@ async function startHubControlTransport(
   };
   state.controlTransport = transport;
 
-  state.deviceAuthStore.cleanupControlRooms(Date.now());
-  for (const room of state.deviceAuthStore.listControlRooms()) {
-    await ingress.armRoom(room.room, {
-      ...(room.kind === "device" ? { deviceId: room.deviceId } : {}),
-    });
-    if (room.kind === "invite") {
-      scheduleControlInviteExpiry(state, room.codeHash, room.expiresAt);
-    }
+  state.deviceAuthStore.cleanupPairingInvites(Date.now());
+  for (const invite of state.identityDb.listPairingCodes()) {
+    scheduleControlInviteExpiry(state, invite.code, invite.expiresAt);
   }
   return transport;
 }
@@ -2150,10 +2121,10 @@ function beginWorkspaceRuntimeStart(
  *
  * Identity is one hub-owned store (WP0 §2): the child opens `identity.db`
  * query-only via `VIBESTUDIO_IDENTITY_DB_PATH` to resolve subjects and rosters.
- * Each advertised workspace keeps its own DTLS identity and routed-room state
+ * Each advertised workspace keeps its own durable Iroh endpoint identity
  * under the canonical advertised workspace directory. A replacement process
- * (including a fresh ephemeral dev checkout) therefore preserves its pinned
- * fingerprint, while different advertised workspaces remain isolated.
+ * (including a fresh ephemeral dev checkout) therefore preserves its Endpoint
+ * ID, while different advertised workspaces remain isolated.
  *
  * `workspaceId` is the registry's OPAQUE stable id (WP2) — the child gates
  * connections with `membershipStore.has(subject.userId, workspaceId)`, so it
@@ -2171,7 +2142,7 @@ export function buildWorkspaceChildEnv(input: {
   ephemeral: boolean;
   creationIntent?: WorkspaceCreationDescriptor | null;
 }): NodeJS.ProcessEnv {
-  const reach = workspaceReachPaths(input.advertisedWorkspaceName);
+  const reach = workspaceIrohReachPaths(input.advertisedWorkspaceName);
   const env: NodeJS.ProcessEnv = {
     ...input.baseEnv,
     VIBESTUDIO_APP_ROOT: input.appRoot,
@@ -2183,20 +2154,14 @@ export function buildWorkspaceChildEnv(input: {
     // report the catalog name so clients can route back through the hub.
     VIBESTUDIO_ADVERTISED_WORKSPACE: input.advertisedWorkspaceName,
     VIBESTUDIO_WORKSPACE_ID: input.workspaceId,
-    // Routed signaling rooms are a property of the advertised workspace, not
-    // of one child process's disk checkout. This is identical for persistent
-    // workspaces and crucial for ephemeral dev, whose random checkout is
-    // deleted on every restart while paired devices must retain their room.
-    VIBESTUDIO_ROUTED_ROOM_STATE_PATH: reach.routesFile,
     VIBESTUDIO_IDENTITY_DB_PATH: input.identityDbPath,
     VIBESTUDIO_WORKSPACE_CHILD_TOKEN: input.workspaceChildToken,
     // Every child gets a distinct loopback-management capability. Never pass
     // through the hub's operator token from baseEnv.
     VIBESTUDIO_ADMIN_TOKEN: randomBytes(32).toString("hex"),
-    // The certificate identifies the advertised logical workspace. Ephemeral
-    // dev may replace its random checkout on every launch, but paired clients
-    // must continue to see the fingerprint they pinned for `dev`.
-    VIBESTUDIO_WEBRTC_IDENTITY: reach.identityFile,
+    // The endpoint key identifies the advertised logical workspace. Ephemeral
+    // dev may replace its checkout, but stored reaches retain this Endpoint ID.
+    VIBESTUDIO_IROH_IDENTITY: reach.identityFile,
     VIBESTUDIO_PROCESS_ROLE: "workspace-child",
     VIBESTUDIO_HUB_URL: input.hubUrl,
     // A historical child uses its own compiled epoch to interpret the
@@ -2217,7 +2182,7 @@ export function buildWorkspaceChildEnv(input: {
     delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
   }
   delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
-  // Obsolete product-wide relay credentials must never enter a workspace
+  // Obsolete product-wide callback-relay credentials must never enter a workspace
   // process. Backhaul auth is derived from the workspace's persistent key.
   delete env["VIBESTUDIO_RELAY_SIGNING_SECRET"];
   return env;
@@ -2555,8 +2520,20 @@ type WorkspaceChildExitDeps = {
 function workspaceRuntimeIsDesired(state: HubRuntimeState, advertisedName: string): boolean {
   if (!state.centralData.hasWorkspace(advertisedName)) return false;
   if (isWorkspaceEphemeral(state, advertisedName)) return true;
-  const routeFile = routedRoomStatePath(advertisedName);
-  return fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0;
+  const workspace = state.centralData
+    .listWorkspaces()
+    .find((candidate) => candidate.name === advertisedName);
+  return (
+    !!workspace &&
+    state.identityDb
+      .listDevices()
+      .some(
+        (device) =>
+          device.revokedAt === undefined &&
+          device.transport.kind === "iroh" &&
+          state.membershipStore.has(device.userId, workspace.workspaceId)
+      )
+  );
 }
 
 function restartExitedWorkspaceRuntime(
@@ -2975,7 +2952,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   // a root exists, new humans arrive by invite (WP1), so no startup code is minted.
   const needsRootBootstrap = !identityDb.hasUsers();
   // No public ingress: the hub is loopback HTTP only. connectUrl is the loopback
-  // gateway URL; remote reach is the per-workspace WebRTC pipe (answerer seam).
+  // gateway URL; remote reach is the per-workspace Iroh endpoint.
   const gatewayUrl = `${hostConfig.protocol}://${hostConfig.externalHost}:${gatewayPort}`;
   const connectUrl = gatewayUrl.replace(/\/$/, "");
   state = {
@@ -3065,7 +3042,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     startupInvite = await rootBootstrapLifecycle.start();
   }
   // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.
-  // A persisted device room is a live reach contract, so routed children must
+  // A persisted endpoint-bound device membership is a live reach contract, so children must
   // restart for returning clients — but pairing and hub control must not wait
   // out a ~20s child cold boot. Routing coalesces onto the pending start, so a
   // client that arrives mid-boot awaits the same runtime promise instead of
@@ -3126,7 +3103,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     if (state.controlTransport) {
       for (const timer of state.controlTransport.inviteExpiryTimers.values()) clearTimeout(timer);
       state.controlTransport.inviteExpiryTimers.clear();
-      await state.controlTransport.ingress.close();
+      await state.controlTransport.ingress.stop();
       await state.controlTransport.rpcServer.stop();
       state.controlTransport.grantStore.close();
     }

@@ -15,7 +15,7 @@ const localTransportMocks = vi.hoisted(() => ({
   resolve: vi.fn<() => Promise<LocalHubControlTransport | null>>(async () => null),
 }));
 
-const webRtcMocks = vi.hoisted(() => ({
+const irohMocks = vi.hoisted(() => ({
   ctor: vi.fn(),
   call: vi.fn(),
   close: vi.fn(async () => undefined),
@@ -32,14 +32,19 @@ vi.mock("./localHubTransport.js", () => ({
   resolveLocalHubControlTransport: localTransportMocks.resolve,
 }));
 
-vi.mock("./webrtcClient.js", () => ({
-  WebRtcRpcClient: class {
+vi.mock("../node/iroh/irohRpcClient.js", () => ({
+  IrohRpcClient: class {
     constructor(config: unknown) {
-      webRtcMocks.ctor(config);
+      irohMocks.ctor(config);
     }
-    call = webRtcMocks.call;
-    close = webRtcMocks.close;
+    call = irohMocks.call;
+    callTarget = irohMocks.call;
+    close = irohMocks.close;
   },
+}));
+
+vi.mock("./irohEndpointLock.js", () => ({
+  acquireIrohEndpointLock: vi.fn(async () => () => undefined),
 }));
 
 vi.mock("./wsClient.js", () => ({
@@ -63,27 +68,25 @@ const CREDS = {
 };
 
 const PAIRED_CREDS = {
-  schemaVersion: 4 as const,
+  schemaVersion: 5 as const,
   kind: "device" as const,
-  url: "webrtc://11111111-1111-4111-8111-111111111111/_workspace/dev",
+  url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "ws_dev",
   workspaceName: "dev",
   serverId: `srv_${"S".repeat(24)}`,
   deviceId: `dev_${"D".repeat(24)}`,
   refreshToken: "R".repeat(43),
+  transport: "iroh" as const,
+  endpointSecret: "E".repeat(43),
   controlPairing: {
-    room: "22222222-2222-4222-8222-222222222222",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example/",
-    v: 3 as const,
-    ice: "all" as const,
+    endpointId: "aa".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4 as const,
   },
   workspacePairing: {
-    room: "11111111-1111-4111-8111-111111111111",
-    fp: "BB".repeat(32),
-    sig: "wss://signal.example/",
-    v: 3 as const,
-    ice: "all" as const,
+    endpointId: "bb".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4 as const,
   },
   pairedAt: 1,
 };
@@ -131,9 +134,9 @@ describe("rpcClient", () => {
   beforeEach(() => {
     clearShellTokenCache();
     localTransportMocks.resolve.mockReset().mockResolvedValue(null);
-    webRtcMocks.ctor.mockClear();
-    webRtcMocks.call.mockReset();
-    webRtcMocks.close.mockClear();
+    irohMocks.ctor.mockClear();
+    irohMocks.call.mockReset();
+    irohMocks.close.mockClear();
     credentialStoreMocks.save.mockClear();
   });
 
@@ -419,7 +422,7 @@ describe("rpcClient", () => {
       "http://127.0.0.1:46247/_workspace/dev/_r/s/auth/refresh-shell",
       "http://127.0.0.1:46247/_workspace/dev/rpc",
     ]);
-    expect(webRtcMocks.ctor).not.toHaveBeenCalled();
+    expect(irohMocks.ctor).not.toHaveBeenCalled();
   });
 
   it("opens sibling transports from one resolved workspace route", async () => {
@@ -463,10 +466,10 @@ describe("rpcClient", () => {
     expect(
       requests.filter((url) => url === "http://127.0.0.1:46247/_workspace/dev/rpc")
     ).toHaveLength(2);
-    expect(webRtcMocks.ctor).not.toHaveBeenCalled();
+    expect(irohMocks.ctor).not.toHaveBeenCalled();
   });
 
-  it("does not hide a rejected local workspace route behind a WebRTC fallback", async () => {
+  it("does not hide a rejected local workspace route behind a Iroh fallback", async () => {
     localTransportMocks.resolve.mockRejectedValue(
       new Error("The local hub routed the paired device to a different server or workspace")
     );
@@ -476,22 +479,23 @@ describe("rpcClient", () => {
       "different server or workspace"
     );
     await expect(client.close()).resolves.toBeUndefined();
-    expect(webRtcMocks.ctor).not.toHaveBeenCalled();
+    expect(irohMocks.ctor).not.toHaveBeenCalled();
   });
 
-  it("connects an explicit WebRTC endpoint without resolving a workspace", async () => {
+  it("connects an explicit Iroh endpoint without resolving a workspace", async () => {
     const client = new RpcClient({
       url: PAIRED_CREDS.url,
       deviceId: PAIRED_CREDS.deviceId,
       refreshToken: PAIRED_CREDS.refreshToken,
       pairing: PAIRED_CREDS.controlPairing,
+      endpointSecret: PAIRED_CREDS.endpointSecret,
     });
 
     await client.call("hubControl.listWorkspaces", []);
 
     expect(localTransportMocks.resolve).not.toHaveBeenCalled();
-    expect(webRtcMocks.ctor).toHaveBeenCalledWith(
-      expect.objectContaining({ pairing: PAIRED_CREDS.controlPairing })
+    expect(irohMocks.ctor).toHaveBeenCalledWith(
+      expect.objectContaining({ reach: PAIRED_CREDS.controlPairing })
     );
   });
 
@@ -577,7 +581,7 @@ describe("rpcClient", () => {
       wsMocks.stream.mockClear();
     });
 
-    it("opens the WS client for onEvent on a loopback device credential (was WebRTC-only)", async () => {
+    it("opens the WS client for onEvent on a loopback device credential (was Iroh-only)", async () => {
       const client = new RpcClient(CREDS);
       const off = await client.onEvent("some:event", () => {});
       expect(wsMocks.ctor).toHaveBeenCalledWith(

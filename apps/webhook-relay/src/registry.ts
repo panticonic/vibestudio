@@ -140,7 +140,7 @@ function decodeBase64(b64: string): Uint8Array {
 /**
  * Throw-safe send. A CLOSING/gone socket throws on `send`; swallow it and report
  * `false` so callers can fail loud (503) instead of surfacing an opaque 500.
- * Mirrors the signaling room's `sendRaw`.
+ * Sends one opaque callback frame to the authenticated server backhaul.
  */
 function safeSend(ws: WebSocket, data: string): boolean {
   try {
@@ -259,7 +259,7 @@ export class RelayRegistry {
     // unclean drop left a zombie socket, or the process restarted). Evict any
     // incumbent bound to this serverId BEFORE accepting the new one, so delivery
     // never picks a dead duplicate and silently loses a webhook/OAuth handoff
-    // while the landing already said "Sign-in complete." Mirrors the signaling
+    // while the landing already said "Sign-in complete." Mirrors the backhaul
     // room's same-role eviction.
     let evicted = 0;
     for (const incumbent of this.state.getWebSockets(serverId)) {

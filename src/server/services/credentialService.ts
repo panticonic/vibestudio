@@ -1445,7 +1445,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }),
   };
 
-  // The home server has NO public inbound HTTP surface post-WebRTC cutover, so
+  // The home server has NO public inbound HTTP surface post-Iroh cutover, so
   // there is no server-hosted `/oauth/callback` route: desktop callbacks arrive
   // over the authenticated backhaul, mobile over the pipe, and co-located
   // loopback via the connection coordinator's ephemeral HTTP server.

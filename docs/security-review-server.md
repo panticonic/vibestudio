@@ -29,7 +29,7 @@ endpoint binding, and JWKS-fetch findings remain open.
 
 ## Executive assessment
 
-The backend has a substantially better baseline than its attack-surface size might suggest. The primary gateway is deliberately loopback-only, remote RPC uses the WebRTC transport, HTTP RPC derives caller identity from the bearer rather than the envelope, workspace membership is checked at HTTP admission and continuously on WebSocket traffic, Durable Object calls use exact method catalogs and host attestations, internal workerd routes require dispatch secrets, and stored credentials use authenticated encryption with strict path-component validation.
+The backend has a substantially better baseline than its attack-surface size might suggest. The primary gateway is deliberately loopback-only, remote RPC uses the Iroh transport, HTTP RPC derives caller identity from the bearer rather than the envelope, workspace membership is checked at HTTP admission and continuously on WebSocket traffic, Durable Object calls use exact method catalogs and host attestations, internal workerd routes require dispatch secrets, and stored credentials use authenticated encryption with strict path-component validation.
 
 The material risks found were not missing cryptography or wholesale unauthenticated
 administration. They sat at seams where two otherwise sound abstractions did not
@@ -101,7 +101,7 @@ This is not an argument to reduce all RPC payloads to tiny values. Large develop
 
 #### Recommended synthesis at the reviewed revision
 
-Create one **staged ingress budget** used by HTTP, WS, WebRTC control frames, and public service routes:
+Create one **staged ingress budget** used by HTTP, WS, Iroh control frames, and public service routes:
 
 1. authenticate headers or a small fixed-size auth frame first;
 2. cap unauthenticated control material to a small value (for example 16–64 KiB);
@@ -201,7 +201,7 @@ Redirects that remain inside the already-approved audience should remain invisib
 #### Evidence
 
 - The implementation explicitly says the shared secret is “too weak for tenant isolation” at `apps/webhook-relay/src/registry.ts:25-29`.
-- Deployment instructs the home server and relay worker to share the same global value (`docs/webrtc-deployment.md:279-288`).
+- Deployment instructs the home server and relay worker to share the same global value (`docs/iroh-deployment.md:279-288`).
 - Backhaul authentication signs attacker-supplied `<serverId>\n<timestamp>` under that one secret (`apps/webhook-relay/src/registry.ts:169-190`).
 - Once verified, the relay accepts that asserted identity without an installation-specific key (`apps/webhook-relay/src/registry.ts:232-240`).
 - A new connection for the same `serverId` evicts the incumbent at `apps/webhook-relay/src/registry.ts:248-266`. The behavior is intentional and covered by `apps/webhook-relay/src/registry.test.ts:441-461`.
@@ -438,7 +438,7 @@ A stolen token therefore remains useful until caller-wide revocation or lifecycl
 
 ### H-02 — Aggregate budgets for authenticated bulk traffic
 
-The WebRTC pre-open buffer is bounded, but its defaults are intentionally very large: 65,536 pending streams and 1 GiB aggregate bytes (`src/server/rpcServer.ts:258-265`). Per-stream caps, condemnation, TTL, and bookkeeping are well designed (`src/server/rpcServer.ts:3878-4004`).
+The Iroh pre-open buffer is bounded, but its defaults are intentionally very large: 65,536 pending streams and 1 GiB aggregate bytes (`src/server/rpcServer.ts:258-265`). Per-stream caps, condemnation, TTL, and bookkeeping are well designed (`src/server/rpcServer.ts:3878-4004`).
 
 Replace global catastrophic ceilings with adaptive per-principal and per-connection budgets plus backpressure. Legitimate bulk agent workflows should reserve or stream capacity; one compromised authenticated principal should not be able to consume the entire host budget.
 

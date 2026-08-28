@@ -1,9 +1,7 @@
 import * as os from "node:os";
-import {
-  parseConnectLink,
-  selectedWorkspacePath,
-  type ConnectPairing,
-} from "@vibestudio/shared/connect";
+import { randomBytes } from "node:crypto";
+import { selectedWorkspacePath } from "@vibestudio/shared/connect";
+import { parseConnectLink, type ConnectPairing } from "@vibestudio/iroh-transport";
 import {
   hubControlMethods,
   type HubPairingInvite,
@@ -55,7 +53,9 @@ async function withControl<T>(
     url: local?.serverUrl ?? creds.url,
     deviceId: creds.deviceId,
     refreshToken: creds.refreshToken,
-    ...(local ? {} : { pairing: creds.controlPairing }),
+    ...(local || creds.transport === "local"
+      ? {}
+      : { pairing: creds.controlPairing, endpointSecret: creds.endpointSecret }),
   });
   let result: T | undefined;
   let operationError: unknown;
@@ -93,6 +93,7 @@ async function withControl<T>(
 export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
   if (!options.link) throw new AuthError("pair requires a Vibestudio pairing link");
   const pairing = parsePairingLink(options.link);
+  const endpointSecret = randomBytes(32).toString("base64url");
   const pairedRef: {
     current: {
       credential: { deviceId: string; refreshToken: string };
@@ -101,9 +102,10 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
   } = {
     current: null,
   };
-  const { WebRtcRpcClient } = await import("./webrtcClient.js");
-  const client = new WebRtcRpcClient({
-    pairing,
+  const { IrohRpcClient } = await import("../node/iroh/irohRpcClient.js");
+  const client = new IrohRpcClient({
+    reach: pairing,
+    endpointSecret: Buffer.from(endpointSecret, "base64url"),
     callerId: "shell:pairing",
     getToken: () => pairing.code,
     clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
@@ -124,18 +126,20 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     if (route.workspaceId !== paired.workspaceId) {
       throw new AuthError("workspace route changed the pairing target");
     }
-    const { code: _code, ...stableHubReach } = pairing;
+    const { code: _code, exp: _exp, ...stableHubReach } = pairing;
     const controlPairing = storeReach(stableHubReach);
     const workspacePairing = storeReach(route.workspaceReach);
     pairedCredential = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: "device",
+      transport: "iroh",
       url: selectedUrl(workspacePairing, route.workspace),
       workspaceId: route.workspaceId,
       workspaceName: route.workspace,
       serverId: route.serverId,
       deviceId: paired.credential.deviceId,
       refreshToken: paired.credential.refreshToken,
+      endpointSecret,
       controlPairing,
       workspacePairing,
       pairedAt: Date.now(),
@@ -153,7 +157,7 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     if (pairingFailure) {
       throw new AggregateError(
         [pairingFailure, closed.reason],
-        "Remote pairing failed and its WebRTC connection could not be closed"
+        "Remote pairing failed and its Iroh connection could not be closed"
       );
     }
     throw closed.reason;
@@ -193,6 +197,15 @@ export async function selectRemoteWorkspace(
   });
   if (route.serverId !== creds.serverId) {
     throw new AuthError("workspace route changed the paired server identity");
+  }
+  if (creds.transport === "local") {
+    return {
+      ...creds,
+      url: route.serverUrl,
+      workspaceId: route.workspaceId,
+      workspaceName: route.workspace,
+      serverId: creds.serverId,
+    };
   }
   const workspacePairing = storeReach(route.workspaceReach);
   return {
@@ -260,14 +273,18 @@ function parsePairingLink(link: string): ConnectPairing {
   return pairing;
 }
 
-function storeReach(reach: HubWorkspaceRoute["workspaceReach"]): CliStoredPairing {
+function storeReach(reach: {
+  endpointId: string;
+  relays: readonly string[];
+  v: 4;
+}): CliStoredPairing {
   try {
-    return canonicalStoredPairing(reach);
+    return canonicalStoredPairing({ ...reach, relays: [...reach.relays] });
   } catch (error) {
     throw new AuthError(error instanceof Error ? error.message : String(error));
   }
 }
 
-function selectedUrl(pairing: Pick<CliStoredPairing, "room">, workspaceName: string): string {
-  return `webrtc://${pairing.room}${selectedWorkspacePath(workspaceName)}`;
+function selectedUrl(pairing: Pick<CliStoredPairing, "endpointId">, workspaceName: string): string {
+  return `iroh://${pairing.endpointId}${selectedWorkspacePath(workspaceName)}`;
 }

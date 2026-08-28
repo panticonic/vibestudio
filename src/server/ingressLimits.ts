@@ -2,7 +2,7 @@
  * Ingress budgets are protocol contracts, not generic transport defaults.
  *
  * RPC WebSockets carry control envelopes. Large request/response bodies belong
- * on the streaming/WebRTC bulk lanes, which provide backpressure and bounded
+ * on the streaming/Iroh bulk lanes, which provide backpressure and bounded
  * framing. CDP/inspector sockets legitimately carry large screenshots and
  * protocol payloads, so they retain a larger post-admission ceiling. Their
  * credentials are validated before the WebSocket upgrade.

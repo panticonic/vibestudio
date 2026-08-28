@@ -46,27 +46,25 @@ function inv(flags: Record<string, string | boolean> = {}) {
   return { positionals: [], flags, flagsMulti: () => [] };
 }
 const deviceCreds = {
-  schemaVersion: 4 as const,
+  schemaVersion: 5 as const,
   kind: "device" as const,
-  url: "webrtc://room-1234/_workspace/ws",
+  transport: "iroh" as const,
+  endpointSecret: "E".repeat(43),
+  url: `iroh://${"bb".repeat(32)}/_workspace/ws`,
   workspaceId: "workspace-1",
   workspaceName: "ws",
   serverId: `srv_${"S".repeat(24)}`,
   deviceId: `dev_${"D".repeat(24)}`,
   refreshToken: "R".repeat(43),
   controlPairing: {
-    room: "room-control",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example/",
-    v: 3 as const,
-    ice: "all" as const,
+    endpointId: "aa".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4 as const,
   },
   workspacePairing: {
-    room: "room-1234",
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example/",
-    v: 3 as const,
-    ice: "all" as const,
+    endpointId: "bb".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4 as const,
   },
   pairedAt: 1,
 };

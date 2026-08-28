@@ -11,7 +11,7 @@
  * and NEVER write plaintext: `save` throws loudly when the cipher is unavailable,
  * so a durable secret is never leaked to disk in the clear.
  *
- * Writes are ATOMIC (tmp + fsync + rename, mirroring webrtc/cert.ts): a crash
+ * Writes are atomic (temporary file + fsync + rename): a crash
  * mid-write can never leave a half-written file that would decrypt-fail and wipe
  * every stored secret. The injected `parse` may SANITIZE — it can drop individual
  * invalid records while keeping the valid ones — so one stale-schema entry never

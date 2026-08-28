@@ -1,319 +1,309 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { WebSocket } from "ws";
-import { DEFAULT_SIGNAL_URL, resolveSignalingUrl } from "./lib/connect-grammar.generated.mjs";
 import { cliCredentialPath, hubIdentityPath, workspaceIdentityPath } from "./lib/config-paths.mjs";
 
 const require = createRequire(import.meta.url);
-
 const UNIT_NAME = "vibestudio-server.service";
+const ALPN = [...new TextEncoder().encode("vibestudio-rpc/4")];
+const PROBE_TIMEOUT_MS = 15_000;
 
 export function parseArgs(argv) {
   const options = {
-    signalUrl: null,
     workspace: null,
     identity: null,
-    identityScope: "hub",
     identityExplicit: false,
+    relayUrls: [],
     json: false,
     help: false,
   };
-  let identityExplicit = false;
-  let workspaceExplicit = false;
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--signal-url") {
-      options.signalUrl = argv[++i] ?? "";
-    } else if (arg === "--workspace") {
-      options.workspace = argv[++i] ?? "";
-      options.identityScope = "workspace";
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--workspace") options.workspace = argv[++index] ?? "";
+    else if (arg === "--relay-url") options.relayUrls.push(argv[++index] ?? "");
+    else if (arg === "--identity") {
+      options.identity = path.resolve(argv[++index] ?? "");
       options.identityExplicit = true;
-      workspaceExplicit = true;
-    } else if (arg === "--identity") {
-      options.identity = path.resolve(argv[++i] ?? "");
-      options.identityScope = "explicit";
-      options.identityExplicit = true;
-      identityExplicit = true;
-    } else if (arg === "--json") {
-      options.json = true;
-    } else if (arg === "--help") {
-      options.help = true;
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
+    } else if (arg === "--json") options.json = true;
+    else if (arg === "--help") options.help = true;
+    else throw new Error(`Unknown argument: ${arg}`);
   }
-  if (identityExplicit && workspaceExplicit) {
+  if (options.workspace && options.identity)
     throw new Error("pass --workspace or --identity, not both");
+  if (options.workspace && !/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
+    throw new Error("--workspace has an invalid name");
   }
-  if (options.workspace !== null && !/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
-    throw new Error("--workspace must contain only letters, numbers, hyphens, and underscores");
-  }
-  options.identity ??=
-    options.identityScope === "workspace"
-      ? workspaceIdentityPath(options.workspace)
-      : identityDefaultPath();
+  options.identity ??= options.workspace
+    ? workspaceIdentityPath(options.workspace)
+    : hubIdentityPath();
+  options.identityExplicit ||= options.workspace !== null;
   return options;
-}
-
-function printHelp() {
-  console.log(`vibestudio remote doctor
-
-Usage:
-  vibestudio remote doctor [--signal-url <wss-url>]
-    [--workspace <name> | --identity <identity.pem>] [--json]
-
-Checks:
-  node-datachannel native addon, the selected identity.pem layout (present,
-  0600, cert+key), signaling reachability, and — when a deployed systemd unit
-  is present — the unit's active state and gateway port. The default identity
-  is the stable hub control ingress. --workspace selects one child's workspace
-  ingress; --identity inspects an explicit endpoint. Server-only checks are
-  skipped (not failed) off the deployed host. If paired, signaling defaults to
-  the hub control reach in the active CLI credential; --signal-url and
-  VIBESTUDIO_WEBRTC_SIGNAL_URL still take precedence.
-`);
-}
-
-export function pairedSignalingUrl(credentialFile = cliCredentialFile()) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
-    const sig = parsed?.controlPairing?.sig;
-    return typeof sig === "string" && sig.length > 0 ? sig : null;
-  } catch {
-    return null;
-  }
-}
-
-function cliCredentialFile() {
-  return cliCredentialPath();
 }
 
 export function check(condition, name, ok, fail, meta = {}) {
   return { name, ok: Boolean(condition), message: condition ? ok : fail, ...meta };
 }
-
 export function skip(name, message, meta = {}) {
   return { name, ok: true, skipped: true, message, ...meta };
 }
 
-export function identityDefaultPath() {
-  return hubIdentityPath();
+function loadBinding(loader = require) {
+  const entry =
+    typeof loader.resolve === "function"
+      ? path.join(path.dirname(loader.resolve("@number0/iroh/package.json")), "index.js")
+      : "@number0/iroh";
+  const binding = loader(entry);
+  if (
+    typeof binding.Endpoint?.builder !== "function" ||
+    typeof binding.SecretKey?.fromBytes !== "function"
+  ) {
+    throw new Error("@number0/iroh did not expose the pinned native API");
+  }
+  return binding;
 }
 
-export function inspectIdentity(identityPath) {
-  if (!identityPath) identityPath = identityDefaultPath();
+export function inspectIdentity(identityPath, loader = require) {
   let stat;
   try {
     stat = fs.statSync(identityPath);
   } catch {
-    return check(false, "identity", "", `identity file is missing: ${identityPath}`, {
-      path: identityPath,
-    });
+    return check(false, "endpoint-identity", "", `endpoint secret is missing: ${identityPath}`);
   }
-  // Private key material must not be group/world accessible.
   const mode = stat.mode & 0o777;
   if ((mode & 0o077) !== 0) {
     return check(
       false,
-      "identity",
+      "endpoint-identity",
       "",
-      `identity.pem is group/world accessible (mode ${mode.toString(8).padStart(4, "0")}); run: chmod 600 ${identityPath}`,
-      { path: identityPath, mode }
+      `endpoint secret must be mode 0600 (found ${mode.toString(8)})`
     );
   }
-  const text = fs.readFileSync(identityPath, "utf8");
-  const hasCert = text.includes("-----BEGIN CERTIFICATE-----");
-  const hasKey = /-----BEGIN (RSA |EC |)PRIVATE KEY-----/.test(text);
+  const bytes = fs.readFileSync(identityPath);
+  try {
+    if (bytes.byteLength !== 32) throw new Error("secret must contain exactly 32 bytes");
+    const endpointId = loadBinding(loader)
+      .SecretKey.fromBytes([...bytes])
+      .public()
+      .toString();
+    return check(
+      true,
+      "endpoint-identity",
+      `endpoint ${endpointId.slice(0, 12)}…; secret is 0600`,
+      "",
+      { endpointId }
+    );
+  } catch (error) {
+    return check(false, "endpoint-identity", "", `malformed endpoint secret: ${error.message}`);
+  }
+}
+
+export function loadPairedCredential(filename = cliCredentialPath()) {
+  try {
+    const value = JSON.parse(fs.readFileSync(filename, "utf8"));
+    return value?.transport === "iroh" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function inspectCredentialEndpoint(credential, loader = require) {
+  if (!credential) return skip("credential-endpoint", "no paired Iroh credential on this host");
+  if (typeof credential.endpointSecret !== "string") {
+    return check(false, "credential-endpoint", "", "paired endpoint secret is missing");
+  }
+  try {
+    const secret = Buffer.from(credential.endpointSecret, "base64url");
+    if (secret.byteLength !== 32) throw new Error("secret must contain exactly 32 bytes");
+    const endpointId = loadBinding(loader)
+      .SecretKey.fromBytes([...secret])
+      .public()
+      .toString();
+    return check(
+      /^[0-9a-f]{64}$/.test(endpointId),
+      "credential-endpoint",
+      `device credential owns endpoint ${endpointId.slice(0, 12)}…`,
+      "paired endpoint secret did not derive a canonical Endpoint ID",
+      { endpointId }
+    );
+  } catch (error) {
+    return check(
+      false,
+      "credential-endpoint",
+      "",
+      `malformed paired endpoint secret: ${error.message}`
+    );
+  }
+}
+
+export function inspectRetiredTransportDependencies(loader = require) {
+  if (typeof loader.resolve !== "function") {
+    return skip("retired-transport", "dependency resolver unavailable in this environment");
+  }
+  const forbidden = [
+    ["react", "native", "web", "rtc"].join("-"),
+    ["node", "datachannel"].join("-"),
+  ];
+  const installed = forbidden.filter((name) => {
+    try {
+      loader.resolve(name);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const retiredEnvironment = Object.keys(process.env).filter((name) =>
+    name.startsWith(["VIBESTUDIO", "WEB", "RTC"].join("_"))
+  );
   return check(
-    hasCert && hasKey,
-    "identity",
-    `identity.pem present, 0600, cert+key: ${identityPath}`,
-    `identity.pem must contain both certificate and private key: ${identityPath}`,
-    { path: identityPath }
+    installed.length === 0 && retiredEnvironment.length === 0,
+    "retired-transport",
+    "retired native dependencies and environment are absent",
+    `retired transport remains installed or configured: ${[
+      ...installed,
+      ...retiredEnvironment,
+    ].join(", ")}`
   );
 }
 
-/**
- * Build the reachability probe URL. The signaling worker only upgrades
- * `/room/:id?role=…` (apps/signaling/src/index.ts) — dialing the endpoint ROOT
- * never upgrades and falsely reports a healthy endpoint as unreachable. Match how
- * packages/rpc/src/transports/webrtcSignalingClient.ts joins: a per-room ws URL
- * with role=answerer against a throwaway random room id.
- */
-export function signalingRoomWsUrl(resolvedUrl, room = randomUUID()) {
-  const url = new URL(resolvedUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/room/${encodeURIComponent(room)}`;
-  if (url.protocol === "http:") url.protocol = "ws:";
-  else if (url.protocol === "https:") url.protocol = "wss:";
-  url.searchParams.set("role", "answerer");
-  return url.toString();
+function validateRelays(relays) {
+  if (!Array.isArray(relays) || relays.length < 1 || relays.length > 8) return false;
+  return relays.every((relay) => {
+    try {
+      const url = new URL(relay);
+      return (
+        url.protocol === "https:" && url.toString() === relay && !url.username && !url.password
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
-export async function checkSignaling(
-  signalUrl,
-  wsFactory = (u) => new WebSocket(u),
-  resolution = undefined
-) {
-  const resolved =
-    resolution ??
-    resolveSignalingUrl({
-      flag: signalUrl ?? undefined,
-      defaultUrl: DEFAULT_SIGNAL_URL,
-    });
-  const url = signalingRoomWsUrl(resolved.url);
-  return new Promise((resolve) => {
-    let settled = false;
-    const socket = wsFactory(url);
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        socket.terminate?.() ?? socket.close?.();
-      } catch {
-        /* already closing */
+async function probePairedReach(credential, loader = require) {
+  if (!credential) return skip("iroh-probe", "no paired Iroh credential on this host");
+  const reach = credential.controlPairing;
+  if (!reach || !validateRelays(reach.relays) || !/^[0-9a-f]{64}$/.test(reach.endpointId ?? "")) {
+    return check(false, "iroh-probe", "", "paired control reach is malformed");
+  }
+  if (typeof credential.endpointSecret !== "string") {
+    return check(false, "iroh-probe", "", "paired endpoint secret is missing");
+  }
+  const binding = loadBinding(loader);
+  let endpoint;
+  try {
+    const secret = Buffer.from(credential.endpointSecret, "base64url");
+    if (secret.byteLength !== 32) throw new Error("paired endpoint secret is malformed");
+    const builder = binding.Endpoint.builder();
+    builder.applyMinimal();
+    builder.secretKey([...secret]);
+    builder.alpns([ALPN]);
+    builder.relayMode(binding.RelayMode.customFromUrls(reach.relays));
+    endpoint = await builder.bind();
+    let timer;
+    const probe = async () => {
+      let lastError;
+      for (const relay of reach.relays) {
+        try {
+          const address = new binding.EndpointAddr(
+            binding.EndpointId.fromString(reach.endpointId),
+            relay,
+            []
+          );
+          const connection = await endpoint.connect(address, ALPN);
+          const path = connection.paths().find((candidate) => candidate.isSelected);
+          connection.close(0n, []);
+          return check(
+            true,
+            "iroh-probe",
+            `ALPN accepted; ${path?.isRelay ? "relayed" : "direct"} path`,
+            "",
+            { relay, path: path?.remoteAddr ?? null }
+          );
+        } catch (error) {
+          lastError = error;
+        }
       }
-      resolve(result);
+      throw lastError ?? new Error("no relay attempt completed");
     };
-    const timer = setTimeout(() => {
-      finish(
-        check(false, "signaling", "", `timed out connecting to ${url}`, {
-          url,
-          source: resolved.source,
-        })
-      );
-    }, 8000);
-    socket.once("open", () => {
-      finish(
-        check(true, "signaling", `reachable: ${resolved.url} (${resolved.source})`, "", {
-          url,
-          source: resolved.source,
-        })
-      );
-    });
-    socket.once("error", (error) => {
-      finish(
-        check(false, "signaling", "", `cannot connect to ${url}: ${error.message}`, {
-          url,
-          source: resolved.source,
-        })
-      );
-    });
-  });
+    return await Promise.race([
+      probe(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          void endpoint.close().catch(() => undefined);
+          reject(new Error(`probe exceeded ${PROBE_TIMEOUT_MS}ms overall deadline`));
+        }, PROBE_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  } catch (error) {
+    return check(false, "iroh-probe", "", `Iroh probe failed: ${error.message}`);
+  } finally {
+    await endpoint?.close().catch(() => undefined);
+  }
 }
 
 function unitFilePath() {
   return path.join(os.homedir(), ".config", "systemd", "user", UNIT_NAME);
 }
 
-/** Parse `--port N` out of the unit's ExecStart line, if present. */
-export function gatewayPortFromUnit(unitText) {
-  const match = unitText.match(/ExecStart=.*\bremote serve\b.*?--port[= ](\d{1,5})/);
-  return match ? Number(match[1]) : null;
-}
-
-async function checkGatewayPort(port) {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: "127.0.0.1", port }, () => {
-      socket.destroy();
-      resolve(
-        check(true, "gateway-port", `loopback gateway is listening on 127.0.0.1:${port}`, "")
-      );
-    });
-    socket.setTimeout(3000);
-    socket.once("timeout", () => {
-      socket.destroy();
-      resolve(
-        check(
-          false,
-          "gateway-port",
-          "",
-          `nothing is listening on 127.0.0.1:${port} (check: vibestudio remote deploy logs <host>)`
-        )
-      );
-    });
-    socket.once("error", (error) => {
-      resolve(check(false, "gateway-port", "", `cannot reach 127.0.0.1:${port}: ${error.message}`));
-    });
-  });
-}
-
-export async function checkDeployedUnit(spawnImpl, unitPath = unitFilePath()) {
-  if (!fs.existsSync(unitPath)) {
-    return {
-      unit: skip("systemd-unit", "no deployed unit on this host (client preflight)"),
-      port: null,
-    };
-  }
-  const { spawnSync } = spawnImpl ?? (await import("node:child_process"));
-  const active = spawnSync("systemctl", ["--user", "is-active", UNIT_NAME], { encoding: "utf8" });
-  const state = (active.stdout ?? "").trim() || (active.stderr ?? "").trim();
-  const unit = check(
-    active.status === 0,
-    "systemd-unit",
-    `${UNIT_NAME} is active`,
-    `${UNIT_NAME} is ${state || "not active"} (check: vibestudio remote deploy status <host>)`
-  );
-  let port = null;
-  try {
-    port = gatewayPortFromUnit(fs.readFileSync(unitPath, "utf8"));
-  } catch {
-    port = null;
-  }
-  return { unit, port };
-}
-
 export async function runDoctor(options, deps = {}) {
   const checks = [];
   try {
-    (deps.require ?? require)("node-datachannel");
-    checks.push(check(true, "node-datachannel", "native addon loads", ""));
+    loadBinding(deps.require ?? require);
+    checks.push(check(true, "native-binding", "@number0/iroh 1.1.0 native binding loads", ""));
   } catch (error) {
-    checks.push(
-      check(false, "node-datachannel", "", `native addon failed to load: ${error.message}`)
-    );
+    checks.push(check(false, "native-binding", "", `Iroh native binding failed: ${error.message}`));
   }
-  const { unit, port } = await checkDeployedUnit(deps.spawnImpl, deps.unitPath);
-  checks.push(unit);
-  if (port !== null) {
-    checks.push(await checkGatewayPort(port));
-  }
-  const identityExplicit = options.identityExplicit ?? Boolean(options.identity);
+  const unitPath = deps.unitPath ?? unitFilePath();
+  const serverHost = fs.existsSync(unitPath);
   checks.push(
-    unit.skipped && !identityExplicit
-      ? skip("identity", "no server identity expected on a client host")
-      : inspectIdentity(options.identity)
+    serverHost
+      ? check(true, "systemd-unit", `${UNIT_NAME} is installed`, "")
+      : skip("systemd-unit", "no deployed unit on this host")
   );
-  const pairedSignal =
-    options.signalUrl || process.env.VIBESTUDIO_WEBRTC_SIGNAL_URL
-      ? null
-      : (deps.pairedSignalUrl ?? pairedSignalingUrl(deps.credentialFile));
-  const signalingResolution = resolveSignalingUrl({
-    flag: options.signalUrl ?? undefined,
-    defaultUrl: pairedSignal ?? DEFAULT_SIGNAL_URL,
-  });
-  if (pairedSignal && signalingResolution.source === "default") {
-    signalingResolution.source = "paired-credential";
-  }
-  checks.push(await checkSignaling(undefined, deps.wsFactory, signalingResolution));
+  checks.push(
+    serverHost || options.identityExplicit
+      ? inspectIdentity(options.identity, deps.require ?? require)
+      : skip("endpoint-identity", "no server endpoint secret expected on this client host")
+  );
+  const credential = deps.credential ?? loadPairedCredential(deps.credentialFile);
+  checks.push(inspectCredentialEndpoint(credential, deps.require ?? require));
+  const relays =
+    options.relayUrls.length > 0
+      ? options.relayUrls
+      : (credential?.controlPairing?.relays ??
+        process.env.VIBESTUDIO_IROH_RELAYS?.split(",") ??
+        []);
+  checks.push(
+    check(
+      validateRelays(relays),
+      "relay-config",
+      `${relays.length} explicit HTTPS relay(s); n0 preset disabled`,
+      "no canonical explicit Iroh relay set is configured"
+    )
+  );
+  checks.push(await probePairedReach(credential, deps.require ?? require));
+  checks.push(inspectRetiredTransportDependencies(deps.require ?? require));
   return { ok: checks.filter((entry) => !entry.skipped).every((entry) => entry.ok), checks };
 }
 
-function renderChecklist({ ok, checks }) {
-  const symbol = (entry) => (entry.skipped ? "○" : entry.ok ? "✓" : "✗");
+function printHelp() {
+  console.log(`vibestudio remote doctor
+
+Usage: vibestudio remote doctor [--workspace <name> | --identity <endpoint.key>]
+                                [--relay-url <https-url>...] [--json]
+
+Checks the pinned Iroh native binding, durable endpoint identities and permissions,
+explicit relay set with n0 presets disabled, retired dependency absence, and one
+bounded peer-authenticated ALPN/path probe when this host has a paired credential.`);
+}
+
+function render(result) {
   console.log("\nVibestudio remote doctor");
-  console.log("─".repeat(40));
-  for (const entry of checks) {
-    console.log(`  ${symbol(entry)} ${entry.name.padEnd(16)} ${entry.message}`);
-  }
-  console.log("─".repeat(40));
-  console.log(ok ? "  All checks passed. 🎉\n" : "  Some checks failed — see the ✗ lines above.\n");
+  for (const entry of result.checks)
+    console.log(`  ${entry.skipped ? "○" : entry.ok ? "✓" : "✗"} ${entry.name}: ${entry.message}`);
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -323,23 +313,16 @@ export async function main(argv = process.argv.slice(2)) {
     return 0;
   }
   const result = await runDoctor(options);
-  if (options.json) {
-    console.log(JSON.stringify(result, null, 2));
-  } else {
-    renderChecklist(result);
-  }
+  if (options.json) console.log(JSON.stringify(result, null, 2));
+  else render(result);
   return result.ok ? 0 : 1;
 }
 
-function isDirectRun() {
-  return process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
-}
-
-if (isDirectRun()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .then((code) => process.exit(code))
     .catch((error) => {
-      console.error(`[remote-doctor] ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`[remote-doctor] ${error.message}`);
       process.exit(1);
     });
 }

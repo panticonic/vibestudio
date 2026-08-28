@@ -3,7 +3,7 @@
  *
  * This is deliberately distinct from transport protocol versions: a transport
  * can remain byte-compatible while RPC envelopes, service semantics, or the
- * workspace shell's native-host projections change. WebRTC peers exchange this
+ * workspace shell's native-host projections change. Iroh peers exchange this
  * value in their pipe hello and require an exact match before either side may
  * send a logical-session `open` frame. Consequently a mismatched desktop and
  * server fail before a one-time pairing credential can be redeemed.

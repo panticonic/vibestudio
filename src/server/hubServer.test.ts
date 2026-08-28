@@ -9,7 +9,6 @@ import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { derivePairingRoom } from "@vibestudio/shared/connect";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { MembershipStore } from "@vibestudio/identity/membership";
@@ -539,7 +538,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
   const base = {
     baseEnv: {
       PATH: "/usr/bin",
-      VIBESTUDIO_WEBRTC_IDENTITY: "/hub/identity.pem",
       VIBESTUDIO_GATEWAY_PORT: "3030",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
@@ -554,7 +552,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     ephemeral: false,
   };
 
-  it("shares the hub identity DB read-only and gives every child its OWN DTLS identity", () => {
+  it("shares the hub identity DB read-only and gives each advertised workspace one endpoint identity", () => {
     const envA = buildWorkspaceChildEnv({
       ...base,
       childWorkspaceName: "alpha",
@@ -573,16 +571,10 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     // gate (VIBESTUDIO_WORKSPACE_ID, WP2) — keyed on the id, never the name.
     expect(envA["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_alpha");
     expect(envB["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_beta");
-    // DTLS identity belongs to the advertised logical workspace, so replacing
-    // an ephemeral child checkout preserves the pinned workspace fingerprint.
-    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(
-      path.join(getWorkspaceDir("base"), "reach", "webrtc", "identity.pem")
+    expect(envA["VIBESTUDIO_IROH_IDENTITY"]).toBe(
+      path.join(getWorkspaceDir("base"), "reach", "iroh", "endpoint.key")
     );
-    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(envB["VIBESTUDIO_WEBRTC_IDENTITY"]);
-
-    // It is still distinct from the hub's own identity.
-    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).not.toBe(base.baseEnv["VIBESTUDIO_WEBRTC_IDENTITY"]);
-    expect(envB["VIBESTUDIO_WEBRTC_IDENTITY"]).not.toBe(base.baseEnv["VIBESTUDIO_WEBRTC_IDENTITY"]);
+    expect(envA["VIBESTUDIO_IROH_IDENTITY"]).toBe(envB["VIBESTUDIO_IROH_IDENTITY"]);
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).toMatch(/^[a-f0-9]{64}$/);
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).not.toBe(base.baseEnv["VIBESTUDIO_ADMIN_TOKEN"]);
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).not.toBe(envB["VIBESTUDIO_ADMIN_TOKEN"]);
@@ -597,9 +589,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
     expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
-    expect(env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"]).toBe(
-      path.join(getWorkspaceDir("base"), "reach", "webrtc", "routes.json")
-    );
     expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
@@ -755,11 +744,9 @@ function makeHubCentralData(
 }
 
 const CHILD_REACH = {
-  room: "child-room",
-  fp: "AA".repeat(32),
-  sig: "wss://signal.example/",
-  v: 3 as const,
-  ice: "all",
+  endpointId: "aa".repeat(32),
+  relays: ["https://relay.example/"],
+  v: 4 as const,
 };
 
 describe("hub public request schemas", () => {
@@ -834,7 +821,11 @@ describe("hub RPC pairing surfacing (§5)", () => {
     // then mint the shell token whose callerId (`shell:<deviceId>`) resolves
     // back to root through the device→user FK.
     const root = userStore.createRoot({ handle: "root", displayName: "Root" });
-    const rootDevice = deviceAuthStore.issueDevice({ userId: root.id, label: "root-cli" });
+    const rootDevice = deviceAuthStore.issueDevice({
+      userId: root.id,
+      label: "root-cli",
+      transport: { kind: "local" },
+    });
     const shellToken = tokenManager.ensureToken(`shell:${rootDevice.deviceId}`, "shell");
     const state: HubRuntimeState = {
       appRoot: "/app",
@@ -867,15 +858,9 @@ describe("hub RPC pairing surfacing (§5)", () => {
     };
     state.controlTransport = {
       ingress: {
-        armRoom: vi.fn(async () => undefined),
-        disarmRoom: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined),
       } as never,
-      pairing: {
-        fp: CHILD_REACH.fp,
-        sig: CHILD_REACH.sig,
-        v: CHILD_REACH.v,
-        ice: "all" as const,
-      },
+      pairing: CHILD_REACH,
       rpcServer: {} as never,
       grantStore: { close: vi.fn() } as never,
       inviteExpiryTimers: new Map(),
@@ -887,13 +872,11 @@ describe("hub RPC pairing surfacing (§5)", () => {
     const { state } = makeState(fakeRuntime(9, {}));
     const invite = (() => {
       const pairing = {
-        room: derivePairingRoom("R".repeat(32)),
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
+        endpointId: "aa".repeat(32),
+        relays: ["https://relay.example/"],
         code: "R".repeat(32),
         exp: 2_000_000_000_000,
-        v: 3 as const,
-        ice: "all" as const,
+        v: 4 as const,
       };
       return {
         ...pairing,
@@ -936,7 +919,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
     expect(payload.rootInvite).not.toHaveProperty("serverUrl");
   });
 
-  it("revokes a device immediately and disarms its exact control room after retirement", async () => {
+  it("revokes a device immediately and retires its authenticated caller", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);
     const invite = state.deviceAuthStore.createPairingInvite(30_000, {
@@ -944,7 +927,11 @@ describe("hub RPC pairing surfacing (§5)", () => {
       userId: rootUserId,
       intent: "pair-device",
     });
-    const paired = state.deviceAuthStore.completePairing({ code: invite.code, label: "phone" });
+    const paired = state.deviceAuthStore.completePairing({
+      code: invite.code,
+      label: "phone",
+      transport: { kind: "local" },
+    });
     const pairedToken = state.tokenManager.ensureToken(`shell:${paired.deviceId}`, "shell");
     let release!: () => void;
     const retired = new Promise<void>((resolve) => {
@@ -962,15 +949,11 @@ describe("hub RPC pairing surfacing (§5)", () => {
     expect(state.deviceAuthStore.userFor(paired.deviceId)).toBeNull();
     expect(state.tokenManager.validateToken(pairedToken)).toBeNull();
     expect(retireCaller).toHaveBeenCalledWith(`shell:${paired.deviceId}`);
-    expect(state.controlTransport!.ingress.disarmRoom).not.toHaveBeenCalled();
-
     release();
     await retired;
-    await Promise.resolve();
-    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledWith(paired.controlRoom);
   });
 
-  it("retires and disarms every exact device reach when a user is revoked", async () => {
+  it("retires every authenticated device caller when a user is revoked", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);
     const member = state.userStore.inviteUser({
@@ -985,7 +968,11 @@ describe("hub RPC pairing surfacing (§5)", () => {
         userId: member.id,
         intent: "pair-device",
       });
-      const credential = state.deviceAuthStore.completePairing({ code: invite.code, label });
+      const credential = state.deviceAuthStore.completePairing({
+        code: invite.code,
+        label,
+        transport: { kind: "local" },
+      });
       state.tokenManager.ensureToken(`shell:${credential.deviceId}`, "shell");
       return credential;
     });
@@ -1008,16 +995,12 @@ describe("hub RPC pairing surfacing (§5)", () => {
     expect(result).toMatchObject({ revoked: true, userId: member.id });
     expect(state.userStore.getUser(member.id)?.revokedAt).toEqual(expect.any(Number));
     expect(retireCaller).toHaveBeenCalledTimes(2);
-    expect(state.controlTransport!.ingress.disarmRoom).not.toHaveBeenCalled();
 
     for (const credential of paired) {
       releases.get(`shell:${credential.deviceId}`)!();
     }
     await Promise.resolve();
     await Promise.resolve();
-    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledTimes(2);
-    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledWith(paired[0]!.controlRoom);
-    expect(state.controlTransport!.ingress.disarmRoom).toHaveBeenCalledWith(paired[1]!.controlRoom);
   });
 });
 

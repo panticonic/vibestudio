@@ -115,6 +115,11 @@ async function runLauncher(argv: string[]): Promise<number> {
     // Validate the executable on the selected machine before minting a launch credential.
     await assertClaudeCodeVersion();
     const prepared = await invokeExtension<PrepareResult>(client, "prepare", [{ channelId }]);
+    // The contained channel-host uses this device credential's Iroh endpoint.
+    // Relinquish the parent binding before spawning it; one Endpoint ID must
+    // never be advertised by two processes. Release is performed with a fresh
+    // client after the child has exited.
+    await client.close();
     return await executePreparedClaudeLaunch({
       prepared,
       expectedContextId: location.binding.contextId,
@@ -125,10 +130,21 @@ async function runLauncher(argv: string[]): Promise<number> {
         serverId: creds.serverId,
         workspaceId: creds.workspaceId,
         workspaceName: creds.workspaceName,
-        ...(creds.workspacePairing ? { workspacePairing: creds.workspacePairing } : {}),
+        transport: creds.transport,
+        ...(creds.transport === "iroh"
+          ? {
+              workspacePairing: creds.workspacePairing,
+              endpointSecret: creds.endpointSecret,
+            }
+          : {}),
       },
       release: async (entityId, launchId) => {
-        await invokeExtension(client, "release", [{ entityId, launchId }]);
+        const releaseClient = new RpcClient(creds);
+        try {
+          await invokeExtension(releaseClient, "release", [{ entityId, launchId }]);
+        } finally {
+          await releaseClient.close().catch(() => undefined);
+        }
       },
     });
   } finally {

@@ -10,6 +10,9 @@
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
 		4E2D41012C00000000000001 /* VibestudioMobileHost.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41002C00000000000001 /* VibestudioMobileHost.mm */; };
 		4E2D41052C00000000000005 /* VibestudioAuthSession.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41042C00000000000004 /* VibestudioAuthSession.mm */; };
+		4E2D41112C00000000000011 /* VibestudioIroh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41102C00000000000010 /* VibestudioIroh.swift */; };
+		4E2D41132C00000000000013 /* VibestudioIrohBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41122C00000000000012 /* VibestudioIrohBridge.m */; };
+		4E2D41152C00000000000015 /* IrohLib in Frameworks */ = {isa = PBXBuildFile; productRef = 4E2D41142C00000000000014 /* IrohLib */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
@@ -21,6 +24,8 @@
 		13B07FB01A68108700A75B9A /* AppDelegate.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = AppDelegate.mm; path = Vibestudio/AppDelegate.mm; sourceTree = "<group>"; };
 		4E2D41002C00000000000001 /* VibestudioMobileHost.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioMobileHost.mm; path = Vibestudio/VibestudioMobileHost.mm; sourceTree = "<group>"; };
 		4E2D41042C00000000000004 /* VibestudioAuthSession.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioAuthSession.mm; path = Vibestudio/VibestudioAuthSession.mm; sourceTree = "<group>"; };
+		4E2D41102C00000000000010 /* VibestudioIroh.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = VibestudioIroh.swift; path = Vibestudio/VibestudioIroh.swift; sourceTree = "<group>"; };
+		4E2D41122C00000000000012 /* VibestudioIrohBridge.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = VibestudioIrohBridge.m; path = Vibestudio/VibestudioIrohBridge.m; sourceTree = "<group>"; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Vibestudio/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Vibestudio/Info.plist; sourceTree = "<group>"; };
 		13B07FB71A68108700A75B9A /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = Vibestudio/main.m; sourceTree = "<group>"; };
@@ -37,6 +42,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4E2D41152C00000000000015 /* IrohLib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -50,6 +56,8 @@
 				13B07FB01A68108700A75B9A /* AppDelegate.mm */,
 				4E2D41002C00000000000001 /* VibestudioMobileHost.mm */,
 				4E2D41042C00000000000004 /* VibestudioAuthSession.mm */,
+				4E2D41102C00000000000010 /* VibestudioIroh.swift */,
+				4E2D41122C00000000000012 /* VibestudioIrohBridge.m */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
@@ -126,6 +134,9 @@
 			);
 			dependencies = (
 			);
+			packageProductDependencies = (
+				4E2D41142C00000000000014 /* IrohLib */,
+			);
 			name = Vibestudio;
 			productName = Vibestudio;
 			productReference = 13B07F961A680F5B00A75B9A /* Vibestudio.app */;
@@ -154,6 +165,9 @@
 			);
 			mainGroup = 83CBB9F61A601CBA00E9B192;
 			productRefGroup = 83CBBA001A601CBA00E9B192 /* Products */;
+			packageReferences = (
+				4E2D41162C00000000000016 /* XCRemoteSwiftPackageReference "iroh-ffi" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -273,6 +287,8 @@
 				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
 				4E2D41012C00000000000001 /* VibestudioMobileHost.mm in Sources */,
 				4E2D41052C00000000000005 /* VibestudioAuthSession.mm in Sources */,
+				4E2D41112C00000000000011 /* VibestudioIroh.swift in Sources */,
+				4E2D41132C00000000000013 /* VibestudioIrohBridge.m in Sources */,
 				13B07FC11A68108700A75B9A /* main.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -523,6 +539,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4E2D41162C00000000000016 /* XCRemoteSwiftPackageReference "iroh-ffi" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/n0-computer/iroh-ffi.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4E2D41142C00000000000014 /* IrohLib */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4E2D41162C00000000000016 /* XCRemoteSwiftPackageReference "iroh-ffi" */;
+			productName = IrohLib;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 83CBB9F71A601CBA00E9B192 /* Project object */;
 }

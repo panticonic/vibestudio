@@ -4,12 +4,12 @@
  * Panels always load from a fixed loopback origin
  * (`buildPanelUrl` → `http://127.0.0.1:{gatewayPort}/{source}/?contextId=…`).
  * In LOCAL mode that port is the child server's gateway. In REMOTE mode there
- * is no local gateway — the RPC plane rides the WebRTC pipe — so this façade
+ * is no local gateway — the RPC plane rides the Iroh pipe — so this façade
  * stands in for it: a tiny loopback HTTP server that proxies each request to
  * the remote server's own gateway via the `gateway.fetch` STREAMING RPC and
  * pipes the response body straight back to the webview. Streaming (not a
  * buffered base64 return) is mandatory: real panel bundles are multiple MB and
- * would exceed the WebRTC control-channel message-size limit; the bulk channel
+ * would exceed the RPC envelope limit; a dedicated QUIC stream
  * chunks them.
  *
  * On top of that raw proxy the façade adds three cache layers (plan §6):

@@ -70,8 +70,8 @@ vibestudio remote deploy local
 
 On Linux with systemd, `deploy local` installs an always-on user service on this
 computer, enables it at login/boot, runs end-to-end diagnostics, and prints the
-first-device pairing QR. The gateway remains loopback-only; clients reach it
-through the encrypted WebRTC connection described below. The service does not
+first-device pairing QR. The gateway remains loopback-only; remote clients use
+endpoint-authenticated Iroh QUIC with explicit HTTPS relay fallback. The service does not
 publish pairing readiness until the default workspace can provide a compiled
 desktop shell, so first-use build work happens before a laptop consumes its
 one-time link. Manage it with:
@@ -90,15 +90,12 @@ vibestudio remote serve --port 3030
 npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030
 ```
 
-Remote clients pair over WebRTC; the signaling
-endpoint is only used to rendezvous, not to carry workspace data. See
-[docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
-Each workspace reach uses one peer connection with prioritized control,
-interactive, and bulk lanes; immutable initial panel assets are verified and
-cached through one bundled transfer. See
+Remote clients pair directly to the advertised Iroh Endpoint ID. Reaches carry
+an explicit ordered relay set; Iroh upgrades to direct paths when possible and
+uses the relays when necessary. See [relay operations](docs/iroh-relay-operations.md)
+and [CLI operations](docs/cli.md). Each RPC request owns a QUIC stream, while
+immutable initial panel assets are verified and cached through one bundled transfer. See
 [docs/architecture/remote-transport-qos.md](docs/architecture/remote-transport-qos.md).
-The hosted signaling service (`wss://signal.vibestudio.app`) is used by default;
-self-hosting is optional.
 
 The headless server does not update itself. Install the desired CLI release,
 then let the deployment lifecycle reinstall that exact version and restart the
@@ -131,9 +128,8 @@ See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
 [Base remote-access skill](https://github.com/panticonic/vibestudio-workspace-base/blob/main/skills/remote-access/SKILL.md)
 for the operational runbook.
 
-The real-client smoke tests use that deployed route, the normal `remote serve`
-hub, and the current one-time root-device invite from the strict ready file. Use
-`pnpm smoke:full -- --local-signaling` only for an offline Miniflare/coturn run.
+The remote-transport suite uses real native Iroh endpoints and the current
+one-time root-device invite contract. Run it with `pnpm test:remote-transport`.
 
 ### Develop (contributors)
 
@@ -163,7 +159,7 @@ pnpm dev:base setup   # clone and remember the external Base checkout (one time)
 pnpm start           # build + start Electron in the source developer instance
 pnpm dev             # launch a fresh disposable development workspace
 pnpm dev:production  # fresh disposable instance using the pinned production Base
-pnpm dev:webrtc      # build + start a local hub, then connect to a routed child over WebRTC
+pnpm dev:iroh        # build + start a local hub, then connect through Iroh
 pnpm cli --help      # run the CLI live from TypeScript
 pnpm server:live --help
 ```
@@ -253,32 +249,31 @@ instances run concurrently. Stopping one never targets another hub.
 
 - `pnpm dev` - Build and start in development mode with DevTools
 - `pnpm bootstrap` - Install the complete host and userland workspace graph
-- `pnpm dev:webrtc` - Build, start an isolated local hub, and launch Electron through its routed child over WebRTC
+- `pnpm dev:iroh` - Build, start an isolated local hub, and launch Electron through Iroh
 - `pnpm build` - Production build
 - `pnpm stage:npm` - Build and stage the public npm packages under `dist-packages/`
 - `pnpm setup:npm-token` - Save the local npm publish token used by the release script
 - `pnpm publish:npm` - Build, stage, dry-run, publish, verify, and install-smoke the npm packages
 - `pnpm publish:npm:staged` - Reuse `dist/` and `dist-packages/` for an auth-only publish retry
-- `pnpm type-check:cloudflare` - Type-check the signaling and apex Cloudflare Workers
-- `pnpm deploy:cloudflare` - Deploy the signaling Worker and apex relay Worker
-- `pnpm smoke:cloudflare` - Smoke the deployed apex and signaling Workers
+- `pnpm type-check:cloudflare` - Type-check the callback/apex Cloudflare Worker
+- `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
+- `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker
 - `pnpm start` - Build and start the source developer instance with the configured Base
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
 - `pnpm format:check` - Check formatting
 - `pnpm type-check` - Type check without emitting
 
-To exercise the remote WebRTC transport without a second machine:
+To exercise the remote Iroh transport without a second machine:
 
 ```bash
-pnpm rebuild node-datachannel   # one-time, if the native module is not built
-pnpm dev:webrtc
+pnpm rebuild @number0/iroh   # one-time, if the native module is not built
+pnpm dev:iroh
 ```
 
-`pnpm dev:webrtc` starts local signaling and a clean, isolated hub, routes its
-default workspace child as the WebRTC answerer, and launches Electron with the
+`pnpm dev:iroh` starts a clean, isolated hub, routes its default workspace, and launches Electron with the
 fresh root-bootstrap `vibestudio://connect` link from the hub ready file. Use
-`pnpm dev:webrtc -- --ephemeral` for an explicitly ephemeral child; named
+`pnpm dev:iroh -- --ephemeral` for an explicitly ephemeral child; named
 workspace selection happens through the paired client, as it does in production.
 
 ### Memory Diagnostics (optional)
@@ -342,8 +337,8 @@ directory. On startup the pairing server prints a QR/deep-link:
 
 ```
 Pair a Vibestudio device
-  Room:        ...
-  Fingerprint: ...
+  Endpoint ID: ...
+  Relays:      https://relay.vibestudio.app/, https://relay-eu.vibestudio.app/
   Pair URL:    https://vibestudio.app/p#<compact-payload>
 ```
 
@@ -354,7 +349,7 @@ atomically updates its protected ready state, so
 the first device claims the root account. Published server commands also gate
 that ready state on the selected workspace's Electron artifact and every
 deduplicated `initPanels` artifact. A visible pair URL is therefore a
-first-surface readiness promise, not merely proof that signaling started.
+first-surface readiness promise, not merely proof that the endpoint bound.
 
 Pairing links are one-time bearer capabilities. Consuming a link prevents
 anyone who copied or photographed it from replaying it to add another device.
@@ -370,11 +365,11 @@ ambiguous “Invalid token.”
 | ------------------------------------ | -------------------------------------------------------- |
 | `--port PORT`, `--gateway-port PORT` | Hub ingress port (environment override or `3030`)        |
 | `--app-root PATH`                    | Application root (the installed package root by default) |
-| `--signal-url URL`                   | Signaling endpoint (hosted service by default)           |
+| `--relay-url URL`                    | Explicit canonical HTTPS Iroh relay (repeatable)         |
 | `--dev`                              | Development mode                                         |
 | `--ephemeral`                        | Use a disposable workspace                               |
 
-The gateway binds loopback only; remote clients reach it over WebRTC (paired by
+The gateway binds loopback only; remote clients reach it over Iroh (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
 decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
 through the callback relay (`VIBESTUDIO_RELAY_URL`).
@@ -385,8 +380,8 @@ reserved for internal child runtimes and are rejected by the public server.
 
 ### Android phone pairing
 
-For an npm installation, install the Android app. Pairing is over WebRTC
-(signaling room + DTLS fingerprint) — no Tailscale/VPN or HTTPS serve setup:
+For an npm installation, install the Android app. Pairing authenticates the
+server Iroh Endpoint ID — no Tailscale/VPN or HTTPS serve setup:
 
 ```bash
 vibestudio mobile install --launch
@@ -403,11 +398,8 @@ no managed server is running. From a source checkout, run `pnpm build` first,
 then use `pnpm cli mobile install --launch` and the same pairing flow.
 
 The QR carries the complete, self-contained
-`https://vibestudio.app/p#<compact-payload>` invitation. Protocol v3 packs the
-one-time secret, DTLS fingerprint, expiry, ICE policy, and any non-default
-signaling endpoint into one URL-safe fragment; the signaling room is derived
-one-way from the secret. The normal hosted link has no shell metacharacters and
-does not depend on SSH or a link-shortening service. See
-[docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the transport and local
-development harness. The first phone, desktop, or CLI to redeem a fresh
+`https://vibestudio.app/p#<compact-payload>` invitation. Protocol v4 packs the
+one-time secret, authenticated Endpoint ID, expiry, and explicit relay set into
+one URL-safe fragment. It does not depend on SSH or a link-shortening service.
+The first phone, desktop, or CLI to redeem a fresh
 server's current startup invitation becomes the root account.

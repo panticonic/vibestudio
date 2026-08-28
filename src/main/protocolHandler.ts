@@ -1,13 +1,13 @@
 import { app } from "electron";
 import * as path from "path";
-import { type ConnectPairing, parseConnectLink } from "@vibestudio/shared/connect";
+import { type ConnectPairing, parseConnectLink } from "@vibestudio/iroh-transport";
 import { parsePanelLocationLink, type PanelLocation } from "@vibestudio/shared/panelLocation";
 import {
   parseShellSurfaceLink,
   type ShellSurfaceDescriptor,
 } from "@vibestudio/shared/shellSurface";
 
-/** The WebRTC pairing material carried by a `vibestudio://connect` deep link. */
+/** The Iroh pairing material carried by a `vibestudio://connect` deep link. */
 export type PendingConnectLink = ConnectPairing;
 
 let pending: PendingConnectLink | null = null;

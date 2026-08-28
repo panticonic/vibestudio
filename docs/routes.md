@@ -203,7 +203,7 @@ need it.
 ## External URL construction
 
 The server has no public endpoint of its own — remote clients reach it over
-WebRTC (paired by QR), and the gateway binds loopback only. Third-party inbound
+Iroh (paired by QR), and the gateway binds loopback only. Third-party inbound
 that genuinely needs a public HTTPS URL (OAuth provider redirects, webhook
 advertisements) goes through the **callback relay** (`apps/webhook-relay`, plan
 §7), which backhauls to this server. OAuth redirect URIs are built from

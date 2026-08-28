@@ -4,9 +4,9 @@ import { pathToFileURL } from "node:url";
 
 const dependencyContracts = [
   {
-    packageName: "node-datachannel",
+    packageName: "@number0/iroh",
     smoke:
-      'const mod = require("node-datachannel"); if (typeof mod.PeerConnection !== "function") throw new Error("PeerConnection export is unavailable");',
+      'const path = require("node:path"); const manifest = require.resolve("@number0/iroh/package.json"); const mod = require(path.join(path.dirname(manifest), "index.js")); if (typeof mod.Endpoint !== "function" || typeof mod.SecretKey !== "function" || typeof mod.RelayMode !== "function") throw new Error("Iroh native endpoint exports are unavailable"); const key = mod.SecretKey.generate(); if (!key.public().toString()) throw new Error("Iroh native key derivation failed");',
   },
   {
     packageName: "node-pty",

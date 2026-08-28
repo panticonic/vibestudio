@@ -7,8 +7,8 @@
 // then the RN bridge reloads onto that bundle.
 
 // Must precede any @vibestudio/rpc import: installs a TextDecoder polyfill that
-// Hermes lacks (the WebRTC control-frame codec needs it).
-import "@vibestudio/mobile-webrtc/polyfills";
+// Hermes lacks (the Iroh control-frame codec needs it).
+import "@vibestudio/mobile-iroh/polyfills";
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,9 +33,9 @@ import {
   isConnectLink,
   markConnectLinkConsumed,
   consumeConnectLinkReplay,
-} from "@vibestudio/mobile-webrtc/connectLink";
+} from "@vibestudio/mobile-iroh/connectLink";
 import {
-  establishWebRtcConnection,
+  establishIrohConnection,
   reconnectMobileSession,
   retryAfterConnectionLoss,
   persistStoredMobileConnection,
@@ -45,8 +45,10 @@ import {
   clearShellCredential,
   makeFreshShellTokenProvider,
   makeReturningShellTokenProvider,
+  createMobileIrohIdentity,
+  deleteMobileIrohIdentity,
   activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
-} from "@vibestudio/mobile-webrtc";
+} from "@vibestudio/mobile-iroh";
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { name as appName } from "./app.json";
@@ -72,9 +74,8 @@ function parseConnectDeepLink(rawUrl) {
   if (!isConnectLink(rawUrl)) return null;
   const parsed = parseConnectLink(rawUrl);
   if (parsed.kind === "error") throw new Error(parsed.reason);
-  // New WebRTC pairing payload: a signaling rendezvous room + the server's pinned
-  // DTLS fingerprint + a one-time pairing code (no server origin URL anymore),
-  // plus the link's expiry. Project it rather than retyping the field list —
+  // Iroh pairing carries the server Endpoint ID, its ordered relay set, and a
+  // one-time pairing code plus expiry. Project it rather than retyping fields —
   // omitting one field here fails validation only after the server has issued a
   // credential, which reads as pairing hanging.
   return connectPairingFromLink(parsed);
@@ -91,61 +92,82 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 }
 
 // ===========================================================================
-// WebRTC connection layer — replaces the HTTP `/rpc` transport and the native
-// HTTP pairing. The host joins the signaling room from the pairing link, pins
-// the server's DTLS fingerprint, opens a `shell` session, and round-trips RPC
-// envelopes over the same DTLS pipe the desktop/CLI use.
+// Iroh connection layer — replaces the HTTP `/rpc` transport and the native
+// HTTP pairing. The host binds one durable Endpoint identity, opens a `shell`
+// logical session, and round-trips RPC envelopes over QUIC streams.
 // ===========================================================================
 
-// The shell-credential store + the WebRTC connect helpers
-// (establishWebRtcConnection / reconnectViaWebRtc / persist+loadShellCredential /
+// The shell-credential store + the Iroh connect helpers
+// (establishIrohConnection / reconnectViaIroh / persist+loadShellCredential /
 // makeShellTokenProvider) now live in
-// @vibestudio/mobile-webrtc, shared with the post-reload workspace app. Only the
+// @vibestudio/mobile-iroh, shared with the post-reload workspace app. Only the
 // fresh-pairing flow below (which emits the smoke phases) stays here.
 
 /** Fresh pairing: redeem the code, capture + persist the issued device credential. */
-async function pairViaWebRtc(pairing) {
+async function pairViaIroh(pairing) {
   smokePhase("embedded-pairing-start");
+  const identity = await createMobileIrohIdentity();
   const tokenProvider = makeFreshShellTokenProvider(pairing);
   let pairedCredential = null;
   let pairingContext = null;
-  const connection = await establishWebRtcConnection(pairing, tokenProvider, {
-    onPaired: (credential, context) => {
-      // Fires inside the open handshake (before `ready()` resolves): switch the
-      // token provider to the refresh secret so reconnects authenticate.
-      pairedCredential = credential;
-      pairingContext = context ?? null;
-      tokenProvider.setCredential(credential);
-    },
-  });
-  const workspaceConnection = await completeFreshMobilePairing({
-    controlConnection: connection,
-    credential: pairedCredential,
-    pairingContext,
-    controlPairing: pairing,
-    persistConnection: persistStoredMobileConnection,
-    connectWorkspace: async (workspacePairing, credential) => {
-      const workspaceTokenProvider = makeReturningShellTokenProvider(credential);
-      return establishWebRtcConnection(workspacePairing, workspaceTokenProvider, {
-        onPaired: async (nextCredential) => {
-          workspaceTokenProvider.setCredential(nextCredential);
-          const current = await loadShellCredential();
-          if (!current || current.schemaVersion !== 4 || current.phase !== "routed") {
-            throw new Error("Routed mobile connection disappeared during workspace authentication");
-          }
-          await persistStoredMobileConnection(
-            replaceMobileConnectionCredential(current, nextCredential)
-          );
+  try {
+    const connection = await establishIrohConnection(
+      pairing,
+      tokenProvider,
+      identity.identityId,
+      "client-loopback",
+      {
+        onPaired: (credential, context) => {
+          pairedCredential = credential;
+          pairingContext = context ?? null;
+          tokenProvider.setCredential(credential);
         },
-      });
-    },
-  });
-  smokePhase("embedded-pairing-complete");
-  return workspaceConnection;
+      }
+    );
+    const workspaceConnection = await completeFreshMobilePairing({
+      controlConnection: connection,
+      credential: pairedCredential,
+      pairingContext,
+      controlPairing: pairing,
+      persistConnection: persistStoredMobileConnection,
+      connectWorkspace: async (workspacePairing, credential, controlConnection) => {
+        const workspaceTokenProvider = makeReturningShellTokenProvider(credential);
+        return establishIrohConnection(
+          workspacePairing,
+          workspaceTokenProvider,
+          identity.identityId,
+          "client-loopback",
+          {
+            onPaired: async (nextCredential) => {
+              workspaceTokenProvider.setCredential(nextCredential);
+              const current = await loadShellCredential();
+              if (!current || current.schemaVersion !== 5 || current.phase !== "routed") {
+                throw new Error(
+                  "Routed mobile connection disappeared during workspace authentication"
+                );
+              }
+              await persistStoredMobileConnection(
+                replaceMobileConnectionCredential(current, nextCredential)
+              );
+            },
+          },
+          controlConnection.endpointPool
+        );
+      },
+    });
+    smokePhase("embedded-pairing-complete");
+    return workspaceConnection;
+  } catch (error) {
+    const stored = await loadShellCredential().catch(() => null);
+    if (stored?.endpointIdentityId !== identity.identityId) {
+      await deleteMobileIrohIdentity(identity.identityId).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 async function rpc(connection, method, args = []) {
-  // All control-plane RPC now rides the WebRTC session (target the server "main").
+  // All control-plane RPC now rides the Iroh session (target the server "main").
   return connection.rpc.call("main", method, args);
 }
 
@@ -402,10 +424,10 @@ function VibestudioMobileHostBootstrap() {
   const connectFromInviteAttempt = useCallback(
     async (connect) => {
       setBusy(true);
-      setStatus("Pairing over a secure WebRTC pipe...");
+      setStatus("Pairing over a secure Iroh pipe...");
       let connection = null;
       try {
-        connection = await pairViaWebRtc(connect.pairing);
+        connection = await pairViaIroh(connect.pairing);
         smokePhase("embedded-workspace-selected");
         if (connect.rawUrl) {
           await markConnectLinkConsumed(connect.rawUrl);
@@ -490,7 +512,7 @@ function VibestudioMobileHostBootstrap() {
         const outcome = await handleIncomingConnectLink(initialUrl);
         if (outcome !== "replay") return;
       }
-      // A returning device reconnects over the SAME signaling room with its
+      // A returning device reconnects with the same durable endpoint identity and
       // stored refresh secret — no HTTP, no native credential read.
       const stored = await loadShellCredential();
       if (!stored) {

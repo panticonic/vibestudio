@@ -243,6 +243,8 @@ export interface VerifiedCaller {
     id: string;
     kind: CallerKind;
   };
+  /** Verified Iroh endpoint carrying this caller, when the caller is remote. */
+  remoteEndpointId?: string;
   /**
    * Host-attested operation origin. This is deliberately independent of
    * runtime.kind: a transport or runtime labelled "server" does not acquire
@@ -467,9 +469,9 @@ export type ServiceContext = {
     payload: unknown;
   };
   /**
-   * Streaming REQUEST body for stream-request dispatches (WebRTC uploads, plan
-   * §1.6): the client pumps it as bulk-channel DATA frames keyed by the
-   * stream-open's `bodyStreamId`; the transport assembles it into this stream.
+   * Streaming request body for stream-request dispatches. The client pumps it
+   * through the request's transport-native stream and the transport assembles
+   * it into this `ReadableStream`.
    * Present only when the caller declared a body; consumed by streaming
    * handlers (e.g. `gateway.fetch`) as the upstream request body.
    */

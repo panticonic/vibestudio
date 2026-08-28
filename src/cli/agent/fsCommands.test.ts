@@ -17,8 +17,8 @@ const transportMock = vi.hoisted(() => ({
   rpcBodies: [] as RpcRequest[],
 }));
 
-vi.mock("../webrtcClient.js", () => ({
-  WebRtcRpcClient: class {
+vi.mock("../../node/iroh/irohRpcClient.js", () => ({
+  IrohRpcClient: class {
     async ready(): Promise<void> {}
 
     async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
@@ -37,27 +37,29 @@ vi.mock("../webrtcClient.js", () => ({
 
     private async dispatch<T>(body: RpcRequest): Promise<T> {
       transportMock.rpcBodies.push(body);
-      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      if (!transportMock.handle) throw new Error("Iroh test server is not configured");
       return (await transportMock.handle(body)) as T;
     }
   },
 }));
 
-/** Configure the deterministic WebRTC RPC boundary used by paired CLI credentials. */
+/** Configure the deterministic Iroh RPC boundary used by paired CLI credentials. */
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
   transportMock.rpcBodies = [];
   transportMock.handle = handle;
   return { rpcBodies: transportMock.rpcBodies };
 }
 
-function writeCredentials(tmpDir: string, url = "webrtc://room-cli/_workspace/dev"): void {
+function writeCredentials(tmpDir: string, url = `iroh://${"bb".repeat(32)}/_workspace/dev`): void {
   const dir = path.join(tmpDir, ".config", "vibestudio");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: "device",
+      transport: "iroh",
+      endpointSecret: "E".repeat(43),
       url,
       workspaceId: "ws_dev",
       workspaceName: "dev",
@@ -65,18 +67,14 @@ function writeCredentials(tmpDir: string, url = "webrtc://room-cli/_workspace/de
       deviceId: `dev_${"D".repeat(24)}`,
       refreshToken: "R".repeat(43),
       controlPairing: {
-        room: "room-control",
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "aa".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       workspacePairing: {
-        room: "room-cli",
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "bb".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       pairedAt: 1,
     })
@@ -117,7 +115,7 @@ describe("vibestudio fs commands", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        throw new Error("Unexpected network request from WebRTC CLI test");
+        throw new Error("Unexpected network request from Iroh CLI test");
       })
     );
     clearShellTokenCache();

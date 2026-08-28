@@ -13,7 +13,7 @@ device refresh credential authenticates one paired client to the hub and its
 workspace children; a provider credential authorizes URL-bound host egress.
 Neither is converted into the other, and neither represents authorship or
 agent intent. Remote pairing topology and storage are documented in
-`docs/webrtc-deployment.md`.
+`docs/iroh-deployment.md`.
 
 Linked-agent authentication is a third, deliberately minimal mechanism. An
 agent credential proves one exact live session entity and stores no copied
@@ -201,7 +201,7 @@ authorize from a different device than the one running vibestudio. The server:
 Provider support is partial. Known good: Google, Microsoft / Azure AD,
 GitHub, GitLab, Slack, Twitch, Spotify, Dropbox, Atlassian, Discord. **Apple
 does not support device code** — for Apple Sign-In, see the redirect-URI
-options in `docs/webrtc-rpc-transport.md` (§7, callback relay).
+options in `docs/iroh-rpc-transport.md` (§7, callback relay).
 
 Use device-code as a fallback path in personal-server installs whose public
 URL can't be registered with a given provider, since it skips the redirect

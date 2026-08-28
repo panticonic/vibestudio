@@ -278,7 +278,7 @@ accidentally becoming an authority-laundering deputy.
   build while those credentials are present.
 - `.github/workflows/ci.yml:14-22`, `.github/workflows/build-mobile.yml:21-43`,
   `:71-72`, `:131-132`, `:163-171`, and
-  `.github/workflows/webrtc-e2e-nightly.yml:20-28`, `:48-58`, `:70-76` use mutable
+  `.github/workflows/iroh-e2e-nightly.yml:20-28`, `:48-58`, `:70-76` use mutable
   action tags, including a third-party Android emulator action.
 - The release-upload action is pinned to a full SHA
   (`.github/workflows/release.yml:20-22` and

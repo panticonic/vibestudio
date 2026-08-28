@@ -8,7 +8,7 @@
  * has no native stream type — so the body crosses the bridge as explicit,
  * sequenced chunk messages and the HOST reassembles it into the
  * `ReadableStream<Uint8Array>` it hands to the panel session's first-class
- * `streamReadable(envelope, signal, body)` (the WebRTC bulk-channel path).
+ * `streamReadable(envelope, signal, body)` (the transport-native stream path).
  *
  * Wire shape (both platforms; chunks are `Uint8Array` where the bridge passes
  * binary — Electron structured clone — and base64 strings where it is
@@ -29,7 +29,7 @@
  *    A producer that ignores the await hits the hard cap and fails LOUDLY.
  *  - response body: the host sends one chunk at a time and awaits the panel's
  *    `streamAck`; the panel defers the ack while its own buffer is over the
- *    watermark. Caps mirror the WebRTC transport's (8 MiB receive cap,
+ *    watermark. Caps mirror the Iroh transport's (8 MiB receive cap,
  *    256 KiB max chunk).
  *
  * Body-less subscriptions use the same response plane without a `bodyId`;
@@ -40,7 +40,7 @@ import type { RpcEnvelope } from "./types.js";
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 
-/** Max bytes per bridge chunk — mirrors the WebRTC transport's MAX_CHUNK_SIZE. */
+/** Max bytes per bridge chunk — mirrors the Iroh transport's MAX_CHUNK_SIZE. */
 export const BRIDGE_STREAM_CHUNK_BYTES = 256 * 1024;
 /** Hard buffering cap per stream — mirrors STREAM_RECEIVE_CAP_BYTES (8 MiB). */
 export const BRIDGE_STREAM_BUFFER_CAP_BYTES = 8 * 1024 * 1024;

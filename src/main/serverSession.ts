@@ -5,17 +5,17 @@
  * Returns a single SessionConnection with everything needed to continue
  * startup. There is ONE auth model in all topologies: device pairing +
  * refresh credentials. Locally the desktop owns a detached hub and routes into
- * a child over its loopback proxy; remotely it reaches the child over WebRTC.
+ * a child over its loopback proxy; remotely it reaches the child over Iroh.
  */
 
 import { app } from "electron";
+import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot, getServerProcessBuildId } from "./paths.js";
 import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
-import { createWebRtcServerClient } from "./webrtcServerClient.js";
-import type { ReconnectProgress } from "@vibestudio/rpc/transports/webrtcClient";
+import { createIrohServerClient } from "./irohServerClient.js";
 import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
@@ -35,15 +35,19 @@ import {
   HubWorkspaceRouteSchema,
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
+import { serverAuthRouteUrl } from "@vibestudio/shared/connect";
 import {
-  normalizeFingerprint,
-  PAIRING_PROTOCOL_VERSION,
-  PAIRING_ROOM_PATTERN,
-  parseSignalingEndpoint,
-  serverAuthRouteUrl,
+  EndpointGenerationOwner,
+  assertIrohReach,
   type ConnectPairing,
-  type ReconnectReach,
-} from "@vibestudio/shared/connect";
+  type IrohReach,
+} from "@vibestudio/iroh-transport";
+import {
+  createNodeEndpointBinding,
+  loadIrohNodeBinding,
+  type NodePhysicalConnection,
+  type NodePhysicalEndpoint,
+} from "@vibestudio/iroh-transport/node";
 import {
   FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
   LOCAL_STARTUP_CONNECTION_PHASES,
@@ -105,7 +109,7 @@ export interface SessionConnection {
   /**
    * Who controls the server process: "desktop-local" means this app manages a
    * detached local hub (quit policy applies); "external" means
-   * someone else owns it (remote WebRTC server).
+   * someone else owns it (remote Iroh server).
    */
   serverOwnership: "desktop-local" | "external";
   protocol: "http" | "https";
@@ -172,13 +176,15 @@ function buildServerInfo(
 }
 
 /**
- * Connect to a remote server over the WebRTC pipe (the only remote transport;
+ * Connect to a remote server over the Iroh pipe (the only remote transport;
  * §8 deleted the direct-wss/TLS-pin path). The QR-pairing flow hands its parsed
- * `ConnectPairing` ({room, fp, code, sig, ice}) here, along with the shell-token
- * provider derived from the persisted device credential.
+ * `ConnectPairing` (Endpoint ID, ordered relays, one-time code, and expiry)
+ * here, along with the shell-token provider derived from the persisted device
+ * credential.
  */
-export function connectRemoteViaWebRtc(
-  pairing: ReconnectReach,
+export function connectRemoteViaIroh(
+  reach: IrohReach,
+  endpointOwner: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>,
   options: {
     /** The shell's caller id, e.g. `shell:<deviceId>`. */
     callerId: string;
@@ -188,12 +194,19 @@ export function connectRemoteViaWebRtc(
     /** Fired when a fresh device is paired — persist the returned credential. */
     onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
     onConnectionStatusChanged?: (status: ConnectionStatus) => void;
-    onReconnectProgress?: (progress: ReconnectProgress) => void;
+    onReconnectProgress?: (progress: IrohReconnectProgress) => void;
     onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
     onMainSessionTerminalClose?: (error: Error) => void;
   }
 ): Promise<ServerClient> {
-  return createWebRtcServerClient({ pairing, ...options });
+  return createIrohServerClient({ reach, endpointOwner, ...options });
+}
+
+export interface IrohReconnectProgress {
+  attempt: number;
+  phase: "scheduled" | "failed";
+  reason: string;
+  nextRetryInMs?: number;
 }
 
 /**
@@ -202,7 +215,7 @@ export function connectRemoteViaWebRtc(
  *   (a) FRESH pair — `args.pendingPairing` carries a pairing link the bootstrap
  *       chooser redeemed THIS launch.
  *   (b) Returning device — a pairing explicitly selected by the startup
- *       orchestrator (WebRTC).
+ *       orchestrator (Iroh).
  *   (c) Local — attach to a healthy detached local workspace server, or spawn
  *       one, and connect over loopback WS with device-pairing auth.
  */
@@ -224,7 +237,7 @@ export async function establishServerSession(args: {
   /** Structured startup progress for the bootstrap timeline. */
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
-  onReconnectProgress?: (progress: ReconnectProgress) => void;
+  onReconnectProgress?: (progress: IrohReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   onMainSessionTerminalClose?: (error: Error) => void;
 }): Promise<SessionConnection> {
@@ -234,7 +247,7 @@ export async function establishServerSession(args: {
   if (pendingPairing) {
     return establishFreshPairSession(pendingPairing, args, args.pendingPairLabel);
   }
-  // (b) Returning device: a paired WebRTC remote persisted on a prior launch.
+  // (b) Returning device: a paired Iroh remote persisted on a prior launch.
   if (storedRemote) {
     return establishRemoteSession(storedRemote, args);
   }
@@ -410,13 +423,26 @@ export async function establishServerSession(args: {
 type RemoteConnectArgs = {
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
-  onReconnectProgress?: (progress: ReconnectProgress) => void;
+  onReconnectProgress?: (progress: IrohReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   onMainSessionTerminalClose?: (error: Error) => void;
 };
 
+function createDesktopEndpointOwner(
+  endpointSecret: Uint8Array,
+  relays: readonly string[]
+): EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint> {
+  if (endpointSecret.byteLength !== 32) throw new Error("Stored Iroh endpoint identity is invalid");
+  return new EndpointGenerationOwner(
+    createNodeEndpointBinding({
+      secretKey: loadIrohNodeBinding().SecretKey.fromBytes([...endpointSecret]),
+      relayUrls: relays,
+    })
+  );
+}
+
 /**
- * Connect to a paired WebRTC remote as the RETURNING device and shape it into a
+ * Connect to a paired Iroh remote as the RETURNING device and shape it into a
  * {@link SessionConnection}. The shell re-authenticates with its refresh token
  * (`refresh:<deviceId>:<refreshToken>`); the RPC plane rides the pipe exactly as
  * the local loopback-WS plane does.
@@ -437,6 +463,10 @@ async function establishRemoteSession(
     saveDeviceCredential(current);
   };
   const auth = () => `refresh:${current.deviceId}:${current.refreshToken}`;
+  const endpointOwner = createDesktopEndpointOwner(
+    Buffer.from(stored.endpointSecret, "base64url"),
+    stored.controlPairing.relays
+  );
   const phase = createStartupPhaseReporter(
     "remote connect",
     RETURNING_REMOTE_STARTUP_CONNECTION_PHASES,
@@ -447,12 +477,12 @@ async function establishRemoteSession(
   // the control and workspace dials are independent and run concurrently.
   phase("connect-server-and-workspace");
   const dials = await Promise.allSettled([
-    connectRemoteViaWebRtc(stored.controlPairing, {
+    connectRemoteViaIroh(stored.controlPairing, endpointOwner, {
       callerId: `shell:${stored.deviceId}`,
       getShellToken: auth,
       onPaired: rotate,
     }),
-    connectRemoteViaWebRtc(stored.workspacePairing, {
+    connectRemoteViaIroh(stored.workspacePairing, endpointOwner, {
       callerId: `shell:${stored.deviceId}`,
       getShellToken: auth,
       onPaired: rotate,
@@ -484,6 +514,7 @@ async function establishRemoteSession(
         ...(hubDial.status === "fulfilled"
           ? [{ label: "remote hub control client", close: () => hubDial.value.close() }]
           : []),
+        { label: "remote Iroh endpoint", close: () => endpointOwner.close() },
       ],
       "Returning remote session establishment"
     );
@@ -495,9 +526,10 @@ async function establishRemoteSession(
     const connection = await buildRemoteSessionConnection(
       serverClient,
       hubControlClient,
-      stored.workspaceName
+      stored.workspaceName,
+      () => endpointOwner.close()
     );
-    log.info(`[Server] Shell client connected over WebRTC remote pipe (${origin})`);
+    log.info(`[Server] Shell client connected over Iroh (${origin})`);
     return connection;
   } catch (error) {
     return throwAfterOwnedCleanup(
@@ -505,6 +537,7 @@ async function establishRemoteSession(
       [
         { label: "remote workspace client", close: serverClient.close.bind(serverClient) },
         { label: "remote hub control client", close: () => hubControlClient.close() },
+        { label: "remote Iroh endpoint", close: () => endpointOwner.close() },
       ],
       "Returning remote session establishment"
     );
@@ -521,18 +554,10 @@ async function establishFreshPairSession(
   args: RemoteConnectArgs,
   label?: string
 ): Promise<SessionConnection> {
-  if (pairing.v !== PAIRING_PROTOCOL_VERSION || !pairing.ice) {
-    throw new Error("Fresh WebRTC pairing requires the current version and explicit ICE policy");
-  }
-  const fingerprint = normalizeFingerprint(pairing.fp);
-  const signaling = parseSignalingEndpoint(pairing.sig);
-  if (
-    !PAIRING_ROOM_PATTERN.test(pairing.room) ||
-    !/^[0-9A-F]{64}$/.test(fingerprint) ||
-    signaling.kind === "error"
-  ) {
-    throw new Error("Fresh WebRTC pairing coordinates are not canonicalizable");
-  }
+  assertIrohReach(pairing);
+  const endpointSecretBytes = randomBytes(32);
+  const endpointSecret = endpointSecretBytes.toString("base64url");
+  const endpointOwner = createDesktopEndpointOwner(endpointSecretBytes, pairing.relays);
   const paired: {
     current: {
       credential: { deviceId: string; refreshToken: string };
@@ -550,42 +575,48 @@ async function establishFreshPairSession(
   phase("check-credential-storage");
   preflightDeviceCredentialStoreForPairing();
   phase("redeem-pairing-link");
-  const controlClient = await connectRemoteViaWebRtc(pairing, {
-    // The server assigns the real `shell:<deviceId>` principal when it redeems the
-    // one-time code; we don't know that id yet, so dial with a stable selfId. (If
-    // the resolved id is ever threaded back, swap it in here.)
-    callerId: "shell:pairing",
-    getShellToken: () => {
-      const credential = paired.current?.credential;
-      return credential
-        ? `refresh:${credential.deviceId}:${credential.refreshToken}`
-        : pairing.code;
-    },
-    // Persist the issued device credential against the pairing material (minus the
-    // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
-    onPaired: (credential, context) => {
-      if (!paired.current) {
-        if (!context) throw new Error("Fresh pairing did not identify its target workspace");
-        paired.current = { credential, workspaceId: context.workspaceId };
-      } else {
-        paired.current = { ...paired.current, credential };
-      }
-      if (currentStored) {
-        currentStored = {
-          ...currentStored,
-          deviceId: credential.deviceId,
-          refreshToken: credential.refreshToken,
-          rotatedAt: Date.now(),
-        };
-        persistFreshDeviceCredential(currentStored);
-      }
-    },
-  });
+  let controlClient: ServerClient;
+  try {
+    controlClient = await connectRemoteViaIroh(pairing, endpointOwner, {
+      // The server assigns the real `shell:<deviceId>` principal when it redeems the
+      // one-time code; we don't know that id yet, so dial with a stable selfId. (If
+      // the resolved id is ever threaded back, swap it in here.)
+      callerId: "shell:pairing",
+      getShellToken: () => {
+        const credential = paired.current?.credential;
+        return credential
+          ? `refresh:${credential.deviceId}:${credential.refreshToken}`
+          : pairing.code;
+      },
+      // Persist the issued device credential against the pairing material (minus the
+      // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
+      onPaired: (credential, context) => {
+        if (!paired.current) {
+          if (!context) throw new Error("Fresh pairing did not identify its target workspace");
+          paired.current = { credential, workspaceId: context.workspaceId };
+        } else {
+          paired.current = { ...paired.current, credential };
+        }
+        if (currentStored) {
+          currentStored = {
+            ...currentStored,
+            deviceId: credential.deviceId,
+            refreshToken: credential.refreshToken,
+            rotatedAt: Date.now(),
+          };
+          persistFreshDeviceCredential(currentStored);
+        }
+      },
+    });
+  } catch (error) {
+    await endpointOwner.close().catch(() => undefined);
+    throw error;
+  }
   let workspaceClient: ServerClient | null = null;
   try {
     if (!paired.current) {
       throw new Error(
-        "Fresh WebRTC pairing completed without an issued device credential — mint a new invite and try again."
+        "Fresh Iroh pairing completed without an issued device credential — mint a new invite and try again."
       );
     }
     const issued = paired.current;
@@ -603,7 +634,8 @@ async function establishFreshPairSession(
     const workspacePairing = storedReach(route.workspaceReach);
     currentStored = {
       serverId: route.serverId,
-      transport: "webrtc",
+      transport: "iroh",
+      endpointSecret,
       controlPairing,
       workspacePairing,
       workspaceName: route.workspace,
@@ -619,7 +651,7 @@ async function establishFreshPairSession(
       return `refresh:${active.deviceId}:${active.refreshToken}`;
     };
     phase("connect-workspace");
-    workspaceClient = await connectRemoteViaWebRtc(currentStored.workspacePairing, {
+    workspaceClient = await connectRemoteViaIroh(currentStored.workspacePairing, endpointOwner, {
       callerId: `shell:${currentStored.deviceId}`,
       getShellToken: auth,
       onPaired: (credential) => {
@@ -641,9 +673,10 @@ async function establishFreshPairSession(
     const connection = await buildRemoteSessionConnection(
       workspaceClient,
       controlClient,
-      currentStored.workspaceName
+      currentStored.workspaceName,
+      () => endpointOwner.close()
     );
-    log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
+    log.info("[Server] Shell client connected over Iroh (fresh pairing)");
     return connection;
   } catch (error) {
     return throwAfterOwnedCleanup(
@@ -658,6 +691,7 @@ async function establishFreshPairSession(
             ]
           : []),
         { label: "fresh hub control client", close: () => controlClient.close() },
+        { label: "fresh Iroh endpoint", close: () => endpointOwner.close() },
       ],
       "Fresh remote session establishment"
     );
@@ -665,17 +699,11 @@ async function establishFreshPairSession(
 }
 
 function storedReach(
-  reach: HubWorkspaceRoute["workspaceReach"] | ReconnectReach
+  reach: HubWorkspaceRoute["workspaceReach"] | IrohReach
 ): StoredRemote["controlPairing"] {
-  const signaling = parseSignalingEndpoint(reach.sig);
-  if (signaling.kind === "error") throw new Error(signaling.reason);
-  return {
-    room: reach.room,
-    fp: normalizeFingerprint(reach.fp),
-    sig: signaling.url,
-    v: reach.v,
-    ice: reach.ice,
-  };
+  const stored = { endpointId: reach.endpointId, relays: [...reach.relays], v: reach.v };
+  assertIrohReach(stored);
+  return stored;
 }
 
 function persistFreshDeviceCredential(credential: StoredRemote): void {
@@ -691,14 +719,15 @@ function persistFreshDeviceCredential(credential: StoredRemote): void {
 }
 
 /**
- * Shape an already-connected remote WebRTC pipe into a {@link SessionConnection}.
+ * Shape an already-connected remote Iroh pipe into a {@link SessionConnection}.
  * Shared by the fresh-pair and returning-device paths — the only difference
  * between them is HOW the pipe authenticated (one-time code vs refresh token).
  */
 async function buildRemoteSessionConnection(
   serverClient: ServerClient,
   hubControlClient: ServerClient,
-  workspaceName: string
+  workspaceName: string,
+  closeEndpoint: () => Promise<void>
 ): Promise<SessionConnection> {
   const protocol = "http" as const;
   const externalHost = "localhost";
@@ -764,6 +793,7 @@ async function buildRemoteSessionConnection(
         { label: "remote workspace client", close: () => serverClient.close() },
         { label: "remote hub control client", close: () => hubControlClient.close() },
         { label: "remote panel asset facade", close: () => facade.close() },
+        { label: "remote Iroh endpoint", close: closeEndpoint },
       ]),
       hubProcessManager: null,
       panelHttpServer,

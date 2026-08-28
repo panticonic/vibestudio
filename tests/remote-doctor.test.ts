@@ -1,226 +1,121 @@
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import {
-  checkDeployedUnit,
-  checkSignaling,
-  gatewayPortFromUnit,
+  inspectCredentialEndpoint,
   inspectIdentity,
-  pairedSignalingUrl,
+  inspectRetiredTransportDependencies,
   parseArgs,
   runDoctor,
-  signalingRoomWsUrl,
 } from "../scripts/cli/remote-doctor.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-class FakeSocket extends EventEmitter {
-  terminate = vi.fn();
-  close = vi.fn();
-}
-
-function tmpFile(name: string, content: string, mode = 0o600): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-doctor-"));
-  const file = path.join(dir, name);
-  fs.writeFileSync(file, content, { mode });
+function tmpFile(bytes: Uint8Array, mode = 0o600): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-iroh-doctor-"));
+  const file = path.join(dir, "endpoint.key");
+  fs.writeFileSync(file, bytes, { mode });
   fs.chmodSync(file, mode);
   return file;
 }
 
-const IDENTITY_PEM =
-  "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n" +
-  "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n";
+const fakeBinding = {
+  Endpoint: { builder: vi.fn() },
+  SecretKey: {
+    fromBytes: (bytes: number[]) => ({
+      public: () => ({ toString: () => Buffer.from(bytes).toString("hex") }),
+    }),
+  },
+};
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("remote-doctor", () => {
-  it("checks the stable hub control identity by default", () => {
+  it("selects durable hub and workspace endpoint-key paths", () => {
     vi.stubEnv("XDG_CONFIG_HOME", "/tmp/vibestudio-doctor-xdg");
-    vi.stubEnv("VIBESTUDIO_WEBRTC_IDENTITY", "/tmp/child-identity.pem");
-    const parsed = parseArgs([]);
-    expect(parsed.identityScope).toBe("hub");
-    expect(parsed.identityExplicit).toBe(false);
-    expect(parsed.identity).toBe(
-      path.join("/tmp/vibestudio-doctor-xdg", "vibestudio", "server-auth", "webrtc", "identity.pem")
+    expect(parseArgs([]).identity).toBe(
+      "/tmp/vibestudio-doctor-xdg/vibestudio/server-auth/iroh/endpoint.key"
+    );
+    expect(parseArgs(["--workspace", "dev_one"]).identity).toBe(
+      "/tmp/vibestudio-doctor-xdg/vibestudio/workspaces/dev_one/reach/iroh/endpoint.key"
+    );
+    expect(() => parseArgs(["--workspace", "dev", "--identity", "/tmp/key"])).toThrow(/not both/);
+  });
+
+  it("derives the advertised Endpoint ID from an exact 0600 32-byte secret", () => {
+    const file = tmpFile(new Uint8Array(32).fill(0xab));
+    expect(inspectIdentity(file, () => fakeBinding)).toMatchObject({
+      ok: true,
+      endpointId: "ab".repeat(32),
+    });
+  });
+
+  it("rejects unsafe permissions and malformed secret lengths", () => {
+    expect(inspectIdentity(tmpFile(new Uint8Array(32), 0o644), () => fakeBinding).message).toMatch(
+      /0600/
+    );
+    expect(inspectIdentity(tmpFile(new Uint8Array(31)), () => fakeBinding).message).toMatch(
+      /32 bytes/
     );
   });
 
-  it("supports an explicit workspace identity selector", () => {
-    const parsed = parseArgs(["--workspace", "dev_one"]);
-    expect(parsed.workspace).toBe("dev_one");
-    expect(parsed.identityScope).toBe("workspace");
-    expect(parsed.identityExplicit).toBe(true);
-    expect(parsed.identity).toContain(path.join("workspaces", "dev_one", "reach", "webrtc"));
-    expect(() => parseArgs(["--workspace", "dev", "--identity", "/tmp/id.pem"])).toThrow(
-      /not both/
-    );
+  it("derives the client Endpoint ID owned by a paired credential", () => {
+    const endpointSecret = Buffer.alloc(32, 0xcd).toString("base64url");
+    expect(inspectCredentialEndpoint({ endpointSecret }, () => fakeBinding)).toMatchObject({
+      ok: true,
+      endpointId: "cd".repeat(32),
+    });
+    expect(inspectCredentialEndpoint({ endpointSecret: "bad" }, () => fakeBinding)).toMatchObject({
+      ok: false,
+    });
   });
 
-  it("dials a per-room ws URL with role=answerer (never the endpoint root)", () => {
-    const url = new URL(signalingRoomWsUrl("https://signal.example/", "abc-123"));
-    expect(url.protocol).toBe("wss:");
-    expect(url.pathname).toBe("/room/abc-123");
-    expect(url.searchParams.get("role")).toBe("answerer");
+  it("fails when a retired dependency or environment setting survives", () => {
+    const resolver = Object.assign(() => fakeBinding, {
+      resolve: (name: string) => {
+        if (name.includes("datachannel")) return "/installed/retired-package";
+        throw new Error("missing");
+      },
+    });
+    expect(inspectRetiredTransportDependencies(resolver)).toMatchObject({ ok: false });
+
+    vi.stubEnv(["VIBESTUDIO", "WEB", "RTC", "MODE"].join("_"), "enabled");
+    const emptyResolver = Object.assign(() => fakeBinding, {
+      resolve: () => {
+        throw new Error("missing");
+      },
+    });
+    expect(inspectRetiredTransportDependencies(emptyResolver)).toMatchObject({ ok: false });
   });
 
-  it("converts http signaling to ws for the room probe", () => {
-    const url = new URL(signalingRoomWsUrl("http://127.0.0.1:8787/", "room1234"));
-    expect(url.protocol).toBe("ws:");
-    expect(url.pathname).toBe("/room/room1234");
-  });
-
-  it("reports signaling reachable when the room socket opens", async () => {
-    const socket = new FakeSocket();
-    let dialed = "";
-    const factory = (u: string) => {
-      dialed = u;
-      queueMicrotask(() => socket.emit("open"));
-      return socket;
-    };
-    const result = await checkSignaling("wss://signal.example/", factory);
-    expect(result.ok).toBe(true);
-    expect(dialed).toContain("/room/");
-    expect(dialed).toContain("role=answerer");
-  });
-
-  it("reports signaling unreachable on socket error", async () => {
-    const socket = new FakeSocket();
-    const factory = () => {
-      queueMicrotask(() => socket.emit("error", new Error("ECONNREFUSED")));
-      return socket;
-    };
-    const result = await checkSignaling("wss://signal.example/", factory);
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/cannot connect/);
-  });
-
-  it("reads the signaling endpoint from the canonical paired credential", () => {
-    const file = tmpFile(
-      "cli-credentials.json",
-      JSON.stringify({
-        controlPairing: { sig: "ws://127.0.0.1:8790/" },
-        workspacePairing: { sig: "ws://127.0.0.1:9999/" },
-      })
-    );
-    expect(pairedSignalingUrl(file)).toBe("ws://127.0.0.1:8790/");
-  });
-
-  it("probes a paired credential's signaling endpoint when no override is supplied", async () => {
-    const socket = new FakeSocket();
-    let dialed = "";
+  it("requires an explicit canonical HTTPS relay set", async () => {
     const result = await runDoctor(
-      { signalUrl: null, identity: null },
-      {
-        require: () => ({}),
-        unitPath: "/nonexistent/unit.service",
-        pairedSignalUrl: "ws://127.0.0.1:8790/",
-        wsFactory: (url: string) => {
-          dialed = url;
-          queueMicrotask(() => socket.emit("open"));
-          return socket;
-        },
-      }
+      { ...parseArgs([]), relayUrls: ["https://relay.example/"] },
+      { require: () => fakeBinding, unitPath: "/nonexistent/unit.service", credential: null }
     );
-    expect(dialed).toContain("127.0.0.1:8790");
     expect(
-      result.checks.find((entry: { name: string }) => entry.name === "signaling")
-    ).toMatchObject({ ok: true, source: "paired-credential" });
-  });
-
-  it("passes a well-formed 0600 identity file", () => {
-    const file = tmpFile("identity.pem", IDENTITY_PEM, 0o600);
-    fs.writeFileSync(path.join(path.dirname(file), "server.pem"), "unrelated-old-file");
-    const result = inspectIdentity(file);
+      result.checks.find((entry: { name: string }) => entry.name === "native-binding")
+    ).toMatchObject({ ok: true });
+    expect(
+      result.checks.find((entry: { name: string }) => entry.name === "relay-config")
+    ).toMatchObject({ ok: true });
+    expect(
+      result.checks.find((entry: { name: string }) => entry.name === "iroh-probe")
+    ).toMatchObject({ skipped: true });
     expect(result.ok).toBe(true);
-    expect(result.message).toContain("cert+key");
   });
 
-  it("fails a group/world-readable identity file", () => {
-    const file = tmpFile("identity.pem", IDENTITY_PEM, 0o644);
-    const result = inspectIdentity(file);
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/group\/world accessible/);
-  });
-
-  it("fails a missing identity file", () => {
-    const result = inspectIdentity("/nonexistent/vibestudio/identity.pem");
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/missing/);
-  });
-
-  it("fails an identity file that lacks the private key", () => {
-    const file = tmpFile(
-      "identity.pem",
-      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-      0o600
+  it("fails absent or noncanonical relay configuration", async () => {
+    const absent = await runDoctor(parseArgs([]), {
+      require: () => fakeBinding,
+      unitPath: "/nonexistent/unit.service",
+      credential: null,
+    });
+    expect(absent.ok).toBe(false);
+    const malformed = await runDoctor(
+      { ...parseArgs([]), relayUrls: ["http://relay.example/"] },
+      { require: () => fakeBinding, unitPath: "/nonexistent/unit.service", credential: null }
     );
-    const result = inspectIdentity(file);
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/certificate and private key/);
-  });
-
-  it("parses the gateway port out of a unit ExecStart line", () => {
-    const unit = "[Service]\nExecStart=/home/u/.npm/bin/vibestudio remote serve --port 3040\n";
-    expect(gatewayPortFromUnit(unit)).toBe(3040);
-    expect(gatewayPortFromUnit("[Service]\nExecStart=/x/vibestudio remote serve\n")).toBeNull();
-  });
-
-  it("skips (does not fail) the systemd-unit check when no unit is deployed", async () => {
-    const { unit, port } = await checkDeployedUnit(
-      undefined,
-      "/nonexistent/vibestudio-server.service"
-    );
-    expect(unit.skipped).toBe(true);
-    expect(unit.ok).toBe(true);
-    expect(port).toBeNull();
-  });
-
-  it("checks unit active state and parses the port when a unit exists", async () => {
-    const unitPath = tmpFile(
-      "vibestudio-server.service",
-      "[Service]\nExecStart=/x/vibestudio remote serve --port 3055\n"
-    );
-    const spawnImpl = { spawnSync: () => ({ status: 0, stdout: "active\n", stderr: "" }) };
-    const { unit, port } = await checkDeployedUnit(spawnImpl, unitPath);
-    expect(unit.ok).toBe(true);
-    expect(unit.skipped).toBeUndefined();
-    expect(port).toBe(3055);
-  });
-
-  it("runDoctor aggregates checks and ignores skipped ones for the overall verdict", async () => {
-    const identity = tmpFile("identity.pem", IDENTITY_PEM, 0o600);
-    const socket = new FakeSocket();
-    const result = await runDoctor(
-      { signalUrl: "wss://signal.example/", identity },
-      {
-        require: () => ({}), // node-datachannel stub loads
-        unitPath: "/nonexistent/unit.service", // → skipped
-        wsFactory: () => {
-          queueMicrotask(() => socket.emit("open"));
-          return socket;
-        },
-      }
-    );
-    expect(result.ok).toBe(true);
-    expect(
-      result.checks.some(
-        (c: { name: string; skipped?: boolean }) => c.name === "systemd-unit" && c.skipped
-      )
-    ).toBe(true);
-    expect(
-      result.checks.some((c: { name: string; ok: boolean }) => c.name === "identity" && c.ok)
-    ).toBe(true);
-    expect(
-      result.checks.some(
-        (c: { name: string; skipped?: boolean }) => c.name === "identity" && !c.skipped
-      )
-    ).toBe(true);
-    expect(
-      result.checks.some((c: { name: string; ok: boolean }) => c.name === "signaling" && c.ok)
-    ).toBe(true);
-    expect(result.checks.some((c: { name: string }) => c.name.includes("legacy"))).toBe(false);
+    expect(malformed.ok).toBe(false);
   });
 });

@@ -23,7 +23,7 @@ import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
-import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/sessionNegotiation";
+import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/remoteSession";
 import {
   requestRpcWebSocketAdmission,
   rpcWebSocketAdmissionUrl,

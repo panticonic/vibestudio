@@ -6,7 +6,7 @@ import { clearShellTokenCache } from "../rpcClient.js";
 
 /**
  * `vibestudio eval` drives the server-side `eval` service (eval.start/get / eval.reset)
- * over the paired CLI transport. These tests keep strict v2 WebRTC credentials
+ * over the paired CLI transport. These tests keep strict v2 Iroh credentials
  * and replace only the signaling/data-channel boundary with an in-process RPC
  * server, then assert the calls, output, and exit codes.
  */
@@ -32,8 +32,8 @@ const transportMock = vi.hoisted(() => ({
   watchControllers: [] as ReadableStreamDefaultController<Uint8Array>[],
 }));
 
-vi.mock("../webrtcClient.js", () => ({
-  WebRtcRpcClient: class {
+vi.mock("../../node/iroh/irohRpcClient.js", () => ({
+  IrohRpcClient: class {
     async ready(): Promise<void> {}
 
     async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
@@ -83,27 +83,29 @@ vi.mock("../webrtcClient.js", () => ({
 
     private async dispatch<T>(body: RpcRequest): Promise<T> {
       transportMock.rpcBodies.push(body);
-      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      if (!transportMock.handle) throw new Error("Iroh test server is not configured");
       return (await transportMock.handle(body)) as T;
     }
   },
 }));
 
-/** Configure the deterministic WebRTC RPC boundary used by paired CLI credentials. */
+/** Configure the deterministic Iroh RPC boundary used by paired CLI credentials. */
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
   transportMock.rpcBodies = [];
   transportMock.handle = handle;
   return { rpcBodies: transportMock.rpcBodies };
 }
 
-function writeCredentials(tmpDir: string, url = "webrtc://room-cli/_workspace/dev"): void {
+function writeCredentials(tmpDir: string, url = `iroh://${"bb".repeat(32)}/_workspace/dev`): void {
   const dir = path.join(tmpDir, ".config", "vibestudio");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: "device",
+      transport: "iroh",
+      endpointSecret: "E".repeat(43),
       url,
       workspaceId: "ws_dev",
       workspaceName: "dev",
@@ -111,18 +113,14 @@ function writeCredentials(tmpDir: string, url = "webrtc://room-cli/_workspace/de
       deviceId: `dev_${"D".repeat(24)}`,
       refreshToken: "R".repeat(43),
       controlPairing: {
-        room: "room-control",
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "aa".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       workspacePairing: {
-        room: "room-cli",
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "bb".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       pairedAt: 1,
     })
@@ -181,7 +179,7 @@ describe("vibestudio eval commands", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        throw new Error("Unexpected network request from WebRTC CLI test");
+        throw new Error("Unexpected network request from Iroh CLI test");
       })
     );
     clearShellTokenCache();
@@ -223,7 +221,7 @@ describe("vibestudio eval commands", () => {
     expect(output["returnValue"]).toEqual({ answer: 42 });
     expect(output["console"]).toBe("hello\n[WARN] careful");
     expect(output["scopeKeys"]).toEqual(["x"]);
-    // Strict v2 pairing uses the persistent WebRTC credential directly: no
+    // Strict v2 pairing uses the persistent Iroh credential directly: no
     // refresh-shell or HTTP RPC compatibility path is involved.
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -382,7 +380,7 @@ describe("vibestudio eval commands", () => {
   it("eval run maps a slow server call to a timeout (exit 4)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    // The in-process WebRTC server never resolves eval.start, so the command's
+    // The in-process Iroh server never resolves eval.start, so the command's
     // client-side timeout remains deterministic without signaling or network.
     stubServer(() => new Promise<never>(() => {}));
 

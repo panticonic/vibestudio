@@ -45,7 +45,7 @@ const vibestudioShell = {
 
   // §1.6 upload hop (see @vibestudio/rpc bridgeStream.ts): streaming REQUEST bodies
   // cross the bridge as sequenced chunk messages; ipcDispatcher reassembles them
-  // and feeds the panel's WebRTC session. Electron structured-clones Uint8Array,
+  // and feeds the panel's Iroh session. Electron structured-clones Uint8Array,
   // so chunks ride binary (no base64). `streamBodyChunk` is invoke()d so the
   // host's resolution is the pump's backpressure.
   streamChunkFormat: "binary" as const,

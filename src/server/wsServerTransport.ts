@@ -13,7 +13,7 @@
  *   is identified as a response, event, or stream frame for a server-initiated call
  */
 
-import type { WebSocket } from "ws";
+import type { RpcSessionSocket } from "./rpcServer/connectionRegistry.js";
 import type { RpcEnvelope, RpcMessage, RpcTransport } from "@vibestudio/rpc";
 import { createHandlerRegistry, envelopeFromMessage } from "@vibestudio/rpc";
 
@@ -29,7 +29,7 @@ function connectionLostError(clientId: string): Error {
 
 export interface WsServerTransportOptions {
   /** The server-side WebSocket for this client */
-  ws: WebSocket;
+  ws: RpcSessionSocket;
   /** Identifier for this client (used in logging) */
   clientId: string;
 }

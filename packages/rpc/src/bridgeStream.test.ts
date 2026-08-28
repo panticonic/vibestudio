@@ -259,14 +259,14 @@ describe("createBridgeStreamRelay", () => {
   it("sends a loud error message when the session cannot stream (no silent fallback)", async () => {
     const { relay, sent } = makeRelay({
       openStream: vi.fn(async () => {
-        throw new Error("Streaming request bodies (uploads) require the WebRTC transport");
+        throw new Error("Streaming request bodies require a native duplex transport");
       }),
     });
     relay.open({ opId: "op-1", envelope: streamRequestEnvelope(), bodyId: "b-1" });
     await vi.waitFor(() => expect(sent.at(-1)?.kind).toBe("error"));
     expect(sent.at(-1)).toMatchObject({
       kind: "error",
-      message: expect.stringContaining("require the WebRTC transport"),
+      message: expect.stringContaining("require a native duplex transport"),
     });
     expect(relay.size()).toBe(0);
   });
@@ -416,13 +416,13 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
   it("rejects when the host session cannot stream a request body", async () => {
     const { surface } = connect(async () => {
       throw new Error(
-        "Streaming request bodies (uploads) require the WebRTC transport; " +
+        "Streaming request bodies require a native duplex transport; " +
           "this panel's host session cannot stream a request body"
       );
     });
     await expect(
       openBridgeUploadStream(surface, streamRequestEnvelope(), null, bodyStreamOf(bytes(1)))
-    ).rejects.toThrow(/require the WebRTC transport/);
+    ).rejects.toThrow(/require a native duplex transport/);
   });
 
   it("caller abort propagates across the bridge and stops both pumps", async () => {

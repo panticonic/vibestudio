@@ -10,7 +10,7 @@ import {
 
 /**
  * Build the per-frame identity gate for a workspace child. Authentication is
- * deliberately not treated as a lifetime grant: every persistent WS/WebRTC
+ * deliberately not treated as a lifetime grant: every persistent WS/Iroh
  * frame must still belong to a live account, a current workspace member, and
  * (for credential-backed callers) the same live device/agent credential.
  */

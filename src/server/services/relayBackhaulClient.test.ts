@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateSelfSignedEcCert } from "../../node/webrtc/cert.js";
 import {
   DEFAULT_RELAY_ORIGIN,
   buildBackhaulUrl,
   getRelayOrigin,
+  ensureRelayBackhaulIdentity,
   loadRelayBackhaulIdentity,
 } from "./relayBackhaulClient.js";
 
@@ -21,8 +21,7 @@ function identityFile(): string {
   const dir = mkdtempSync(join(tmpdir(), "vibestudio-relay-identity-"));
   tempDirs.push(dir);
   const file = join(dir, "identity.pem");
-  const { certPem, keyPem } = generateSelfSignedEcCert();
-  writeFileSync(file, `${certPem}\n${keyPem}`, { mode: 0o600 });
+  ensureRelayBackhaulIdentity(file);
   return file;
 }
 

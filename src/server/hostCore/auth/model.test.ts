@@ -53,7 +53,12 @@ describe("auth response model", () => {
   it("returns a shell credential only when explicitly requested", () => {
     const { store, userId } = makeStore();
     const tokenManager = new TokenManager();
-    const credential = store.issueDevice({ userId, label: "Laptop", platform: "desktop" });
+    const credential = store.issueDevice({
+      userId,
+      label: "Laptop",
+      platform: "desktop",
+      transport: { kind: "local" },
+    });
     const deps = {
       tokenManager,
       deviceAuthStore: store,

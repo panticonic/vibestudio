@@ -802,7 +802,7 @@ describe("RpcServer HTTP POST /rpc", () => {
     });
 
     // (Removed) "allows the configured public URL origin" — public-URL ingress
-    // is decommissioned (§8); remote traffic is WebRTC, the gateway is loopback-only.
+    // is decommissioned; remote traffic is Iroh, and the gateway is loopback-only.
   });
 
   describe("websocket admission exchange", () => {
@@ -885,6 +885,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(redeemPairingCredential).toHaveBeenCalledWith("PAIR-CODE-ONCE", {
         clientLabel: "München phone",
         clientPlatform: "mobile",
+        transport: { kind: "local" },
       });
       if (!result.body.ok) throw new Error(result.body.message);
       const retried = await postWsAdmission(port, "PAIR-CODE-ONCE", {

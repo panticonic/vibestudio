@@ -55,7 +55,9 @@ export async function refreshPrincipalGrantResponse(
       400
     );
   }
-  const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
+  const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken, {
+    kind: "local",
+  });
   const user = deps.resolveUser(device.userId);
   if (!user || user.revokedAt !== undefined) {
     throw authError("INVALID_DEVICE", "The device owner is unavailable", 401);

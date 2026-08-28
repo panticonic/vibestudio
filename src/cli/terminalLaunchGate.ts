@@ -11,6 +11,7 @@ import {
   type HostLaunchResult,
 } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
+import type { CliStoredPairing } from "./credentialStore.js";
 import { TimeoutError } from "./output.js";
 
 export interface TerminalLaunchGateOptions {
@@ -29,8 +30,10 @@ export interface TerminalLaunchGateResult {
 }
 
 export async function runTerminalLaunchGate(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "workspacePairing">>,
+  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> & {
+    workspacePairing?: CliStoredPairing;
+    endpointSecret?: string;
+  },
   options: TerminalLaunchGateOptions = {}
 ): Promise<TerminalLaunchGateResult> {
   const target = options.target ?? "terminal";

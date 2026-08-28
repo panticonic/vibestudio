@@ -2,12 +2,16 @@ import type { RpcClient } from "@vibestudio/rpc";
 import type { CallerKind, WsClientInfo } from "@vibestudio/shared/serviceDispatcher";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import { WebSocket } from "ws";
+import type { IrohRpcSessionSocket } from "../irohRpcSessionSocket.js";
 import type { WsServerTransportInternal } from "../wsServerTransport.js";
 import type { WsUploadBodies } from "./wsUploadBodies.js";
 
-/** Server-side state for a connected WebSocket client. */
+/** Physical session surface shared by loopback WebSocket and remote Iroh. */
+export type RpcSessionSocket = WebSocket | IrohRpcSessionSocket;
+
+/** Server-side state for one connected RPC session. */
 export interface WsClientState extends WsClientInfo {
-  ws: WebSocket;
+  ws: RpcSessionSocket;
   authenticatedAt: number;
   /**
    * Owning user — a denormalized, non-null mirror of
@@ -33,7 +37,7 @@ export interface ConnectionRegistryOptions {
  * this registry only keeps those independently indexed views coherent.
  */
 export class ConnectionRegistry {
-  private clients = new Map<WebSocket, WsClientState>();
+  private clients = new Map<RpcSessionSocket, WsClientState>();
   private callerConnections = new Map<string, Map<string, WsClientState>>();
   private bridges = new Map<string, Map<string, RpcClient>>();
   private transports = new Map<string, Map<string, WsServerTransportInternal>>();
@@ -53,7 +57,7 @@ export class ConnectionRegistry {
 
   constructor(private readonly options: ConnectionRegistryOptions) {}
 
-  getBySocket(ws: WebSocket): WsClientState | undefined {
+  getBySocket(ws: RpcSessionSocket): WsClientState | undefined {
     return this.clients.get(ws);
   }
 

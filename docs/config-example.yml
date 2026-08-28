@@ -21,13 +21,13 @@ cache:
 # ============================================================================
 # Remote Pairing Configuration
 # ============================================================================
-# Remote reach is WebRTC. Pairing commands use the hosted signaling endpoint by
+# Remote reach is Iroh. Pairing commands use the hosted signaling endpoint by
 # default; override it only when self-hosting:
 #
 #   vibestudio remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev
 #
-# The signaling service only brokers the WebRTC rendezvous; workspace data moves
-# over the pinned DTLS pipe, not through a public HTTP remote URL.
+# The signaling service only brokers the Iroh rendezvous; workspace data moves
+# over the pinned Endpoint ID pipe, not through a public HTTP remote URL.
 
 # ============================================================================
 # Size Reference Guide

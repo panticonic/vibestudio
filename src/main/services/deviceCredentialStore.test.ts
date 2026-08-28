@@ -48,22 +48,19 @@ const loopback: DeviceCredentialEntry = {
   pairedAt: 1234,
 };
 
-const webrtc: DeviceCredentialEntry = {
+const iroh: DeviceCredentialEntry = {
   serverId: REMOTE_SERVER_ID,
-  transport: "webrtc",
+  transport: "iroh",
+  endpointSecret: "E".repeat(43),
   controlPairing: {
-    room: "room-control",
-    fp: "AA".repeat(32),
-    sig: "wss://sig.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "aa".repeat(32),
+    relays: ["https://relay-a.example/"],
+    v: 4,
   },
   workspacePairing: {
-    room: "room-1111",
-    fp: "AA".repeat(32),
-    sig: "wss://sig.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "bb".repeat(32),
+    relays: ["https://relay-a.example/"],
+    v: 4,
   },
   workspaceName: "dev",
   deviceId: REMOTE_DEVICE_ID,
@@ -71,22 +68,19 @@ const webrtc: DeviceCredentialEntry = {
   pairedAt: 5678,
 };
 
-const webrtc2: DeviceCredentialEntry = {
+const iroh2: DeviceCredentialEntry = {
   serverId: OTHER_SERVER_ID,
-  transport: "webrtc",
+  transport: "iroh",
+  endpointSecret: "F".repeat(43),
   controlPairing: {
-    room: "room-control-2",
-    fp: "BB".repeat(32),
-    sig: "wss://sig.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "cc".repeat(32),
+    relays: ["https://relay-b.example/"],
+    v: 4,
   },
   workspacePairing: {
-    room: "room-workspace-2",
-    fp: "BB".repeat(32),
-    sig: "wss://sig.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "dd".repeat(32),
+    relays: ["https://relay-b.example/"],
+    v: 4,
   },
   workspaceName: "second",
   deviceId: `dev_${"q".repeat(24)}`,
@@ -105,17 +99,17 @@ function doc(
 }
 
 describe("deviceCredentialStore", () => {
-  it("round-trips loopback and WebRTC entries keyed by server id", () => {
+  it("round-trips loopback and Iroh entries keyed by server id", () => {
     const { store } = makeStore(xorCipher);
     expect(store.load()).toBeNull();
-    const document = doc([loopback, webrtc], webrtc.serverId);
+    const document = doc([loopback, iroh], iroh.serverId);
     store.save(document);
     expect(store.load()).toEqual(document);
   });
 
   it("encrypts at rest", () => {
     const { store, filePath } = makeStore(xorCipher);
-    store.save(doc([loopback, webrtc]));
+    store.save(doc([loopback, iroh]));
     const onDisk = fs.readFileSync(filePath, "utf8");
     expect(onDisk).not.toContain(LOCAL_REFRESH_TOKEN);
     expect(onDisk).not.toContain(REMOTE_REFRESH_TOKEN);
@@ -123,7 +117,7 @@ describe("deviceCredentialStore", () => {
 
   it("writes atomically (no leftover tmp file, target present)", () => {
     const { store, filePath, dir } = makeStore(xorCipher);
-    store.save(doc([webrtc]));
+    store.save(doc([iroh]));
     expect(fs.existsSync(filePath)).toBe(true);
     const leftovers = fs
       .readdirSync(path.dirname(filePath))
@@ -134,7 +128,7 @@ describe("deviceCredentialStore", () => {
 
   it("fails loud rather than writing plaintext when secure storage is unavailable", () => {
     const { store, filePath } = makeStore(unavailableCipher);
-    expect(() => store.save(doc([webrtc]))).toThrow(/secure storage|plaintext/i);
+    expect(() => store.save(doc([iroh]))).toThrow(/secure storage|plaintext/i);
     expect(fs.existsSync(filePath)).toBe(false);
     expect(store.load()).toBeNull();
   });
@@ -164,7 +158,7 @@ describe("deviceCredentialStore", () => {
   it("allows pairing preflight with a missing or canonical credential document", () => {
     const { store } = makeStore(xorCipher);
     expect(() => store.preflightPairing()).not.toThrow();
-    store.save(doc([webrtc]));
+    store.save(doc([iroh]));
     expect(() => store.preflightPairing()).not.toThrow();
   });
 
@@ -173,13 +167,13 @@ describe("deviceCredentialStore", () => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(
       filePath,
-      xorCipher.encrypt(JSON.stringify({ [webrtc.serverId]: { ...webrtc, pairedAt: 1.5 } }))
+      xorCipher.encrypt(JSON.stringify({ [iroh.serverId]: { ...iroh, pairedAt: 1.5 } }))
     );
     expect(() => store.load()).toThrow(/unreadable|canonical schema/u);
 
     expect(() =>
       store.save({
-        entries: { [webrtc.serverId]: { ...webrtc, refreshToken: "" } },
+        entries: { [iroh.serverId]: { ...iroh, refreshToken: "" } },
       })
     ).toThrow(/non-canonical device credential/u);
     expect(() => store.load()).toThrow(/unreadable|canonical schema/u);
@@ -187,7 +181,6 @@ describe("deviceCredentialStore", () => {
 
   it("rejects non-issuer credentials, missing pairing fields, and retired fields", () => {
     const { store } = makeStore(xorCipher);
-    const colonFingerprint = Array.from({ length: 32 }, () => "AA").join(":");
     const invalidEntries = [
       { [loopback.serverId]: { ...loopback, serverId: "srv_local" } },
       { [loopback.serverId]: { ...loopback, deviceId: "dev_local" } },
@@ -196,51 +189,51 @@ describe("deviceCredentialStore", () => {
         [loopback.serverId]: { ...loopback, workspaceId: "retired-workspace-binding" },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, code: "must-not-persist" },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, code: "must-not-persist" },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, v: undefined },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, v: undefined },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, ice: undefined },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, relays: undefined },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, v: 1 },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, v: 1 },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, fp: colonFingerprint },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, endpointId: "AA".repeat(32) },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, fp: "aa".repeat(32) },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, endpointId: "aa" },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, sig: "wss://sig.example" },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, relays: ["http://relay.example/"] },
         },
       },
       {
-        [webrtc.serverId]: {
-          ...webrtc,
-          workspacePairing: { ...webrtc.workspacePairing, srv: "remote" },
+        [iroh.serverId]: {
+          ...iroh,
+          workspacePairing: { ...iroh.workspacePairing, srv: "remote" },
         },
       },
     ];
@@ -252,7 +245,7 @@ describe("deviceCredentialStore", () => {
 
   it("clear removes the credential file", () => {
     const { store } = makeStore(xorCipher);
-    store.save(doc([webrtc]));
+    store.save(doc([iroh]));
     store.clear();
     expect(store.load()).toBeNull();
     expect(store.exists()).toBe(false);
@@ -266,35 +259,35 @@ describe("selectCurrentRemote", () => {
   });
 
   it("returns the pinned current remote (not the oldest) with two paired servers", () => {
-    const document = doc([webrtc, webrtc2], webrtc2.serverId);
-    expect(selectCurrentRemote(document)?.serverId).toBe(webrtc2.serverId);
+    const document = doc([iroh, iroh2], iroh2.serverId);
+    expect(selectCurrentRemote(document)?.serverId).toBe(iroh2.serverId);
   });
 
   it("falls back to the most recently paired remote when no current is pinned", () => {
-    // webrtc2 pairedAt (9999) > webrtc pairedAt (5678).
-    expect(selectCurrentRemote(doc([webrtc, webrtc2]))?.serverId).toBe(webrtc2.serverId);
+    // iroh2 pairedAt (9999) > iroh pairedAt (5678).
+    expect(selectCurrentRemote(doc([iroh, iroh2]))?.serverId).toBe(iroh2.serverId);
   });
 });
 
 describe("parseDeviceCredentialDocument", () => {
   it("rejects non-document values", () => {
     expect(parseDeviceCredentialDocument(null)).toBeNull();
-    expect(parseDeviceCredentialDocument([webrtc])).toBeNull();
+    expect(parseDeviceCredentialDocument([iroh])).toBeNull();
     expect(parseDeviceCredentialDocument({ notEntries: {} })).toBeNull();
-    expect(parseDeviceCredentialDocument({ [webrtc.serverId]: webrtc })).toBeNull();
+    expect(parseDeviceCredentialDocument({ [iroh.serverId]: iroh })).toBeNull();
   });
 
   it("rejects stale pointers and the entire document when any entry is invalid", () => {
     expect(
       parseDeviceCredentialDocument({
         currentRemoteServerId: "gone",
-        entries: { [webrtc.serverId]: webrtc },
+        entries: { [iroh.serverId]: iroh },
       })
     ).toBeNull();
     expect(
       parseDeviceCredentialDocument({
         entries: {
-          [webrtc.serverId]: webrtc,
+          [iroh.serverId]: iroh,
           [LOCAL_SERVER_ID]: { ...loopback, refreshToken: "retired-secret-shape" },
         },
       })
@@ -304,9 +297,9 @@ describe("parseDeviceCredentialDocument", () => {
   it("accepts only the current canonical document", () => {
     const canonical = {
       currentRemoteServerId: "gone",
-      entries: { [webrtc.serverId]: webrtc },
+      entries: { [iroh.serverId]: iroh },
     };
-    canonical.currentRemoteServerId = webrtc.serverId;
+    canonical.currentRemoteServerId = iroh.serverId;
     expect(parseDeviceCredentialDocument(canonical)).toEqual(canonical);
   });
 });

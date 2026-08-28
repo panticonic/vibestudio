@@ -30,7 +30,7 @@ describe("published npm dependency surface", () => {
   it("publishes every external native host runtime dependency", () => {
     expect(publicRuntimeDependencies).toMatchObject({
       "@vscode/ripgrep": "1.18.0",
-      "node-datachannel": rootPackage.dependencies["node-datachannel"],
+      "@number0/iroh": "1.1.0",
       "node-pty": rootPackage.dependencies["node-pty"],
     });
   });

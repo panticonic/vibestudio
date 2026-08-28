@@ -479,7 +479,7 @@ async function waitForRun(
   connection: RpcClient
 ): Promise<EvalStatus> {
   // Hold one transport for the bounded wait. Re-negotiating the single-peer
-  // WebRTC room every second races signaling teardown and can starve an
+  // Polling readiness every second races process teardown and can starve an
   // independent inspector. Local headless runs normally use doctor's verified
   // direct gateway, so status/inspect/cancel remain concurrently available;
   // remote users who need that concurrency can start the durable run detached.

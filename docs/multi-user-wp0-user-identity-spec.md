@@ -72,12 +72,12 @@ Instead:
 the client to the right workspace child (WP1); the child, on `handleAuth`, resolves the
 connecting device's `userId` by reading the shared identity DB (`deviceAuthStore.userFor` →
 the DB), then stamps the `subject`. No signed grant token, no HMAC — the child looks up the
-authenticated device in the same store the hub wrote. (For remote WebRTC, the child owns its
+authenticated device in the same store the hub wrote. (For remote Iroh, the child owns its
 own ingress per WP1; the device presents its existing device credential, which the child
 validates against the shared DB exactly as the hub would.)
 
 ```
-remote client ──(WebRTC to the child's ingress, device credential)──► workspace child
+remote client ──(Iroh to the child's ingress, device credential)──► workspace child
    child.handleAuth: validate device credential against shared identity DB
                      → device.userId → UserSubject{userId, handle} → VerifiedCaller.subject
    (the hub authenticated the user first and routed the client here — WP1)

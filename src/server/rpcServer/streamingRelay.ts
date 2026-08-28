@@ -6,7 +6,7 @@ import {
   type RpcEnvelope,
   type RpcStreamRequest,
 } from "@vibestudio/rpc";
-import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
+import type { FrameType as StreamFrameType } from "@vibestudio/rpc/protocol/streamCodec";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -728,7 +728,7 @@ export class StreamingRelay {
     };
     // A desktop panel can originate a body-less stream through its ordinary
     // envelope bridge. Such a request has no `stream-open` bulk id even though
-    // its host-side socket is a WebRTC shim; its frames must return over the
+    // its host-side socket is a Iroh shim; its frames must return over the
     // same envelope lane. Bulk-opened streams retain the raw-byte hot path.
     const sendBinaryFrame =
       shim.hasBulkStream?.(request.requestId) === false

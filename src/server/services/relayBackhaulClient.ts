@@ -27,6 +27,7 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { WebSocket } from "ws";
 import { PAIR_LINK_ORIGIN } from "@vibestudio/shared/connect";
 
@@ -51,12 +52,37 @@ export interface RelayBackhaulIdentity {
   sign(payload: string): string;
 }
 
+/**
+ * Own the callback relay's P-256 signing key independently of every application
+ * transport. Existing combined certificate/private-key PEM files remain valid;
+ * new installations persist only the private key because the public key is
+ * derived deterministically from it.
+ */
+export function ensureRelayBackhaulIdentity(identityPemFile: string): void {
+  try {
+    loadRelayBackhaulIdentity(identityPemFile);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const directory = path.dirname(identityPemFile);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+  const temporary = `${identityPemFile}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+  fs.writeFileSync(temporary, pem, { mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, identityPemFile);
+  fs.chmodSync(identityPemFile, 0o600);
+}
+
 /** Load the workspace's persistent self-certifying relay identity. */
 export function loadRelayBackhaulIdentity(identityPemFile: string): RelayBackhaulIdentity {
   const pem = fs.readFileSync(identityPemFile, "utf8");
-  const certificate = new crypto.X509Certificate(pem);
-  const publicKeyDer = certificate.publicKey.export({ type: "spki", format: "der" }) as Buffer;
   const privateKey = crypto.createPrivateKey(pem);
+  const publicKeyDer = crypto.createPublicKey(privateKey).export({
+    type: "spki",
+    format: "der",
+  }) as Buffer;
   const publicKey = publicKeyDer.toString("base64url");
   const relayId = `rly_${crypto.createHash("sha256").update(publicKeyDer).digest("hex")}`;
   return {

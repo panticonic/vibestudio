@@ -1,6 +1,6 @@
 /**
  * assetDiskCache — content-addressed on-disk cache for the desktop panel-asset
- * façade (WebRTC RPC v2, plan §6).
+ * façade (Iroh RPC v2, plan §6).
  *
  * Panel bundles are digest-addressed immutable artifacts: the gateway marks them
  * `Cache-Control: public, max-age=31536000, immutable`, and their cache key (the

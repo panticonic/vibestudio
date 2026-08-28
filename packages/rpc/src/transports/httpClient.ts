@@ -248,7 +248,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         // no channel for a separate streaming request body (plan §1.6: fail
         // loud, never a silent drop or base64 fallback).
         throw new Error(
-          "Streaming request bodies (uploads) require the WebRTC transport; the HTTP transport cannot stream a request body"
+          "Streaming request bodies (uploads) require the Iroh transport; the HTTP transport cannot stream a request body"
         );
       }
       let response: Response;

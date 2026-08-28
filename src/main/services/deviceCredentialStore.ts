@@ -1,20 +1,14 @@
 /**
  * Unified desktop credential store for paired servers.
  *
- * Entries for both loopback and WebRTC transports live in one encrypted file,
+ * Entries for both loopback and Iroh transports live in one encrypted file,
  * keyed by the server identifier emitted by the current credential issuer.
  */
 
 import { safeStorage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  normalizeFingerprint,
-  PAIRING_PROTOCOL_VERSION,
-  PAIRING_ROOM_PATTERN,
-  parseSignalingEndpoint,
-  type ReconnectReach,
-} from "@vibestudio/shared/connect";
+import { assertIrohReach, type IrohReach } from "@vibestudio/iroh-transport";
 import { isDeviceId, isDeviceRefreshToken, isServerId } from "@vibestudio/shared/deviceCredentials";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
@@ -25,7 +19,7 @@ import {
 
 export type { StoreCipher };
 
-export type StoredPairing = ReconnectReach;
+export type StoredPairing = IrohReach;
 
 interface DeviceCredentialBase {
   serverId: string;
@@ -41,7 +35,8 @@ export type LoopbackDeviceCredential = DeviceCredentialBase & {
 };
 
 export type StoredRemote = DeviceCredentialBase & {
-  transport: "webrtc";
+  transport: "iroh";
+  endpointSecret: string;
   controlPairing: StoredPairing;
   workspacePairing: StoredPairing;
   workspaceName: string;
@@ -86,7 +81,7 @@ function isEntry(value: unknown): value is DeviceCredentialEntry {
   ) {
     return false;
   }
-  if (v.transport !== "loopback" && v.transport !== "webrtc") return false;
+  if (v.transport !== "loopback" && v.transport !== "iroh") return false;
   const allowedBase = new Set([
     "serverId",
     "deviceId",
@@ -104,9 +99,13 @@ function isEntry(value: unknown): value is DeviceCredentialEntry {
       "controlPairing",
       "workspacePairing",
       "workspaceName",
+      "endpointSecret",
     ]);
     if (Object.keys(v).some((key) => !allowedRemote.has(key))) return false;
     if (!isStoredPairing(v.controlPairing) || !isStoredPairing(v.workspacePairing)) return false;
+    if (typeof v.endpointSecret !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(v.endpointSecret)) {
+      return false;
+    }
     if (typeof v.workspaceName !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(v.workspaceName)) {
       return false;
     }
@@ -117,25 +116,14 @@ function isEntry(value: unknown): value is DeviceCredentialEntry {
 function isStoredPairing(value: unknown): value is StoredPairing {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pairing = value as Partial<StoredPairing>;
-  const allowedPairing = new Set(["room", "fp", "sig", "v", "ice"]);
+  const allowedPairing = new Set(["endpointId", "relays", "v"]);
   if (Object.keys(value).some((key) => !allowedPairing.has(key))) return false;
-  if (
-    typeof pairing.room !== "string" ||
-    !PAIRING_ROOM_PATTERN.test(pairing.room) ||
-    typeof pairing.fp !== "string" ||
-    pairing.fp !== normalizeFingerprint(pairing.fp) ||
-    !/^[0-9A-F]{64}$/.test(pairing.fp) ||
-    typeof pairing.sig !== "string"
-  ) {
+  try {
+    assertIrohReach(pairing as IrohReach);
+  } catch {
     return false;
   }
-  const signaling = parseSignalingEndpoint(pairing.sig);
-  return (
-    signaling.kind === "ok" &&
-    signaling.url === pairing.sig &&
-    pairing.v === PAIRING_PROTOCOL_VERSION &&
-    (pairing.ice === "all" || pairing.ice === "relay")
-  );
+  return true;
 }
 
 function isEntries(value: unknown): value is DeviceCredentialEntries {
@@ -157,7 +145,7 @@ export function parseDeviceCredentialDocument(value: unknown): DeviceCredentialD
   const current = record["currentRemoteServerId"];
   if (
     current !== undefined &&
-    (typeof current !== "string" || record["entries"][current]?.transport !== "webrtc")
+    (typeof current !== "string" || record["entries"][current]?.transport !== "iroh")
   ) {
     return null;
   }
@@ -178,10 +166,10 @@ export function selectCurrentRemote(
   const pinned = document.currentRemoteServerId
     ? document.entries[document.currentRemoteServerId]
     : undefined;
-  if (pinned?.transport === "webrtc") return pinned;
+  if (pinned?.transport === "iroh") return pinned;
   return (
     Object.values(document.entries)
-      .filter((entry): entry is StoredRemote => entry.transport === "webrtc")
+      .filter((entry): entry is StoredRemote => entry.transport === "iroh")
       .sort((a, b) => entryTimestamp(b) - entryTimestamp(a))[0] ?? null
   );
 }
@@ -282,7 +270,7 @@ export function preflightDeviceCredentialStoreForPairing(): void {
   getStore().preflightPairing();
 }
 
-/** The CURRENT remote pairing (the active WebRTC server), if any. */
+/** The current remote pairing, if any. */
 export function loadStoredRemotePairing(): StoredRemote | null {
   return selectCurrentRemote(getStore().load());
 }
@@ -290,7 +278,7 @@ export function loadStoredRemotePairing(): StoredRemote | null {
 export function saveDeviceCredential(entry: DeviceCredentialEntry): void {
   const document = getStore().load() ?? { entries: {} };
   document.entries[entry.serverId] = entry;
-  if (entry.transport === "webrtc") document.currentRemoteServerId = entry.serverId;
+  if (entry.transport === "iroh") document.currentRemoteServerId = entry.serverId;
   getStore().save(document);
 }
 

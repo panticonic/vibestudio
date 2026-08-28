@@ -39,7 +39,7 @@ import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
-import { retireRoutedReach } from "./routedReachRetirement.js";
+import { retireAuthenticatedCallers } from "./authenticatedCallerRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
 import { canonicalWorkspaceObjectContextId } from "./bootstrap/workspaceObjectIdentity.js";
@@ -445,10 +445,14 @@ async function main() {
     workspaceChildToken,
     adminToken: childAdminToken,
   } = consumeWorkspaceChildSecrets(process.env);
-  const workspaceIdentityPemFile = process.env["VIBESTUDIO_WEBRTC_IDENTITY"];
-  if (!workspaceIdentityPemFile) {
-    throw new Error("Workspace runtime requires a hub-owned WebRTC identity path");
+  const workspaceIrohIdentityFile = process.env["VIBESTUDIO_IROH_IDENTITY"];
+  if (!workspaceIrohIdentityFile) {
+    throw new Error("Workspace runtime requires a hub-owned Iroh identity path");
   }
+  const callbackRelayIdentityPemFile = path.join(
+    path.dirname(workspaceIrohIdentityFile),
+    "callback-relay-identity.pem"
+  );
 
   const wsDir = args.workspaceDir ?? process.env["VIBESTUDIO_WORKSPACE_DIR"];
   const wsName = args.workspaceName ?? process.env["VIBESTUDIO_WORKSPACE"];
@@ -3255,9 +3259,12 @@ async function main() {
   // Inert until start(); returns null when no relay is configured. Created
   // before the credential/webhook services so its client can be their
   // registrar, with handlers that close over the refs assigned below. ──
-  const { startRelayBackhaul, getRelayOrigin } = await import("./services/relayBackhaulClient.js");
-  const { ensurePersistentCert: ensureRelayIdentity } = await import("../node/webrtc/cert.js");
-  ensureRelayIdentity({ identityPemFile: workspaceIdentityPemFile });
+  const {
+    startRelayBackhaul,
+    getRelayOrigin,
+    ensureRelayBackhaulIdentity: ensureRelayIdentity,
+  } = await import("./services/relayBackhaulClient.js");
+  ensureRelayIdentity(callbackRelayIdentityPemFile);
   // Holder (not bare `let`s) so the backhaul handler closures can read the
   // service refs without TypeScript narrowing them to null across the closure
   // boundary; both are filled once the container builds the services.
@@ -3280,7 +3287,7 @@ async function main() {
     } | null;
   } = { credential: null, webhook: null };
   const relayBackhaul = startRelayBackhaul({
-    identityPemFile: workspaceIdentityPemFile,
+    identityPemFile: callbackRelayIdentityPemFile,
     onWebhook: async (frame) => {
       if (!relayServices.webhook) {
         return { ok: false, permanent: false, reason: "webhook ingress not ready" };
@@ -4468,26 +4475,8 @@ async function main() {
   // Child ingress is armed exclusively by authenticated hub control requests.
   // Exact transport ownership is injected from the advertised workspace's
   // hub-owned reach tree, outside resettable semantic/runtime state.
-  let webrtcPairing: Omit<import("@vibestudio/shared/connect").ReconnectReach, "room"> | null =
-    null;
-  let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
-  const { RoutedRoomStore, replaceRoutedRoom, routedRoomKey } =
-    await import("./hostCore/routedRoomStore.js");
-  const routedRoomStatePath = process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"];
-  if (!routedRoomStatePath) {
-    throw new Error("Workspace runtime requires a hub-owned routed-room state path");
-  }
-  const routedRoomStore = new RoutedRoomStore(routedRoomStatePath);
-  for (const route of routedRoomStore.list()) {
-    const key = routedRoomKey(route);
-    const userId = deviceAuthStore.userFor(route.deviceId);
-    const keep = !!userId && membershipStore.has(userId, entryWorkspaceId);
-    if (!keep) routedRoomStore.remove(key);
-  }
-  const disarmRoutedRoom = async (key: string): Promise<void> => {
-    const persisted = routedRoomStore.remove(key);
-    if (persisted && webrtcIngress) await webrtcIngress.disarmRoom(persisted.room);
-  };
+  let irohReach: import("@vibestudio/iroh-transport").IrohReach | null = null;
+  let irohIngress: import("./irohIngress.js").IrohIngress | null = null;
   function getResolvedGatewayPort(context: string): number {
     if (!gatewayPortResolved) {
       throw new Error(`Gateway port not finalized before ${context}`);
@@ -4495,7 +4484,7 @@ async function main() {
     return gatewayPortResolved;
   }
   // Public TLS ingress is decommissioned — the gateway is loopback HTTP only.
-  // Remote reach is the WebRTC pipe (DTLS-encrypted); there is no public URL.
+  // Remote reach is the endpoint-authenticated Iroh pipe; there is no public URL.
   function gatewayProtocol(): "http" {
     return "http";
   }
@@ -4507,7 +4496,7 @@ async function main() {
   }
   // Single advertised loopback origin for auth connection info and native React
   // Native bundle bootstrap. (The public/QR pairing origin is gone — pairing is
-  // the WebRTC room+fp link minted by the answerer; see the seam below.)
+  // the compact endpoint reach minted by the ingress; see the seam below.)
   function getConnectUrl(context: string): string {
     return getExternalGatewayUrl(context);
   }
@@ -4983,6 +4972,55 @@ async function main() {
       await instance?.server?.stop();
     },
   });
+  container.registerManaged({
+    name: "irohIngress",
+    dependencies: ["rpcServer"],
+    async start(resolve) {
+      const rpc = assertPresent(
+        resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+      ).server;
+      try {
+        const { createNodeEndpointBinding, loadOrCreateNodeEndpointSecret } =
+          await import("@vibestudio/iroh-transport/node");
+        const { IROH_REACH_VERSION } = await import("@vibestudio/iroh-transport");
+        const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
+        const { startIrohIngress } = await import("./irohIngress.js");
+        const relayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+        const secretKey = loadOrCreateNodeEndpointSecret(workspaceIrohIdentityFile);
+        const ingress = startIrohIngress({
+          binding: createNodeEndpointBinding({ secretKey, relayUrls }),
+          admitPeer: (endpointId) => {
+            const device = identityDb.getDeviceForEndpoint(endpointId);
+            return !!device && membershipStore.has(device.userId, entryWorkspaceId);
+          },
+          attach: (connection) => rpc.attachIrohConnection(connection),
+          waitUntilOnline: (endpoint) => endpoint.native.online(),
+          log: (message) => console.warn(`[iroh-workspace] ${message}`),
+        });
+        await ingress.ready;
+        irohIngress = ingress;
+        irohReach = {
+          endpointId: ingress.endpointId,
+          relays: relayUrls,
+          v: IROH_REACH_VERSION,
+        };
+        return ingress;
+      } catch (error) {
+        throw new Error(
+          `[iroh-ingress] failed to start; refusing loopback-only startup: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    },
+    async stop(ingress: import("./irohIngress.js").IrohIngress) {
+      await ingress.stop();
+      if (irohIngress === ingress) {
+        irohIngress = null;
+        irohReach = null;
+      }
+    },
+  });
   {
     const { createPhoneNativeEndpointService } =
       await import("./services/phoneNativeEndpointService.js");
@@ -5015,18 +5053,13 @@ async function main() {
   // Revocation invalidates identity immediately, while RpcServer keeps only an
   // already-running request alive long enough to queue its response. Routed
   // reach can then be removed at that exact transport retirement boundary.
-  const retireWorkspaceReach = (
-    callerIds: readonly string[],
-    routeKeys: readonly string[]
-  ): Promise<void> =>
-    retireRoutedReach(
+  const retireWorkspaceCallers = (callerIds: readonly string[]): Promise<void> =>
+    retireAuthenticatedCallers(
       {
         tokenManager,
         rpcServer: assertPresent(rpcServerForGateway),
-        disarmRoute: disarmRoutedRoom,
       },
-      callerIds,
-      routeKeys
+      callerIds
     );
   const observeReachRetirement = (retirement: Promise<void>): void => {
     void retirement.catch((error) => {
@@ -5148,10 +5181,6 @@ async function main() {
         if (!pushForRevocation) throw new Error("Push service is not started");
         const removedPushRegistrations = pushForRevocation.unregisterUser(userId);
 
-        const routeKeys = routedRoomStore
-          .list()
-          .filter((route) => identityDb.getDevice(route.deviceId)?.userId === userId)
-          .map(routedRoomKey);
         const { RevokedUserCleanupResultSchema } =
           await import("@vibestudio/identity/revocationCleanup");
         respond(
@@ -5167,10 +5196,7 @@ async function main() {
           })
         );
         observeReachRetirement(
-          retireWorkspaceReach(
-            connections.map((connection) => connection.caller.runtime.id),
-            routeKeys
-          )
+          retireWorkspaceCallers(connections.map((connection) => connection.caller.runtime.id))
         );
       },
     },
@@ -5213,25 +5239,11 @@ async function main() {
             respond(403, { error: "Device owner is not a workspace member", code: "EACCES" });
             return;
           }
-          if (!webrtcIngress || !webrtcPairing) {
-            respond(503, { error: "Workspace WebRTC ingress is not ready", code: "NOT_READY" });
+          if (!irohIngress || !irohReach) {
+            respond(503, { error: "Workspace Iroh ingress is not ready", code: "NOT_READY" });
             return;
           }
-          const key = `device:${deviceId}`;
-          const existing = routedRoomStore.get(key);
-          if (existing) {
-            await webrtcIngress.armRoom(existing.room, { deviceId: existing.deviceId });
-            respond(200, { room: existing.room, ...webrtcPairing });
-            return;
-          }
-          const room = randomUUID();
-          const route: import("./hostCore/routedRoomStore.js").RoutedRoomRecord = {
-            kind: "device",
-            deviceId,
-            room,
-          };
-          await replaceRoutedRoom(routedRoomStore, route, webrtcIngress);
-          respond(200, { room, ...webrtcPairing });
+          respond(200, irohReach);
         } catch (error) {
           respond(400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -5258,7 +5270,7 @@ async function main() {
         }
         const callerId = `shell:${deviceId}`;
         const connections = rpcServerForGateway.getPrincipalConnections(callerId);
-        const retirement = retireWorkspaceReach([callerId], [`device:${deviceId}`]);
+        const retirement = retireWorkspaceCallers([callerId]);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ closed: connections.length }));
         observeReachRetirement(retirement);
@@ -5287,13 +5299,8 @@ async function main() {
           return;
         }
         const connections = rpcServerForGateway.getUserConnections(userId);
-        const routeKeys = routedRoomStore
-          .list()
-          .filter((route) => identityDb.getDevice(route.deviceId)?.userId === userId)
-          .map(routedRoomKey);
-        const retirement = retireWorkspaceReach(
-          connections.map((connection) => connection.caller.runtime.id),
-          routeKeys
+        const retirement = retireWorkspaceCallers(
+          connections.map((connection) => connection.caller.runtime.id)
         );
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ closed: connections.length }));
@@ -6425,9 +6432,8 @@ async function main() {
     );
   }
 
-  // Static WebRTC reach material (fp/sig/ice — no room) is populated after
-  // the ingress starts. The hub combines it with each ephemeral routed room;
-  // identity rows and the child auth service never own transport coordinates.
+  // The durable Iroh reach is populated after ingress starts. Identity rows
+  // and the child auth service never own transport coordinates.
 
   // ── Per-workspace content-addressable blobstore ──
   {
@@ -6545,28 +6551,18 @@ async function main() {
         uptimeMs: Date.now() - startedAt,
         workerd: workerdManagerForGateway?.getPort() ? "running" : "stopped",
         tokenSource,
-        // Relay-alarm landing spot (plan §2.1/§9.8): per-room pipe state incl.
-        // the selected ICE path, plus the pool's connect/relay counters. Null
-        // when WebRTC ingress is off (loopback co-located mode).
-        webrtc: webrtcIngress
-          ? { rooms: webrtcIngress.status(), stats: webrtcIngress.stats() }
-          : null,
+        // Remote transport health. Null for loopback-only co-located mode.
+        iroh: irohReach,
       };
     },
   });
   const gatewayPort = await gateway.start(requestedGatewayPort ?? 0);
   gatewayPortResolved = gatewayPort;
 
-  // ── Remote ingress: WebRTC pipe ──
-  // The public TLS endpoint, public-URL advertisement, and Tailscale/VPN
-  // auto-provisioning are decommissioned. Remote clients no longer dial an HTTPS
-  // origin; they pair by QR (signaling room + DTLS fingerprint) and the server
-  // accepts ONE peer-to-peer WebRTC pipe. The loopback HTTP gateway above is the
-  // only socket (co-located mode stays on loopback WS).
-  //
-  // The answerer is started AFTER `container.startAll()` below — it needs the
-  // live `rpcServerForGateway`, which only exists once the RpcServer service has
-  // started. (Starting it here would no-op silently: rpcServerForGateway is null.)
+  // ── Remote ingress: Iroh endpoint ──
+  // Remote clients authenticate the expected Endpoint ID and use Iroh's direct
+  // path discovery with explicit HTTPS relay fallback. The HTTP gateway remains
+  // loopback-only for co-located clients.
 
   // ── Workerd inspector bridge + service (userland profiling of workers/DOs) ──
   {
@@ -6677,58 +6673,6 @@ async function main() {
   await relayServices.webhook?.internal
     .reannounceRelaySubscriptions()
     .catch((err: unknown) => console.warn("[Server] relay subscription re-announce failed:", err));
-
-  // ── WebRTC ingress pool (now that rpcServerForGateway is live) ──
-  // The child presents a persistent DTLS certificate (stable `fp`) and starts
-  // with no rooms. Authenticated hub routing arms ephemeral answerer pipes.
-  const { resolveSignalingUrl } = await import("@vibestudio/shared/connect");
-  const webrtcSignalUrl = resolveSignalingUrl({ env: process.env }).url;
-  if (rpcServerForGateway) {
-    try {
-      const { startWebRtcIngress } = await import("./webrtcIngress.js");
-      const { ensurePersistentCert } = await import("../node/webrtc/cert.js");
-      const { assertNodeDatachannelAvailable } =
-        await import("../node/webrtc/nodeDatachannelPeer.js");
-      assertNodeDatachannelAvailable();
-      const cert = ensurePersistentCert({
-        identityPemFile: workspaceIdentityPemFile,
-      });
-      const iceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
-        process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
-      const serverIceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
-        process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "relay"
-          ? "relay"
-          : process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "all"
-            ? "all"
-            : iceTransportPolicy;
-      const ingress = startWebRtcIngress({
-        rpcServer: rpcServerForGateway,
-        signalUrl: webrtcSignalUrl,
-        certificatePemFile: cert.certificatePemFile,
-        keyPemFile: cert.keyPemFile,
-        iceTransportPolicy: serverIceTransportPolicy,
-      });
-      webrtcIngress = ingress;
-      for (const route of routedRoomStore.list()) {
-        await ingress.armRoom(route.room, { deviceId: route.deviceId });
-      }
-      // Expose static reach material to the hub through the ready file and the
-      // authenticated internal routing endpoint. Device ownership is durable;
-      // the ingress pipe is reconstructed from that route after restart.
-      webrtcPairing = {
-        fp: cert.fingerprint,
-        sig: webrtcSignalUrl,
-        v: (await import("@vibestudio/shared/connect")).PAIRING_PROTOCOL_VERSION,
-        ice: iceTransportPolicy,
-      };
-    } catch (error) {
-      throw new Error(
-        `[webrtc-ingress] failed to start; refusing loopback-only startup: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
 
   const workerdManager =
     container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
@@ -7224,8 +7168,7 @@ async function main() {
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
         adminToken,
-        // Static child ingress seam. Rooms are armed on demand by the hub.
-        pairing: webrtcPairing,
+        pairing: irohReach,
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
         tokenFilePath,
@@ -7276,14 +7219,14 @@ async function main() {
       .stop()
       .catch((err) => console.warn("[Server] relay backhaul stop failed:", err));
 
-    // Close the WebRTC ingress pool (started outside the service container, so
-    // stopAll() never touches it) — remote clients get a clean close instead of
-    // an abrupt ICE drop.
-    if (webrtcIngress) {
-      await webrtcIngress
-        .close()
-        .catch((err) => console.warn("[Server] WebRTC ingress close failed:", err));
-      webrtcIngress = null;
+    // Stop admitting remote work before quiescing application services. The
+    // service-container stop is idempotent and remains the startup-failure
+    // cleanup owner.
+    if (irohIngress) {
+      await irohIngress
+        .stop()
+        .catch((err) => console.warn("[Server] Iroh ingress close failed:", err));
+      irohIngress = null;
     }
 
     // Close the shared eval admission before tearing down its host-held

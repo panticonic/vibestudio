@@ -20,10 +20,11 @@ import type {
   OAuthCallbackMode,
   PairingContext,
 } from "@vibestudio/rpc/protocol/wsProtocol";
-import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/sessionNegotiation";
+import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/remoteSession";
 import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { authMethods } from "@vibestudio/service-schemas/auth";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
@@ -74,8 +75,8 @@ export interface PanelSession {
    */
   isClosed?(): boolean;
   /**
-   * First-class duplex stream with a §1.6 streaming request body. WebRTC uses
-   * its bulk channel; loopback WebSocket uses ordered, ack-gated body frames.
+   * First-class duplex stream with a streaming request body. Iroh uses a
+   * native QUIC stream; loopback WebSocket uses ordered, ack-gated body frames.
    */
   streamReadable?(
     envelope: RpcEnvelope,
@@ -127,11 +128,9 @@ export interface ServerClient {
    */
   openPanelSession(runtimeEntityId: string, connectionId: string): Promise<PanelSession>;
   /**
-   * Stream a backend service method's `Response` over the pipe's bulk channel
-   * (chunked) — for large/streamed bodies (e.g. `gateway.fetch` panel assets)
-   * that exceed the control-channel message-size limit. `options.body` streams
-   * a REQUEST body on the session's native transport (WebRTC bulk or ordered
-   * loopback WebSocket upload frames).
+   * Stream a backend service method's `Response` on the session's native
+   * transport. Remote Iroh sessions use one QUIC stream per request; loopback
+   * WebSocket sessions use ordered, acknowledged upload frames.
    */
   stream(
     service: string,
@@ -157,17 +156,15 @@ export interface ServerClient {
   /** Current connection status */
   getConnectionStatus(): ConnectionStatus;
   /**
-   * Last selected ICE candidate-pair type of the pipe (`'relay'` = TURN
-   * engaged, `null` while unsettled/down). Additive observability the WebRTC
-   * client (webrtcServerClient.ts) implements so the shell can seed a "relayed"
-   * hint on a fresh badge mount; the loopback WS client omits it (optional).
+   * Current Iroh path diagnostics. The loopback client returns `null` because
+   * no remote network path exists.
    */
-  candidateType?(): "host" | "srflx" | "prflx" | "relay" | null;
+  transportDiagnostics(): RemoteTransportDiagnostics | null;
   /**
    * Liveness nudge (transport-level): probe a possibly-dead pipe so a stale
    * "connected" is torn down promptly instead of lingering (~45s) after a
    * sleep/wake or network change. Present only on transports that can probe
-   * (the WebRTC pipe); the loopback WS client omits it (loopback never sleeps
+   * (the Iroh pipe); the loopback WS client omits it (loopback never sleeps
    * out from under us the same way). Never forces a teardown on its own — a
    * healthy pipe answers the probe and stays up.
    */
@@ -185,7 +182,7 @@ export interface ServerClientOptions {
    * Dynamic WebSocket URL provider, consulted before each connect/reconnect.
    * Used by local mode to follow the child server's port across restarts; when
    * omitted the client dials the fixed loopback gateway. There is no remote
-   * `wsUrl`/TLS option — remote topology is WebRTC (DTLS), never a direct wss.
+   * `wsUrl`/TLS option — remote topology is Iroh QUIC, never a direct wss.
    */
   getWsUrl?: () => string;
   /** Called when the connection is permanently lost after explicit non-reconnect close. */
@@ -202,7 +199,7 @@ export interface ServerClientOptions {
    * Fired once when the main session paired a fresh device (a one-time pairing
    * code was redeemed): the durable device credential to persist so reconnects
    * can authenticate with `refresh:<deviceId>:<refreshToken>` instead of
-   * re-pairing. Mirrors the WebRTC client's `onPaired` (webrtcServerClient.ts).
+   * re-pairing.
    */
   onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
 }
@@ -462,6 +459,9 @@ export async function createServerClient(
     },
     getConnectionStatus(): ConnectionStatus {
       return transport.status?.() ?? "disconnected";
+    },
+    transportDiagnostics(): null {
+      return null;
     },
     async close(): Promise<void> {
       await Promise.allSettled(

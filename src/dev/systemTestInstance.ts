@@ -17,6 +17,10 @@ import {
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
+export const SYSTEM_TEST_IROH_RELAYS = [
+  "https://use1-1.relay.n0.iroh.link/",
+  "https://euc1-1.relay.n0.iroh.link/",
+] as const;
 // Cold managed workspaces may need to seal npm-backed runtime dependencies
 // before they can publish semantic readiness. Keep the outer self-provisioner
 // on the same finite budget as the child supervisor; a shorter competing
@@ -37,6 +41,17 @@ type ManagedMarker = {
   generationId: string;
   repoDigest: string;
 };
+
+export function systemTestInstanceEnvironment(
+  base: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  return {
+    ...base,
+    // Managed tests own their network topology. Phase 0 deliberately uses
+    // Iroh's public relays until Vibestudio's production relay fleet exists.
+    VIBESTUDIO_IROH_RELAYS: SYSTEM_TEST_IROH_RELAYS.join(","),
+  };
+}
 
 export type EnsuredSystemTestInstance = {
   instance: DevInstanceRecord;
@@ -222,7 +237,7 @@ function spawnManagedInstance(
       ],
       {
         cwd: repoRoot,
-        env: process.env,
+        env: systemTestInstanceEnvironment(),
         detached: true,
         stdio: ["ignore", output, output],
       }

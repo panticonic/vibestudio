@@ -36,13 +36,13 @@
       "types": "./dist/protocol/recoveryCoordinator.d.ts",
       "default": "./dist/protocol/recoveryCoordinator.js"
     },
+    "./protocol/remoteSession": {
+      "types": "./dist/protocol/remoteSession.d.ts",
+      "default": "./dist/protocol/remoteSession.js"
+    },
     "./protocol/streamCodec": {
       "types": "./dist/protocol/streamCodec.d.ts",
       "default": "./dist/protocol/streamCodec.js"
-    },
-    "./protocol/bulkMux": {
-      "types": "./dist/protocol/bulkMux.d.ts",
-      "default": "./dist/protocol/bulkMux.js"
     },
     "./protocol/closeCodes": {
       "types": "./dist/protocol/closeCodes.d.ts",
@@ -52,9 +52,13 @@
       "types": "./dist/protocol/contractVersion.d.ts",
       "default": "./dist/protocol/contractVersion.js"
     },
-    "./protocol/sessionNegotiation": {
-      "types": "./dist/protocol/sessionNegotiation.d.ts",
-      "default": "./dist/protocol/sessionNegotiation.js"
+    "./protocol/irohSession": {
+      "types": "./dist/protocol/irohSession.d.ts",
+      "default": "./dist/protocol/irohSession.js"
+    },
+    "./protocol/irohStreamResponse": {
+      "types": "./dist/protocol/irohStreamResponse.d.ts",
+      "default": "./dist/protocol/irohStreamResponse.js"
     },
     "./transports/inProcess": {
       "types": "./dist/transports/inProcess.d.ts",
@@ -72,29 +76,13 @@
       "types": "./dist/transports/httpClient.d.ts",
       "default": "./dist/transports/httpClient.js"
     },
-    "./transports/webrtcClient": {
-      "types": "./dist/transports/webrtcClient.d.ts",
-      "default": "./dist/transports/webrtcClient.js"
+    "./transports/irohClient": {
+      "types": "./dist/transports/irohClient.d.ts",
+      "default": "./dist/transports/irohClient.js"
     },
-    "./transports/pairedConnection": {
-      "types": "./dist/transports/pairedConnection.d.ts",
-      "default": "./dist/transports/pairedConnection.js"
-    },
-    "./transports/webrtcAnswerer": {
-      "types": "./dist/transports/webrtcAnswerer.d.ts",
-      "default": "./dist/transports/webrtcAnswerer.js"
-    },
-    "./transports/webrtcPeer": {
-      "types": "./dist/transports/webrtcPeer.d.ts",
-      "default": "./dist/transports/webrtcPeer.js"
-    },
-    "./transports/webrtcSignaling": {
-      "types": "./dist/transports/webrtcSignaling.d.ts",
-      "default": "./dist/transports/webrtcSignaling.js"
-    },
-    "./transports/webrtcSignalingClient": {
-      "types": "./dist/transports/webrtcSignalingClient.d.ts",
-      "default": "./dist/transports/webrtcSignalingClient.js"
+    "./transports/reconnectingIrohClient": {
+      "types": "./dist/transports/reconnectingIrohClient.d.ts",
+      "default": "./dist/transports/reconnectingIrohClient.js"
     }
   },
   "files": [
@@ -107,5 +95,8 @@
   },
   "devDependencies": {
     "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@vibestudio/iroh-transport": "workspace:*"
   }
 }

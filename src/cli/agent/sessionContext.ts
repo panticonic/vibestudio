@@ -104,7 +104,7 @@ function requireWorkspaceCredential(): NonNullable<ReturnType<typeof loadCliCred
  * Tier 3 — cwd-upward context binding, dispatched over the canonical CLI
  * credential. The binding is accepted only when its durable workspace id
  * matches the selected credential. Reachability always comes from that
- * credential's current WebRTC/hub route.
+ * credential's current Iroh/hub route.
  */
 function resolveBindingScope(
   binding: ContextBinding,

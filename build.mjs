@@ -165,7 +165,7 @@ const serverElectronConfig = {
     "electron",
     "esbuild",
     "esbuild-svelte",
-    "node-datachannel",
+    "@number0/iroh",
     // Resolves its platform binary relative to the installed package through
     // import.meta.url. Bundling that ESM module into this CJS artifact erases
     // the URL and makes every workspace child fail during module evaluation.
@@ -407,7 +407,7 @@ const clientConfig = {
   target: "node20",
   format: "esm",
   outfile: "dist/cli/client.mjs",
-  external: ["ws", "node-datachannel"],
+  external: ["ws", "@number0/iroh"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
@@ -423,7 +423,7 @@ const mainConfig = {
   target: "node20",
   format: "cjs",
   outfile: "dist/main.cjs",
-  external: ["electron", "esbuild", "node-datachannel"],
+  external: ["electron", "esbuild", "@number0/iroh"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,

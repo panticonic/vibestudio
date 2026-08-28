@@ -5,8 +5,11 @@ import {
   isCliCredentials,
   isCliStoredPairing,
   type CliAgentCredentials,
+  type CliIrohAgentCredentials,
   type CliCredentials,
   type CliDeviceCredentials,
+  type CliIrohDeviceCredentials,
+  type CliLocalDeviceCredentials,
   type CliStoredPairing,
 } from "@vibestudio/shared/cliCredentials";
 import { writeFileAtomicSync } from "../atomicFile.js";
@@ -15,8 +18,11 @@ import { cliCredentialPath } from "./configPaths.js";
 export {
   canonicalStoredPairing,
   type CliAgentCredentials,
+  type CliIrohAgentCredentials,
   type CliCredentials,
   type CliDeviceCredentials,
+  type CliIrohDeviceCredentials,
+  type CliLocalDeviceCredentials,
   type CliStoredPairing,
 };
 
@@ -108,7 +114,7 @@ export function clearCliCredentials(): void {
   if (fs.existsSync(p)) fs.unlinkSync(p);
 }
 
-export function isWebRtcCredential<T extends { workspacePairing?: unknown }>(
+export function isIrohCredential<T extends { workspacePairing?: unknown }>(
   creds: T | null | undefined
 ): creds is T & { workspacePairing: CliStoredPairing } {
   return !!creds?.workspacePairing && isCliStoredPairing(creds.workspacePairing);

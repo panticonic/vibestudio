@@ -605,7 +605,7 @@ export class EgressProxy {
       method: string;
       headers?: Record<string, string>;
       /**
-       * `ReadableStream` = a streamed upload from the WebRTC pipe (plan §1.6).
+       * `ReadableStream` = a streamed upload from the Iroh pipe (plan §1.6).
        * Streams are single-shot, which is compatible with this path's
        * no-retries contract (`maxRetries: 0` below).
        */

@@ -55,7 +55,6 @@ const EXACT_PIN_EXCEPTIONS = new Map([
     "react-native-screens",
     "react-native-svg",
     "react-native-tcp-socket",
-    "react-native-webrtc",
     "react-native-webview",
   ].map((name) => [
     `apps/mobile/package.json:dependencies:${name}`,

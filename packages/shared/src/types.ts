@@ -146,12 +146,16 @@ export interface AppInfo {
   remoteHost?: string;
   /** Current connection status */
   connectionStatus: "connected" | "connecting" | "disconnected";
-  /**
-   * Selected ICE path of a remote (WebRTC) pipe: host/srflx/prflx = direct P2P,
-   * relay = TURN, null = unknown/local. Lets a fresh badge mount reflect a
-   * stable relay session without waiting for the next connection transition.
-   */
-  connectionCandidateType?: "host" | "srflx" | "prflx" | "relay" | null;
+  /** Current Iroh network path; null for local or not-yet-established sessions. */
+  remoteTransport?: RemoteTransportDiagnostics | null;
+}
+
+export interface RemoteTransportDiagnostics {
+  path: "direct" | "relay";
+  rttMs?: number;
+  remoteAddress?: string;
+  relayUrl?: string;
+  endpointGeneration?: number;
 }
 
 export interface PanelInfo {

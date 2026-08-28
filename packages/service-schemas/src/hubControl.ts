@@ -2,13 +2,11 @@
 
 import { z } from "zod";
 import {
-  normalizeFingerprint,
+  assertIrohReach,
+  IROH_REACH_VERSION,
   PAIRING_CODE_PATTERN,
-  PAIRING_PROTOCOL_VERSION,
-  PAIRING_ROOM_PATTERN,
   parseConnectLink,
-  parseSignalingEndpoint,
-} from "@vibestudio/shared/connect";
+} from "@vibestudio/iroh-transport";
 import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { RevokedUserCleanupResultSchema } from "@vibestudio/identity/revocationCleanup";
@@ -32,17 +30,21 @@ export type HubWorkspaceEntry = z.infer<typeof HubWorkspaceEntrySchema>;
 
 export const HubReachSchema = z
   .object({
-    room: z.string().regex(PAIRING_ROOM_PATTERN),
-    fp: z.string().refine((value) => /^[0-9A-F]{64}$/.test(normalizeFingerprint(value)), {
-      message: "Expected a SHA-256 DTLS fingerprint",
-    }),
-    sig: z.string().refine((value) => parseSignalingEndpoint(value).kind === "ok", {
-      message: "Expected a secure signaling URL or a cleartext loopback URL",
-    }),
-    v: z.literal(PAIRING_PROTOCOL_VERSION),
-    ice: z.enum(["all", "relay"]),
+    endpointId: z.string().regex(/^[0-9a-f]{64}$/),
+    relays: z.array(z.string()).min(1).max(8),
+    v: z.literal(IROH_REACH_VERSION),
   })
-  .strict();
+  .strict()
+  .superRefine((reach, ctx) => {
+    try {
+      assertIrohReach(reach);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 
 export const HubWorkspaceRouteSchema = z
   .object({
@@ -58,15 +60,9 @@ export const HubWorkspaceRouteSchema = z
 
 export const HubPairingInviteSchema = z
   .object({
-    room: z.string().regex(PAIRING_ROOM_PATTERN),
-    fp: z.string().refine((value) => /^[0-9A-F]{64}$/.test(normalizeFingerprint(value)), {
-      message: "Expected a SHA-256 DTLS fingerprint",
-    }),
-    sig: z.string().refine((value) => parseSignalingEndpoint(value).kind === "ok", {
-      message: "Expected a secure signaling URL or a cleartext loopback URL",
-    }),
-    v: z.literal(PAIRING_PROTOCOL_VERSION),
-    ice: z.enum(["all", "relay"]),
+    endpointId: z.string().regex(/^[0-9a-f]{64}$/),
+    relays: z.array(z.string()).min(1).max(8),
+    v: z.literal(IROH_REACH_VERSION),
     code: z.string().regex(PAIRING_CODE_PATTERN),
     exp: z.number().int().positive(),
     deepLink: z.string().startsWith("vibestudio://connect/"),
@@ -87,15 +83,11 @@ export const HubPairingInviteSchema = z
         ctx.addIssue({ code: "custom", path: [field], message: parsed.reason });
         continue;
       }
-      const signaling = parseSignalingEndpoint(invite.sig);
       const matches =
-        parsed.room === invite.room &&
-        normalizeFingerprint(parsed.fp) === normalizeFingerprint(invite.fp) &&
+        parsed.endpointId === invite.endpointId &&
+        JSON.stringify(parsed.relays) === JSON.stringify(invite.relays) &&
         parsed.code === invite.code &&
-        signaling.kind === "ok" &&
-        parsed.sig === signaling.url &&
         parsed.v === invite.v &&
-        parsed.ice === invite.ice &&
         parsed.exp === invite.expiresAt;
       if (!matches) {
         ctx.addIssue({

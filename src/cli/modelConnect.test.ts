@@ -4,16 +4,18 @@ import type { DeviceCredential } from "./rpcClient.js";
 import { connectModelProvider, type ModelConnectDependencies } from "./modelConnect.js";
 
 const CREDENTIALS = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   kind: "device",
-  url: "webrtc://workspace-room/_workspace/dev",
+  url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "ws_dev",
   workspaceName: "dev",
   serverId: `srv_${"S".repeat(24)}`,
   deviceId: `dev_${"D".repeat(24)}`,
   refreshToken: "R".repeat(43),
-  controlPairing: pairing("control-room"),
-  workspacePairing: pairing("workspace-room"),
+  transport: "iroh",
+  endpointSecret: "E".repeat(43),
+  controlPairing: pairing("aa"),
+  workspacePairing: pairing("bb"),
   pairedAt: 1,
 } satisfies DeviceCredential;
 
@@ -180,13 +182,11 @@ describe("connectModelProvider", () => {
   });
 });
 
-function pairing(room: string) {
+function pairing(byte: string) {
   return {
-    room,
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example.test",
-    v: 3 as const,
-    ice: "all" as const,
+    endpointId: byte.repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4 as const,
   };
 }
 

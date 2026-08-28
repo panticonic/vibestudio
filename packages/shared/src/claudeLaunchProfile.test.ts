@@ -20,12 +20,11 @@ const AGENT_ID = `agt_${"a".repeat(24)}`;
 const AGENT_TOKEN = `agent:${AGENT_ID}:${"s".repeat(43)}`;
 const SERVER_ID = `srv_${"s".repeat(24)}`;
 const PAIRING = {
-  room: "local-pairing",
-  fp: "AA".repeat(32),
-  sig: "wss://signal.example/",
-  v: 3 as const,
-  ice: "all" as const,
+  endpointId: "aa".repeat(32),
+  relays: ["https://relay.example/"],
+  v: 4 as const,
 };
+const ENDPOINT_SECRET = "E".repeat(43);
 
 function directRoute(url: string) {
   return {
@@ -33,6 +32,7 @@ function directRoute(url: string) {
     serverId: SERVER_ID,
     workspaceId: "workspace-dev",
     workspaceName: "dev",
+    transport: "local" as const,
   };
 }
 
@@ -86,7 +86,9 @@ describe("ClaudeLaunchProfile", () => {
       profile: profile(),
       profilesRoot,
       cliRoute: {
-        ...directRoute("webrtc://local-pairing/_workspace/dev"),
+        ...directRoute(`iroh://${PAIRING.endpointId}/_workspace/dev`),
+        transport: "iroh",
+        endpointSecret: ENDPOINT_SECRET,
         workspacePairing: PAIRING,
       },
       hostClaudeConfigDirectory: path.join(root, "missing-host-config"),
@@ -132,9 +134,9 @@ describe("ClaudeLaunchProfile", () => {
     expect((await stat(path.join(launch.profileDir, "env.json"))).mode & 0o777).toBe(0o600);
     expect((await stat(launch.cliCredentialPath)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(launch.cliCredentialPath, "utf8"))).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "agent",
-      url: "webrtc://local-pairing/_workspace/dev",
+      url: `iroh://${PAIRING.endpointId}/_workspace/dev`,
       workspaceId: "workspace-dev",
       workspaceName: "dev",
       serverId: SERVER_ID,
@@ -142,12 +144,14 @@ describe("ClaudeLaunchProfile", () => {
       contextId: "context-one",
       agentId: AGENT_ID,
       agentToken: AGENT_TOKEN,
+      transport: "iroh",
+      endpointSecret: ENDPOINT_SECRET,
       workspacePairing: PAIRING,
       signedInAt: expect.any(Number),
     });
     const diagnostic = await readFile(path.join(launch.profileDir, "env.json"), "utf8");
     expect(diagnostic).not.toContain(AGENT_TOKEN);
-    expect(diagnostic).not.toContain("webrtc://local-pairing");
+    expect(diagnostic).not.toContain(`iroh://${PAIRING.endpointId}`);
   });
 
   it.runIf(installedClaude !== undefined)(

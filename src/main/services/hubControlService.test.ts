@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import {
-  createConnectDeepLink,
-  createConnectPairUrl,
-  derivePairingRoom,
-} from "@vibestudio/shared/connect";
+import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { createHubControlHostService } from "./hubControlService.js";
 
 const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
@@ -12,13 +8,11 @@ const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell"
 describe("hubControlHostService", () => {
   it("forwards device lifecycle calls unchanged over the stable hub client", async () => {
     const coordinates = {
-      room: derivePairingRoom("C".repeat(32)),
-      fp: "AA".repeat(32),
+      endpointId: "aa".repeat(32),
+      relays: ["https://relay.example/"],
       code: "C".repeat(32),
       exp: 2_000_000_000_000,
-      sig: "wss://sig.example/",
-      v: 3 as const,
-      ice: "all" as const,
+      v: 4 as const,
     };
     const pairing = {
       ...coordinates,

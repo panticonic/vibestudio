@@ -335,7 +335,7 @@ export interface RpcStreamOptions {
   causalParent?: RpcCausalParent;
   /**
    * Streaming REQUEST body. Body-capable transports carry it on their native
-   * streaming wire (WebRTC bulk frames or ordered WebSocket upload frames).
+   * streaming wire (Iroh bulk frames or ordered WebSocket upload frames).
    * Other transports throw; bodies never silently fall back to base64-in-args.
    */
   body?: ReadableStream<Uint8Array> | null;

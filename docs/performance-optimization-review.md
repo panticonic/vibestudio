@@ -297,7 +297,7 @@ is otherwise validated.
     add an aggregate alongside the old reconstruction path.
 
 - **Runtime track, tranche 3 / 2026-07-27**
-  - **Choice:** Rotate active WebRTC scheduler keys with an indexed,
+  - **Choice:** Rotate active Iroh scheduler keys with an indexed,
     periodically compacted array and tombstones for cancelled keys; fast-path
     an already-present immutable CAS namespace target with an existence check
     before recursive directory creation and hardlink convergence.

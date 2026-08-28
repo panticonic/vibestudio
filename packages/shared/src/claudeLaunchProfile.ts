@@ -126,7 +126,9 @@ export interface ClaudeCliRoute {
   serverId: string;
   workspaceId: string;
   workspaceName: string;
+  transport: "local" | "iroh";
   workspacePairing?: CliStoredPairing;
+  endpointSecret?: string;
 }
 
 export interface ClaudeCredentialState {
@@ -179,6 +181,18 @@ export async function materializeClaudeLaunch(input: {
 }): Promise<MaterializedClaudeLaunch> {
   const profile = parseClaudeLaunchProfile(input.profile);
   if (!input.cliRoute.url) throw new Error("Claude launch owner requires a server route");
+  if (
+    input.cliRoute.transport === "iroh" &&
+    (!input.cliRoute.workspacePairing || !input.cliRoute.endpointSecret)
+  ) {
+    throw new Error("Remote Claude launch requires Iroh reach and endpoint identity");
+  }
+  if (
+    input.cliRoute.transport === "local" &&
+    (input.cliRoute.workspacePairing || input.cliRoute.endpointSecret)
+  ) {
+    throw new Error("Local Claude launch cannot contain remote transport identity");
+  }
 
   const name = Buffer.from(profile.launchId, "utf8").toString("base64url");
   const materializationId = randomUUID();
@@ -270,8 +284,8 @@ export async function materializeClaudeLaunch(input: {
     const parsedAgentToken = parseAgentToken(profile.environment.VIBESTUDIO_AGENT_TOKEN);
     if (!parsedAgentToken)
       throw new Error("Claude launch profile contains a malformed agent token");
-    const cliCredentials: CliAgentCredentials = {
-      schemaVersion: 1,
+    const commonAgentCredential = {
+      schemaVersion: 2,
       kind: "agent",
       url: input.cliRoute.url,
       workspaceId: input.cliRoute.workspaceId,
@@ -281,11 +295,17 @@ export async function materializeClaudeLaunch(input: {
       contextId: profile.environment.VIBESTUDIO_CONTEXT_ID,
       agentId: parsedAgentToken.agentId,
       agentToken: profile.environment.VIBESTUDIO_AGENT_TOKEN,
-      ...(input.cliRoute.workspacePairing
-        ? { workspacePairing: input.cliRoute.workspacePairing }
-        : {}),
       signedInAt: Date.now(),
-    };
+    } as const;
+    const cliCredentials: CliAgentCredentials =
+      input.cliRoute.transport === "iroh"
+        ? {
+            ...commonAgentCredential,
+            transport: "iroh",
+            workspacePairing: input.cliRoute.workspacePairing!,
+            endpointSecret: input.cliRoute.endpointSecret!,
+          }
+        : { ...commonAgentCredential, transport: "local" };
 
     await Promise.all([
       writeFile(mcpPath, `${JSON.stringify(mcp, null, 2)}\n`, { mode: 0o600 }),

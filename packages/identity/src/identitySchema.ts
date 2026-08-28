@@ -2,9 +2,9 @@ import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 11 is the only accepted schema. Every other shape is rejected.
+ * Version 13 is the only accepted schema. Every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 11;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 13;
 
 export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: IDENTITY_DATABASE_SCHEMA_VERSION,
@@ -30,18 +30,30 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE TABLE devices (
         device_id TEXT PRIMARY KEY,
         refresh_token_hash TEXT NOT NULL,
+        transport_kind TEXT NOT NULL,
+        endpoint_id TEXT,
         user_id TEXT NOT NULL REFERENCES users(id),
         label TEXT NOT NULL,
         platform TEXT,
         created_at INTEGER NOT NULL,
         last_used_at INTEGER,
-        revoked_at INTEGER
+        revoked_at INTEGER,
+        CHECK (
+          (transport_kind = 'local' AND endpoint_id IS NULL)
+          OR
+          (transport_kind = 'iroh' AND endpoint_id IS NOT NULL AND length(endpoint_id) = 64 AND endpoint_id = lower(endpoint_id))
+        )
       )`,
     },
     {
       type: "index",
       name: "devices_by_user",
       sql: "CREATE INDEX devices_by_user ON devices(user_id)",
+    },
+    {
+      type: "index",
+      name: "devices_by_endpoint",
+      sql: "CREATE UNIQUE INDEX devices_by_endpoint ON devices(endpoint_id) WHERE endpoint_id IS NOT NULL",
     },
     {
       type: "table",
@@ -65,21 +77,6 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
         intent TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
-      )`,
-    },
-    {
-      type: "table",
-      name: "control_rooms",
-      sql: `CREATE TABLE control_rooms (
-        room TEXT PRIMARY KEY,
-        invite_code_hash TEXT UNIQUE REFERENCES pairing_codes(code) ON DELETE CASCADE,
-        device_id TEXT UNIQUE REFERENCES devices(device_id) ON DELETE CASCADE,
-        invite_expires_at INTEGER,
-        CHECK (
-          (invite_code_hash IS NOT NULL AND device_id IS NULL AND invite_expires_at IS NOT NULL AND invite_expires_at > 0)
-          OR
-          (invite_code_hash IS NULL AND device_id IS NOT NULL AND invite_expires_at IS NULL)
-        )
       )`,
     },
     {

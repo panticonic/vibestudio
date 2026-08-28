@@ -154,7 +154,7 @@ channel/trajectory state:
 The host creates a `MessageChannel`, retains one end as the session endpoint, and
 transfers the other end into the admitted iframe. The iframe constructs the ordinary
 RPC client over that port. It has its own request namespace, subscriptions, streaming,
-recovery, revocation, and lifecycle, but no independent WebSocket/WebRTC connection.
+recovery, revocation, and lifecycle, but no independent WebSocket/Iroh connection.
 The session multiplexer carries it over the existing host transport.
 
 Every inbound envelope is canonicalized from the port binding. A frame-supplied

@@ -75,11 +75,11 @@ describe("mobile Metro native capability boundary", () => {
     ).not.toThrow();
   });
 
-  it("permits the shared WebRTC transport package to persist the shell credential", () => {
+  it("permits the shared Iroh transport package to persist the shell credential", () => {
     expect(() =>
       boundary.guardNativeModuleImport(
         "@react-native-async-storage/async-storage",
-        path.resolve("packages/mobile-webrtc/src/connect.ts")
+        path.resolve("packages/mobile-iroh/src/connect.ts")
       )
     ).not.toThrow();
   });

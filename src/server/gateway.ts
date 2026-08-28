@@ -532,7 +532,7 @@ export class Gateway {
     };
 
     // Loopback HTTP only — the public/TLS ingress is decommissioned; remote
-    // reach is the WebRTC pipe, co-located reach is loopback WS.
+    // reach is the Iroh pipe, co-located reach is loopback WS.
     const server = createServer(requestHandler);
     this.server = server;
 

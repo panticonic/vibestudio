@@ -155,7 +155,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   globalThis.__vibestudioEntityId = entityId;
   globalThis.__vibestudioSlotId = slotId;
   const gatewayConfig = cfg.gatewayConfig;
-  // Panel RPC rides the shell bridge (host → WebRTC control channel), not a
+  // Panel RPC rides the shell bridge (host → Iroh control channel), not a
   // direct /rpc WebSocket: no panel-side ws URL is built. The token still
   // arrives out-of-band here and is consumed by the bridge's SessionNegotiation.
   globalThis.__vibestudioGatewayToken = gatewayConfig.token;

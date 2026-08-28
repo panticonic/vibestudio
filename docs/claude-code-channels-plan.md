@@ -331,7 +331,7 @@ NDJSON response **is** the attachment resource.
 
 ## 6. CLI: transport, context discovery, `channel` group, and eval
 
-### 6.1 Transport: standard RPC over HTTP, WS, and WebRTC
+### 6.1 Transport: standard RPC over HTTP, WS, and Iroh
 
 Everything in this plan rides the standard envelope-native RPC (`RpcEnvelope` →
 `ServiceDispatcher`). The vessel↔bridge link is an ordinary routed streaming RPC
@@ -342,11 +342,11 @@ panels/app). Selection stays credential/URL-shaped, as today:
 
 - one-shot request/response commands keep HTTP `POST /rpc` (loopback);
 - anything needing a long-lived response — the bridge, `channel tail`, `logs --follow`
-  — opens WS on loopback/LAN, or rides **WebRTC** when the credential carries a pairing
+  — opens WS on loopback/LAN, or rides **Iroh** when the credential carries a pairing
   blob (remote servers). `stream` is the transport-independent client API; resource
   loss is response termination, not an out-of-band liveness opinion.
 
-**Remote agent auth**: the WebRTC redeemer (`createPairingRedeemer`) accepts the
+**Remote agent auth**: the Iroh redeemer (`createPairingRedeemer`) accepts the
 `agent:<agentId>:<token>` prefix alongside `refresh:<deviceId>:<token>` — same
 pipeline, one added prefix — so a bridge or in-session CLI works against a remote
 workspace server identically to loopback.
@@ -354,7 +354,7 @@ workspace server identically to loopback.
 **Placement note**: the common remote story needs no remote bridge — PTYs spawn on the
 server host, so a remote human driving the terminal panel still gets a Claude Code
 process on loopback WS with a real local context folder. A Claude Code process on a
-_different_ machine gets full channel-agent connectivity and the full CLI over WebRTC —
+_different_ machine gets full channel-agent connectivity and the full CLI over Iroh —
 with the same read-only linked policy — plus a local snapshot export via **remote
 context mirrors** (§6.5).
 
@@ -416,7 +416,7 @@ materialization time (`WorkspaceVcs.ensureContextFolder`):
 `<contextFolder>/.vibestudio-context.json` contains exactly those fields. It has no
 endpoint, credential, entity hint, projection generation, semantic receipt, or
 optional legacy shape. Reach is resolved from the selected paired credential's
-current hub/WebRTC route; an extension process receives its current gateway through
+current hub/Iroh route; an extension process receives its current gateway through
 `VIBESTUDIO_EXTENSION_GATEWAY_URL`. A binding whose `workspaceId` differs from the
 credential is rejected before RPC. Because this file is only a durable locator, it
 does not duplicate agent intent or attribution: those remain projections over the
@@ -674,10 +674,10 @@ There are now two explicit states only:
    Earlier credential, session, and endpoint-bearing binding shapes are rejected rather
    than migrated.
 4. **CLI transport**: `RpcClient.stream` carries response-owned resources across
-   WS/WebRTC; the linked bridge no longer has a transport-specific push callback
+   WS/Iroh; the linked bridge no longer has a transport-specific push callback
    (internal API change).
 5. **Auth surface**: new token prefix `agent:` in both the WS-auth redeemer and the
-   WebRTC pairing redeemer (`createPairingRedeemer`); anything pattern-matching token
+   Iroh pairing redeemer (`createPairingRedeemer`); anything pattern-matching token
    prefixes must be updated. Entity binding stamped on agent-authenticated connections
    is new connection state.
 6. **Context projection protocol**: `ensureContextFolder` writes the strict
@@ -718,7 +718,7 @@ shipping order):
 
 - **W1 Identity & transport** — `agent` caller kind + full policy sweep + `agent ⊆ do`
   policy test, `auth.mintAgentCredential` + connection entity binding, WS transport in
-  `RpcClient`, `agent:` prefix in both redeemers (WS + WebRTC).
+  `RpcClient`, `agent:` prefix in both redeemers (WS + Iroh).
 - **W2 Linked-agent vessel** — `workspace/workers/linked-agent/`: one response-owned
   bridge resource, addressing gate, causal trajectory projection, method provision,
   task duty, presence/cursor semantics.
@@ -746,7 +746,7 @@ independent after W1.
 **Acceptance (single cut).** The branch merges only when _all_ of the following pass
 together, plus typecheck, unit suites, and the boundary checker:
 
-1. CLI authenticates with an agent token over WS and over WebRTC against a remote
+1. CLI authenticates with an agent token over WS and over Iroh against a remote
    server; `auth.getConnectionInfo` shows kind `agent` with entity binding; the
    `agent ⊆ do` policy test holds.
 2. A linked vessel exchanges messages and method calls with a Pi vessel on a shared
@@ -763,7 +763,7 @@ together, plus typecheck, unit suites, and the boundary checker:
    proves exact-ID human verdicts and local/remote race cleanup.
 6. An unmanaged `channel-host` refuses before adopting identity. A controlled launch
    proves native context writes fail with `EROFS` and explicit scratch writes pass.
-7. On a second machine over WebRTC: `context mirror` exports the exact context
+7. On a second machine over Iroh: `context mirror` exports the exact context
    snapshot and establishes zero-flag read-only CLI scoping; managed mutation is
    refused without a watcher or filesystem reconstruction fallback.
 8. A Pi parent spawns a Claude Code reviewer subagent; progress folds into its

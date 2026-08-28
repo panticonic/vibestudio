@@ -54,7 +54,16 @@ export const AppInfoSchema: z.ZodType<AppInfo> = z.object({
   connectionMode: z.enum(["local", "remote"]),
   remoteHost: z.string().optional(),
   connectionStatus: z.enum(["connected", "connecting", "disconnected"]),
-  connectionCandidateType: z.enum(["host", "srflx", "prflx", "relay"]).nullable().optional(),
+  remoteTransport: z
+    .object({
+      path: z.enum(["direct", "relay"]),
+      rttMs: z.number().nonnegative().optional(),
+      remoteAddress: z.string().min(1).optional(),
+      relayUrl: z.string().url().optional(),
+      endpointGeneration: z.number().int().positive().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const PanelFocusResultSchema: z.ZodType<PanelFocusResult> = z.object({

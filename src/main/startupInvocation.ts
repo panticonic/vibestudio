@@ -1,4 +1,4 @@
-export const DEV_WEBRTC_REMOTE_ARG = "--dev-webrtc-remote";
+export const DEV_IROH_REMOTE_ARG = "--dev-iroh-remote";
 export const PAIR_CONFIRMED_ARG = "--pair-confirmed";
 export const SKIP_REMOTE_PAIRING_ARG = "--skip-remote-pairing";
 export const HEADLESS_HOST_ARG = "--headless-host";
@@ -23,7 +23,7 @@ export interface MainStartupInvocation {
   isDevelopmentClientExecutor: boolean;
   pendingPairConfirmed: boolean;
   skipRemotePairing: boolean;
-  devWebRtcRemote: boolean;
+  devIrohRemote: boolean;
   crashRecovery: LocalServerCrashRecoveryInvocation;
 }
 
@@ -76,7 +76,7 @@ export function parseMainStartupInvocation(
     isDevelopmentClientExecutor: argv.includes(DEVELOPMENT_CLIENT_EXECUTOR_ARG),
     pendingPairConfirmed: argv.includes(PAIR_CONFIRMED_ARG),
     skipRemotePairing: argv.includes(SKIP_REMOTE_PAIRING_ARG),
-    devWebRtcRemote: argv.includes(DEV_WEBRTC_REMOTE_ARG),
+    devIrohRemote: argv.includes(DEV_IROH_REMOTE_ARG),
     crashRecovery: {
       recoveredExitCode: recovered.value,
       crashLoopExitCode: crashLoop.value,

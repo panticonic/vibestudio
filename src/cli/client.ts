@@ -641,18 +641,24 @@ const remoteCommands: CliCommand[] = [
       passthroughHelp: true,
     }
   ),
-  scriptCommand("remote", "doctor", "remote-doctor.mjs", "Run remote WebRTC preflight checks", {
-    usage:
-      "vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]",
-    passthroughHelp: true,
-  }),
   scriptCommand(
     "remote",
-    "repair-identity",
-    "remote-repair-identity.mjs",
-    "Regenerate one workspace child's WebRTC identity",
+    "doctor",
+    "remote-doctor.mjs",
+    "Run Iroh remote-transport preflight checks",
     {
-      usage: "vibestudio remote repair-identity --workspace <name> --yes",
+      usage:
+        "vibestudio remote doctor [--relay-url <https-url>...] [--workspace <name> | --identity <endpoint.key>]",
+      passthroughHelp: true,
+    }
+  ),
+  scriptCommand(
+    "remote",
+    "rotate-endpoint",
+    "remote-rotate-endpoint.mjs",
+    "Rotate one workspace child's Iroh endpoint identity",
+    {
+      usage: "vibestudio remote rotate-endpoint --workspace <name> --yes",
       passthroughHelp: true,
     }
   ),

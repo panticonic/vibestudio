@@ -1,0 +1,39 @@
+{
+  "name": "@vibestudio/mobile-iroh",
+  "version": "0.1.0",
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./connectLink": "./src/connectLink.ts",
+    "./bundleDelivery": "./src/bundleDelivery.ts",
+    "./nativeBridge": "./src/nativeBridge.ts",
+    "./polyfills": "./src/polyfills.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/mobile-iroh/src",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@vibestudio/iroh-transport": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@react-native-community/netinfo": "^11.4.1",
+    "react-native-keychain": "^9.2.2",
+    "web-streams-polyfill": "^3.3.3"
+  },
+  "peerDependencies": {
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "react-native": "^0.79.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.4",
+    "typescript": "7.0.2"
+  }
+}

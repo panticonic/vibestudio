@@ -503,7 +503,7 @@ function connectionHandoffFor(actionId: string): { title: string; detail: string
   if (actionId === "pair") {
     return {
       title: "Pairing server",
-      detail: "Redeeming the pairing link over WebRTC and connecting...",
+      detail: "Redeeming the pairing link over Iroh and connecting...",
     };
   }
   return null;
@@ -592,7 +592,7 @@ function appendPairRemote(parent: HTMLElement): void {
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent =
-    "Paste the vibestudio:// pairing link from the server. Pairing connects over WebRTC and opens the remote workspace in this window.";
+    "Paste the vibestudio:// pairing link from the server. Pairing connects over Iroh and opens the remote workspace in this window.";
   const fields = document.createElement("div");
   fields.className = "field-grid";
 
@@ -749,7 +749,7 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
     return;
   }
   // Opened via a vibestudio://connect deep link ⇒ show a confirmation card (server
-  // label + fingerprint + Trust/Cancel) rather than silently pairing. Opening a
+  // label + Endpoint ID + Trust/Cancel) rather than silently pairing. Opening a
   // link is not consent to trust the server it points at.
   const awaitingConfirm = !!state.pendingPairLink && !autoPairTriggered && !pairConfirmDismissed;
   if (awaitingConfirm && state.pendingPairLink) {
@@ -760,15 +760,15 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
   appendLocalWorkspaces(approvalsContainer, state);
 }
 
-/** Uppercase colon-separated hex — the canonical DTLS fingerprint form to compare. */
-function formatFingerprintGroups(fp: string): string {
-  const hex = fp.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+/** Group the authenticated Endpoint ID for human comparison. */
+function formatEndpointId(endpointId: string): string {
+  const hex = endpointId.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
   return (hex.match(/.{1,2}/g) ?? [hex]).join(":");
 }
 
 /**
  * The DELIGHTFUL pairing confirmation (bug 1): a reassuring card, NOT a scary
- * blocker. Shows the server label + the DTLS fingerprint to compare, with a
+ * blocker. Shows the server label + authenticated Endpoint ID to compare, with a
  * one-tap Trust / Cancel. Trust pairs; Cancel drops back to the normal chooser.
  */
 function appendPairConfirmation(parent: HTMLElement, link: string): void {
@@ -796,7 +796,7 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
   }
 
   meta.textContent =
-    "You opened a pairing link. Confirm the fingerprint matches the one shown on the server before connecting.";
+    "You opened a pairing link. Confirm the Endpoint ID matches the one shown on the server before connecting.";
 
   const details = document.createElement("div");
   details.className = "field-grid";
@@ -805,9 +805,9 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
   const fpRow = document.createElement("div");
   const fpLabel = document.createElement("div");
   fpLabel.className = "meta";
-  fpLabel.textContent = "Fingerprint";
+  fpLabel.textContent = "Endpoint ID";
   const fpValue = document.createElement("code");
-  fpValue.textContent = formatFingerprintGroups(parsed.fp);
+  fpValue.textContent = formatEndpointId(parsed.endpointId);
   fpValue.style.wordBreak = "break-all";
   fpValue.style.fontSize = "0.85em";
   fpRow.append(fpLabel, fpValue);

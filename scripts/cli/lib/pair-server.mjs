@@ -3,17 +3,14 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveSignalingUrl } from "./connect-grammar.generated.mjs";
 import { printConnectBanner } from "./connect-banner.mjs";
 import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
-// Loopback host the co-located server binds. Remote reach is WebRTC (the QR
-// carries room/fp/sig); there is no LAN/Tailscale/public-URL origin anymore.
+// Loopback host the co-located gateway binds. Remote reach is the Iroh endpoint.
 const LOOPBACK_HOST = "127.0.0.1";
-const SIGNAL_ENV = ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
 
 /**
  * Signal the complete server process tree. POSIX children are spawned as
@@ -86,7 +83,6 @@ function parsePort(value, label) {
 }
 
 export function parsePairArgs(argv, config) {
-  const signalEnv = signalEnvFor(config);
   const options = {
     port: parsePort(
       firstDefined(config.portEnv.map((key) => process.env[key])) ?? "3030",
@@ -95,8 +91,7 @@ export function parsePairArgs(argv, config) {
     appRoot: null,
     dev: process.env[config.devEnv] === "1",
     help: false,
-    signalUrl: undefined,
-    signalSource: "default",
+    relayUrls: [],
     readyFile: null,
     bootstrapWorkspace: null,
   };
@@ -114,7 +109,7 @@ export function parsePairArgs(argv, config) {
       arg === "--require-public-url"
     ) {
       throw new Error(
-        `${arg} is no longer supported; remote reach is WebRTC and the server binds loopback only`
+        `${arg} is no longer supported; remote reach is Iroh and the gateway binds loopback only`
       );
     } else if (arg === "--workspace" || arg === "--workspace-dir") {
       throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
@@ -128,9 +123,13 @@ export function parsePairArgs(argv, config) {
       const workspace = argv[++i] ?? "";
       if (!workspace) throw new Error("--bootstrap-workspace requires a name");
       options.bootstrapWorkspace = workspace;
-    } else if (arg === "--signal-url" || arg === "--signaling-url") {
-      options.signalUrl = argv[++i] ?? "";
-      options.signalSource = "flag";
+    } else if (arg === "--relay-url") {
+      const relay = argv[++i] ?? "";
+      const url = new URL(relay);
+      if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+        throw new Error("--relay-url requires a canonical HTTPS relay URL");
+      }
+      options.relayUrls.push(url.toString());
     } else if (arg === "--dev") {
       options.dev = true;
     } else if (arg === "--no-init") {
@@ -148,9 +147,9 @@ export function parsePairArgs(argv, config) {
     if (options.dev && options.bootstrapWorkspace) {
       throw new Error("--dev and --bootstrap-workspace are mutually exclusive");
     }
-    const resolved = resolveSignalingEndpoint(options.signalUrl, signalEnv, config);
-    options.signalUrl = resolved.url;
-    options.signalSource = resolved.source;
+    if (new Set(options.relayUrls).size !== options.relayUrls.length) {
+      throw new Error("--relay-url values must be unique");
+    }
   }
   return options;
 }
@@ -159,9 +158,9 @@ export function printPairHelp(config) {
   console.log(`${config.commandName}
 
 Starts the co-located Vibestudio server (bound to loopback) and prints a pairing
-QR/deep link. The device reaches the server over an encrypted WebRTC pipe — the
-link carries the signaling room, the server's DTLS fingerprint, and a one-time
-pairing code, not a server URL.
+QR/deep link. The device reaches the server over an end-to-end encrypted Iroh
+connection. The link carries the server Endpoint ID, ordered relay set, and a
+one-time pairing code, not a public server URL.
 
 Usage:
 ${config.usage.map((line) => `  ${line}`).join("\n")}
@@ -171,10 +170,9 @@ Options:
       Stable gateway port for the loopback server. Defaults through ${config.portEnv.join(", ")} or 3030.
   --app-root <path>
       Application root passed to the server.
-  --signal-url, --signaling-url <url>
-      WebRTC signaling endpoint. Resolution: flag > ${signalEnvFor(config).join(", ")} > config > hosted default.
-      Use wss:// or https:// for remote endpoints; ws:// and http:// are only
-      accepted for loopback development.
+  --relay-url <url>
+      Add one production Iroh relay URL. Repeat to define the ordered relay set.
+      When omitted, VIBESTUDIO_IROH_RELAYS or the shipped relay set is used.
   --ready-file <path>
       Write the structured hub-ready payload to this path. Useful for unattended
       pairing; suppresses the QR/link on stdout. Protect and delete the file
@@ -254,7 +252,11 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
   console.log(`[${config.logPrefix}] Loopback host: ${LOOPBACK_HOST}`);
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);
-  console.log(`[${config.logPrefix}] Signaling: ${options.signalUrl} (${options.signalSource})`);
+  console.log(
+    `[${config.logPrefix}] Iroh relays: ${
+      options.relayUrls.length > 0 ? options.relayUrls.join(", ") : "configured default"
+    }`
+  );
   if (options.dev) {
     console.log(`[${config.logPrefix}] Dev workspace: fresh template copy, deleted on exit`);
   }
@@ -270,7 +272,9 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     ...process.env,
     VIBESTUDIO_HOST: LOOPBACK_HOST,
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
-    VIBESTUDIO_WEBRTC_SIGNAL_URL: options.signalUrl,
+    ...(options.relayUrls.length > 0
+      ? { VIBESTUDIO_IROH_RELAYS: options.relayUrls.join(",") }
+      : {}),
     ...(options.dev
       ? {
           NODE_ENV: "development",
@@ -285,7 +289,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 
   // The hub ready file is the only pairing contract. One complete invite owns
-  // the room/code and both presentation links; the CLI never reconstructs it.
+  // the endpoint reach, code, and both presentation links; the CLI never reconstructs it.
   let rootInvite = null;
   let lastPrintedInviteCode = null;
   let rootStatusPrinted = false;
@@ -385,7 +389,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
           !rootInvite && "root invite",
         ].filter(Boolean);
         console.warn(
-          `[${config.logPrefix}] Still waiting for pairing material (${missing.join(", ")}). Run \`vibestudio remote doctor\` to check signaling and native WebRTC support.`
+          `[${config.logPrefix}] Still waiting for pairing material (${missing.join(", ")}). Run \`vibestudio remote doctor\` to check relay configuration and the Iroh native binding.`
         );
       }
       try {
@@ -587,19 +591,4 @@ function readyFileFromServerArgs(args) {
 
 function firstDefined(values) {
   return values.find((value) => value !== undefined && value !== "");
-}
-
-function signalEnvFor(config) {
-  return Array.isArray(config.signalEnv) && config.signalEnv.length > 0
-    ? config.signalEnv
-    : SIGNAL_ENV;
-}
-
-function resolveSignalingEndpoint(raw, signalEnv, config) {
-  return resolveSignalingUrl({
-    flag: raw,
-    env: process.env,
-    envKeys: signalEnv,
-    configUrl: typeof config.signalingUrl === "string" ? config.signalingUrl : undefined,
-  });
 }

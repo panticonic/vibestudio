@@ -5,7 +5,7 @@ import {
   serverRpcHttpUrl,
 } from "@vibestudio/shared/connect";
 import {
-  isWebRtcCredential,
+  isIrohCredential,
   canonicalStoredPairing,
   saveCliCredentials,
   type CliCredentials,
@@ -41,13 +41,14 @@ export type RefreshShellResponse = z.infer<typeof RefreshShellResponseSchema>;
  * A raw-token credential for internal callers and focused transport tests.
  * Ordinary CLI agent login always uses the canonical persisted agent profile.
  * The `agent:` token IS the auth; there is no
- * refresh-shell device exchange; WS/WebRTC auth and the HTTP `/refresh-agent`
+ * refresh-shell device exchange; WS/Iroh auth and the HTTP `/refresh-agent`
  * bearer exchange all use it verbatim.
  */
 export interface RawTokenCredential {
   url: string;
   token: string;
   workspacePairing?: CliStoredPairing;
+  endpointSecret?: string;
 }
 
 export type RefreshAgentResponse = z.infer<typeof RefreshAgentResponseSchema>;
@@ -56,18 +57,19 @@ export type RefreshAgentResponse = z.infer<typeof RefreshAgentResponseSchema>;
  * One device-authenticated RPC endpoint. Unlike a complete CLI credential,
  * this does not select a workspace and therefore never participates in local
  * workspace routing. It is used for already-resolved HTTP endpoints and for
- * non-workspace WebRTC endpoints such as hub control.
+ * non-workspace Iroh endpoints such as hub control.
  */
 export interface DeviceEndpointCredential {
   url: string;
   deviceId: string;
   refreshToken: string;
   pairing?: CliStoredPairing;
+  endpointSecret?: string;
 }
 
 export type RpcClientCredential = CliCredentials | DeviceEndpointCredential | RawTokenCredential;
 
-/** Shared surface of the persistent WS and WebRTC clients. */
+/** Shared surface of the persistent local-WebSocket and remote-Iroh clients. */
 interface PersistentRpcClient {
   callTarget<T = unknown>(targetId: string, method: string, args?: unknown[]): Promise<T>;
   stream(
@@ -95,14 +97,16 @@ function isAgentCliCredentials(
 function isCompleteDeviceCredentials(creds: RpcClientCredential): creds is CliDeviceCredentials {
   const candidate = creds as Partial<CliDeviceCredentials>;
   return (
-    candidate.schemaVersion === 4 &&
+    candidate.schemaVersion === 5 &&
     candidate.kind === "device" &&
     typeof candidate.workspaceId === "string" &&
     candidate.workspaceId.length > 0 &&
     typeof candidate.workspaceName === "string" &&
     typeof candidate.serverId === "string" &&
-    candidate.controlPairing !== undefined &&
-    candidate.workspacePairing !== undefined
+    (candidate.transport === "local" ||
+      (candidate.transport === "iroh" &&
+        candidate.controlPairing !== undefined &&
+        candidate.workspacePairing !== undefined))
   );
 }
 
@@ -181,7 +185,7 @@ export async function refreshShell(
 /**
  * Exchange an `agent:<agentId>:<token>` credential for a short-lived caller
  * (bearer) token, so HTTP `POST /rpc` works with agent credentials — the HTTP
- * mirror of the WS/WebRTC redeemer (one auth model everywhere, §6.1).
+ * mirror of the WS/Iroh redeemer (one auth model everywhere, §6.1).
  */
 export async function refreshAgent(creds: {
   url: string;
@@ -229,12 +233,15 @@ export class RpcClient {
   private readonly deviceId: string | null;
   private readonly refreshToken: string | null;
   private readonly pairing: CliStoredPairing | undefined;
+  private readonly endpointSecret: string | undefined;
   /** Envelope self-id + kind. The server re-derives the authenticated caller
    *  from the redeemed token, so these are informational for routing/logging. */
   private callerId: string;
   private readonly callerKind: CallerKind;
 
-  private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
+  private irohClient: Promise<import("../node/iroh/irohRpcClient.js").IrohRpcClient> | null = null;
+  private ownsIrohClient = true;
+  private releaseEndpointLock: (() => void) | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
   private localWorkspaceClient: Promise<RpcClient | null> | null = null;
   private httpDispatcher: Agent | null = null;
@@ -245,7 +252,8 @@ export class RpcClient {
   constructor(creds: RpcClientCredential) {
     this.url = creds.url;
     if (isAgentCliCredentials(creds)) {
-      this.pairing = creds.workspacePairing;
+      this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
+      this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
       this.cliCredentials = null;
       this.rawToken = creds.agentToken;
       this.deviceId = null;
@@ -254,6 +262,7 @@ export class RpcClient {
       this.callerKind = "agent";
     } else if (isRawTokenCredential(creds)) {
       this.pairing = creds.workspacePairing;
+      this.endpointSecret = creds.endpointSecret;
       this.cliCredentials = null;
       this.rawToken = creds.token;
       this.deviceId = null;
@@ -263,10 +272,12 @@ export class RpcClient {
     } else {
       if (isCompleteDeviceCredentials(creds)) {
         this.cliCredentials = creds;
-        this.pairing = creds.workspacePairing;
+        this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
+        this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
       } else {
         this.cliCredentials = null;
         this.pairing = creds.pairing;
+        this.endpointSecret = creds.endpointSecret;
       }
       this.rawToken = null;
       this.deviceId = creds.deviceId;
@@ -279,12 +290,12 @@ export class RpcClient {
   /** Result of the most recent shell refresh, if one occurred. */
   lastRefresh: RefreshShellResponse | null = null;
 
-  /** Whether this credential rides WebRTC (a pairing blob is present). */
-  private get isWebRtc(): boolean {
-    return isWebRtcCredential({ workspacePairing: this.pairing });
+  /** Whether this credential rides Iroh (a pairing blob is present). */
+  private get isIroh(): boolean {
+    return isIrohCredential({ workspacePairing: this.pairing });
   }
 
-  /** The redeemable WS/WebRTC auth token (`agent:…` or `refresh:…`). */
+  /** The redeemable WS/Iroh auth token (`agent:…` or `refresh:…`). */
   private authToken(): string {
     if (this.rawToken) return this.rawToken;
     const device = this.deviceCredential();
@@ -305,12 +316,12 @@ export class RpcClient {
 
   /**
    * Ensure a token exists (cached or freshly refreshed) and return it.
-   * For push transports (WS/WebRTC) the redeemable token IS the auth; for the
+   * For push transports (WS/Iroh) the redeemable token IS the auth; for the
    * one-shot HTTP path it is a short-lived bearer (shell or agent).
    */
   async getShellToken(): Promise<string> {
     if (this.rawToken) return this.rawToken;
-    if (this.isWebRtc) return this.authToken();
+    if (this.isIroh) return this.authToken();
     return await this.ensureBearerToken();
   }
 
@@ -350,16 +361,16 @@ export class RpcClient {
     method: string,
     args: unknown[] = []
   ): Promise<T> {
-    if (this.isWebRtc) {
+    if (this.isIroh) {
       const local = await this.ensureLocalWorkspaceClient();
       if (local) return await local.callTarget<T>(targetId, method, args);
-      return await this.dispatchWebRtc<T>(targetId, method, args);
+      return await this.dispatchIroh<T>(targetId, method, args);
     }
     return await this.dispatch<T>(targetId, method, args);
   }
 
   /**
-   * `callTarget` over the PERSISTENT push transport (WS, or WebRTC when paired),
+   * `callTarget` over the PERSISTENT push transport (WS, or Iroh when paired),
    * not the one-shot HTTP path. Use this for unary calls whose peer may issue
    * routed callbacks over the same authenticated connection. Long-lived
    * resources use {@link stream} so the response itself owns their lifetime.
@@ -380,8 +391,8 @@ export class RpcClient {
     args: unknown[] = [],
     options?: RpcStreamOptions
   ): Promise<Response> {
-    // Push/stream: WebRTC when the credential is a pairing blob, otherwise the
-    // persistent loopback/LAN WebSocket (no more "streaming requires WebRTC").
+    // Push/stream: Iroh when the credential is a pairing blob, otherwise the
+    // persistent loopback/LAN WebSocket (no more "streaming requires Iroh").
     this.keepPushOpen = true;
     const client = await this.persistentClient();
     return await client.stream(targetId, method, args, options);
@@ -417,6 +428,29 @@ export class RpcClient {
       const local = await this.ensureLocalWorkspaceClient();
       if (local) return await local.openSiblingConnection();
     }
+    if (this.isIroh) {
+      // QUIC gives every request its own independently flow-controlled stream,
+      // so the old Iroh reason for a second physical connection no longer
+      // exists. Share the one credential endpoint and let the event/watch own a
+      // separate request stream. Binding the same Endpoint ID twice is invalid.
+      await this.ensureIrohClient();
+      const sibling = this.rawToken
+        ? new RpcClient({
+            url: this.url,
+            token: this.rawToken,
+            workspacePairing: this.pairing,
+            endpointSecret: this.endpointSecret,
+          })
+        : new RpcClient({
+            url: this.url,
+            ...this.deviceCredential(),
+            pairing: this.pairing,
+            endpointSecret: this.endpointSecret,
+          });
+      sibling.irohClient = this.irohClient;
+      sibling.ownsIrohClient = false;
+      return sibling;
+    }
     if (this.rawToken) {
       return new RpcClient({
         url: this.url,
@@ -433,16 +467,18 @@ export class RpcClient {
   }
 
   async close(): Promise<void> {
-    const webRtc = this.webRtcClient;
+    const iroh = this.irohClient;
     const ws = this.wsClient;
     const local = this.localWorkspaceClient;
     const httpDispatcher = this.httpDispatcher;
-    this.webRtcClient = null;
+    this.irohClient = null;
     this.wsClient = null;
     this.localWorkspaceClient = null;
     this.httpDispatcher = null;
     const resources = [
-      ...(webRtc ? [{ label: "WebRTC client", close: async () => (await webRtc).close() }] : []),
+      ...(iroh && this.ownsIrohClient
+        ? [{ label: "Iroh client", close: async () => (await iroh).close() }]
+        : []),
       ...(ws ? [{ label: "WebSocket client", close: async () => (await ws).close() }] : []),
       ...(local
         ? [
@@ -480,11 +516,13 @@ export class RpcClient {
     if (failures.length > 1) {
       throw new AggregateError(failures, "CLI connections could not all be closed");
     }
+    this.releaseEndpointLock?.();
+    this.releaseEndpointLock = null;
   }
 
   /**
    * Keep the push transport alive across a bounded batch of ordinary calls.
-   * Pollers use this so WebRTC pairing/ICE is paid once per command, not once
+   * Pollers use this so Iroh pairing/ICE is paid once per command, not once
    * per poll. The returned async release is idempotent and closes when the last
    * batch holder leaves (unless an event subscriber owns the connection).
    */
@@ -598,8 +636,8 @@ export class RpcClient {
     });
   }
 
-  private async dispatchWebRtc<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
-    const client = await this.ensureWebRtcClient();
+  private async dispatchIroh<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
+    const client = await this.ensureIrohClient();
     try {
       return targetId === "main"
         ? await client.call<T>(method, args)
@@ -613,16 +651,22 @@ export class RpcClient {
     }
   }
 
-  private ensureWebRtcClient(): Promise<import("./webrtcClient.js").WebRtcRpcClient> {
-    if (!this.pairing) {
-      throw new Error("Stored credential does not contain WebRTC pairing material");
+  private ensureIrohClient(): Promise<import("../node/iroh/irohRpcClient.js").IrohRpcClient> {
+    if (!this.pairing || !this.endpointSecret) {
+      throw new Error("Stored credential does not contain Iroh reach and endpoint identity");
     }
-    if (!this.webRtcClient) {
+    if (!this.irohClient) {
       const pairing = this.pairing;
-      this.webRtcClient = import("./webrtcClient.js")
-        .then(({ WebRtcRpcClient }) => {
-          return new WebRtcRpcClient({
-            pairing,
+      const endpointSecret = this.endpointSecret;
+      this.irohClient = Promise.all([
+        import("../node/iroh/irohRpcClient.js"),
+        import("./irohEndpointLock.js"),
+      ])
+        .then(async ([{ IrohRpcClient }, { acquireIrohEndpointLock }]) => {
+          this.releaseEndpointLock = await acquireIrohEndpointLock(endpointSecret);
+          return new IrohRpcClient({
+            reach: pairing,
+            endpointSecret: Buffer.from(endpointSecret, "base64url"),
             callerId: this.callerId,
             callerKind: this.callerKind,
             getToken: () => this.authToken(),
@@ -631,18 +675,20 @@ export class RpcClient {
           });
         })
         .catch((error) => {
-          this.webRtcClient = null;
+          this.releaseEndpointLock?.();
+          this.releaseEndpointLock = null;
+          this.irohClient = null;
           throw error;
         });
     }
-    return this.webRtcClient;
+    return this.irohClient;
   }
 
   /** Select the credential's one persistent push/stream transport. */
   private async persistentClient(): Promise<PersistentRpcClient> {
-    if (!this.isWebRtc) return await this.ensureWsClient();
+    if (!this.isIroh) return await this.ensureWsClient();
     const local = await this.ensureLocalWorkspaceClient();
-    return local ? await local.persistentClient() : await this.ensureWebRtcClient();
+    return local ? await local.persistentClient() : await this.ensureIrohClient();
   }
 
   private ensureLocalWorkspaceClient(): Promise<RpcClient | null> {
@@ -691,8 +737,13 @@ export class RpcClient {
     }
     const refreshedCredentials: CliDeviceCredentials = {
       ...credentials,
-      url: `webrtc://${route.workspaceReach.room}${expectedPath}`,
-      workspacePairing: canonicalStoredPairing(route.workspaceReach),
+      url:
+        credentials.transport === "iroh"
+          ? `iroh://${route.workspaceReach.endpointId}${expectedPath}`
+          : route.serverUrl.replace(/\/$/, ""),
+      ...(credentials.transport === "iroh"
+        ? { workspacePairing: canonicalStoredPairing(route.workspaceReach) }
+        : {}),
     };
     saveCliCredentials(refreshedCredentials);
     return new RpcClient({

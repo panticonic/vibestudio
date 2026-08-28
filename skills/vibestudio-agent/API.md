@@ -320,7 +320,7 @@ Authority principals: `code`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `gateway.fetch` | Loopback-fetch a panel asset from the server's own gateway and stream the Response back over the pipe's bulk channel (a streaming method). A request body streams IN over the same channel (stream-open bodyStreamId → ctx.body). |
+| `gateway.fetch` | Loopback-fetch a panel asset from the server's own gateway and stream the Response back over a dedicated transport stream. A request body streams IN over the same channel (stream-open bodyStreamId → ctx.body). |
 
 ## `governance`
 

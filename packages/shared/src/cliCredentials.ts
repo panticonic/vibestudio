@@ -1,11 +1,5 @@
-import {
-  normalizeFingerprint,
-  PAIRING_PROTOCOL_VERSION,
-  PAIRING_ROOM_PATTERN,
-  parseSignalingEndpoint,
-  selectedWorkspacePath,
-  type ReconnectReach,
-} from "./connect.js";
+import { assertIrohReach, type IrohReach } from "@vibestudio/iroh-transport";
+import { selectedWorkspacePath } from "./connect.js";
 import { isDeviceId, isDeviceRefreshToken, isServerId } from "./deviceCredentials.js";
 
 export const AGENT_ID_PATTERN = /^agt_[A-Za-z0-9_-]{24}$/;
@@ -25,10 +19,10 @@ export function parseAgentToken(token: string): ParsedAgentToken | null {
   return match?.[1] && match[2] ? { agentId: match[1], secret: match[2] } : null;
 }
 
-export type CliStoredPairing = ReconnectReach;
+export type CliStoredPairing = IrohReach;
 
-export interface CliDeviceCredentials {
-  schemaVersion: 4;
+interface CliDeviceCredentialsBase {
+  schemaVersion: 5;
   kind: "device";
   url: string;
   workspaceId: string;
@@ -36,15 +30,26 @@ export interface CliDeviceCredentials {
   serverId: string;
   deviceId: string;
   refreshToken: string;
-  controlPairing: CliStoredPairing;
-  workspacePairing: CliStoredPairing;
   pairedAt: number;
 }
 
+export interface CliIrohDeviceCredentials extends CliDeviceCredentialsBase {
+  transport: "iroh";
+  endpointSecret: string;
+  controlPairing: CliStoredPairing;
+  workspacePairing: CliStoredPairing;
+}
+
+export interface CliLocalDeviceCredentials extends CliDeviceCredentialsBase {
+  transport: "local";
+}
+
+export type CliDeviceCredentials = CliIrohDeviceCredentials | CliLocalDeviceCredentials;
+
 /** One entity-scoped ordinary CLI login. It never contains or reuses a human
  * device refresh identity; an optional pairing contributes transport reach only. */
-export interface CliAgentCredentials {
-  schemaVersion: 1;
+interface CliAgentCredentialsBase {
+  schemaVersion: 2;
   kind: "agent";
   url: string;
   workspaceId: string;
@@ -54,9 +59,20 @@ export interface CliAgentCredentials {
   contextId: string;
   agentId: string;
   agentToken: string;
-  workspacePairing?: CliStoredPairing;
   signedInAt: number;
 }
+
+export interface CliIrohAgentCredentials extends CliAgentCredentialsBase {
+  transport: "iroh";
+  endpointSecret: string;
+  workspacePairing: CliStoredPairing;
+}
+
+export interface CliLocalAgentCredentials extends CliAgentCredentialsBase {
+  transport: "local";
+}
+
+export type CliAgentCredentials = CliIrohAgentCredentials | CliLocalAgentCredentials;
 
 export type CliCredentials = CliDeviceCredentials | CliAgentCredentials;
 
@@ -69,6 +85,8 @@ const DEVICE_KEYS = new Set([
   "serverId",
   "deviceId",
   "refreshToken",
+  "transport",
+  "endpointSecret",
   "controlPairing",
   "workspacePairing",
   "pairedAt",
@@ -85,43 +103,34 @@ const AGENT_KEYS = new Set([
   "contextId",
   "agentId",
   "agentToken",
+  "transport",
+  "endpointSecret",
   "workspacePairing",
   "signedInAt",
 ]);
 
-const STORED_PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
+const STORED_PAIRING_KEYS = new Set(["endpointId", "relays", "v"]);
+const ENDPOINT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export function isCliStoredPairing(value: unknown): value is CliStoredPairing {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (Object.keys(value).some((key) => !STORED_PAIRING_KEYS.has(key))) return false;
-  const pairing = value as Partial<CliStoredPairing>;
-  const signaling = typeof pairing.sig === "string" ? parseSignalingEndpoint(pairing.sig) : null;
-  return (
-    typeof pairing.room === "string" &&
-    PAIRING_ROOM_PATTERN.test(pairing.room) &&
-    typeof pairing.fp === "string" &&
-    pairing.fp === normalizeFingerprint(pairing.fp) &&
-    /^[0-9A-F]{64}$/.test(pairing.fp) &&
-    typeof pairing.sig === "string" &&
-    signaling?.kind === "ok" &&
-    signaling.url === pairing.sig &&
-    pairing.v === PAIRING_PROTOCOL_VERSION &&
-    (pairing.ice === "all" || pairing.ice === "relay")
-  );
+  try {
+    assertIrohReach(value as CliStoredPairing);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function canonicalStoredPairing(reach: CliStoredPairing): CliStoredPairing {
-  const signaling = parseSignalingEndpoint(reach.sig);
-  if (signaling.kind === "error") throw new Error(signaling.reason);
   const canonical: CliStoredPairing = {
-    room: reach.room,
-    fp: normalizeFingerprint(reach.fp),
-    sig: signaling.url,
+    endpointId: reach.endpointId,
+    relays: [...reach.relays],
     v: reach.v,
-    ice: reach.ice,
   };
   if (!isCliStoredPairing(canonical)) {
-    throw new Error("Hub returned non-canonical WebRTC reach coordinates");
+    throw new Error("Hub returned non-canonical Iroh reach coordinates");
   }
   return canonical;
 }
@@ -129,29 +138,52 @@ export function canonicalStoredPairing(reach: CliStoredPairing): CliStoredPairin
 export function isCliDeviceCredentials(value: unknown): value is CliDeviceCredentials {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (Object.keys(value).some((key) => !DEVICE_KEYS.has(key))) return false;
-  const candidate = value as Partial<CliDeviceCredentials>;
+  const candidate = value as Partial<CliDeviceCredentialsBase> & {
+    transport?: unknown;
+    endpointSecret?: unknown;
+    controlPairing?: unknown;
+    workspacePairing?: unknown;
+  };
   if (
-    candidate.schemaVersion !== 4 ||
+    candidate.schemaVersion !== 5 ||
     candidate.kind !== "device" ||
     !commonWorkspaceIdentity(candidate) ||
     !isDeviceId(candidate.deviceId) ||
     !isDeviceRefreshToken(candidate.refreshToken) ||
-    !isCliStoredPairing(candidate.controlPairing) ||
-    !isCliStoredPairing(candidate.workspacePairing) ||
     !positiveSafeInteger(candidate.pairedAt)
   ) {
     return false;
   }
-  const canonical = candidate as CliDeviceCredentials;
+  if (candidate.transport === "local") {
+    return (
+      candidate.endpointSecret === undefined &&
+      candidate.controlPairing === undefined &&
+      candidate.workspacePairing === undefined &&
+      isDirectWorkspaceUrl(candidate.url!, candidate.workspaceName!)
+    );
+  }
+  if (candidate.transport !== "iroh") return false;
+  if (
+    typeof candidate.endpointSecret !== "string" ||
+    !ENDPOINT_SECRET_PATTERN.test(candidate.endpointSecret) ||
+    !isCliStoredPairing(candidate.controlPairing) ||
+    !isCliStoredPairing(candidate.workspacePairing)
+  )
+    return false;
+  const canonical = candidate as CliIrohDeviceCredentials;
   return canonical.url === workspacePairingUrl(canonical.workspaceName, canonical.workspacePairing);
 }
 
 export function isCliAgentCredentials(value: unknown): value is CliAgentCredentials {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (Object.keys(value).some((key) => !AGENT_KEYS.has(key))) return false;
-  const candidate = value as Partial<CliAgentCredentials>;
+  const candidate = value as Partial<CliAgentCredentialsBase> & {
+    transport?: unknown;
+    endpointSecret?: unknown;
+    workspacePairing?: unknown;
+  };
   if (
-    candidate.schemaVersion !== 1 ||
+    candidate.schemaVersion !== 2 ||
     candidate.kind !== "agent" ||
     !commonWorkspaceIdentity(candidate) ||
     typeof candidate.entityId !== "string" ||
@@ -166,14 +198,24 @@ export function isCliAgentCredentials(value: unknown): value is CliAgentCredenti
   ) {
     return false;
   }
-  const canonical = candidate as CliAgentCredentials;
-  if (canonical.workspacePairing !== undefined) {
+  if (candidate.transport === "iroh") {
+    if (
+      typeof candidate.endpointSecret !== "string" ||
+      !ENDPOINT_SECRET_PATTERN.test(candidate.endpointSecret) ||
+      !isCliStoredPairing(candidate.workspacePairing)
+    )
+      return false;
+    const canonical = candidate as CliIrohAgentCredentials;
     return (
-      isCliStoredPairing(canonical.workspacePairing) &&
       canonical.url === workspacePairingUrl(canonical.workspaceName, canonical.workspacePairing)
     );
   }
-  return isDirectWorkspaceUrl(canonical.url, canonical.workspaceName);
+  if (candidate.transport !== "local") return false;
+  return (
+    candidate.endpointSecret === undefined &&
+    candidate.workspacePairing === undefined &&
+    isDirectWorkspaceUrl(candidate.url!, candidate.workspaceName!)
+  );
 }
 
 export function isCliCredentials(value: unknown): value is CliCredentials {
@@ -205,7 +247,7 @@ function commonWorkspaceIdentity(value: {
 }
 
 function workspacePairingUrl(workspaceName: string, pairing: CliStoredPairing): string {
-  return `webrtc://${pairing.room}${selectedWorkspacePath(workspaceName)}`;
+  return `iroh://${pairing.endpointId}${selectedWorkspacePath(workspaceName)}`;
 }
 
 function isDirectWorkspaceUrl(raw: string, workspaceName: string): boolean {

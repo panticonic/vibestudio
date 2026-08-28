@@ -28,7 +28,7 @@ import type {
 } from "./types.js";
 import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
-import { SESSION_CONNECTION_LOST_CODE } from "./protocol/sessionNegotiation.js";
+import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import {
@@ -805,7 +805,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       // postMessage bridges) has no request-body channel at all — but a panel
       // shell bridge can still carry uploads through its dedicated upload hop
       // (`streamBody`, plan §1.6): the panel pumps the body across the bridge
-      // as chunk messages and the HOST feeds it to its WebRTC session.
+      // as chunk messages and the HOST feeds it to its Iroh session.
       if (config.transport.streamBody) {
         const envelope = makeEnvelope(
           targetId,
@@ -834,7 +834,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcStreamOptions
   ) {
-    // Prefer a transport-native raw stream (notably React Native WebRTC, where
+    // Prefer a transport-native raw stream (notably React Native Iroh, where
     // whatwg-fetch Response cannot consume a ReadableStream body). Browser and
     // Node transports can losslessly unwrap the ordinary Response path.
     if (!config.transport.streamReadable) {
@@ -1095,8 +1095,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   // cover — a routed REQUEST or RESPONSE that was queued but never hit the
   // wire at pipe-down (nothing server-side to replay; a lost response strands
   // the REMOTE caller, whose pipe never went down) — is closed at the
-  // TRANSPORT layer: the WebRTC transport re-drives undelivered routed frames
-  // on a `resubscribe` recovery (webrtcClient.ts, unflushedRouted), so every
+  // TRANSPORT layer: the Iroh transport re-drives undelivered routed frames
+  // on a `resubscribe` recovery, so every
   // surviving routed pending is guaranteed its request AND response delivery.
   // The remaining case — the request WAS delivered but the callee then
   // terminally dies (grace expiry / lease revoke), so no response will ever

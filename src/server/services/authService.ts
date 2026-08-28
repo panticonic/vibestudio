@@ -22,6 +22,7 @@ import {
 } from "@vibestudio/shared/deviceCredentials";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { User } from "@vibestudio/identity/types";
+import type { DeviceTransportBinding } from "@vibestudio/identity/identityDb";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
@@ -103,7 +104,11 @@ interface WorkspaceCredentialRedeemerDeps extends DeviceCredentialRedeemerDeps {
 const REFRESH_PREFIX = "refresh:";
 const AGENT_PREFIX = "agent:";
 
-async function redeemReturningDevice(deps: DeviceCredentialRedeemerDeps, token: string) {
+async function redeemReturningDevice(
+  deps: DeviceCredentialRedeemerDeps,
+  token: string,
+  transport: DeviceTransportBinding
+) {
   if (!token.startsWith(REFRESH_PREFIX)) return null;
   const rest = token.slice(REFRESH_PREFIX.length);
   const sep = rest.indexOf(":");
@@ -114,7 +119,7 @@ async function redeemReturningDevice(deps: DeviceCredentialRedeemerDeps, token: 
     return null;
   }
   try {
-    const device = deps.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+    const device = deps.deviceAuthStore.validateRefresh(deviceId, refreshToken, transport);
     const user = deps.resolveUser(device.userId);
     if (!user || user.revokedAt !== undefined) return null;
     await deps.touchDevice?.(deviceId);
@@ -164,17 +169,25 @@ export function createHubCredentialRedeemer(
   deps: DeviceCredentialRedeemerDeps & {
     redeemPairingCode: (
       code: string,
-      input: { label?: string; platform?: string }
+      input: { label?: string; platform?: string; transport: DeviceTransportBinding }
     ) => Promise<PairedDeviceCredential>;
   }
 ) {
-  return async (token: string, ctx: { clientLabel?: string; clientPlatform?: string }) => {
-    if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token);
+  return async (
+    token: string,
+    ctx: {
+      clientLabel?: string;
+      clientPlatform?: string;
+      transport: DeviceTransportBinding;
+    }
+  ) => {
+    if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token, ctx.transport);
     if (token.startsWith(AGENT_PREFIX)) return null;
     try {
       const credential = await deps.redeemPairingCode(token, {
         label: ctx.clientLabel,
         platform: ctx.clientPlatform,
+        transport: ctx.transport,
       });
       const user = deps.resolveUser(credential.userId);
       if (!user || user.revokedAt !== undefined) return null;
@@ -207,8 +220,8 @@ export function createHubCredentialRedeemer(
 
 /** Workspace ingress: already-issued devices and workspace-scoped agents only. */
 export function createWorkspaceCredentialRedeemer(deps: WorkspaceCredentialRedeemerDeps) {
-  return async (token: string) => {
-    if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token);
+  return async (token: string, ctx: { transport: DeviceTransportBinding }) => {
+    if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token, ctx.transport);
     if (token.startsWith(AGENT_PREFIX)) return redeemAgentCredential(deps, token);
     return null;
   };
@@ -408,6 +421,7 @@ export function createAuthService(deps: {
         await deps.resolveRuntimeEntity?.(principalId);
         return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id, {
           ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
+          ...(ctx.caller.remoteEndpointId ? { remoteEndpointId: ctx.caller.remoteEndpointId } : {}),
         });
       },
       getConnectionInfo: (ctx) => ({
@@ -454,7 +468,9 @@ export function createAuthService(deps: {
       handler: async (req, res) => {
         try {
           const body = RefreshShellBodySchema.parse(await readJson(req));
-          const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
+          const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken, {
+            kind: "local",
+          });
           const shellToken = deps.tokenManager.ensureToken(shellCallerId(body.deviceId), "shell");
           sendJson(
             res,
@@ -482,7 +498,7 @@ export function createAuthService(deps: {
       // Mirror of /refresh-shell for entity-scoped agent credentials (§3.2):
       // exchange an `agent:<agentId>:<secret>` credential for a short-lived
       // caller (bearer) token so HTTP `POST /rpc` works with one auth model
-      // everywhere. The WS/WebRTC paths use the same credential directly via the
+      // everywhere. The WS/Iroh paths use the same credential directly via the
       // redeemer; this route is the HTTP-only leg.
       handler: async (req, res) => {
         try {
@@ -557,7 +573,7 @@ export function createAuthService(deps: {
             return;
           }
           const body = MobileAppBootstrapBodySchema.parse(await readJson(req));
-          deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
+          deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken, { kind: "local" });
           const readiness = await deps.ensureMobileAppReady?.(body.source ?? null);
           if (readiness && !readiness.ready) {
             const approvalRequired = readiness.approvalRequired === true;

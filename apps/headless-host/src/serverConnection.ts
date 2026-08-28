@@ -2,7 +2,7 @@
  * Server RPC connection for the headless host: WS /rpc transport with
  * ws:auth fields declaring a headless client. Public raw/device auth is
  * intentionally absent: server-spawned hosts
- * receive a capability over IPC; the CLI injects its paired WebRTC connection.
+ * receive a capability over IPC; the CLI injects its paired Iroh connection.
  */
 import { WebSocket } from "ws";
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";

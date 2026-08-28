@@ -78,7 +78,7 @@
     "node_modules",
     "dist",
     "**/dist",
-    "packages/mobile-webrtc",
+    "packages/mobile-iroh",
     "src/server/workerdPrograms",
     "src/server/services/relaySeam.integration.test.ts"
   ]

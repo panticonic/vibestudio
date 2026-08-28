@@ -72,8 +72,8 @@ obsolete and hardens the seams.
 - **Per-child device store:** now that the hub owns identity (WP0/WP1), remove the per-child
   `{childStateDir}/auth/devices.json` provisioning in `buildWorkspaceChildEnv`
   (`hubServer.ts:739-775`); pass the child the **read-only identity-DB path** instead.
-  **Keep the per-child DTLS identity + WebRTC ingress** — the hub-as-answerer/relay design was
-  rejected (WP1 pivot); each child owns its own ingress, so its DTLS identity stays. (Do **not**
+  **Keep the per-child Endpoint ID identity + Iroh ingress** — the hub-as-answerer/relay design was
+  rejected (WP1 pivot); each child owns its own ingress, so its Endpoint ID identity stays. (Do **not**
   remove it, and there is no `VIBESTUDIO_HUB_GRANT_KEY` to add — no HMAC grant exists.)
 - **Admin-token-as-root remnants:** finish removing any human-identity use of the admin token
   left after WP9 (`index.ts:2014-2039`, `centralAuth.ts`, `hubServer.ts:876-888`) — keep only
@@ -96,8 +96,8 @@ obsolete and hardens the seams.
 - `docs/cli.md` — new CLI: `invite-user`, `pair-device`, `add-member`, `list-users`,
   workspace list/route for a user.
 - `workspace/skills/remote-access/SKILL.md` — multi-user pairing, root bootstrap, membership.
-- `docs/webrtc-deployment.md` — hub owns **identity/pairing/routing-signaling**; **each child
-  keeps its own WebRTC ingress + DTLS identity** (hub is not a media relay — WP1 pivot).
+- `docs/iroh-deployment.md` — hub owns **identity/pairing/routing-signaling**; **each child
+  keeps its own Iroh ingress + Endpoint ID identity** (hub is not a media relay — WP1 pivot).
 
 ---
 
@@ -107,7 +107,7 @@ Extend the existing gates rather than inventing parallel ones:
 
 - **Existing:** `pnpm quality:check` (type + lint + format + `check:host-boundary`),
   `pnpm test`, `pnpm smoke:full`, the remote-overhaul focused gates
-  (`docs/remote-ux-overhaul-plan.md:59-67`), `pnpm test:webrtc-e2e`.
+  (`docs/remote-ux-overhaul-plan.md:59-67`), `pnpm test:iroh-e2e`.
 - **New multi-user scenarios (add to the ladder):**
   1. **Two users / one workspace / mutual inspectability:** both see the full panel forest,
      approve from one queue, neither blocked from the other's tree/channels/logs.
@@ -153,10 +153,10 @@ A closing grep-style audit; each hit is either fixed or documented as intentiona
 | `packages/shared/src/centralData.ts`, `workspace/types.ts`                                                                                 | per-record locked updates; mint opaque `WorkspaceEntry.workspaceId`; `lastWorkspaceTarget` per-user; remove single-user LWW comment                                        |
 | `src/server/index.ts`                                                                                                                      | remove `panelPort` (`:91,262`), single-user comment (`:337-339`), admin-token-as-root remnants                                                                             |
 | `src/server/panelHttpServer.ts`                                                                                                            | remove `setPort` (`:229-238`)                                                                                                                                              |
-| `src/server/hubServer.ts`                                                                                                                  | remove `panelPort` (`:33`), per-child **device store** (`:739-775`) and pass read-only identity-DB path; **keep** per-child DTLS ingress; admin-token-as-root (`:876-888`) |
+| `src/server/hubServer.ts`                                                                                                                  | remove `panelPort` (`:33`), per-child **device store** (`:739-775`) and pass read-only identity-DB path; **keep** per-child Endpoint ID ingress; admin-token-as-root (`:876-888`) |
 | `src/server/services/pushService.ts`                                                                                                       | replace the whole-file registration store with exact-schema `server-auth/push.db`; host-stamped ownership and exact target APIs                                            |
 | `packages/shared/src/centralAuth.ts`                                                                                                       | admin token = diagnostic only                                                                                                                                              |
-| `STATE_DIRECTORY.md`, `docs/routes.md`, `README.md`, `docs/cli.md`, `docs/webrtc-deployment.md`, `workspace/skills/remote-access/SKILL.md` | multi-user refresh                                                                                                                                                         |
+| `STATE_DIRECTORY.md`, `docs/routes.md`, `README.md`, `docs/cli.md`, `docs/iroh-deployment.md`, `workspace/skills/remote-access/SKILL.md` | multi-user refresh                                                                                                                                                         |
 | `scripts/full-system-smoke.mjs` + test configs                                                                                             | multi-user scenarios in the ladder                                                                                                                                         |
 
 ---

@@ -215,14 +215,15 @@ vibestudio remote deploy pairing local
 vibestudio remote deploy logs local
 vibestudio remote deploy update local
 vibestudio remote deploy remove local
-vibestudio remote deploy user@host --port 3030 --signal-url wss://signaling.example.workers.dev
+vibestudio remote deploy user@host --port 3030 \
+  --relay-url https://relay.example/ --relay-url https://relay-eu.example/
 vibestudio remote deploy status user@host
 vibestudio remote deploy pairing user@host
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 vibestudio remote deploy remove user@host [--purge]
 vibestudio remote doctor
-vibestudio remote repair-identity --workspace default --yes
+vibestudio remote rotate-endpoint --workspace default --yes
 ```
 
 Use `local` when the computer running the command is the server; it uses the
@@ -234,7 +235,7 @@ nvm / user-prefix npm installs). Deploy then polls both the loopback hub and the
 routed `default` workspace health endpoint and requires protected managed ready
 state before running `remote doctor` against both the stable hub identity and
 the default workspace reach. Pairing invites are minted by
-the hub with an exact target workspace ID; their rooms remain on the stable hub
+the hub with an exact target workspace ID; control remains on the stable hub
 control ingress. Deploy never consumes an invite. `remote deploy pairing
 <target>` reads that target's mode-`0600` managed ready file, proves it belongs
 to the live hub and a healthy default workspace, and prints the current root
@@ -243,28 +244,26 @@ QR/link. `remote deploy logs <target>` is only for diagnostics.
 `update` reuses `deploy` and explicitly restarts the unit, so a new build
 replaces the running old binary. `remove` disables and deletes the unit; add
 `--purge` to also uninstall the `@panticonic/vibestudio-server` npm package and
-delete workspace-child WebRTC reaches. Hub control identity, accounts, and
+delete workspace-child Iroh endpoint secrets. Hub control identity, accounts, and
 device pairing remain intact; clients obtain fresh workspace reaches through
 the hub after reinstall. Workspace source directories are always left intact.
 
-`remote doctor` runs a checklist: the `node-datachannel` native addon, the
-selected `identity.pem` layout (present, mode `0600`, cert+key), signaling
-reachability (a real `role=answerer` room dial, not the endpoint root), and —
-when a deployed unit is present on the host — the unit's active state and
-gateway port. It checks the stable hub control identity by default;
-`--workspace` explicitly selects one child identity. Server-only checks are
-skipped, not failed, when run as a client-side preflight.
+`remote doctor` verifies the pinned `@number0/iroh` native binding, the selected
+32-byte endpoint key and mode `0600`, the explicit canonical HTTPS relay set,
+and an ALPN/path probe when paired reach is available. It checks the stable hub
+control identity by default; `--workspace` explicitly selects one child
+identity. Server-only checks are skipped, not failed, on a client-only host.
 
-`remote repair-identity` requires an explicit `--workspace` and rotates only
-that child's reach. Device pairing remains valid and clients only re-route that
-workspace. Hub control identity rotation is intentionally unsupported because
-that identity is account/device trust, not a replaceable reach cache; restore
-its exact backup instead.
+`remote rotate-endpoint` requires an explicit `--workspace` and `--yes`. It
+atomically installs a fresh 32-byte endpoint secret, retains a timestamped
+backup, and forces clients to request a fresh reach for that workspace. Hub
+endpoint rotation is intentionally unsupported because it is a device-trust
+reset, not a repair operation.
 
-`remote serve`, `mobile pair`, and server startup resolve signaling as:
-flag > `VIBESTUDIO_WEBRTC_SIGNAL_URL` > hosted default
-(`wss://signal.vibestudio.app`). Self-hosted signaling is deployed from
-`apps/signaling`; there is no separate setup command that mutates the repo.
+`remote deploy` accepts repeatable `--relay-url` values and writes their ordered
+set to `VIBESTUDIO_IROH_RELAYS`. Without flags it uses the product relay pair.
+Server startup rejects malformed, credential-bearing, non-HTTPS, duplicate, or
+oversized relay coordinates and never enables n0 public presets or address lookup.
 
 Production Cloudflare deploys are rooted in the repo scripts:
 
@@ -274,9 +273,9 @@ pnpm deploy:cloudflare
 pnpm smoke:cloudflare
 ```
 
-`signal.vibestudio.app` is owned by `apps/signaling`; `vibestudio.app` is owned by
-`apps/webhook-relay` for `/p`, `/panel`, `.well-known`, OAuth callbacks,
-webhooks, and backhaul.
+`vibestudio.app` is owned by `apps/webhook-relay` for `/p`, `/panel`,
+`.well-known`, OAuth callbacks, webhooks, and backhaul. Iroh relays are operated
+separately as documented in [iroh-relay-operations.md](iroh-relay-operations.md).
 
 ## Agent
 
@@ -371,7 +370,7 @@ vibestudio mobile install --from-source --launch
 vibestudio mobile install --platform ios --simulator --launch
 ```
 
-Start the phone pairing server (pairing is over WebRTC — no Tailscale/HTTPS setup):
+Start the phone pairing server (pairing is over Iroh — no Tailscale/HTTPS setup):
 
 ```sh
 vibestudio mobile pair --port 3030
@@ -399,12 +398,13 @@ Useful flags:
 - `--device <adb-serial>` targets a specific Android device.
 - `--platform android|ios` selects the mobile target. iOS requires macOS + Xcode.
 - `--port <port>` chooses the local pairing server port.
-- `--signal-url <url>` chooses the WebRTC signaling endpoint; otherwise the hosted default is used.
+- `--relay-url <https-url>` adds an explicit Iroh relay; repeat to define order.
 - `--dev` on `vibestudio mobile pair` offers a disposable template workspace named
   `dev` after pairing.
 
-Remote reach is WebRTC (pair by QR: signaling room + DTLS fingerprint); see
-[webrtc-rpc-transport.md](./webrtc-rpc-transport.md) and [webrtc-local-e2e.md](./webrtc-local-e2e.md).
+Remote reach is Iroh (pair by QR: Endpoint ID, explicit relays, and one-time code);
+see [transport-sessions.md](./architecture/transport-sessions.md) and
+[iroh-relay-operations.md](./iroh-relay-operations.md).
 
 ## Git Upstream
 

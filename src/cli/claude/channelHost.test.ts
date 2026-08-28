@@ -35,7 +35,7 @@ const LAUNCH_ENV = {
   VIBESTUDIO_LAUNCH_PROFILE: "/tmp/vibestudio-test-profile",
 } as NodeJS.ProcessEnv;
 const AGENT_CREDENTIAL = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   kind: "agent" as const,
   url: "https://workspace.example/",
   workspaceId: "workspace-1",
@@ -45,6 +45,7 @@ const AGENT_CREDENTIAL = {
   contextId: "ctx-1",
   agentId: `agt_${"A".repeat(24)}`,
   agentToken: `agent:agt_${"A".repeat(24)}:${"T".repeat(43)}`,
+  transport: "local" as const,
   signedInAt: 1,
 };
 const BRIDGE_ENVIRONMENT = { loadCredentials: () => AGENT_CREDENTIAL };

@@ -4,7 +4,7 @@
  * In REMOTE mode the desktop has no local gateway: panels still load from a
  * loopback origin (`buildPanelUrl` → `http://127.0.0.1:{port}/{source}/`), but
  * the asset bytes live on the server. This service exposes a single `fetch`
- * method that the remote shell's panel-asset façade calls over the WebRTC pipe;
+ * method that the remote shell's panel-asset façade calls over the Iroh pipe;
  * the server does a LOOPBACK fetch to its OWN gateway and streams the full
  * response back.
  *
@@ -14,7 +14,7 @@
  * header (and any other descriptor headers) is forwarded verbatim for the rare
  * asset path that wants it, but it is never injected here.
  *
- * The Response streams back over the pipe's bulk channel (panel bundles are MB).
+ * The Response streams back over the request's native transport stream.
  * REQUEST bodies stream in the same way (plan §1.6): the caller declares a
  * `bodyStreamId` on its stream-open and pumps the body as bulk DATA frames; the
  * transport assembles it into `ctx.body`, which this handler forwards as the
@@ -57,7 +57,7 @@ import {
 } from "@vibestudio/shared/panel/assetHeaders";
 
 /** Loopback fetch request shape sent by the panel-asset façade. The request
- * body (if any) rides the bulk channel as a stream (`ctx.body`), never in here. */
+ * body (if any) rides the request stream (`ctx.body`), never in here. */
 export interface GatewayFetchDescriptor {
   /** Absolute request path (must start with "/"), e.g. `/apps/shell/?contextId=…`. */
   path: string;
@@ -76,7 +76,7 @@ const fetchDescriptorSchema = z
     path: z.string(),
     method: z.string().optional(),
     headers: z.record(z.string(), z.string()).optional(),
-    // Gzip the response on the wire. react-native-webrtc serializes its bulk-channel
+    // Gzip the response on the wire. Mobile receives bounded QUIC chunks through
     // receive (one message per round-trip), so a multi-MB asset streams too slowly
     // over a relay; gzip (~4×) keeps it inside the pipe window. The caller is
     // responsible for decompressing (the mobile native host does, before verifying
@@ -220,11 +220,11 @@ const gatewayFetchMethods = defineServiceMethods({
     },
     description:
       "Loopback-fetch a panel asset from the server's own gateway and stream the " +
-      "Response back over the pipe's bulk channel (a streaming method). A request " +
+      "Response back over a dedicated transport stream. A request " +
       "body streams IN over the same channel (stream-open bodyStreamId → ctx.body).",
     args: z.tuple([fetchDescriptorSchema]),
     // Streaming method: the handler returns a Response whose body is chunked
-    // over the bulk channel by handleWsStreamRequest. Node callers use `.stream`
+    // through the transport's streaming handler. Node callers use `.stream`
     // (Response); RN callers use `.streamReadable` (the raw ReadableStream).
     returns: z.instanceof(Response),
     access: { sensitivity: "read" as const },
@@ -251,7 +251,7 @@ export function createGatewayFetchService(deps: {
     name: serviceName,
     description: "Loopback panel-asset fetch bridge (remote shells)",
     // Reachable by the trusted desktop principals (remote shells call as `shell`
-    // via the WebRtcServerClient main session; Electron-hosted runtimes call as
+    // via the Iroh server client main session; Electron-hosted runtimes call as
     // `app`) and all userland runtimes. The panel runtime's gatewayFetch tunnels
     // here as the panel principal to load gateway-relative workspace assets.
     // Worker/DO runtimes are server-co-located and normally fetch directly, but
@@ -320,9 +320,9 @@ export function createGatewayFetchService(deps: {
         console.log(`[gateway.fetch] -> ${descriptor.method ?? "GET"} ${label}`);
 
         // STREAMING both ways (via the pipe's stream path, handleWsStreamRequest):
-        // the response body rides the bulk channel chunked under the data-channel
-        // message-size limit, and the request body (ctx.body, plan §1.6) streams in
-        // from the same channel. A buffered base64 body in either direction would
+        // the response body rides the request's native stream, beyond the envelope
+        // size limit, and the request body (`ctx.body`) streams in on the same
+        // bidirectional request. A buffered base64 body in either direction would
         // exceed that limit for real payloads (MB).
         const requestHasRange = hasRangeRequestHeader(descriptor.headers);
         const resumableGzip =

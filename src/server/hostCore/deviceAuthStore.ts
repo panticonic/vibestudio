@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { derivePairingRoom } from "@vibestudio/shared/connect";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import {
   DEVICE_REFRESH_TOKEN_PATTERN,
@@ -14,8 +13,8 @@ import {
 } from "@vibestudio/shared/cliCredentials";
 import type {
   AgentCredentialRow,
-  ControlRoomRow,
   DeviceRow,
+  DeviceTransportBinding,
   IdentityDb,
   PairingCodeIntent,
 } from "@vibestudio/identity/identityDb";
@@ -64,17 +63,14 @@ export interface IssuedDeviceCredential {
   platform?: string;
 }
 
-/** A newly issued device and the stable hub control room promoted to it. */
 export interface PairedDeviceCredential extends IssuedDeviceCredential {
-  controlRoom: string;
   /** Exact workspace suggested by the consumed invite. */
   workspaceId: string;
 }
 
-/** Presentable pairing secret plus its durable hub-owned invite room. */
+/** Presentable one-time pairing secret. */
 export interface PairingInvite {
   code: string;
-  room: string;
   expiresAt: number;
 }
 
@@ -105,7 +101,6 @@ export class DeviceAuthStore {
     this.serverId = this.loadServerId(options.serverIdPath);
     if (!this.db.readOnly) {
       this.db.deleteExpiredPairingInvites(this.now());
-      this.db.deleteRevokedDeviceControlRooms();
     }
   }
 
@@ -121,27 +116,25 @@ export class DeviceAuthStore {
     const codeHash = hashSecret(code);
     const createdAt = this.now();
     const expiresAt = createdAt + ttlMs;
-    const room = derivePairingRoom(code);
     this.db.insertPairingInvite({
       code: codeHash,
-      room,
       workspaceId: opts.workspaceId,
       intent: opts?.intent ?? "pair-device",
       createdAt,
       expiresAt,
       ...(opts?.userId ? { userId: opts.userId } : {}),
     });
-    return { code, room, expiresAt };
+    return { code, expiresAt };
   }
 
-  /** Cancel an invite that was never returned, including its hub control room. */
-  cancelPairingInvite(code: string): Extract<ControlRoomRow, { kind: "invite" }> | null {
+  cancelPairingInvite(code: string): boolean {
     const codeHash = hashSecret(code);
-    return this.db.deletePairingInvite(codeHash);
+    return this.db.deletePairingInvite(codeHash) !== null;
   }
 
   completePairing(input: {
     code: string;
+    transport: DeviceTransportBinding;
     /** Invoked only after a valid, unbound root-bootstrap code is consumed. */
     createRootUser?: () => string;
     label?: string;
@@ -160,6 +153,7 @@ export class DeviceAuthStore {
             device: {
               deviceId: `dev_${randomBase64Url(18)}`,
               refreshTokenHash: hashSecret(refreshToken),
+              transport: input.transport,
               userId,
               label: input.label ?? "Vibestudio client",
               createdAt: this.now(),
@@ -189,7 +183,6 @@ export class DeviceAuthStore {
     return {
       deviceId: completed.device.deviceId,
       refreshToken: completed.refreshToken,
-      controlRoom: completed.controlRoom,
       workspaceId: completed.workspaceId,
       userId: completed.device.userId,
       label: completed.device.label,
@@ -197,12 +190,18 @@ export class DeviceAuthStore {
     };
   }
 
-  issueDevice(input: { userId: string; label: string; platform?: string }): IssuedDeviceCredential {
+  issueDevice(input: {
+    userId: string;
+    label: string;
+    platform?: string;
+    transport: DeviceTransportBinding;
+  }): IssuedDeviceCredential {
     const deviceId = `dev_${randomBase64Url(18)}`;
     const refreshToken = randomBase64Url(32);
     const record: DeviceRecord = {
       deviceId,
       refreshTokenHash: hashSecret(refreshToken),
+      transport: input.transport,
       userId: input.userId,
       label: input.label,
       createdAt: this.now(),
@@ -218,7 +217,11 @@ export class DeviceAuthStore {
     };
   }
 
-  validateRefresh(deviceId: string, refreshToken: string): DeviceRecord {
+  validateRefresh(
+    deviceId: string,
+    refreshToken: string,
+    presentedTransport: DeviceTransportBinding
+  ): DeviceRecord {
     const record = this.db.getDevice(deviceId);
     if (!record || record.revokedAt) {
       throw authError("DEVICE_NOT_PAIRED", "Device is not paired", 401);
@@ -226,6 +229,18 @@ export class DeviceAuthStore {
     const presentedHash = hashSecret(refreshToken);
     if (!constantTimeStringEqual(presentedHash, record.refreshTokenHash)) {
       throw authError("INVALID_REFRESH_CREDENTIAL", "Invalid refresh credential", 401);
+    }
+    const bindingMatches =
+      record.transport.kind === presentedTransport.kind &&
+      (record.transport.kind === "local" ||
+        (presentedTransport.kind === "iroh" &&
+          constantTimeStringEqual(record.transport.endpointId, presentedTransport.endpointId)));
+    if (!bindingMatches) {
+      throw authError(
+        "DEVICE_TRANSPORT_MISMATCH",
+        "Device credential is not bound to this transport identity",
+        401
+      );
     }
     // Children validate against the shared identity DB read-only (WP0 §5.1);
     // only the hub — the sole writer — stamps last-used.
@@ -253,20 +268,12 @@ export class DeviceAuthStore {
     return this.db.listDevices();
   }
 
-  listControlRooms(): ControlRoomRow[] {
-    return this.db.listControlRooms();
+  cleanupPairingInvites(now = this.now()): void {
+    this.db.deleteExpiredPairingInvites(now);
   }
 
-  getDeviceControlRoom(deviceId: string): string | null {
-    return this.db.getDeviceControlRoom(deviceId)?.room ?? null;
-  }
-
-  /** Reconcile startup/expiry state and return rooms the live ingress should disarm. */
-  cleanupControlRooms(now = this.now()): ControlRoomRow[] {
-    return [
-      ...this.db.deleteExpiredPairingInvites(now),
-      ...this.db.deleteRevokedDeviceControlRooms(),
-    ];
+  hasLivePairingInvite(now = this.now()): boolean {
+    return this.db.hasLivePairingInvite(now);
   }
 
   /** Whether durable pairing state has ever been created for this workspace hub. */

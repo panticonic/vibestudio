@@ -1450,7 +1450,7 @@ exact topic membership, and transport recovery reopens the caller's desired
 watch. Direct delivery addresses the already-authenticated live transport
 session and does not create a durable event participant. There are no unary
 subscribe/unsubscribe methods, server-to-client callback retries, persisted
-watch handles, or application heartbeats layered on WebRTC.
+watch handles, or application heartbeats layered on Iroh.
 
 An externally linked agent attachment is likewise one long-lived
 `openBridge()` response. The response stream carries the initial attachment

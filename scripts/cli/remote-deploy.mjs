@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseSignalingEndpoint } from "./lib/connect-grammar.generated.mjs";
 import { printConnectBanner } from "./lib/connect-banner.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 
@@ -12,6 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 const SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 const MANAGED_READY_FILE_RELATIVE = ".config/vibestudio/server-auth/hub-ready.json";
+const DEFAULT_RELAY_URLS = ["https://relay.vibestudio.app/", "https://relay-eu.vibestudio.app/"];
 const nodeEngineMatch = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(pkg.engines?.node ?? "");
 if (!nodeEngineMatch) {
   throw new Error("package.json engines.node must be an exact >=major.minor.patch requirement");
@@ -26,7 +26,7 @@ export function parseArgs(argv) {
       verb: "deploy",
       target: null,
       artifact: null,
-      signalUrl: null,
+      relayUrls: [...DEFAULT_RELAY_URLS],
       port: "3030",
       purge: false,
       help: true,
@@ -39,7 +39,7 @@ export function parseArgs(argv) {
     verb,
     target: args.shift() ?? null,
     artifact: null,
-    signalUrl: null,
+    relayUrls: [],
     port: "3030",
     purge: false,
     help: false,
@@ -47,17 +47,16 @@ export function parseArgs(argv) {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--artifact") options.artifact = path.resolve(args[++i] ?? "");
-    else if (arg === "--signal-url") {
+    else if (arg === "--relay-url") {
       const raw = args[++i];
       if (!raw || /[\u0000-\u001f\u007f]/u.test(raw)) {
-        throw new Error(`${arg} requires one signaling URL without control characters`);
+        throw new Error(`${arg} requires one relay URL without control characters`);
       }
-      const parsed = parseSignalingEndpoint(raw);
-      if (parsed.kind === "error") throw new Error(parsed.reason);
-      const url = new URL(parsed.url);
-      if (url.username || url.password)
-        throw new Error("Signaling URL must not contain credentials");
-      options.signalUrl = parsed.url;
+      const url = new URL(raw);
+      if (url.protocol !== "https:" || url.username || url.password || url.toString() !== raw) {
+        throw new Error("Relay URL must be canonical, credential-free HTTPS");
+      }
+      options.relayUrls.push(raw);
     } else if (arg === "--port") {
       const raw = args[++i];
       const port = Number(raw);
@@ -69,6 +68,13 @@ export function parseArgs(argv) {
     else if (arg === "--help") options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
+  if (options.relayUrls.length === 0) options.relayUrls = [...DEFAULT_RELAY_URLS];
+  if (
+    options.relayUrls.length > 8 ||
+    new Set(options.relayUrls).size !== options.relayUrls.length
+  ) {
+    throw new Error("Pass between one and eight distinct --relay-url values");
+  }
   return options;
 }
 
@@ -76,11 +82,11 @@ export function printHelp() {
   console.log(`vibestudio remote deploy
 
 Usage:
-  vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
+  vibestudio remote deploy <user@host|local> [--artifact <tgz>] [--relay-url <https-url>...] [--port 3030]
   vibestudio remote deploy status <user@host|local>
   vibestudio remote deploy logs <user@host|local>
   vibestudio remote deploy pairing <user@host|local>
-  vibestudio remote deploy update <user@host|local> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
+  vibestudio remote deploy update <user@host|local> [--artifact <tgz>] [--relay-url <https-url>...] [--port 3030]
   vibestudio remote deploy remove <user@host|local> [--purge]
 
 Deploys a systemd user unit named vibestudio-server. With --artifact, the
@@ -88,9 +94,9 @@ tarball is installed with npm install -g. Without --artifact, the target
 installs the invoking CLI package/version from npm. Use \`local\` to make this
 computer the server without SSH. The target must run Node.js ${pkg.engines.node}.
 Remove leaves workspace source intact. --purge also removes the installed npm
-package and every workspace child's WebRTC reach. Hub identity, accounts, and
-device pairing remain intact; clients obtain fresh workspace reaches through
-the stable hub control ingress after reinstall.
+package and every workspace child's Iroh endpoint secret. Hub identity,
+accounts, and device pairing remain intact; clients obtain fresh workspace
+reaches through the stable hub control ingress after reinstall.
 `);
 }
 
@@ -290,9 +296,7 @@ export async function deploy(options, hooks = {}) {
   if (options.artifact && !fs.existsSync(options.artifact))
     throw new Error(`artifact not found: ${options.artifact}`);
   const unitDir = "$HOME/.config/systemd/user";
-  const signalEnv = options.signalUrl
-    ? `Environment=${systemdQuote(`VIBESTUDIO_WEBRTC_SIGNAL_URL=${options.signalUrl}`)}\n`
-    : "";
+  const relayEnv = `Environment=${systemdQuote(`VIBESTUDIO_IROH_RELAYS=${options.relayUrls.join(",")}`)}\n`;
   const requiredNodeTuple = JSON.stringify(REQUIRED_NODE_VERSION);
   console.log(
     options.target === "local"
@@ -368,7 +372,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 UMask=0077
-${signalEnv}ExecStart=${serverCommand}
+${relayEnv}ExecStart=${serverCommand}
 Restart=on-failure
 RestartSec=3
 
@@ -408,13 +412,15 @@ done
     hooks
   );
   console.log("✓ systemd user service      vibestudio-server.service");
-  const signalArg = options.signalUrl ? ` --signal-url ${shellQuote(options.signalUrl)}` : "";
+  const relayArgs = options.relayUrls
+    .map((relayUrl) => ` --relay-url ${shellQuote(relayUrl)}`)
+    .join("");
   await targetShell(
     options.target,
     `set -e
 ${RESOLVE_REMOTE_RUNTIME}
-"$node_bin" "$vibestudio_entry" remote doctor${signalArg}
-"$node_bin" "$vibestudio_entry" remote doctor${signalArg} --workspace default
+"$node_bin" "$vibestudio_entry" remote doctor${relayArgs}
+"$node_bin" "$vibestudio_entry" remote doctor${relayArgs} --workspace default
 "$node_bin" "$vibestudio_entry" remote deploy pairing local
 `,
     hooks
@@ -433,8 +439,8 @@ systemctl --user daemon-reload`;
   if (!purge) return base;
   return `${base}
 npm uninstall -g ${SERVER_PACKAGE_NAME} >/dev/null 2>&1 || true
-find $HOME/.config/vibestudio/workspaces -maxdepth 4 -type d -path '*/reach/webrtc' -exec rm -rf {} + 2>/dev/null || true
-echo "Purged workspace WebRTC reaches; hub pairing remains valid and clients must re-route workspaces after reinstall." >&2`;
+find $HOME/.config/vibestudio/workspaces -maxdepth 5 -type f -path '*/reach/iroh/endpoint.key' -delete 2>/dev/null || true
+echo "Purged workspace Iroh endpoint secrets; hub pairing remains valid and clients must re-route workspaces after reinstall." >&2`;
 }
 
 export async function main(argv = process.argv.slice(2), hooks = {}) {

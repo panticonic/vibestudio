@@ -1,9 +1,4 @@
-import {
-  normalizeFingerprint,
-  PAIRING_PROTOCOL_VERSION,
-  parseConnectLink,
-  parseSignalingEndpoint,
-} from "./connect-grammar.generated.mjs";
+import { PAIRING_PROTOCOL_VERSION, parseConnectLink } from "./connect-grammar.generated.mjs";
 
 const READY_KEYS = new Set([
   "mode",
@@ -18,11 +13,9 @@ const READY_KEYS = new Set([
   "workspaces",
 ]);
 const INVITE_KEYS = new Set([
-  "room",
-  "fp",
-  "sig",
+  "endpointId",
+  "relays",
   "v",
-  "ice",
   "code",
   "exp",
   "deepLink",
@@ -83,23 +76,28 @@ function assertHttpUrl(value, label) {
 function parseInvite(value, label, ready) {
   const invite = objectRecord(value, label);
   assertExactKeys(invite, INVITE_KEYS, INVITE_REQUIRED_KEYS, label);
-  if (typeof invite.room !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(invite.room)) {
-    throw new Error(`${label}.room has an unexpected format`);
-  }
-  if (typeof invite.fp !== "string" || !/^[0-9A-F]{64}$/.test(normalizeFingerprint(invite.fp))) {
-    throw new Error(`${label}.fp must be a SHA-256 DTLS fingerprint`);
+  if (typeof invite.endpointId !== "string" || !/^[0-9a-f]{64}$/.test(invite.endpointId)) {
+    throw new Error(`${label}.endpointId must be a canonical Iroh Endpoint ID`);
   }
   if (typeof invite.code !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(invite.code)) {
     throw new Error(`${label}.code has an unexpected format`);
   }
-  if (typeof invite.sig !== "string") throw new Error(`${label}.sig must be a string`);
-  const signaling = parseSignalingEndpoint(invite.sig);
-  if (signaling.kind === "error") throw new Error(`${label}.sig: ${signaling.reason}`);
+  if (
+    !Array.isArray(invite.relays) ||
+    invite.relays.length < 1 ||
+    invite.relays.length > 4 ||
+    invite.relays.some((relay) => {
+      try {
+        const url = new URL(relay);
+        return url.protocol !== "https:" || url.toString() !== relay;
+      } catch {
+        return true;
+      }
+    })
+  )
+    throw new Error(`${label}.relays must be one to four canonical HTTPS relay URLs`);
   if (invite.v !== PAIRING_PROTOCOL_VERSION) {
     throw new Error(`${label}.v must be ${PAIRING_PROTOCOL_VERSION}`);
-  }
-  if (invite.ice !== "all" && invite.ice !== "relay") {
-    throw new Error(`${label}.ice must be all or relay`);
   }
   for (const [field, pattern] of [
     ["serverId", /^srv_[A-Za-z0-9_-]{24}$/],
@@ -132,13 +130,11 @@ function parseInvite(value, label, ready) {
     const parsed = parseConnectLink(link);
     if (parsed.kind === "error") throw new Error(`${label}.${field}: ${parsed.reason}`);
     if (
-      parsed.room !== invite.room ||
-      normalizeFingerprint(parsed.fp) !== normalizeFingerprint(invite.fp) ||
+      parsed.endpointId !== invite.endpointId ||
+      JSON.stringify(parsed.relays) !== JSON.stringify(invite.relays) ||
       parsed.code !== invite.code ||
       parsed.exp !== invite.exp ||
-      parsed.sig !== signaling.url ||
-      parsed.v !== invite.v ||
-      parsed.ice !== invite.ice
+      parsed.v !== invite.v
     ) {
       throw new Error(`${label}.${field} does not match the invite coordinates`);
     }

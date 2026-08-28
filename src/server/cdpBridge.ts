@@ -7,7 +7,7 @@
  *
  * Two connection surfaces:
  * - host providers connect either via `/api/cdp-host` WebSocket (local shells)
- *   or a shell-authenticated RPC stream (remote/WebRTC shells)
+ *   or a shell-authenticated RPC stream (remote/Iroh shells)
  * - `/cdp/{targetId}` — per-panel Playwright client WebSocket connections
  *
  * Both paths authenticate at the HTTP upgrade boundary, before ws allocates
@@ -254,7 +254,7 @@ export class CdpBridge {
 
   /**
    * Attach a trusted host provider over an already-authenticated transport.
-   * Used by remote/WebRTC shells where the management plane is RPC, not a
+   * Used by remote/Iroh shells where the management plane is RPC, not a
    * direct loopback WebSocket. The caller is responsible for authenticating and
    * authorizing the shell before exposing this connection.
    */

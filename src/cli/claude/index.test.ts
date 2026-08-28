@@ -13,17 +13,17 @@ const AGENT_ID = `agt_${"a".repeat(24)}`;
 const AGENT_TOKEN = `agent:${AGENT_ID}:${"s".repeat(43)}`;
 const SERVER_ID = `srv_${"s".repeat(24)}`;
 const PAIRING = {
-  room: "paired-room",
-  fp: "AA".repeat(32),
-  sig: "wss://signal.example/",
-  v: 3 as const,
-  ice: "all" as const,
+  endpointId: "aa".repeat(32),
+  relays: ["https://relay.example/"],
+  v: 4 as const,
 };
+const ENDPOINT_SECRET = "E".repeat(43);
 const directRoute = (url = "http://local") => ({
   url,
   serverId: SERVER_ID,
   workspaceId: "workspace-dev",
   workspaceName: "dev",
+  transport: "local" as const,
 });
 
 beforeEach(() => {
@@ -113,7 +113,9 @@ describe("remote Claude launch materialization", () => {
         contextDirectory,
         profilesRoot,
         cliRoute: {
-          ...directRoute("webrtc://paired-room/_workspace/dev"),
+          ...directRoute(`iroh://${PAIRING.endpointId}/_workspace/dev`),
+          transport: "iroh",
+          endpointSecret: ENDPOINT_SECRET,
           workspacePairing: PAIRING,
         },
         release,

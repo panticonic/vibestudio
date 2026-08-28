@@ -66,7 +66,7 @@ lazy.
 
 Apps can declare package-root-relative `vibestudio.app.startupModules`. These
 modules stay dynamically executed, but their emitted static closures are added
-to the initial artifact bundle. This removes a request-by-request WebRTC
+to the initial artifact bundle. This removes a request-by-request Iroh
 waterfall without eagerly evaluating optional code. The Base shell declares its
 normal `App` module; feature toolchains below it remain lazy.
 

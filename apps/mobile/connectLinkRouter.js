@@ -59,7 +59,7 @@ export async function routeIncomingConnectLink(
  * Coalesce overlapping pairing requests onto the active happy path. A fresh
  * request is only attempted after the active one reports failure; successful
  * pairing/activation satisfies every overlapping request without opening a
- * second WebRTC pipe or racing two bundle streams.
+ * second Iroh pipe or racing two bundle streams.
  */
 export function createSuccessfulConnectCoalescer(connect) {
   let active = null;

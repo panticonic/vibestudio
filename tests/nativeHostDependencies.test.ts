@@ -14,7 +14,7 @@ describe("host native dependency contracts", () => {
     const run = vi.fn(() => result(0));
 
     expect(inspectHostNativeDependencies({ run })).toEqual([
-      { packageName: "node-datachannel", ok: true },
+      { packageName: "@number0/iroh", ok: true },
       { packageName: "node-pty", ok: true },
       { packageName: "@vscode/ripgrep", ok: true },
     ]);
@@ -30,7 +30,7 @@ describe("host native dependency contracts", () => {
       .mockReturnValueOnce(result(0));
 
     expect(() => assertHostNativeDependencies({ run })).toThrow(
-      /pnpm rebuild node-datachannel node-pty/
+      /pnpm rebuild @number0\/iroh node-pty/
     );
   });
 
@@ -48,7 +48,7 @@ describe("host native dependency contracts", () => {
 
     ensureHostNativeDependencies({ run, log });
 
-    expect(run.mock.calls[3]?.[1]).toEqual(["rebuild", "node-datachannel"]);
+    expect(run.mock.calls[3]?.[1]).toEqual(["rebuild", "@number0/iroh"]);
     expect(log).toHaveBeenLastCalledWith(
       "[native-dependencies] Host runtime dependencies repaired and verified."
     );

@@ -1,17 +1,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  createConnectDeepLink,
-  createConnectPairUrl,
-  derivePairingRoom,
-} from "@vibestudio/shared/connect";
+import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadCliCredentials, saveCliCredentials } from "../cli/credentialStore.js";
 import { ConnectionError } from "../cli/output.js";
 import { bootstrapInstanceCliFromDevice } from "./bootstrapInstanceCli.js";
 
 const roots: string[] = [];
+const reach = (byte: string) => ({
+  endpointId: byte.repeat(32),
+  relays: ["https://relay.example/"],
+  v: 4 as const,
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -26,28 +27,15 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const existingDeviceId = `dev_${"C".repeat(24)}`;
     saveCliCredentials(
       {
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: "device",
-        url: "webrtc://workspace-old/_workspace/dev",
+        url: "http://127.0.0.1:5000/_workspace/dev",
         workspaceId: "ws_dev_retired",
         workspaceName: "dev",
         serverId,
         deviceId: existingDeviceId,
         refreshToken: "R".repeat(43),
-        controlPairing: {
-          room: "development-cli",
-          fp: "AA".repeat(32),
-          sig: "wss://signal.example/",
-          v: 3,
-          ice: "all",
-        },
-        workspacePairing: {
-          room: "workspace-old",
-          fp: "BB".repeat(32),
-          sig: "wss://signal.example/",
-          v: 3,
-          ice: "all",
-        },
+        transport: "local",
         pairedAt: 123,
       },
       credentialFile
@@ -64,13 +52,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
           workspaceId: "ws_dev_current",
           running: true,
           serverUrl: "http://127.0.0.1:5000/_r/ws/dev",
-          workspaceReach: {
-            room: "workspace-current",
-            fp: "CC".repeat(32),
-            sig: "wss://signal.example/",
-            v: 3,
-            ice: "all",
-          },
+          workspaceReach: reach("cc"),
           serverId,
           serverBootId: `boot_${"B".repeat(24)}`,
         };
@@ -100,7 +82,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
       workspaceName: "dev",
       deviceId: existingDeviceId,
       pairedAt: 123,
-      workspacePairing: { room: "workspace-current" },
+      transport: "local",
     });
   });
 
@@ -111,13 +93,9 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverId = `srv_${"S".repeat(24)}`;
     const serverBootId = `boot_${"B".repeat(24)}`;
     const pairing = {
-      room: derivePairingRoom("D".repeat(32)),
-      fp: "AA".repeat(32),
-      sig: "wss://signal.example/",
+      ...reach("aa"),
       code: "D".repeat(32),
       exp: 2_000_000_000_000,
-      v: 3 as const,
-      ice: "all" as const,
     };
     const invite = {
       ...pairing,
@@ -140,13 +118,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
           workspaceId: "ws_dev",
           running: true,
           serverUrl: "http://127.0.0.1:5000/_r/ws/dev",
-          workspaceReach: {
-            room: "workspace-dev",
-            fp: "BB".repeat(32),
-            sig: "wss://signal.example/",
-            v: 3,
-            ice: "all",
-          },
+          workspaceReach: reach("bb"),
           serverId,
           serverBootId,
         };
@@ -197,8 +169,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
       workspaceId: "ws_dev",
       workspaceName: "dev",
       deviceId: `dev_${"C".repeat(24)}`,
-      controlPairing: { room: pairing.room },
-      workspacePairing: { room: "workspace-dev" },
+      transport: "local",
     });
   });
 
@@ -209,13 +180,9 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverId = `srv_${"S".repeat(24)}`;
     const serverBootId = `boot_${"B".repeat(24)}`;
     const pairing = {
-      room: derivePairingRoom("D".repeat(32)),
-      fp: "AA".repeat(32),
-      sig: "wss://signal.example/",
+      ...reach("aa"),
       code: "D".repeat(32),
       exp: 2_000_000_000_000,
-      v: 3 as const,
-      ice: "all" as const,
     };
     const invite = {
       ...pairing,
@@ -239,13 +206,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
           workspaceId: "ws_dev",
           running: true,
           serverUrl: "http://127.0.0.1:5000/_r/ws/dev",
-          workspaceReach: {
-            room: "workspace-dev",
-            fp: "BB".repeat(32),
-            sig: "wss://signal.example/",
-            v: 3,
-            ice: "all",
-          },
+          workspaceReach: reach("bb"),
           serverId,
           serverBootId,
         };

@@ -13,6 +13,8 @@ import {
   isLocalSystemTestHelpCommand,
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
+  SYSTEM_TEST_IROH_RELAYS,
+  systemTestInstanceEnvironment,
 } from "./systemTestInstance.js";
 
 describe("self-provisioning system-test instance", () => {
@@ -77,6 +79,14 @@ describe("self-provisioning system-test instance", () => {
     expect(isLocalSystemTestHelpCommand(["run", "--help"])).toBe(false);
     expect(isLocalSystemTestHelpCommand(["list", "--help"])).toBe(false);
     expect(isLocalSystemTestHelpCommand([])).toBe(false);
+  });
+
+  it("owns a working Phase-0 Iroh relay topology instead of inheriting product defaults", () => {
+    expect(
+      systemTestInstanceEnvironment({ VIBESTUDIO_IROH_RELAYS: "https://stale.invalid/" })
+    ).toEqual({
+      VIBESTUDIO_IROH_RELAYS: SYSTEM_TEST_IROH_RELAYS.join(","),
+    });
   });
 
   it("reuses an explicitly selected ready server without taking ownership", async () => {

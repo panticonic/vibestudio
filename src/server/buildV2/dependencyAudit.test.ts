@@ -102,17 +102,17 @@ describe("auditWorkspaceDependencies", () => {
     // The half of an app's closure that a workspace-only walk cannot see. The
     // owner has to read as a package a manifest author recognizes, not as a
     // path into someone else's checkout.
-    writeHostPackage("@vibestudio/mobile-webrtc", {
-      peerDependencies: { "react-native-webrtc": "^124.0.5" },
+    writeHostPackage("@vibestudio/native-camera", {
+      peerDependencies: { "react-native-camera-kit": "^16.0.0" },
     });
     writeUnit("apps/mobile", {
       name: "@workspace-apps/mobile",
-      dependencies: { "@vibestudio/mobile-webrtc": "workspace:*" },
+      dependencies: { "@vibestudio/native-camera": "workspace:*" },
     });
 
     expect(audit()).toEqual([
       "apps/mobile: @workspace-apps/mobile is loaded on its own, so nothing provides its " +
-        "closure's peers: react-native-webrtc@^124.0.5 (required by @vibestudio/mobile-webrtc). " +
+        "closure's peers: react-native-camera-kit@^16.0.0 (required by @vibestudio/native-camera). " +
         "Declare each as a dependency of @workspace-apps/mobile at the version it should own.",
     ]);
 
@@ -120,8 +120,8 @@ describe("auditWorkspaceDependencies", () => {
     writeUnit("apps/mobile", {
       name: "@workspace-apps/mobile",
       dependencies: {
-        "@vibestudio/mobile-webrtc": "workspace:*",
-        "react-native-webrtc": "124.0.7",
+        "@vibestudio/native-camera": "workspace:*",
+        "react-native-camera-kit": "16.0.1",
       },
     });
     expect(audit()).toEqual([]);

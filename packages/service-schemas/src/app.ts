@@ -71,7 +71,7 @@ export const appMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "App version plus connection mode/host, current server connection status, and the selected ICE path (relay vs direct).",
+      "App version plus connection mode/host, current server status, and Iroh path diagnostics.",
     args: z.tuple([]),
     returns: AppInfoSchema,
     access: READ_ACCESS,
@@ -82,7 +82,7 @@ export const appMethods = defineServiceMethods({
           version: "1.0.0",
           connectionMode: "local",
           connectionStatus: "connected",
-          connectionCandidateType: null,
+          remoteTransport: null,
         },
       },
     ],

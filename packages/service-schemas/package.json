@@ -21,6 +21,7 @@
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/identity": "workspace:*",
+    "@vibestudio/iroh-transport": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",

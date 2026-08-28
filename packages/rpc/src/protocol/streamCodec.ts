@@ -113,7 +113,7 @@ export function parseErrorFrame(payload: Uint8Array): ErrorFramePayload {
 }
 
 /**
- * Receive-side demultiplexer for the bulk channel. The transport feeds decoded
+ * Receive-side demultiplexer for framed loopback streaming. The transport feeds decoded
  * bulk mux frames (`protocol/bulkMux.ts`) in via `push`; each `acquire(streamId)`
  * returns a framed `ReadableStream<Uint8Array>` that the caller hands straight to
  * `decodeFramedResponseToStreaming`. Reusing the one Response builder means the
@@ -128,7 +128,7 @@ export interface InboundStreamMux {
   /** Error ONE stream (caller abort / receive-cap breach) — its body rejects
    * with `error` and the id is retired exactly like END/ERROR would. */
   fail(streamId: number, error: Error): void;
-  /** Error every open stream (pipe/bulk-channel loss) — fail loud, never hang. */
+  /** Error every open stream on transport loss — fail loud, never hang. */
   closeAll(error: Error): void;
   /** Number of streams still open (for keepalive/idle accounting). */
   readonly size: number;
@@ -385,7 +385,11 @@ export async function decodeFramedStream(
     }
     if (type === FRAME_END) {
       const end = parseEndFrame(payload);
-      if (!Number.isSafeInteger(end.bytesIn) || end.bytesIn < 0 || end.bytesIn !== bodyBytesReceived) {
+      if (
+        !Number.isSafeInteger(end.bytesIn) ||
+        end.bytesIn < 0 ||
+        end.bytesIn !== bodyBytesReceived
+      ) {
         errorBody(
           new Error(
             `Streaming RPC body length mismatch: expected ${String(end.bytesIn)} bytes, received ${bodyBytesReceived}`
@@ -460,7 +464,7 @@ export async function decodeFramedResponseToStreaming(
   const status = decoded.status >= 200 && decoded.status <= 599 ? decoded.status : 502;
   // The wire stream for a null-body status is empty (HEAD then END); pass null.
   // Plain HTTP cancels the unused decoded stream to avoid a dangling reader.
-  // WebRTC installs onBodyCancel as a wire-level stream-cancel hook, so leave the
+  // Iroh installs onBodyCancel as a wire-level stream-cancel hook, so leave the
   // decoder running until END rather than turning this internal discard into a
   // remote cancellation.
   const nullBody = NULL_BODY_STATUSES.has(status);

@@ -16,26 +16,26 @@ const transportMock = vi.hoisted(() => ({
   rpcBodies: [] as RpcRequest[],
 }));
 
-vi.mock("../webrtcClient.js", () => ({
-  WebRtcRpcClient: class {
+vi.mock("../../node/iroh/irohRpcClient.js", () => ({
+  IrohRpcClient: class {
     async ready(): Promise<void> {}
     async call(method: string, args: unknown[] = []): Promise<unknown> {
       const body = { method, args };
       transportMock.rpcBodies.push(body);
-      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      if (!transportMock.handle) throw new Error("Iroh test server is not configured");
       return transportMock.handle(body);
     }
     async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
       const body = { type: "call", targetId, method, args };
       transportMock.rpcBodies.push(body);
-      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      if (!transportMock.handle) throw new Error("Iroh test server is not configured");
       return transportMock.handle(body);
     }
     async close(): Promise<void> {}
   },
 }));
 
-/** Configure the canonical WebRTC RPC transport used by a paired CLI device. */
+/** Configure the canonical Iroh RPC transport used by a paired CLI device. */
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
   transportMock.rpcBodies = [];
   transportMock.handle = handle;
@@ -48,27 +48,25 @@ function writeCredentials(tmpDir: string, overrides: Record<string, unknown> = {
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: "device",
-      url: "webrtc://room-cli/_workspace/dev",
+      transport: "iroh",
+      endpointSecret: "E".repeat(43),
+      url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
       workspaceId: "ws_dev",
       workspaceName: "dev",
       serverId: `srv_${"S".repeat(24)}`,
       deviceId: `dev_${"D".repeat(24)}`,
       refreshToken: "R".repeat(43),
       controlPairing: {
-        room: "room-control",
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "aa".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       workspacePairing: {
-        room: "room-cli",
-        fp: "AA".repeat(32),
-        sig: "wss://signal.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "bb".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       pairedAt: 1,
       ...overrides,
@@ -212,7 +210,7 @@ describe("vibestudio agent commands", () => {
 
     writeCredentials(tmpDir, {
       workspaceName: "renamed",
-      url: "webrtc://room-cli/_workspace/renamed",
+      url: `iroh://${"bb".repeat(32)}/_workspace/renamed`,
     });
     const { rpcBodies } = stubServer((body) => {
       if (body.method === "runtime.listEntities") return [LIVE_SESSION_ROW];

@@ -126,7 +126,7 @@ module.exports = (async () => {
       "^react/(.*)$": path.join(hostModules, "react", "$1"),
       "^react-native$": path.join(hostModules, "react-native"),
       "^react-test-renderer$": path.join(hostModules, "react-test-renderer"),
-      "^@vibestudio/mobile-webrtc$": path.join(packageSource("mobile-webrtc"), "index.ts"),
+      "^@vibestudio/mobile-iroh$": path.join(packageSource("mobile-iroh"), "index.ts"),
       "^@vibestudio/rpc$": path.join(packageSource("rpc"), "index.ts"),
       "^@vibestudio/rpc/(.*)$": path.join(packageSource("rpc"), "$1"),
       "^@vibestudio/shared$": path.join(packageSource("shared"), "index.ts"),

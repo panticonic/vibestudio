@@ -397,14 +397,14 @@ export interface EventPayloads {
     isRemote: boolean;
     /** Remote server hostname (only when isRemote) */
     remoteHost?: string;
-    /**
-     * Selected ICE candidate-pair type of the remote WebRTC pipe (remote mode
-     * only): `"relay"` means the session rides a TURN relay (works, but slower —
-     * surfaced as a subtle "Relayed" hint); `host`/`srflx`/`prflx` are direct
-     * P2P. `null`/omitted means unknown or not applicable (local server, or the
-     * path has not settled yet).
-     */
-    candidateType?: "host" | "srflx" | "prflx" | "relay" | null;
+    /** Current Iroh path; omitted while unsettled or for local sessions. */
+    remoteTransport?: {
+      path: "direct" | "relay";
+      rttMs?: number;
+      remoteAddress?: string;
+      relayUrl?: string;
+      endpointGeneration?: number;
+    };
     reconnect?: {
       phase: "scheduled" | "connecting" | "failed";
       attempt: number;

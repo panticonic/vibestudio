@@ -2,12 +2,12 @@
  * startupMode — local-vs-pending resolution + relaunch-arg builders.
  *
  * Remote startup (env URL / stored-remote credentials / TLS pins) was removed in
- * §8c — remote topology is now WebRTC, paired live via the remoteCred flow, not a
+ * Remote topology is paired live via the remoteCred flow, not a
  * startup mode. So startup only resolves `local` vs `pending`.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
+import { DEV_IROH_REMOTE_ARG } from "./startupInvocation.js";
 
 // Mocks must be set up before the startupMode module is imported, so we
 // resetModules + re-import in each test.
@@ -115,7 +115,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
-  it("opens the chooser when launched with a WebRTC pairing deep link", () => {
+  it("opens the chooser when launched with an Iroh pairing deep link", () => {
     mockResolveWorkspaceName.mockReturnValue("default");
     setArgv([
       "--workspace",
@@ -129,7 +129,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
-  it("does not treat WebRTC pairing deep links as a headless startup mode", () => {
+  it("does not treat Iroh pairing deep links as a headless startup mode", () => {
     setArgv(["vibestudio://connect?room=room&fp=fp&code=code&sig=ws://127.0.0.1"]);
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
@@ -160,11 +160,11 @@ describe("resolveStartupMode interactive desktop policy", () => {
     ).toEqual(["--foo", mod.CHOOSE_CONNECTION_ARG]);
   });
 
-  it("strips one-shot WebRTC dev pairing args from relaunch selectors", () => {
+  it("strips one-shot Iroh dev pairing args from relaunch selectors", () => {
     expect(
       mod.workspaceRelaunchArgs("default", [
         "--foo",
-        DEV_WEBRTC_REMOTE_ARG,
+        DEV_IROH_REMOTE_ARG,
         "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
         "vibestudio://panel?v=1&source=about%2Fserver-logs",
       ])

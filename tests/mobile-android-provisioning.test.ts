@@ -31,7 +31,7 @@ describe("Android USB provisioning activity lifecycle", () => {
     expect(provisioning).toContain("fun pairingApprovalDigest(pairUrl: String): String?");
     expect(provisioning).toContain('uri.scheme?.lowercase() == "vibestudio"');
     expect(provisioning).toContain('uri.scheme?.lowercase() == "https"');
-    expect(provisioning).toContain("MessageDigest.getInstance(\"SHA-256\")");
+    expect(provisioning).toContain('MessageDigest.getInstance("SHA-256")');
     expect(provisioning).toContain("compactPayload.toByteArray(Charsets.US_ASCII)");
     expect(provisioning).not.toContain(".putString(PAIR_URL_DIGEST, digest(pairUrl))");
     expect(nativeHost).toContain("ProvisioningActivity.pairingApprovalDigest(pairUrl)");

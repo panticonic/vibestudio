@@ -205,6 +205,7 @@ describe("workspace child auth clean cutover", () => {
     try {
       const port = await gateway.start(0);
       const issued = identity.deviceAuthStore.issueDevice({
+        transport: { kind: "local" },
         userId: identity.rootId!,
         label: "Laptop",
       });
@@ -467,6 +468,7 @@ describe("auth service connection grants", () => {
     try {
       const port = await gateway.start(0);
       const issued = identity.deviceAuthStore.issueDevice({
+        transport: { kind: "local" },
         userId: identity.rootId!,
         label: "Phone",
         platform: "mobile",
@@ -651,7 +653,11 @@ describe("transport-specific credential redemption", () => {
       workspaceId,
       userId: rootId!,
     });
-    const result = await redeem(code, { clientLabel: "laptop", clientPlatform: "desktop" });
+    const result = await redeem(code, {
+      clientLabel: "laptop",
+      clientPlatform: "desktop",
+      transport: { kind: "local" },
+    });
     expect(result).toMatchObject({
       callerKind: "shell",
       pairingContext: { workspaceId },
@@ -660,7 +666,7 @@ describe("transport-specific credential redemption", () => {
     expect(
       result && "deviceCredential" in result ? result.deviceCredential.deviceId : null
     ).toMatch(/^dev_/);
-    await expect(redeem(code, {})).rejects.toMatchObject({
+    await expect(redeem(code, { transport: { kind: "local" } })).rejects.toMatchObject({
       code: "PAIRING_CODE_INVALID_OR_EXPIRED",
     });
     expect(deviceAuthStore.listDevices()).toHaveLength(1);
@@ -669,8 +675,14 @@ describe("transport-specific credential redemption", () => {
   it("validates a returning device without issuing another credential", async () => {
     const touchDevice = vi.fn(async () => undefined);
     const { deviceAuthStore, rootId, redeem } = hubFixture(touchDevice);
-    const issued = deviceAuthStore.issueDevice({ userId: rootId!, label: "phone" });
-    const result = await redeem("refresh:" + issued.deviceId + ":" + issued.refreshToken, {});
+    const issued = deviceAuthStore.issueDevice({
+      transport: { kind: "local" },
+      userId: rootId!,
+      label: "phone",
+    });
+    const result = await redeem("refresh:" + issued.deviceId + ":" + issued.refreshToken, {
+      transport: { kind: "local" },
+    });
     expect(result).toMatchObject({
       callerId: "shell:" + issued.deviceId,
       callerKind: "shell",
@@ -694,7 +706,7 @@ describe("transport-specific credential redemption", () => {
     const issued = deviceAuthStore.mintAgentCredential({
       entityId: "session:s1",
     });
-    const result = await redeem(issued.agentToken);
+    const result = await redeem(issued.agentToken, { transport: { kind: "local" } });
     expect(result).toMatchObject({
       callerId: "agent:session:s1",
       agentBinding: { entityId: "session:s1", contextId: "ctx", channelId: "channel" },
@@ -707,13 +719,17 @@ describe("transport-specific credential redemption", () => {
     const agent = hub.deviceAuthStore.mintAgentCredential({
       entityId: "session:hub-denied",
     });
-    await expect(hub.redeem(agent.agentToken, {})).resolves.toBeNull();
+    await expect(
+      hub.redeem(agent.agentToken, { transport: { kind: "local" } })
+    ).resolves.toBeNull();
 
     const workspace = workspaceFixture();
     const invite = workspace.deviceAuthStore.createPairingInvite(60_000, {
       workspaceId: workspace.workspaceId,
       userId: workspace.rootId!,
     });
-    await expect(workspace.redeem(invite.code)).resolves.toBeNull();
+    await expect(
+      workspace.redeem(invite.code, { transport: { kind: "local" } })
+    ).resolves.toBeNull();
   });
 });

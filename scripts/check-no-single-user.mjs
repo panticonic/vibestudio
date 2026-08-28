@@ -39,15 +39,14 @@ const SCANNED_FILES = [
   "docs/cli.md",
   "docs/routes.md",
   "docs/trusted-workspace-units.md",
-  "docs/webrtc-deployment.md",
-  "docs/webrtc-local-e2e.md",
+  "docs/iroh-relay-operations.md",
 ];
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".md"]);
 const IGNORED_DIRS = new Set(["node_modules", "dist", "dist-packages", "dist-publish", ".git"]);
 
 // This checker (and the smoke ladder that names the scenarios) describe the
 // vestiges; scanning them only produces self-referential noise.
-const SELF_FILES = new Set(["scripts/check-no-single-user.mjs", "scripts/full-system-smoke.mjs"]);
+const SELF_FILES = new Set(["scripts/check-no-single-user.mjs"]);
 
 /** Same test-context heuristic as the host-boundary checker. */
 export function isTestContext(relFile) {

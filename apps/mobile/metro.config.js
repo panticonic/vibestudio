@@ -79,13 +79,13 @@ const config = {
         }
       }
 
-      // The native Android/iOS project links the root react-native-webrtc
+      // The native Android/iOS project links the root react-native-Iroh
       // package. Force every workspace importer onto that same JS instance so
-      // PeerConnection/DataChannel events share one NativeEventEmitter bridge.
-      if (moduleName === "react-native-webrtc" || moduleName.startsWith("react-native-webrtc/")) {
-        const subpath = moduleName.slice("react-native-webrtc".length);
-        const rootWebRtc = path.resolve(monorepoRoot, "node_modules", "react-native-webrtc");
-        return context.resolveRequest(context, `${rootWebRtc}${subpath}`, platform);
+      // Native Iroh connection and stream events share one NativeEventEmitter bridge.
+      if (moduleName === "react-native-Iroh" || moduleName.startsWith("react-native-Iroh/")) {
+        const subpath = moduleName.slice("react-native-Iroh".length);
+        const rootIroh = path.resolve(monorepoRoot, "node_modules", "react-native-Iroh");
+        return context.resolveRequest(context, `${rootIroh}${subpath}`, platform);
       }
 
       // 0a. Resolve @vibestudio/* packages to their TypeScript source.

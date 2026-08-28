@@ -40,24 +40,30 @@ import type {
 } from "@vibestudio/rpc/internal";
 import { verifiedExternalContextFor } from "@vibestudio/rpc/internal";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
-import {
-  decodeControlFrame,
-  encodeControlFrame,
-  SESSION_CLOSED,
-  SESSION_NOT_OPEN_CLOSE_CODE,
-  SESSION_OPEN_RESULT,
-  type SessionControlFrame,
-  type SessionStreamTrafficClass,
-} from "@vibestudio/rpc/protocol/sessionNegotiation";
-import {
-  FRAME_DATA,
-  FRAME_END,
-  FRAME_ERROR,
-  parseEndFrame,
-} from "@vibestudio/rpc/protocol/streamCodec";
-import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
-import { PIPE_LANE, SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
+import { SESSION_NOT_OPEN_CLOSE_CODE } from "@vibestudio/rpc/protocol/remoteSession";
+import { FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
+import {
+  IROH_WIRE_VERSION,
+  MAX_CONTROL_FRAME_BYTES,
+  MAX_ENVELOPE_FRAME_BYTES,
+  readFrame,
+  readIrohStreamPreamble,
+  writeFrame,
+  type IrohPhysicalConnection,
+} from "@vibestudio/iroh-transport";
+import {
+  decodeIrohSessionControlFrame,
+  encodeIrohSessionControlFrame,
+  IROH_SESSION_CLOSE,
+  IROH_SESSION_CLOSED,
+  IROH_SESSION_HELLO,
+  IROH_SESSION_OPEN,
+  IROH_SESSION_OPEN_RESULT,
+  type IrohSessionControlFrame,
+} from "@vibestudio/rpc/protocol/irohSession";
+import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
+import { IrohRpcSessionSocket } from "./irohRpcSessionSocket.js";
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -139,7 +145,11 @@ export async function awaitRpcAdmissionResolution<T>(
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
-import { ConnectionRegistry, type WsClientState } from "./rpcServer/connectionRegistry.js";
+import {
+  ConnectionRegistry,
+  type RpcSessionSocket,
+  type WsClientState,
+} from "./rpcServer/connectionRegistry.js";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
@@ -286,7 +296,7 @@ interface PendingToolCall {
   resolve: (result: ToolExecutionResult) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
-  clientWs: WebSocket;
+  clientWs: RpcSessionSocket;
 }
 
 interface ResolvedRpcCredential {
@@ -393,22 +403,6 @@ interface ResolvedCausalInvocation {
   parent: RpcCausalParent;
   /** Host-resolved turn author. This is attribution, never the authorizing principal. */
   initiatingUser: UserSubject | null;
-}
-
-export interface RpcServerUploadPreopenLimits {
-  maxPendingStreams?: number;
-  maxBufferedBytes?: number;
-}
-
-const DEFAULT_UPLOAD_PREOPEN_STREAM_CAP = 65_536;
-const DEFAULT_UPLOAD_PREOPEN_TOTAL_CAP_BYTES = 1024 * 1024 * 1024;
-
-function resolvePositiveLimit(value: number | undefined, fallback: number, name: string): number {
-  if (value === undefined) return fallback;
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new RangeError(`${name} must be a positive safe integer`);
-  }
-  return value;
 }
 
 function relayCallOptions(meta?: RelayCallMeta): RpcCallOptions | undefined {
@@ -519,7 +513,7 @@ export class RpcServer {
   private readonly eventSessionReleases = new WeakMap<WsClientState, () => void>();
   private disposeTokenRevocationListener: (() => void) | null = null;
   private readonly pendingAuthentications = new Map<
-    WebSocket,
+    RpcSessionSocket,
     ReturnType<typeof setTimeout> | null
   >();
   private pendingWsAdmissionResolutions = 0;
@@ -527,10 +521,10 @@ export class RpcServer {
   private readonly pairingAdmissionReplayKey = randomBytes(32);
   private readonly pairingAdmissionReplays = new Map<string, RpcPairingAdmissionReplay>();
   /** Requests whose response still has to be queued before revocation may close the socket. */
-  private readonly activeInboundRequests = new Map<WebSocket, number>();
+  private readonly activeInboundRequests = new Map<RpcSessionSocket, number>();
   /** Exact unary requests owned by each authenticated socket. */
   private readonly inboundRequestControllers = new WeakMap<
-    WebSocket,
+    RpcSessionSocket,
     Map<string, AbortController>
   >();
   /** Terminal caller teardown, shared by token revocation and explicit reach cleanup. */
@@ -539,7 +533,7 @@ export class RpcServer {
     {
       promise: Promise<void>;
       resolve: () => void;
-      pendingSockets: Set<WebSocket>;
+      pendingSockets: Set<RpcSessionSocket>;
       callerKind?: CallerKind;
       settled: boolean;
     }
@@ -552,7 +546,6 @@ export class RpcServer {
   }
 
   private readonly bootId = randomUUID();
-  private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
   /**
    * Invocation-scoped policy delegation for nested infrastructure calls.
    *
@@ -793,7 +786,7 @@ export class RpcServer {
         "issueFromPreparation" | "resolve"
       >;
       /**
-       * Live identity gate for persistent WS/WebRTC sessions. Authentication
+       * Live identity gate for persistent WS/Iroh sessions. Authentication
        * stamps a caller once, but revocation and workspace membership are
        * mutable. Production re-checks the shared identity DB before every
        * subsequent inbound frame so a failed administrative socket teardown
@@ -836,13 +829,17 @@ export class RpcServer {
        * token — a QR pairing `code` (fresh device) or `refresh:<deviceId>:<token>`
        * (returning device) — into a shell principal. This is the over-the-pipe
        * equivalent of the loopback HTTP `/complete-pairing` + `/refresh-shell`
-       * endpoints (which a remote WebRTC client cannot reach). A freshly issued
+       * endpoints (which a remote Iroh client cannot reach). A freshly issued
        * device credential is returned so the auth-result hands it back to the
        * client to persist for reconnects. Returns null if the token is neither.
        */
       redeemPairingCredential?: (
         token: string,
-        ctx: { clientLabel?: string; clientPlatform?: ClientPlatform }
+        ctx: {
+          clientLabel?: string;
+          clientPlatform?: ClientPlatform;
+          transport: import("@vibestudio/identity/identityDb").DeviceTransportBinding;
+        }
       ) =>
         | {
             callerId: string;
@@ -867,7 +864,6 @@ export class RpcServer {
             agentBinding?: import("@vibestudio/identity/types").AgentBinding;
             subject?: UserSubject;
           } | null>;
-      uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
   ) {
     if (typeof deps.ensureUserlandDoReady !== "function") {
@@ -921,18 +917,6 @@ export class RpcServer {
       handleEvent: (caller, envelope, message) =>
         this.handleEnvelopeEvent(caller.callerId, caller.callerKind, envelope, message),
     });
-    this.uploadPreopenLimits = {
-      maxPendingStreams: resolvePositiveLimit(
-        deps.uploadPreopenLimits?.maxPendingStreams,
-        DEFAULT_UPLOAD_PREOPEN_STREAM_CAP,
-        "uploadPreopenLimits.maxPendingStreams"
-      ),
-      maxBufferedBytes: resolvePositiveLimit(
-        deps.uploadPreopenLimits?.maxBufferedBytes,
-        DEFAULT_UPLOAD_PREOPEN_TOTAL_CAP_BYTES,
-        "uploadPreopenLimits.maxBufferedBytes"
-      ),
-    };
     deps.runtimeCoordinator?.setCloseConnection((panelId, connectionId, code, reason) => {
       this.connections.closeConnection(panelId, connectionId, code, reason);
     });
@@ -1464,7 +1448,7 @@ export class RpcServer {
     this.handlersInitialized = true;
 
     // RPC WebSockets carry control envelopes. Large payloads use the streaming
-    // and WebRTC bulk lanes instead of consuming one monolithic WS message.
+    // and Iroh bulk lanes instead of consuming one monolithic WS message.
     // Origin allow-listing remains at the gateway upgrade boundary.
     this.wss = new WebSocketServer({
       noServer: true,
@@ -1488,7 +1472,10 @@ export class RpcServer {
   }
   private handlersInitialized = false;
 
-  private handleConnection(ws: WebSocket, upgradeAdmission?: RpcWebSocketAdmissionGrant): void {
+  private handleConnection(
+    ws: RpcSessionSocket,
+    upgradeAdmission?: RpcWebSocketAdmissionGrant
+  ): void {
     if (this.isShuttingDown()) {
       ws.close(1001, "Server shutting down");
       return;
@@ -1596,7 +1583,8 @@ export class RpcServer {
   private resolveRpcCredential(
     token: unknown,
     clientLabel?: string,
-    clientPlatform?: ClientPlatform
+    clientPlatform?: ClientPlatform,
+    transport: import("@vibestudio/identity/identityDb").DeviceTransportBinding = { kind: "local" }
   ): RpcCredentialResolution | Promise<RpcCredentialResolution> {
     if (typeof token !== "string" || token.length === 0) {
       return {
@@ -1609,9 +1597,10 @@ export class RpcServer {
       return { ok: false, code: "admin_credential", message: ADMIN_RPC_AUTH_ERROR };
     }
 
+    const remoteEndpointId = transport.kind === "iroh" ? transport.endpointId : undefined;
     const connectionGrant =
-      this.deps.connectionGrants?.redeem(token) ??
-      this.deps.connectionGrants?.validate(token) ??
+      this.deps.connectionGrants?.redeem(token, remoteEndpointId) ??
+      this.deps.connectionGrants?.validate(token, remoteEndpointId) ??
       null;
     let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
     let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
@@ -1645,7 +1634,7 @@ export class RpcServer {
       const resolvedEntry = entry;
       const isValidAtUpgrade = (): boolean => {
         if (connectionGrant) {
-          const current = this.deps.connectionGrants?.validate(token);
+          const current = this.deps.connectionGrants?.validate(token, remoteEndpointId);
           return (
             current?.principalId === resolvedEntry.callerId &&
             current.principalKind === resolvedEntry.callerKind
@@ -1683,11 +1672,15 @@ export class RpcServer {
         },
       };
     };
+    // Ordinary token-manager bearers are loopback-only. A connection grant is
+    // accepted remotely only when it was minted by and presented from the same
+    // verified Iroh endpoint.
+    if (entry && transport.kind === "iroh" && !connectionGrant) return rejectedCredential();
     if (entry) return finish(null);
     if (!this.deps.redeemPairingCredential) return finish(null);
     try {
       return Promise.resolve(
-        this.deps.redeemPairingCredential(token, { clientLabel, clientPlatform })
+        this.deps.redeemPairingCredential(token, { clientLabel, clientPlatform, transport })
       ).then(
         (paired) => finish(paired),
         (error) => rejectedCredential(error)
@@ -1698,7 +1691,7 @@ export class RpcServer {
   }
 
   private async handleAuth(
-    ws: WebSocket,
+    ws: RpcSessionSocket,
     token: unknown,
     requestedConnectionId?: string,
     clientLabel?: string,
@@ -1714,7 +1707,14 @@ export class RpcServer {
     if (ws.readyState !== WebSocket.OPEN) return;
     const resolutionOrPromise = preResolved
       ? ({ ok: true, resolved: preResolved } as const)
-      : this.resolveRpcCredential(token, clientLabel, clientPlatform);
+      : this.resolveRpcCredential(
+          token,
+          clientLabel,
+          clientPlatform,
+          ws instanceof IrohRpcSessionSocket
+            ? { kind: "iroh", endpointId: ws.peerEndpointId }
+            : { kind: "local" }
+        );
     const resolution =
       resolutionOrPromise instanceof Promise ? await resolutionOrPromise : resolutionOrPromise;
     // Pairing redemption crosses the child→hub boundary. The unauthenticated
@@ -1870,7 +1870,11 @@ export class RpcServer {
       this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
       existing.ws.close(4002, "Replaced by new connection");
     }
-    const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
+    const verifiedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
+    const caller: VerifiedCaller =
+      ws instanceof IrohRpcSessionSocket
+        ? { ...verifiedCaller, remoteEndpointId: ws.peerEndpointId }
+        : verifiedCaller;
     // Denormalize the host-verified owning user once, at admission (WP4 §2.1).
     // Defensive invariant: only the in-process server can synthesize a subject;
     // every external unattributed caller fails here.
@@ -1990,7 +1994,7 @@ export class RpcServer {
     }
   }
 
-  private abortFailedAuthentication(ws: WebSocket, error: unknown): void {
+  private abortFailedAuthentication(ws: RpcSessionSocket, error: unknown): void {
     const client = this.connections.getBySocket(ws);
     if (client) this.releaseEventSession(client);
     if (client && this.connections.removeClient(client)) {
@@ -2068,7 +2072,7 @@ export class RpcServer {
    * this method owns only transport disposal. Idle sockets close immediately,
    * while a socket dispatching a unary request closes after that response has
    * been queued. The promise settles after every concrete socket has closed, so
-   * callers may then tear down the WebRTC room that carries those sessions.
+   * callers may then tear down the Iroh room that carries those sessions.
    */
   retireCaller(callerId: string): Promise<void> {
     const existing = this.callerRetirements.get(callerId);
@@ -4596,50 +4600,17 @@ export class RpcServer {
   // message class is silently discarded below that bound.
   private static readonly WS_BACKPRESSURE_HARD_LIMIT = 128 * 1024 * 1024;
 
-  /** Min interval between `closed(4008)` self-heal frames per unknown sid (plan §1.5). */
-  private static readonly SESSION_NOT_OPEN_CLOSED_INTERVAL_MS = 2000;
-
   /**
-   * Hard cap on the per-pipe `notOpenClosedAt` rate-limiter map. The interval
-   * sweep only evicts entries older than the window, so a peer flooding MANY
-   * unique fake sids WITHIN one window leaves every entry "recent" and the sweep
-   * frees nothing — the map would grow unbounded. Past this cap we additionally
-   * evict oldest-first (insertion order) so it can never exceed the ceiling.
-   * Generous: a legitimate multi-panel client tracks at most a handful of sids.
-   */
-  private static readonly SESSION_NOT_OPEN_MAX_TRACKED = 1024;
-
-  /**
-   * Generous ceiling on concurrent logical sessions (shims) per WebRTC pipe.
+   * Ceiling on concurrent logical sessions per authenticated Iroh connection.
    * Each `open` drives a full handleConnection (10s auth timer + auth work), so
    * an unbounded flood of opens is a pre-auth DoS. A legitimate client multiplexes
    * its panels + shell — dozens at most — so this is far above any real need; a
    * re-open of an already-tracked sid is never blocked.
    */
-  private static readonly MAX_SESSIONS_PER_PIPE = 512;
+  private static readonly MAX_SESSIONS_PER_PIPE = 64;
+  private static readonly IROH_PREAUTH_TIMEOUT_MS = 10_000;
 
-  /**
-   * Bound on one inbound upload's UNCONSUMED bytes (plan §1.6). SCTP delivers
-   * reliably and cannot be paused mid-stream, so a consumer that falls more
-   * than this far behind gets the body errored (and the request fails loudly)
-   * instead of the server buffering without bound. Mirrors the client's
-   * `STREAM_RECEIVE_CAP_BYTES` receive-cap policy.
-   */
-  private static readonly UPLOAD_RECEIVE_CAP_BYTES = 8 * 1024 * 1024;
-
-  /**
-   * TTL on upload frames buffered BEFORE their stream-open arrives (see the
-   * pre-open buffer in `attachWebRtcPipe`). Control (stream-open) and bulk
-   * (DATA) are independent SCTP streams, so under packet loss a retransmitted
-   * stream-open can trail its first DATA frames — by retransmission round
-   * trips, not by seconds. Past this window the frames belong to a request
-   * whose open will never come (a client that kept pumping after teardown/
-   * settle) and are discarded; if the open DOES arrive later still, the body
-   * fails loudly rather than resuming truncated.
-   */
-  private static readonly UPLOAD_PREOPEN_TTL_MS = 5000;
-
-  private sendToWs(ws: WebSocket, msg: WsServerMessage): void {
+  private sendToWs(ws: RpcSessionSocket, msg: WsServerMessage): void {
     if (ws.readyState !== WebSocket.OPEN) return;
     const buffered = ws.bufferedAmount;
     if (buffered > RpcServer.WS_BACKPRESSURE_HARD_LIMIT) {
@@ -4944,618 +4915,165 @@ export class RpcServer {
   }
 
   /**
-   * Attach the answerer side of a WebRTC pipe (plan §1/§3). N logical panel/shell
-   * sessions multiplex over the pipe's control channel; each `open` frame stands
-   * up a per-session `SessionWebSocketShim` that drives the EXISTING per-connection
-   * machinery (handleConnection → handleAuth → per-session bridge with close-time
-   * `CONNECTION_LOST` synthesis). Streaming bodies ride the binary bulk channel.
-   * This reuses one server RPC implementation — the answerer is a translation
-   * layer, not a parallel server (fail-loud rule). Local co-located mode enters
-   * through the pre-upgrade admission in `handleGatewayWsUpgrade`; both transports
-   * feed the same authenticated dispatch machinery.
+   * Attach one fully handshaken Iroh connection. The first bidirectional stream
+   * is the sole lifecycle control stream; every subsequent RPC owns its own
+   * QUIC stream and enters the same handleConnection/auth/dispatch machinery as
+   * loopback WebSocket.
    */
-  attachWebRtcPipe(
-    pipe: PipeChannels & {
-      onControl(handler: (data: Uint8Array) => void): void;
-      onStreamFrame(
-        handler: (
-          trafficClass: SessionStreamTrafficClass,
-          streamId: number,
-          type: StreamFrameType,
-          payload: Uint8Array
-        ) => void
-      ): void;
-      onDown?(handler: (reason: string) => void): () => void;
+  async attachIrohConnection(connection: IrohPhysicalConnection): Promise<void> {
+    if (this.isShuttingDown()) {
+      throw new Error("RpcServer has stopped and cannot attach an Iroh connection");
     }
-  ): void {
-    if (this.isShuttingDown())
-      throw new Error("RpcServer has stopped and cannot attach a WebRTC pipe");
-    const decoder = new TextDecoder();
-    const encoder = new TextEncoder();
-    const shims = new Map<string, SessionWebSocketShim>();
-    const writeControlFrame = (frame: SessionControlFrame): void => {
-      // Lane = the frame's sid so the pipe's fragment scheduler round-robins
-      // fairly across sessions; pipe-level frames ride the shared lane.
-      const lane = (frame as { sid?: string }).sid ?? PIPE_LANE;
-      void pipe.writeControl(encoder.encode(encodeControlFrame(frame)), lane).catch(() => {
-        // Pipe failure surfaces via onDown (which closes every session); a
-        // frame lost in the same instant is moot.
-      });
-    };
-    // Self-healing closed semantics (plan §1.5): ANY frame for an unknown sid
-    // gets a non-terminal `closed` so the client reopens the session — events
-    // for a desynced session no longer vanish silently. Rate-limited per sid so
-    // a chatty desynced client gets one closed per window, not a storm.
-    const notOpenClosedAt = new Map<string, number>();
-    const sendSessionNotOpenClosed = (sid: string): void => {
-      const now = Date.now();
-      const last = notOpenClosedAt.get(sid);
-      if (last !== undefined && now - last < RpcServer.SESSION_NOT_OPEN_CLOSED_INTERVAL_MS) return;
-      // Bound the map: a client inventing sids must not grow it without limit.
-      if (notOpenClosedAt.size >= RpcServer.SESSION_NOT_OPEN_MAX_TRACKED) {
-        // First free anything past the rate-limit window…
-        for (const [staleSid, at] of notOpenClosedAt) {
-          if (now - at >= RpcServer.SESSION_NOT_OPEN_CLOSED_INTERVAL_MS) {
-            notOpenClosedAt.delete(staleSid);
-          }
-        }
-        // …then hard-cap: a peer flooding >cap unique sids WITHIN one window
-        // leaves every entry "recent" so the sweep frees nothing. Evict oldest
-        // (Map preserves insertion order) until we are back under the ceiling.
-        while (notOpenClosedAt.size >= RpcServer.SESSION_NOT_OPEN_MAX_TRACKED) {
-          const oldest = notOpenClosedAt.keys().next().value;
-          if (oldest === undefined) break;
-          notOpenClosedAt.delete(oldest);
-        }
+    const preauth = async <T>(operation: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          operation,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+              connection.close(0x203n, new TextEncoder().encode("pre-auth deadline exceeded"));
+              reject(new Error("Iroh pre-auth deadline exceeded"));
+            }, RpcServer.IROH_PREAUTH_TIMEOUT_MS);
+            timer.unref();
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      notOpenClosedAt.set(sid, now);
-      writeControlFrame({
-        t: SESSION_CLOSED,
+    };
+    const control = await preauth(connection.acceptBi());
+    const preamble = await preauth(readIrohStreamPreamble(control.recv));
+    if (preamble.k !== "control") {
+      throw new Error(`First Iroh stream must be control, received ${preamble.k}`);
+    }
+    const hello = decodeIrohSessionControlFrame(
+      await preauth(readFrame(control.recv, MAX_CONTROL_FRAME_BYTES))
+    );
+    if (hello.t !== IROH_SESSION_HELLO || hello.contractVersion !== RPC_CONTRACT_VERSION) {
+      throw new Error("Iroh peer has an incompatible RPC contract");
+    }
+
+    let controlTail = Promise.resolve();
+    const writeControl = (frame: IrohSessionControlFrame): Promise<void> => {
+      const operation = controlTail.then(() =>
+        writeFrame(control.send, encodeIrohSessionControlFrame(frame), MAX_CONTROL_FRAME_BYTES)
+      );
+      controlTail = operation.catch(() => undefined);
+      return operation;
+    };
+    await writeControl({
+      t: IROH_SESSION_HELLO,
+      protocolVersion: IROH_WIRE_VERSION,
+      contractVersion: RPC_CONTRACT_VERSION,
+    });
+
+    const sessions = new Map<string, IrohRpcSessionSocket>();
+    let stopped = false;
+    const closeAll = (reason: string): void => {
+      if (stopped) return;
+      stopped = true;
+      for (const session of sessions.values()) session.remoteClosed(1006, reason);
+      sessions.clear();
+    };
+    const refuseUnknownSession = async (sid: string): Promise<void> => {
+      await writeControl({
+        t: IROH_SESSION_CLOSED,
         sid,
         code: SESSION_NOT_OPEN_CLOSE_CODE,
         reason: "session not open",
         terminal: false,
       });
     };
-    const writeUnknownSessionResponse = (sid: string, envelope: RpcEnvelope): void => {
-      const message = envelope.message;
-      if (message.type !== "request" && message.type !== "stream-request") return;
-      const response: RpcMessage = {
-        type: "response",
-        requestId: message.requestId,
-        error: "WebRTC session is not open",
-        errorKind: "transport",
-        errorCode: "SESSION_NOT_OPEN",
-      };
-      writeControlFrame({
-        t: "rpc",
-        sid,
-        envelope: responseEnvelopeFor(
-          envelope,
-          { callerId: "main", callerKind: "server" },
-          response
-        ),
-      });
-    };
-    const getShim = (sid: string, frameType: string): SessionWebSocketShim | undefined => {
-      const shim = shims.get(sid);
-      if (!shim) log.warn(`WebRTC pipe: ${frameType} for unknown session ${sid}`);
-      return shim;
-    };
 
-    // Upload seam (plan §1.6): request bodies arrive as inbound bulk DATA
-    // frames keyed by the stream-open's `bodyStreamId` and are assembled into
-    // per-request ReadableStreams the stream dispatch consumes.
-    //
-    // ORDERING: the client sends the stream-open (control channel) before its
-    // first DATA frame (bulk channel), but those are independent SCTP streams —
-    // under packet loss DATA can ARRIVE before the open. Frames for an id with
-    // no registered body are therefore held in a bounded pre-open buffer
-    // (`pendingBodies`) and flushed, in order, when `registerInboundBody` runs
-    // for that id. Frames for a RETIRED id (body settled — the client kept
-    // pumping after teardown/settle) still drop.
-    interface InboundBodyEntry {
-      trafficClass: SessionStreamTrafficClass;
-      controller: ReadableStreamDefaultController<Uint8Array>;
-      /** Bytes enqueued so far — checked against the bytesIn count on END. */
-      received: number;
-      settle: (error?: Error) => void;
-    }
-    const inboundBodies = new Map<number, InboundBodyEntry>();
-    // Pre-open frames awaiting their stream-open, keyed by bodyStreamId.
-    // Bounded four ways: total buffered bytes per stream (UPLOAD_RECEIVE_CAP_BYTES,
-    // the same cap a registered body enforces), catastrophic total buffered bytes
-    // across the pipe, catastrophic total pending ids, and a TTL
-    // (UPLOAD_PREOPEN_TTL_MS). Breaching any fuse CONDEMNS the id: buffered frames
-    // are freed, and an open arriving later fails the body loudly — never a
-    // silently truncated upload.
-    interface PendingBodyBuffer {
-      trafficClass: SessionStreamTrafficClass;
-      frames: Array<{ type: StreamFrameType; payload: Uint8Array }>;
-      bytes: number;
-      timer: ReturnType<typeof setTimeout>;
-    }
-    const pendingBodies = new Map<number, PendingBodyBuffer>();
-    let pendingBodyBytes = 0;
-    // Terminal per-id outcomes, FIFO-bounded (bodyStreamIds are monotonic per
-    // client, so old entries only shield against ever-later stragglers):
-    //   null  — the body existed and settled: late frames drop silently.
-    //   Error — pre-open buffering was condemned (over-cap / TTL expiry): late
-    //           frames drop, and a later stream-open errors the body with this.
-    const retiredBodyIds = new Map<number, Error | null>();
-    const RETIRED_BODY_IDS_MAX = 1024;
-    const retireBodyId = (bodyStreamId: number, outcome: Error | null): void => {
-      retiredBodyIds.delete(bodyStreamId); // re-insert = refresh FIFO position
-      retiredBodyIds.set(bodyStreamId, outcome);
-      if (retiredBodyIds.size > RETIRED_BODY_IDS_MAX) {
-        const oldest = retiredBodyIds.keys().next().value;
-        if (oldest !== undefined) retiredBodyIds.delete(oldest);
-      }
-    };
-    const condemnPending = (bodyStreamId: number, error: Error): void => {
-      const pending = pendingBodies.get(bodyStreamId);
-      if (pending) {
-        clearTimeout(pending.timer);
-        pendingBodies.delete(bodyStreamId);
-        pendingBodyBytes -= pending.bytes;
-      }
-      retireBodyId(bodyStreamId, error);
-    };
-    const bufferPreOpenFrame = (
-      trafficClass: SessionStreamTrafficClass,
-      streamId: number,
-      type: StreamFrameType,
-      payload: Uint8Array
-    ): void => {
-      if (retiredBodyIds.has(streamId)) return; // settled/condemned — drop
-      let pending = pendingBodies.get(streamId);
-      if (pending && pending.trafficClass !== trafficClass) {
-        condemnPending(
-          streamId,
-          new Error(
-            `protocol violation: upload stream ${streamId} switched from ` +
-              `${pending.trafficClass} to ${trafficClass}`
-          )
+    const controlLoop = async (): Promise<void> => {
+      while (!stopped) {
+        const frame = decodeIrohSessionControlFrame(
+          await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
         );
-        return;
-      }
-      if (!pending) {
-        if (pendingBodies.size >= this.uploadPreopenLimits.maxPendingStreams) {
-          const error = new Error(
-            `upload pre-open buffer has too many pending streams ` +
-              `(cap ${this.uploadPreopenLimits.maxPendingStreams})`
-          );
-          log.warn(`WebRTC pipe: ${error.message}; condemning upload stream ${streamId}`);
-          retireBodyId(streamId, error);
-          return;
-        }
-        const timer = setTimeout(
-          () =>
-            // Never opened within the TTL — the legitimate drop case (client
-            // pumped past teardown), so no log; the condemnation marker makes
-            // a pathologically late open fail loud instead of truncating.
-            condemnPending(
-              streamId,
-              new Error(
-                `upload stream ${streamId}'s early frames expired ` +
-                  `${RpcServer.UPLOAD_PREOPEN_TTL_MS}ms before its stream-open arrived`
-              )
-            ),
-          RpcServer.UPLOAD_PREOPEN_TTL_MS
-        );
-        (timer as { unref?: () => void }).unref?.();
-        pending = { trafficClass, frames: [], bytes: 0, timer };
-        pendingBodies.set(streamId, pending);
-      }
-      if (type === FRAME_DATA && payload.byteLength === 0) return;
-      if (
-        payload.byteLength > 0 &&
-        pendingBodyBytes + payload.byteLength > this.uploadPreopenLimits.maxBufferedBytes
-      ) {
-        const error = new Error(
-          `upload pre-open buffers exceeded the ` +
-            `${this.uploadPreopenLimits.maxBufferedBytes}-byte aggregate cap`
-        );
-        log.warn(
-          `WebRTC pipe: upload stream ${streamId} would take pre-open buffers to ` +
-            `${pendingBodyBytes + payload.byteLength} bytes ` +
-            `(cap ${this.uploadPreopenLimits.maxBufferedBytes}) — condemning the stream`
-        );
-        condemnPending(streamId, error);
-        return;
-      }
-      pending.bytes += payload.byteLength;
-      pendingBodyBytes += payload.byteLength;
-      if (pending.bytes > RpcServer.UPLOAD_RECEIVE_CAP_BYTES) {
-        log.warn(
-          `WebRTC pipe: upload stream ${streamId} buffered ${pending.bytes} bytes ` +
-            `before its stream-open arrived (cap ${RpcServer.UPLOAD_RECEIVE_CAP_BYTES}) — condemning the stream`
-        );
-        condemnPending(
-          streamId,
-          new Error(
-            `upload exceeded the ${RpcServer.UPLOAD_RECEIVE_CAP_BYTES}-byte ` +
-              `pre-open buffer before its stream-open arrived`
-          )
-        );
-        return;
-      }
-      // COPY: the payload is a subarray view into the transport's receive
-      // buffer, valid only during this callback (see decodeBulkMessage).
-      pending.frames.push({ type, payload: payload.slice() });
-    };
-    const registerInboundBody = (
-      bodyStreamId: number,
-      trafficClass: SessionStreamTrafficClass
-    ): ReadableStream<Uint8Array> => {
-      // A duplicate bodyStreamId is a client protocol bug: fail the old body
-      // loudly rather than cross-feeding two requests.
-      inboundBodies
-        .get(bodyStreamId)
-        ?.settle(new Error(`upload stream ${bodyStreamId} superseded by a re-used id`));
-      let controller!: ReadableStreamDefaultController<Uint8Array>;
-      const body = new ReadableStream<Uint8Array>(
-        {
-          start(c) {
-            controller = c;
-          },
-          cancel() {
-            // Consumer walked away (e.g. upstream fetch failed): unregister +
-            // retire so late DATA frames drop instead of enqueueing into a
-            // dead stream (or piling into the pre-open buffer).
-            inboundBodies.delete(bodyStreamId);
-            retireBodyId(bodyStreamId, null);
-          },
-        },
-        // Byte-length strategy sized to the cap: desiredSize = cap - unconsumed
-        // bytes, giving the DATA handler an exact overflow gauge (mirror of the
-        // client's receive-cap policy — SCTP cannot be paused, so past the cap
-        // the body errors loudly instead of buffering without bound).
-        {
-          highWaterMark: RpcServer.UPLOAD_RECEIVE_CAP_BYTES,
-          size: (chunk) => chunk?.byteLength ?? 0,
-        }
-      );
-      const entry: InboundBodyEntry = {
-        trafficClass,
-        controller,
-        received: 0,
-        settle: (error?: Error) => {
-          if (!inboundBodies.delete(bodyStreamId)) return;
-          // Retire the id so post-settle frames drop rather than buffering as
-          // "pre-open" for a request that is already over.
-          retireBodyId(bodyStreamId, null);
-          try {
-            if (error) controller.error(error);
-            else controller.close();
-          } catch {
-            // already settled by the stream itself
-          }
-        },
-      };
-      // A retired id must never be re-registered. Condemned ids fail loudly
-      // because leading frames were dropped; normally retired ids close
-      // immediately so a duplicate stream-open cannot resurrect the route.
-      if (retiredBodyIds.has(bodyStreamId)) {
-        const condemned = retiredBodyIds.get(bodyStreamId);
-        // Not registered, so no retire bookkeeping — just settle the fresh body.
-        if (condemned) controller.error(condemned);
-        else controller.close();
-        return body;
-      }
-      inboundBodies.set(bodyStreamId, entry);
-      // Flush frames that beat this stream-open across the channel boundary,
-      // in arrival order. A flushed END/ERROR settles the body (unregistering
-      // it), so re-check registration between frames.
-      const pending = pendingBodies.get(bodyStreamId);
-      if (pending) {
-        clearTimeout(pending.timer);
-        pendingBodies.delete(bodyStreamId);
-        pendingBodyBytes -= pending.bytes;
-        if (pending.trafficClass !== trafficClass) {
-          entry.settle(
-            new Error(
-              `protocol violation: upload stream ${bodyStreamId} arrived on ` +
-                `${pending.trafficClass}, declared ${trafficClass}`
-            )
-          );
-          return body;
-        }
-        for (const frame of pending.frames) {
-          if (!inboundBodies.has(bodyStreamId)) break;
-          deliverBodyFrame(trafficClass, bodyStreamId, frame.type, frame.payload);
-        }
-      }
-      return body;
-    };
-    const deliverBodyFrame = (
-      trafficClass: SessionStreamTrafficClass,
-      streamId: number,
-      type: StreamFrameType,
-      payload: Uint8Array
-    ): void => {
-      const entry = inboundBodies.get(streamId);
-      if (!entry) return; // settled under a pre-open flush — drop
-      if (entry.trafficClass !== trafficClass) {
-        entry.settle(
-          new Error(
-            `protocol violation: upload stream ${streamId} arrived on ${trafficClass}, ` +
-              `declared ${entry.trafficClass}`
-          )
-        );
-        return;
-      }
-      if (type === FRAME_DATA) {
-        if (payload.byteLength === 0) return;
-        try {
-          // COPY: the payload is a subarray view into the transport's receive
-          // buffer, valid only during this callback (see decodeBulkMessage);
-          // the stream queue retains it until the consumer reads. (Pre-open
-          // flushes hand in already-owned copies; re-slicing those is a cheap
-          // one-time cost for a single delivery path.)
-          entry.controller.enqueue(payload.slice());
-        } catch {
-          // Stream already errored/cancelled under us — unregister the route.
-          inboundBodies.delete(streamId);
-          retireBodyId(streamId, null);
-          return;
-        }
-        entry.received += payload.byteLength;
-        const desired = entry.controller.desiredSize;
-        if (desired !== null && desired < 0) {
-          const buffered = RpcServer.UPLOAD_RECEIVE_CAP_BYTES - desired;
-          log.warn(
-            `WebRTC pipe: upload stream ${streamId} exceeded the ` +
-              `${RpcServer.UPLOAD_RECEIVE_CAP_BYTES}-byte receive buffer (${buffered} buffered) — failing the request`
-          );
-          entry.settle(
-            new Error(
-              `upload exceeded the ${RpcServer.UPLOAD_RECEIVE_CAP_BYTES}-byte receive buffer (${buffered} bytes unconsumed)`
-            )
-          );
-        }
-        return;
-      }
-      if (type === FRAME_END) {
-        // END carries the sender's byte count (`EndFramePayload.bytesIn`, sent
-        // by the client's pumpRequestBody). Validate it against what actually
-        // arrived — mirroring the HTTP stream path's END accounting — so a
-        // transport that lost or duplicated DATA fails the request loudly
-        // instead of settling a truncated upload as complete.
-        let declared: number | undefined;
-        try {
-          declared = parseEndFrame(payload).bytesIn;
-        } catch {
-          // malformed END payload — fails the typeof check below
-        }
-        if (typeof declared !== "number" || !Number.isFinite(declared)) {
-          entry.settle(
-            new Error(`protocol violation: upload END frame for stream ${streamId} has no bytesIn`)
-          );
-          return;
-        }
-        if (declared !== entry.received) {
-          log.warn(
-            `WebRTC pipe: upload stream ${streamId} byte-count mismatch — ` +
-              `sender declared ${declared}, received ${entry.received} — failing the request`
-          );
-          entry.settle(
-            new Error(
-              `upload stream truncated: sender declared ${declared} bytes, received ${entry.received}`
-            )
-          );
-          return;
-        }
-        entry.settle();
-        return;
-      }
-      // ERROR (or a protocol-violating HEAD on an upload stream): error the
-      // body so the in-flight request fails loudly, never a truncated upload.
-      let message = "upload failed";
-      let code: string | undefined;
-      if (type === FRAME_ERROR) {
-        try {
-          const parsed = JSON.parse(decoder.decode(payload)) as { message?: string; code?: string };
-          if (typeof parsed.message === "string" && parsed.message) message = parsed.message;
-          if (typeof parsed.code === "string") code = parsed.code;
-        } catch {
-          // malformed error payload — keep the generic message
-        }
-      } else {
-        message = `protocol violation: frame type ${type} on upload stream ${streamId}`;
-      }
-      const error = new Error(message) as Error & { code?: string };
-      if (code) error.code = code;
-      entry.settle(error);
-    };
-    const resetPipe = (reason: string): void => {
-      for (const [sid, shim] of [...shims]) {
-        shims.delete(sid);
-        shim.remoteClosed(1006, reason || "WebRTC pipe down");
-      }
-      for (const body of [...inboundBodies.values()]) {
-        body.settle(new Error(reason || "WebRTC pipe down"));
-      }
-      for (const pending of pendingBodies.values()) clearTimeout(pending.timer);
-      pendingBodies.clear();
-      pendingBodyBytes = 0;
-      retiredBodyIds.clear();
-    };
-    // A transport-down is a generation boundary, not necessarily the end of
-    // the answerer object: WebRTC recovery may reopen sessions on this same
-    // pipe. Reset generation-owned state while retaining the subscription.
-    pipe.onDown?.((reason) => resetPipe(reason));
-
-    pipe.onStreamFrame((trafficClass, streamId, type, payload) => {
-      if (this.isShuttingDown()) return;
-      if (inboundBodies.has(streamId)) {
-        deliverBodyFrame(trafficClass, streamId, type, payload);
-        return;
-      }
-      // No registered body: either the frame beat its stream-open across the
-      // channel boundary (buffer it) or the id is retired (drop, inside).
-      bufferPreOpenFrame(trafficClass, streamId, type, payload);
-    });
-
-    pipe.onControl((data) => {
-      if (this.isShuttingDown()) return;
-      let frame: SessionControlFrame;
-      try {
-        frame = decodeControlFrame(decoder.decode(data));
-      } catch (err) {
-        log.warn(`WebRTC pipe: dropping malformed control frame: ${(err as Error).message}`);
-        return;
-      }
-      switch (frame.t) {
-        case "open": {
-          // Generous pre-auth DoS backstop: cap concurrent logical sessions per
-          // pipe. Each open drives a full handleConnection (10s auth timer + auth
-          // work), so an unbounded open flood would pin resources before any auth.
-          // A re-open of an already-tracked sid is never blocked (it replaces).
-          if (!shims.has(frame.sid) && shims.size >= RpcServer.MAX_SESSIONS_PER_PIPE) {
-            log.warn(
-              `WebRTC pipe: refusing open for ${frame.sid} — session cap ` +
-                `(${RpcServer.MAX_SESSIONS_PER_PIPE}) reached; possible pre-auth flood`
-            );
-            writeControlFrame({
-              t: SESSION_OPEN_RESULT,
-              sid: frame.sid,
-              success: false,
-              error: "Too many concurrent sessions on this connection",
-              terminal: true,
-            });
-            return;
-          }
-          // A re-sent SESSION_OPEN on reconnect means the prior pipe generation's
-          // shim is stale (its connection is gone, but the answerer pipe + this
-          // closure survive the ICE re-establish). Tear it down — firing the old
-          // connection's handleClose WITHOUT writing SESSION_CLOSED to the client
-          // (it is re-opening, not closing), and GC'ing the old shim's per-session
-          // stream maps — so the re-sent auth drives a FRESH handleConnection →
-          // handleAuth that emits a new open-result. Reusing the stale shim would
-          // route the auth into the live handleMessage, which IGNORES a duplicate
-          // ws:auth (rpcServer ~"ws:auth" case), so reopen()/ready() would hang
-          // forever and onRecovery (resubscribe / cold-recover) would never fire.
-          const stale = shims.get(frame.sid);
-          if (stale) stale.remoteClosed(4000, "superseded by re-open");
-          const shim = new SessionWebSocketShim(frame.sid, pipe, (sid) => shims.delete(sid));
-          shims.set(frame.sid, shim);
-          // Drive the full auth/session/bridge pipeline for this logical session.
-          this.handleConnection(shim as unknown as WebSocket);
-          shim.deliverInbound({
-            type: "ws:auth",
-            contractVersion: RPC_CONTRACT_VERSION,
-            token: frame.token,
-            connectionId: frame.connectionId,
-            clientLabel: frame.clientLabel,
-            clientSessionId: frame.clientSessionId,
-            clientPlatform: frame.clientPlatform,
-            oauthCallbackMode: frame.oauthCallbackMode,
-          });
-          return;
-        }
-        case "rpc": {
-          const shim = getShim(frame.sid, frame.t);
-          if (!shim) {
-            // Requests get a per-request SESSION_NOT_OPEN response so the
-            // pending call settles NOW; event-carrying envelopes have nothing
-            // to respond to. Both also get the self-healing non-terminal
-            // closed so the client reopens the session.
-            writeUnknownSessionResponse(frame.sid, frame.envelope);
-            sendSessionNotOpenClosed(frame.sid);
-            return;
-          }
-          shim.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
-          return;
-        }
-        case "route": {
-          const shim = getShim(frame.sid, frame.t);
-          if (!shim) {
-            writeUnknownSessionResponse(frame.sid, frame.envelope);
-            sendSessionNotOpenClosed(frame.sid);
-            return;
-          }
-          shim.deliverInbound({
-            type: "ws:route",
-            envelope: frame.envelope,
-            targetConnectionId: frame.targetConnectionId,
-          });
-          return;
-        }
-        case "stream-open": {
-          const shim = getShim(frame.sid, frame.t);
-          if (!shim) {
-            // Settle the client's pending stream: a bulk ERROR frame whose
-            // payload is the UTF-8 JSON `ErrorFramePayload` the client's
-            // decodeFramedStream/parseErrorFrame expects.
-            void pipe
-              .writeStreamFrame(
-                frame.trafficClass,
-                frame.streamId,
-                FRAME_ERROR,
-                encoder.encode(
-                  JSON.stringify({
-                    status: 409,
-                    message: "WebRTC session is not open",
-                    code: "SESSION_NOT_OPEN",
-                  })
-                )
-              )
-              .catch(() => {
-                // Pipe failure surfaces via onDown; the stream is moot then.
+        switch (frame.t) {
+          case IROH_SESSION_OPEN: {
+            if (!sessions.has(frame.sid) && sessions.size >= RpcServer.MAX_SESSIONS_PER_PIPE) {
+              await writeControl({
+                t: IROH_SESSION_OPEN_RESULT,
+                sid: frame.sid,
+                success: false,
+                error: "Too many concurrent sessions on this connection",
+                terminal: true,
               });
-            sendSessionNotOpenClosed(frame.sid);
-            return;
+              continue;
+            }
+            sessions.get(frame.sid)?.remoteClosed(4000, "superseded by re-open");
+            const session = new IrohRpcSessionSocket({
+              sid: frame.sid,
+              connection,
+              writeControl,
+              onClosed: (sid) => sessions.delete(sid),
+              log: (message) => log.warn(message),
+            });
+            sessions.set(frame.sid, session);
+            this.handleConnection(session);
+            session.deliverAuth({
+              type: "ws:auth",
+              contractVersion: RPC_CONTRACT_VERSION,
+              token: frame.token,
+              connectionId: frame.connectionId,
+              clientLabel: frame.clientLabel,
+              clientSessionId: frame.clientSessionId,
+              clientPlatform: frame.clientPlatform,
+              oauthCallbackMode: frame.oauthCallbackMode,
+            });
+            break;
           }
-          const requestId = (frame.envelope.message as { requestId?: string }).requestId;
-          if (requestId) shim.registerStream(requestId, frame.streamId, frame.trafficClass);
-          // Upload path (plan §1.6): a declared bodyStreamId routes inbound
-          // bulk DATA/END/ERROR frames into a per-request body stream the
-          // dispatch consumes (shim.takeInboundBody). The client SENDS the
-          // stream-open before its first DATA frame, but control and bulk are
-          // independent SCTP streams, so DATA can ARRIVE first — such frames
-          // wait in the bounded pre-open buffer and registerInboundBody
-          // flushes them, in order, into the body here.
-          if (requestId && typeof frame.bodyStreamId === "number") {
-            const bodyStreamId = frame.bodyStreamId;
-            const body = registerInboundBody(bodyStreamId, frame.trafficClass);
-            shim.registerInboundBody(requestId, body, () =>
-              inboundBodies
-                .get(bodyStreamId)
-                ?.settle(new Error("request settled before the upload completed"))
-            );
-          }
-          shim.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
-          return;
-        }
-        case "stream-cancel": {
-          const shim = getShim(frame.sid, frame.t);
-          if (!shim) {
-            sendSessionNotOpenClosed(frame.sid);
-            return;
-          }
-          shim.cancelStream(frame.streamId);
-          return;
-        }
-        case "close": {
-          // Deliberately NO closed(4008) reply for an unknown sid: the client
-          // is discarding this session; echoing closed would auto-reopen it.
-          const shim = shims.get(frame.sid);
-          shims.delete(frame.sid);
-          shim?.remoteClosed(frame.code, frame.reason);
-          return;
-        }
-        default: {
-          // open-result/closed/routed/event/*-error are client-bound; pong is
-          // pipe-level (keepalive lives inside the answerer transport now, so
-          // ping never reaches here). A session-scoped frame for an unknown
-          // sid still self-heals via closed(4008) — plan §1.5.
-          const sid = (frame as { sid?: string }).sid;
-          if (typeof sid === "string" && !shims.has(sid)) sendSessionNotOpenClosed(sid);
-          return;
+          case IROH_SESSION_CLOSE:
+            sessions.get(frame.sid)?.remoteClosed(frame.code, frame.reason);
+            sessions.delete(frame.sid);
+            break;
+          case IROH_SESSION_HELLO:
+            throw new Error("Duplicate Iroh session hello");
+          case IROH_SESSION_OPEN_RESULT:
+          case IROH_SESSION_CLOSED:
+            throw new Error(`Server received client-invalid Iroh frame ${frame.t}`);
         }
       }
-    });
+    };
+
+    const streamLoop = async (): Promise<void> => {
+      while (!stopped) {
+        const stream = await connection.acceptBi();
+        const streamPreamble = await readIrohStreamPreamble(stream.recv);
+        if (streamPreamble.k === "control") {
+          throw new Error("Duplicate Iroh control stream");
+        }
+        const session = sessions.get(streamPreamble.sid);
+        if (!session) {
+          await Promise.all([
+            stream.recv.stop(0x201n).catch(() => undefined),
+            stream.send.reset(0x201n).catch(() => undefined),
+            refuseUnknownSession(streamPreamble.sid),
+          ]);
+          continue;
+        }
+        const envelope = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
+          )
+        ) as RpcEnvelope;
+        const body =
+          streamPreamble.k === "stream" && streamPreamble.body
+            ? irohReceiveStreamBody(stream.recv)
+            : undefined;
+        session.deliverEnvelope(envelope, stream, body);
+      }
+    };
+
+    const fail = (error: unknown): void => {
+      const reason = error instanceof Error ? error.message : String(error);
+      closeAll(reason);
+      connection.close(0x200n, new TextEncoder().encode(reason));
+    };
+    void controlLoop().catch(fail);
+    void streamLoop().catch(fail);
+    void connection.closed().then(closeAll);
   }
 
   /** Handle an HTTP POST /rpc from the gateway (in-process dispatch). */

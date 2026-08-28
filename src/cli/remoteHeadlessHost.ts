@@ -3,7 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
-import { loadCliCredentials, requireDeviceCliCredentials } from "./credentialStore.js";
+import {
+  loadCliCredentials,
+  requireDeviceCliCredentials,
+  type CliIrohDeviceCredentials,
+} from "./credentialStore.js";
 import type { ParsedInvocation } from "./commandTable.js";
 import { CliError, UsageError, jsonMode, printError, redactCliSecrets } from "./output.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
@@ -21,15 +25,13 @@ export function resolveRemoteHeadlessHostEntryPath(env: NodeJS.ProcessEnv = proc
   return path.join(appRoot, "dist", "headless-host", "index.js");
 }
 
-async function createWebRtcHeadlessHostOverrides(
-  creds: DeviceCredential & {
-    workspacePairing: NonNullable<DeviceCredential["workspacePairing"]>;
-  },
+async function createIrohHeadlessHostOverrides(
+  creds: CliIrohDeviceCredentials,
   opts: { entryPath: string; label?: string }
 ): Promise<Record<string, unknown>> {
-  const [{ WebRtcRpcClient }, { startPanelAssetFacade }, { RemoteCdpHostBridgeSocket }] =
+  const [{ IrohRpcClient }, { startPanelAssetFacade }, { RemoteCdpHostBridgeSocket }] =
     await Promise.all([
-      import("./webrtcClient.js"),
+      import("../node/iroh/irohRpcClient.js"),
       import("../node/panelAssets/panelAssetFacade.js"),
       import(pathToFileURL(opts.entryPath).href),
     ]);
@@ -37,13 +39,13 @@ async function createWebRtcHeadlessHostOverrides(
   const clientSessionId = `headless-${randomUUID()}`;
   const label = opts.label ?? "Headless";
   const token = `refresh:${creds.deviceId}:${creds.refreshToken}`;
-  const client = new WebRtcRpcClient({
-    pairing: creds.workspacePairing,
+  const client = new IrohRpcClient({
+    reach: creds.workspacePairing,
+    endpointSecret: Buffer.from(creds.endpointSecret, "base64url"),
     callerId: `shell:${creds.deviceId}`,
     getToken: () => token,
     connectionId: clientSessionId,
     clientLabel: label,
-    logPrefix: "[headless-webrtc]",
   });
 
   let facade: Awaited<ReturnType<typeof startPanelAssetFacade>> | null = null;
@@ -75,7 +77,7 @@ async function createWebRtcHeadlessHostOverrides(
         targetId: string,
         method: string,
         args: unknown[] = [],
-        options?: Parameters<import("./webrtcClient.js").WebRtcRpcClient["stream"]>[3]
+        options?: Parameters<import("../node/iroh/irohRpcClient.js").IrohRpcClient["stream"]>[3]
       ): Promise<Response> {
         return client.stream(targetId, method, args, options);
       },
@@ -175,11 +177,15 @@ async function runRemoteHeadlessHost(inv: ParsedInvocation): Promise<number> {
     console.error(error instanceof Error ? error.message : String(error));
     return 3;
   }
+  if (creds.transport !== "iroh") {
+    console.error("remote headless host requires an Iroh-paired device profile");
+    return 3;
+  }
   if (!isSelectedWorkspaceUrl(creds.url)) {
     console.error("stored remote credential is not scoped to a workspace");
     return 3;
   }
-  const configOverrides: Record<string, unknown> = await createWebRtcHeadlessHostOverrides(creds, {
+  const configOverrides: Record<string, unknown> = await createIrohHeadlessHostOverrides(creds, {
     entryPath,
     label: flagStr("label"),
   });

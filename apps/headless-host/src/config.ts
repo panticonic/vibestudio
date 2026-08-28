@@ -36,9 +36,9 @@ export interface HeadlessHostConfig {
   profileDir: string;
   /** Prefer chrome-headless-shell over full Chrome when downloading. */
   leanBrowser?: boolean;
-  /** Inject a non-WS management-plane connection, e.g. CLI WebRTC. */
+  /** Inject a non-WS management-plane connection, e.g. CLI Iroh. */
   connectionFactory?: () => Promise<HeadlessHostServerConnection>;
-  /** Override the CDP host-provider bridge transport, e.g. RPC stream over WebRTC. */
+  /** Override the CDP host-provider bridge transport, e.g. RPC stream over Iroh. */
   bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
   lifecycle?: {
     onRegistered?: () => void;

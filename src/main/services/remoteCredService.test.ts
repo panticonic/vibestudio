@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createConnectDeepLink, derivePairingRoom } from "@vibestudio/shared/connect";
+import { createConnectDeepLink } from "@vibestudio/shared/connect";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
@@ -28,7 +28,7 @@ vi.mock("./deviceCredentialStore.js", () => ({
   loadDeviceCredentialByWorkspaceId: () => null,
   saveDeviceCredential: (value: DeviceCredentialEntry) => {
     if (mocks.store.saveError) throw mocks.store.saveError;
-    if (value.transport === "webrtc") mocks.store.value = value as StoredRemote;
+    if (value.transport === "iroh") mocks.store.value = value as StoredRemote;
   },
   clearStoredRemotePairing: () => {
     if (mocks.store.clearError) throw mocks.store.clearError;
@@ -42,20 +42,17 @@ const NEXT_DEVICE_ID = `dev_${"n".repeat(24)}`;
 const NEXT_REFRESH_TOKEN = "n".repeat(43);
 const sampleStored: StoredRemote = {
   serverId: `srv_${"s".repeat(24)}`,
-  transport: "webrtc",
+  transport: "iroh",
+  endpointSecret: "E".repeat(43),
   controlPairing: {
-    room: "room-control",
-    fp: "AA".repeat(32),
-    sig: "wss://sig.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "aa".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4,
   },
   workspacePairing: {
-    room: "room-abc",
-    fp: "AA".repeat(32),
-    sig: "wss://sig.example/",
-    v: 3,
-    ice: "all",
+    endpointId: "bb".repeat(32),
+    relays: ["https://relay.example/"],
+    v: 4,
   },
   deviceId: SELF_DEVICE_ID,
   refreshToken: "r".repeat(43),
@@ -127,7 +124,7 @@ describe("remoteCredService", () => {
     });
   });
 
-  it("persists fresh and rotated WebRTC device credentials", async () => {
+  it("persists fresh and rotated Iroh device credentials", async () => {
     const { persistRotatedRemoteCredential, saveStoredRemote } =
       await import("./remoteCredService.js");
     saveStoredRemote(sampleStored);
@@ -151,11 +148,9 @@ describe("remoteCredService", () => {
       running: true,
       serverUrl: "https://hub.example.test/w/second",
       workspaceReach: {
-        room: `room_${"w".repeat(24)}`,
-        fp: "CC".repeat(32),
-        sig: "wss://sig.example/",
-        v: 3,
-        ice: "all",
+        endpointId: "cc".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
       },
       serverId: sampleStored.serverId,
       serverBootId: `boot_${"b".repeat(24)}`,
@@ -165,7 +160,11 @@ describe("remoteCredService", () => {
     expect(mocks.store.value).toMatchObject({
       workspaceName: "second",
       controlPairing: sampleStored.controlPairing,
-      workspacePairing: { room: `room_${"w".repeat(24)}`, fp: "CC".repeat(32), ice: "all" },
+      workspacePairing: {
+        endpointId: "cc".repeat(32),
+        relays: ["https://relay.example/"],
+        v: 4,
+      },
     });
   });
 
@@ -180,11 +179,9 @@ describe("remoteCredService", () => {
         running: true,
         serverUrl: "https://hub.example.test/w/second",
         workspaceReach: {
-          room: `room_${"w".repeat(24)}`,
-          fp: "CC".repeat(32),
-          sig: "wss://sig.example/",
-          v: 3,
-          ice: "all",
+          endpointId: "cc".repeat(32),
+          relays: ["https://relay.example/"],
+          v: 4,
         },
         serverId: `srv_${"x".repeat(24)}`,
         serverBootId: `boot_${"b".repeat(24)}`,
@@ -232,13 +229,11 @@ describe("remoteCredService", () => {
     expect(mocks.app.relaunch).not.toHaveBeenCalled();
 
     const link = createConnectDeepLink({
-      room: derivePairingRoom("B".repeat(32)),
-      fp: "AA".repeat(32),
+      endpointId: "aa".repeat(32),
+      relays: ["https://relay.example/"],
       code: "B".repeat(32),
       exp: Date.now() + 60_000,
-      sig: "wss://sig.example/",
-      v: 3,
-      ice: "all",
+      v: 4,
     });
     await expect(service.handler(shellCtx, "pair", [{ link }])).resolves.toEqual({ ok: true });
     expect(mocks.app.relaunch).toHaveBeenCalledWith({

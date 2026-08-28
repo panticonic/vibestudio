@@ -8,7 +8,7 @@ function stripTrailingSlash(value: string): string {
 
 function canonicalServerUrl(raw: string): URL {
   const url = new URL(raw);
-  if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "webrtc:") {
+  if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "iroh:") {
     throw new Error(`Unsupported server URL protocol: ${url.protocol}`);
   }
   if (url.username || url.password || url.search || url.hash) {

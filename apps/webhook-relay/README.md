@@ -33,7 +33,7 @@ socket; provider-level HMAC/OIDC verification still runs independently.
 - **mobile → deep-link.** The relay hosts the Apple App Site Association /
   Android assetlinks (`/.well-known/...`) anchored on `/oauth/callback/*`, so the
   OS hands the URL straight into the already-connected app, which forwards
-  `{state, code}` over the WebRTC pipe. The landing HTML is only reached if the
+  `{state, code}` over the Iroh pipe. The landing HTML is only reached if the
   deep-link failed — it then renders an error and refuses to forward.
 - **desktop → backhaul-forward.** The landing pushes `{state, code}` **verbatim**
   down the owning server's backhaul. If that backhaul is down, the landing fails

@@ -12,7 +12,7 @@
  *   - mobile  -> deep-link. The relay only HOSTS the Apple App Site Association
  *     / Android assetlinks (see build* below). When that works the OS hands the
  *     URL straight into the already-connected app, which forwards {state,code}
- *     over the WebRTC pipe — this landing HTML never runs. If we DO reach this
+ *     over the Iroh pipe — this landing HTML never runs. If we DO reach this
  *     handler for a mobile transaction the deep-link failed (app missing /
  *     association broken): we render an error and refuse to forward. We never
  *     fall back to the desktop backhaul — a silent second path is exactly what

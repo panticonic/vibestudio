@@ -18,9 +18,9 @@ describe("CLI config paths", () => {
     const root = path.join("/tmp/vibestudio-xdg", "vibestudio");
     expect(cliConfigRoot()).toBe(root);
     expect(cliCredentialPath()).toBe(path.join(root, "cli-credentials.json"));
-    expect(hubIdentityPath()).toBe(path.join(root, "server-auth", "webrtc", "identity.pem"));
+    expect(hubIdentityPath()).toBe(path.join(root, "server-auth", "iroh", "endpoint.key"));
     expect(workspaceIdentityPath("dev")).toBe(
-      path.join(root, "workspaces", "dev", "reach", "webrtc", "identity.pem")
+      path.join(root, "workspaces", "dev", "reach", "iroh", "endpoint.key")
     );
   });
 

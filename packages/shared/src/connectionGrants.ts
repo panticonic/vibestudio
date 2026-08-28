@@ -9,6 +9,8 @@ export interface ConnectionGrant {
   token: string;
   principalId: string;
   issuedBy: string;
+  /** Remote endpoint of the authenticated issuer; absent only for loopback grants. */
+  remoteEndpointId?: string;
   /** Authenticated human bound to the issuing connection, when one exists. */
   subject?: UserSubject;
   expiresAt: number;
@@ -21,6 +23,7 @@ export interface ConnectionGrantValidation {
   principalId: string;
   principalKind: CallerKind;
   issuedBy: string;
+  remoteEndpointId?: string;
   subject?: UserSubject;
 }
 
@@ -81,7 +84,7 @@ export class ConnectionGrantService {
   grant(
     principalId: string,
     issuedBy: string,
-    options: { ttlMs?: number; subject?: UserSubject } = {}
+    options: { ttlMs?: number; subject?: UserSubject; remoteEndpointId?: string } = {}
   ): { token: string; expiresAt: number } {
     const record = this.entityCache.resolveActive(principalId);
     if (!record) {
@@ -94,6 +97,7 @@ export class ConnectionGrantService {
       token,
       principalId,
       issuedBy,
+      ...(options.remoteEndpointId ? { remoteEndpointId: options.remoteEndpointId } : {}),
       expiresAt,
       ...(options.subject ? { subject: options.subject } : {}),
       ...(executionDigest ? { executionDigest } : {}),
@@ -101,10 +105,19 @@ export class ConnectionGrantService {
     return { token, expiresAt };
   }
 
-  redeem(token: string): { principalId: string; issuedBy: string; subject?: UserSubject } | null {
+  redeem(
+    token: string,
+    remoteEndpointId?: string
+  ): {
+    principalId: string;
+    issuedBy: string;
+    subject?: UserSubject;
+    remoteEndpointId?: string;
+  } | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
     if (grant.redeemed) return null;
+    if (grant.remoteEndpointId !== remoteEndpointId) return null;
     if (grant.expiresAt <= Date.now()) {
       this.grants.delete(token);
       return null;
@@ -125,6 +138,7 @@ export class ConnectionGrantService {
     return {
       principalId: grant.principalId,
       issuedBy: grant.issuedBy,
+      ...(grant.remoteEndpointId ? { remoteEndpointId: grant.remoteEndpointId } : {}),
       ...(grant.subject ? { subject: grant.subject } : {}),
     };
   }
@@ -145,9 +159,10 @@ export class ConnectionGrantService {
     for (let i = 0; i < excess; i++) this.grants.delete(redeemedTokens[i]!);
   }
 
-  validate(token: string): ConnectionGrantValidation | null {
+  validate(token: string, remoteEndpointId?: string): ConnectionGrantValidation | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
+    if (grant.remoteEndpointId !== remoteEndpointId) return null;
     if (!grant.redeemed && grant.expiresAt <= Date.now()) {
       this.grants.delete(token);
       return null;
@@ -168,6 +183,7 @@ export class ConnectionGrantService {
       principalId: grant.principalId,
       principalKind,
       issuedBy: grant.issuedBy,
+      ...(grant.remoteEndpointId ? { remoteEndpointId: grant.remoteEndpointId } : {}),
       ...(grant.subject ? { subject: grant.subject } : {}),
     };
   }

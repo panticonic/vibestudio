@@ -16,7 +16,7 @@ function blockedImportFor(blockedImports, moduleName) {
 
 function createNativeBoundary(workspaceAppRoot) {
   const appPackage = JSON.parse(
-    fs.readFileSync(path.join(workspaceAppRoot, "package.json"), "utf8"),
+    fs.readFileSync(path.join(workspaceAppRoot, "package.json"), "utf8")
   );
   const declaration = appPackage.vibestudio?.app?.nativeModulePolicy;
   if (typeof declaration !== "string" || !declaration) {
@@ -35,8 +35,10 @@ function createNativeBoundary(workspaceAppRoot) {
   const allowedByModule = new Map(
     Object.entries(blockedImports).map(([moduleName, relativePaths]) => [
       moduleName,
-      new Set(relativePaths.map((relativePath) => normalize(path.join(workspaceAppRoot, relativePath)))),
-    ]),
+      new Set(
+        relativePaths.map((relativePath) => normalize(path.join(workspaceAppRoot, relativePath)))
+      ),
+    ])
   );
   const nativeBootstrap = normalize(path.join(__dirname, "index.js"));
   // Trusted PLATFORM code that runs before any downloaded workspace app bundle
@@ -46,31 +48,26 @@ function createNativeBoundary(workspaceAppRoot) {
   allowedByModule.get("@react-native-clipboard/clipboard")?.add(nativeBootstrap);
   allowedByModule.get("@react-native-async-storage/async-storage")?.add(nativeBootstrap);
 
-  // Trusted PLATFORM code that persists the device's WebRTC shell-reconnect
+  // Trusted PLATFORM code that persists the device's Iroh shell-reconnect
   // credential directly (not userland workspace surface, so not capability-gated):
-  // the native host bootstrap (apps/mobile/index.js) and the shared WebRTC
-  // transport package (@vibestudio/mobile-webrtc). Both live OUTSIDE
+  // the native host bootstrap (apps/mobile/index.js) and the shared Iroh
+  // transport package (@vibestudio/mobile-iroh). Both live OUTSIDE
   // workspaceAppRoot and bundle through this Metro, so they are exempted by
   // absolute path rather than the workspaceAppRoot-relative allowlist above.
-  const mobileWebRtcConnect = normalize(
-    path.join(__dirname, "..", "..", "packages", "mobile-webrtc", "src", "connect.ts"),
+  const mobileIrohConnect = normalize(
+    path.join(__dirname, "..", "..", "packages", "mobile-iroh", "src", "connect.ts")
   );
-  const mobileWebRtcConnectLink = normalize(
-    path.join(__dirname, "..", "..", "packages", "mobile-webrtc", "src", "connectLink.ts"),
+  const mobileIrohConnectLink = normalize(
+    path.join(__dirname, "..", "..", "packages", "mobile-iroh", "src", "connectLink.ts")
   );
   const keychainAllowed = allowedByModule.get("react-native-keychain");
-  keychainAllowed?.add(mobileWebRtcConnect);
-  const asyncStorageAllowed = allowedByModule.get(
-    "@react-native-async-storage/async-storage",
-  );
-  asyncStorageAllowed?.add(mobileWebRtcConnect);
-  asyncStorageAllowed?.add(mobileWebRtcConnectLink);
+  keychainAllowed?.add(mobileIrohConnect);
+  const asyncStorageAllowed = allowedByModule.get("@react-native-async-storage/async-storage");
+  asyncStorageAllowed?.add(mobileIrohConnectLink);
   // The native host bootstrap (apps/mobile/index.js) is the out-of-tree trusted
-  // consumer of the @vibestudio/mobile-webrtc capability; allowlist it by absolute
+  // consumer of the @vibestudio/mobile-iroh capability; allowlist it by absolute
   // path alongside the workspace-app-relative shell consumers above.
-  allowedByModule
-    .get("@vibestudio/mobile-webrtc")
-    ?.add(nativeBootstrap);
+  allowedByModule.get("@vibestudio/mobile-iroh")?.add(nativeBootstrap);
 
   return {
     guardNativeModuleImport(moduleName, originModulePath) {
@@ -81,7 +78,7 @@ function createNativeBoundary(workspaceAppRoot) {
       throw new Error(
         `Direct import of native module "${moduleName}" from workspace app code is blocked. ` +
           `Importer: ${origin || "unknown"}. ` +
-          "Use the Vibestudio platform-owned wrapper for this native surface.",
+          "Use the Vibestudio platform-owned wrapper for this native surface."
       );
     },
   };

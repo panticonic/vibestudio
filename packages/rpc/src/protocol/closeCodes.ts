@@ -4,9 +4,9 @@
  *
  * A *terminal* close means "this session is gone for good — do NOT auto-reopen
  * it"; any other code is a transient drop the client re-establishes. Previously
- * the server-side `webrtcSessionShim` and the WS client transport each hardcoded
+ * old remote and loopback transports each hardcoded
  * their own set, and they had drifted: 4093 (panel retired) was terminal on the
- * WebRTC pipe but not on WS, and 4005 (bad first message) was terminal on WS but
+ * Iroh pipe but not on WS, and 4005 (bad first message) was terminal on WS but
  * not on the pipe — so the same server close produced opposite reconnect
  * behavior per transport. This module is the single source of truth.
  */
@@ -26,7 +26,7 @@ export const CLOSE_PANEL_RETIRED = 4093;
 
 /**
  * Closes after which the client must NOT reconnect the session. Every transport
- * (the server `webrtcSessionShim`, the WS client transport, anything that
+ * (the Iroh session owner, the WS client transport, anything that
  * classifies a close code) must consult this one set.
  */
 export const TERMINAL_CLOSE_CODES: ReadonlySet<number> = new Set([

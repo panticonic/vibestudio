@@ -14,9 +14,9 @@ export function cliCredentialPath() {
 }
 
 export function hubIdentityPath() {
-  return path.join(cliConfigRoot(), "server-auth", "webrtc", "identity.pem");
+  return path.join(cliConfigRoot(), "server-auth", "iroh", "endpoint.key");
 }
 
 export function workspaceIdentityPath(workspace = "default") {
-  return path.join(cliConfigRoot(), "workspaces", workspace, "reach", "webrtc", "identity.pem");
+  return path.join(cliConfigRoot(), "workspaces", workspace, "reach", "iroh", "endpoint.key");
 }

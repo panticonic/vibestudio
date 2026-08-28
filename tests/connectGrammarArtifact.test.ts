@@ -11,10 +11,9 @@ describe("raw-node pairing grammar artifact", () => {
   it("loads with the raw-node exports used by pairing scripts", async () => {
     const grammar = await import("../scripts/cli/lib/connect-grammar.generated.mjs");
     expect(grammar).toMatchObject({
-      DEFAULT_SIGNAL_URL: expect.any(String),
       createConnectDeepLink: expect.any(Function),
       parseConnectLink: expect.any(Function),
-      parseSignalingEndpoint: expect.any(Function),
+      connectPairingFromLink: expect.any(Function),
     });
   });
 
@@ -22,9 +21,9 @@ describe("raw-node pairing grammar artifact", () => {
     await expect(
       esbuild.build({
         entryPoints: [
-          path.resolve("scripts/dev-webrtc-remote.mjs"),
-          path.resolve("scripts/desktop-pairing-smoke.mjs"),
-          path.resolve("scripts/cli-remote-smoke.mjs"),
+          path.resolve("scripts/cli/lib/pair-server.mjs"),
+          path.resolve("scripts/cli/remote-deploy.mjs"),
+          path.resolve("scripts/cli/remote-doctor.mjs"),
         ],
         bundle: true,
         format: "esm",

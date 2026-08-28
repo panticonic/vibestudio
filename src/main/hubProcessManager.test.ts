@@ -1,10 +1,6 @@
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
-import {
-  createConnectDeepLink,
-  createConnectPairUrl,
-  derivePairingRoom,
-} from "@vibestudio/shared/connect";
+import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
 
@@ -66,13 +62,11 @@ const LEASE = {
 
 function readyInvite() {
   const pairing = {
-    room: derivePairingRoom("D".repeat(32)),
-    fp: "AA".repeat(32),
-    sig: "wss://signal.example/",
+    endpointId: "aa".repeat(32),
+    relays: ["https://relay.example/"],
     code: "D".repeat(32),
     exp: 2_000_000_000_000,
-    v: 3 as const,
-    ice: "all" as const,
+    v: 4 as const,
   };
   return {
     ...pairing,
@@ -165,11 +159,9 @@ function workspaceRoute(workspace: string, workspaceId: string) {
     running: true as const,
     serverUrl: `http://127.0.0.1:5000/_r/ws/${workspace}`,
     workspaceReach: {
-      room: `workspace-${workspace}`,
-      fp: "AA".repeat(32),
-      sig: "wss://signal.example/",
-      v: 3 as const,
-      ice: "all" as const,
+      endpointId: "bb".repeat(32),
+      relays: ["https://relay.example/"],
+      v: 4 as const,
     },
     serverId: CHILD_SERVER_ID,
     serverBootId: CHILD_SERVER_BOOT_ID,
@@ -218,7 +210,7 @@ describe("HubProcessManager", () => {
     expect(() =>
       parseHubReadyFile({
         ...canonical,
-        rootInvite: { ...canonical.rootInvite, ice: undefined },
+        rootInvite: { ...canonical.rootInvite, relays: undefined },
       })
     ).toThrow(/canonical contract/);
     expect(() =>

@@ -1,7 +1,7 @@
 /**
  * HostConfig — resolved host/port configuration for a Vibestudio server.
  *
- * The gateway serves loopback HTTP only. Remote access is WebRTC (DTLS-encrypted,
+ * The gateway serves loopback HTTP only. Remote access is Iroh (Endpoint ID-encrypted,
  * paired by QR), so there is no HTTPS/TLS branch, no remote-server URL, and no
  * public-URL/protocol negotiation here. All panel-facing URL construction flows
  * through this config.

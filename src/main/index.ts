@@ -26,7 +26,6 @@ import {
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
 import { remoteStartupFailurePresentation } from "./remoteStartupFailure.js";
-import { cleanupNodeDatachannel } from "../node/webrtc/nodeDatachannelPeer.js";
 import {
   copyPendingNpmUpdateCommand,
   consumeNpmUpdateResult,
@@ -39,7 +38,7 @@ import {
   createConnectDeepLink,
   parseConnectLink,
   type ConnectPairing,
-} from "@vibestudio/shared/connect";
+} from "@vibestudio/iroh-transport";
 import {
   createPanelDeepLink,
   validatePanelLocation,
@@ -106,14 +105,6 @@ function writeHeadlessStartupError(error: unknown, wsDir?: string): void {
     );
   } catch (writeError) {
     console.error("[headless] Failed to write startup-error.json:", writeError);
-  }
-}
-
-function cleanupNativeWebRtc(): void {
-  try {
-    cleanupNodeDatachannel();
-  } catch (error) {
-    console.error("[App] Native WebRTC cleanup failed:", formatUnknownError(error));
   }
 }
 
@@ -360,20 +351,20 @@ let bootstrapWorkspaceRpcReady = false;
 let bootstrapStartupProgress: StartupConnectionProgress | null = null;
 let bootstrapConnectionKind: "local" | "remote" | null =
   startupMode.kind === "local" ? "local" : null;
-// True when this launch found a persisted WebRTC remote pairing — the chooser is
+// True when this launch found a persisted Iroh remote pairing — the chooser is
 // skipped and `establishServerSession` connects to the remote over the pipe.
 let remotePairedAtLaunch = false;
 
 /**
  * A returning device's credential was terminally rejected (revoked / reset on the
- * server, or the DTLS cert regenerated so the pinned fingerprint no longer
+ * server, or the durable endpoint key changed so the saved Endpoint ID no longer
  * matches) — re-pairing is required. A transient outage reads differently (the
  * transport retries internally; a connect timeout has its own shape), so those do
  * NOT match and the stored pairing is kept for a later retry.
  */
 function isTerminalRemoteCredentialFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /credential (expired|revoked|invalid)|re-pair|fingerprint mismatch|invalid token|session (is )?closed|session auth failed|SESSION_AUTH_FAILED/i.test(
+  return /credential (expired|revoked|invalid)|re-pair|endpoint id mismatch|invalid token|session (is )?closed|session auth failed|SESSION_AUTH_FAILED/i.test(
     message
   );
 }
@@ -395,8 +386,8 @@ const chooserChoice = new Promise<ChooserChoice>((resolve) => {
   };
 });
 
-function shouldAutoPairPendingDevWebRtcLink(): boolean {
-  return isDev() && startupInvocation.devWebRtcRemote;
+function shouldAutoPairPendingDevIrohLink(): boolean {
+  return isDev() && startupInvocation.devIrohRemote;
 }
 
 let appliedElectronHostTargetKey: string | null = null;
@@ -1506,7 +1497,7 @@ function requireBootstrapShellSender(event: Electron.IpcMainInvokeEvent, channel
 function getBootstrapConnectionState(): BootstrapConnectionState {
   // The chooser is shown only while startup is still `pending`, nothing was
   // paired at launch, AND the user has not yet made an in-process choice. A
-  // paired WebRTC remote (remotePairedAtLaunch) or a resolved chooser choice
+  // paired Iroh remote (remotePairedAtLaunch) or a resolved chooser choice
   // (chooserChoiceMade) flips the launch gate forward to connect rather than
   // offering a choice.
   const mode = bootstrapStartupError
@@ -1682,7 +1673,7 @@ function installBootstrapConnectionHandlers(): void {
     // second Connections dialog over the already-connected workspace.
     getPendingConnectLink();
     // Hand the parsed pairing to the pending path; establishServerSession dials it
-    // over WebRTC and KEEPS the pipe as the session (the one-time code authenticates
+    // over Iroh and keeps the authenticated QUIC connection as the session (the one-time code authenticates
     // it; the issued device credential is persisted for the next launch).
     log.info("[bootstrap] Pairing remote server by user request; connecting in-process");
     resolveChooserChoice({ kind: "remote", pairing: parsed });
@@ -1766,7 +1757,7 @@ app.on("ready", async () => {
   // Drain any error buffered before this listener registered (launch-time click).
   const bufferedLinkError = getPendingConnectLinkError();
   if (bufferedLinkError) surfaceConnectLinkError(bufferedLinkError);
-  // Sleep/wake + screen-unlock recovery: a WebRTC pipe can be dead while the
+  // Sleep/wake + screen-unlock recovery: a Iroh pipe can be dead while the
   // transport still reports "connected" for up to ~45s after the machine wakes.
   // NUDGE ONLY (never a forced teardown): the transport probes the pipe and a
   // healthy one answers untouched; a dead one is torn down promptly so reconnect
@@ -1997,26 +1988,24 @@ app.on("ready", async () => {
       : null;
 
   // A FRESH pairing the chooser redeems THIS launch (set from a remote choice
-  // below). When present, establishServerSession keeps its WebRTC pipe as the
+  // below). When present, establishServerSession keeps its Iroh pipe as the
   // session rather than spawning a local server or re-dialing a stored pairing.
   let pendingRemotePairing: ConnectPairing | null = null;
 
   if (startupMode.kind === "pending" && !remotePairedAtLaunch) {
-    const devAutoPairing = shouldAutoPairPendingDevWebRtcLink() ? getPendingConnectLink() : null;
+    const devAutoPairing = shouldAutoPairPendingDevIrohLink() ? getPendingConnectLink() : null;
     if (devAutoPairing) {
       resolveChooserChoice({ kind: "remote", pairing: devAutoPairing });
-      log.info("[bootstrap] Dev WebRTC remote mode: auto-pairing launch deep link");
-    } else if (shouldAutoPairPendingDevWebRtcLink()) {
-      log.warn(
-        "[bootstrap] Dev WebRTC remote mode requested but no pending pairing link was found"
-      );
+      log.info("[bootstrap] Dev Iroh remote mode: auto-pairing launch deep link");
+    } else if (shouldAutoPairPendingDevIrohLink()) {
+      log.warn("[bootstrap] Dev Iroh remote mode requested but no pending pairing link was found");
     } else if (IS_HEADLESS_HOST) {
       // No chooser UI on a headless host and nothing paired to connect to —
       // stay alive (a supervisor can pair a remote or select a workspace and
       // restart) rather than opening a window nothing can drive.
       log.error(
         "[headless] No workspace selected and no remote server paired. Pair a server over " +
-          "WebRTC or select a workspace, then restart the headless host."
+          "Iroh or select a workspace, then restart the headless host."
       );
       return;
     }
@@ -2057,7 +2046,7 @@ app.on("ready", async () => {
       // Remote: leave startupMode pending; the fresh pairing becomes the session.
       bootstrapConnectionKind = "remote";
       pendingRemotePairing = choice.pairing;
-      log.info("[bootstrap] Remote server chosen; pairing the session over WebRTC");
+      log.info("[bootstrap] Remote server chosen; pairing the session over Iroh");
     }
     // Fall through to the connected setup.
   }
@@ -2263,7 +2252,7 @@ app.on("ready", async () => {
     });
 
     // null mode = no local spawn; establishServerSession connects either the
-    // fresh pairing (pendingRemotePairing) or a stored pairing over WebRTC.
+    // fresh pairing (pendingRemotePairing) or a stored pairing over Iroh.
     const connectedStartupMode: ConnectedStartupMode | null =
       startupMode.kind === "local" ? startupMode : null;
     const establish = (mode: ConnectedStartupMode | null) =>
@@ -2310,22 +2299,12 @@ app.on("ready", async () => {
           });
         },
         onConnectionStatusChanged: (status) => {
-          // The selected ICE path (host/srflx/prflx = direct, relay = TURN) is
-          // additive observability the WebRTC ServerClient exposes; the loopback
-          // WS client has no `candidateType()`, so read it defensively. `null`
-          // (unknown / not settled / local) omits the hint from the badge.
-          const withCandidate = serverClientRef as {
-            candidateType?: () => "host" | "srflx" | "prflx" | "relay" | null;
-          } | null;
-          const candidateType =
-            typeof withCandidate?.candidateType === "function"
-              ? (withCandidate.candidateType() ?? undefined)
-              : undefined;
+          const remoteTransport = serverClientRef?.transportDiagnostics() ?? undefined;
           eventService.emit("server-connection-changed", {
             status,
             isRemote: isRemoteSession,
             remoteHost,
-            ...(candidateType ? { candidateType } : {}),
+            ...(remoteTransport ? { remoteTransport } : {}),
           });
           if (status === "disconnected") {
             for (const entry of panelRegistry?.listPanels() ?? []) {
@@ -2445,7 +2424,7 @@ app.on("ready", async () => {
 
     // The shell always spawns its own loopback server (ServerProcessManager
     // manages its lifecycle), so there is no out-of-process server to /healthz-
-    // poll. Remote topology is WebRTC, whose own liveness lives in the transport.
+    // poll. Remote topology is Iroh, whose own liveness lives in the transport.
 
     // Create PanelRegistry (pure in-memory — server owns persistence). Its
     // debounced projection notification is the Electron-local presentation
@@ -3335,7 +3314,6 @@ app.on("ready", async () => {
       cdpHostProvider = null;
     }
     await Promise.all(cleanupPromises);
-    cleanupNativeWebRtc();
 
     console.error("[App] Startup failed:", formatUnknownError(error));
     if (!IS_HEADLESS_HOST && applicationWindow.isOpen) {
@@ -3564,7 +3542,6 @@ app.on("will-quit", (event) => {
       const core = shellCore;
       shellCore = null;
       core?.shutdown?.();
-      cleanupNativeWebRtc();
       clearTimeout(shutdownTimeout);
       console.log("[App] Shutdown complete");
       app.exit(
@@ -3605,7 +3582,6 @@ app.on("will-quit", (event) => {
       } catch (cleanupError) {
         console.error("[App] Shell cleanup also failed:", formatUnknownError(cleanupError));
       }
-      cleanupNativeWebRtc();
       clearTimeout(shutdownTimeout);
       console.error(
         `[App] Shutdown failed${updateQuit ? "; update cancelled" : ""}:`,

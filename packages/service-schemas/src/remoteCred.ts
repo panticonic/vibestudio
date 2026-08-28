@@ -1,4 +1,4 @@
-/** Electron-owned persistence and connection actions for a paired WebRTC device. */
+/** Electron-owned persistence and connection actions for a paired Iroh device. */
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
@@ -15,7 +15,7 @@ export const RemotePairArgsSchema = z
       .string()
       .min(1)
       .describe(
-        "A vibestudio://connect or https://vibestudio.app/p link containing compact WebRTC pairing material."
+        "A vibestudio://connect or https://vibestudio.app/p link containing compact Iroh pairing material."
       ),
     label: z.string().trim().min(1).max(128).optional(),
   })
@@ -26,7 +26,7 @@ export const RemoteCredCurrentSchema = z.object({
   connected: z.boolean(),
   configured: z.boolean(),
   isActive: z.boolean(),
-  // A remote is reached over a paired WebRTC pipe ("device") or not configured
+  // A remote is reached over a paired Iroh pipe ("device") or not configured
   // ("none"). The old cleartext "admin-token"/"hybrid" URL remotes were deleted
   // (§8c), along with the URL, token-preview, and nested-hub fields they carried.
   bootstrap: z.enum(["device", "none"]),
@@ -89,7 +89,7 @@ export const remoteCredMethods = defineServiceMethods({
         verb: "manage",
       },
     },
-    description: "Validate a WebRTC pairing link and relaunch into the one-time pairing session.",
+    description: "Validate a Iroh pairing link and relaunch into the one-time pairing session.",
     args: z.tuple([RemotePairArgsSchema]),
     returns: PairResultSchema,
     access: adminAccess,
@@ -138,7 +138,7 @@ export const remoteCredMethods = defineServiceMethods({
         verb: "manage",
       },
     },
-    description: "Delete this desktop's stored WebRTC device pairing.",
+    description: "Delete this desktop's stored Iroh device pairing.",
     args: z.tuple([]),
     returns: OkResultSchema,
     access: destructiveAccess,

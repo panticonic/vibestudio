@@ -8,10 +8,10 @@ resolution. WP1 wires the **hub side**: it becomes the identity/pairing/membersh
 it may enter, and coordinates signaling to the right child — **without** becoming a media
 relay.
 
-**Design pivot (load-bearing).** The hub does **not** terminate WebRTC or relay RPC. The
-WebRTC-v2 "hub-as-answerer" design was explicitly **rejected** (`webrtc-rpc-v2-plan.md:382-385`),
-and one `RpcServer` owns its DTLS pipe end to end (`rpcServer.ts:3292` `attachWebRtcPipe`).
-Each **workspace child keeps its own WebRTC ingress**, exactly as today. What actually makes
+**Design pivot (load-bearing).** The hub does **not** terminate Iroh or relay RPC. The
+Iroh-v2 "hub-as-answerer" design was explicitly **rejected** (`iroh-rpc-v2-plan.md:382-385`),
+and one `RpcServer` owns its Iroh pipe end to end.
+Each **workspace child keeps its own Iroh ingress**, exactly as today. What actually makes
 "pair once, reach every workspace" work is not a single ingress — it's a **user-scoped device
 credential** validated against the **shared identity DB** at whichever child the client
 connects to. The hub's job is discovery + signaling coordination + the pairing/invite/membership
@@ -38,7 +38,7 @@ connect (it already reads the shared identity DB, WP0 §3.7).
 **Out of scope:** the `UserStore`/`DeviceRecord.userId` data model + child-side subject
 resolution (WP0); membership store internals + `addMember` (WP2); per-user fan-out (WP4);
 role attenuation of non-pairing capabilities (WP9). **Explicitly not in scope: any hub media
-relay or hub WebRTC answerer** — rejected design, see the pivot above.
+relay or hub Iroh answerer** — rejected design, see the pivot above.
 
 **Exit criteria:**
 
@@ -57,15 +57,15 @@ relay or hub WebRTC answerer** — rejected design, see the pivot above.
 
 ## 2. Today → target
 
-**Today** (topology investigation): each workspace **child** runs its own WebRTC ingress and
+**Today** (topology investigation): each workspace **child** runs its own Iroh ingress and
 mints its own invites (`hubServer.ts:246-282` `mintChildPairingInvite`, `:739-775`
-`buildWorkspaceChildEnv` gives each child its own DTLS identity + device store); the hub is a
+`buildWorkspaceChildEnv` gives each child its own Endpoint ID identity + device store); the hub is a
 loopback HTTP/WS reverse proxy keyed by `/w/{name}/` (`hubServer.ts:544-557,591-708`) and
 holds `HubRuntimeState.runtimes` (`:55-75`). A remote client effectively pairs to a
-_workspace_ (device store is per-child), and each workspace has its own DTLS identity.
+_workspace_ (device store is per-child), and each workspace has its own Endpoint ID identity.
 
 **Target:** the **hub** owns **identity, pairing, and membership**; each **child keeps its own
-WebRTC ingress**. A device pairs once at the hub and receives a **user-scoped** device
+Iroh ingress**. A device pairs once at the hub and receives a **user-scoped** device
 credential recorded in the shared identity DB. To reach workspace W the client asks the hub
 which workspaces it may enter and how to reach W's child, signals to that child's ingress, and
 authenticates there with its device credential; the child resolves `subject` and gates
@@ -75,7 +75,7 @@ membership by reading the shared DB. The hub never sits in the media/RPC path.
 device ──pair once──► HUB (pairing/invite)     ── records user-scoped device cred in shared identity DB
 client ──hubControl.listWorkspaces()─► HUB      ── returns only member workspaces (reads MembershipStore)
 client ──"reach W"──► HUB (signaling coord)    ── points client at child W's ingress room
-client ──WebRTC──► CHILD W ingress             ── child owns its DTLS pipe (unchanged topology)
+client ──Iroh──► CHILD W ingress             ── child owns its Endpoint ID pipe (unchanged topology)
                     └─ child.handleAuth: validate device cred → read userId from shared DB → subject
                        └─ isMember(userId, W)? else EACCES   (entry gate at the child, WP0 §3.7)
 ```
@@ -84,20 +84,19 @@ client ──WebRTC──► CHILD W ingress             ── child owns its D
 
 ## 3. Ingress stays at the child; the hub coordinates
 
-- **No ingress relocation.** `startWebRtcIngress` (`webrtcIngress.ts:109` pool, `:182`
-  `armRoom`, `:211`/`rpcServer.ts:3292` `attachWebRtcPipe`) **remains in each child**, armed
-  with that child's DTLS identity. The hub does **not** run an answerer — that was rejected
-  (`webrtc-rpc-v2-plan.md:382-385`) and would split ownership of a pipe one `RpcServer` must
+- **No ingress relocation.** `startIrohIngress` remains in each child, bound
+  with that child's Endpoint ID identity. The hub does **not** run an answerer — that was rejected
+  (`iroh-rpc-v2-plan.md:382-385`) and would split ownership of a pipe one `RpcServer` must
   own. This is the single most important correction over the first draft.
-- **The session shim is unchanged.** `SessionWebSocketShim` (`webrtcSessionShim.ts:88`) still
-  makes one WebRTC session quack like a `ws` and drives the child's
+- **The session shim is unchanged.** `SessionWebSocketShim` (`irohSessionShim.ts:88`) still
+  makes one Iroh session quack like a `ws` and drives the child's
   `handleConnection`/`handleAuth`. The device credential is presented as the `ws:auth` token
   (no minted grant); the child validates it (WP0 §5.1).
 - **What the hub actually provides for reach:** (a) `hubControl.listWorkspaces()` — the
   member set; (b) `hubControl.routeWorkspace({workspace})`, which returns a stable control
   reach plus the selected child's current reach. The **media/RPC pipe terminates at the
   child**.
-- **Signaling room model** (`apps/signaling/room.ts:35-41,178-188`) is unchanged: one remote
+- **Endpoint model** is unchanged: one remote
   party per room, per device, per child — exactly as today.
 
 ---
@@ -133,7 +132,7 @@ since the hub owns the identity DB (the sole writer):
   connection that (1) spawns/attaches the child and (2) returns the control and workspace
   reach coordinates for the client to reach that child's
   ingress. It does **not** attach a session leg through the hub — the client then establishes
-  its own WebRTC session to the child (§3). If the caller is not a member the child will refuse
+  its own Iroh session to the child (§3). If the caller is not a member the child will refuse
   on connect regardless; the hub may also short-circuit with `EACCES` for a cleaner UX.
 - A user may hold **concurrent sessions to multiple workspaces** (multi-workspace,
   multi-session): each is a direct client↔child pipe. The hub's routing/registry of live
@@ -184,7 +183,7 @@ ready payload; first redemption creates root and terminates renewal.
   child; `hubControl.listWorkspaces` omits it; `routeWorkspace` short-circuits `EACCES`.
 - **No grant token:** the child authenticates the session from the device credential +
   shared-DB lookup alone (WP0 §5.1); there is no HMAC grant to forge, expire, or replay.
-- **Child owns ingress:** the WebRTC/RPC pipe terminates at the child; the hub is never in the
+- **Child owns ingress:** the Iroh/RPC pipe terminates at the child; the hub is never in the
   media path (assert no hub answerer).
 - **Invite roles:** `inviteUser` as member → `EACCES`; as root → creates user + memberships;
   `pairDevice` as member → binds to caller's own `userId`.
@@ -198,13 +197,13 @@ ready payload; first redemption creates root and terminates renewal.
 
 | File                                                             | Change                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/server/webrtcIngress.ts`                                    | **unchanged topology** — ingress stays in each child with its own DTLS identity                                                                                                                                                                             |
-| `src/server/webrtcSessionShim.ts`                                | unchanged — session terminates at the child; device credential as `ws:auth`                                                                                                                                                                                 |
+| `src/server/irohIngress.ts`                                    | **unchanged topology** — ingress stays in each child with its own Endpoint ID identity                                                                                                                                                                             |
+| `src/server/irohSessionShim.ts`                                | unchanged — session terminates at the child; device credential as `ws:auth`                                                                                                                                                                                 |
 | `src/server/hubServer.ts`                                        | own identity DB + pairing; `hubControl.routeWorkspace` (spawn child + return dual reach coordinates); membership-filtered `listWorkspaces`; `inviteUser`/`pairDevice`; pass the read-only identity-DB path to children; root bootstrap on empty identity DB |
 | `src/server/hubServer.ts`                                        | pairing/refresh at hub; user-scoped device credentials; typed `inviteUser`/`pairDevice`; role gates resolve the subject's current account row                                                                                                               |
 | `src/server/index.ts`                                            | child validates device credential + reads subject/membership from the shared identity DB; refuses remote user sessions without it (dev workspace mode)                                                                                                      |
-| `apps/signaling/*`                                               | unchanged (per-device, per-child room model retained)                                                                                                                                                                                                       |
-| `STATE_DIRECTORY.md`, `docs/webrtc-deployment.md`, `docs/cli.md` | hub-owned identity/pairing; children keep ingress; new pair/invite/list/route surface                                                                                                                                                                       |
+| `deploy/iroh-relay/*`                                               | unchanged (per-device, per-child room model retained)                                                                                                                                                                                                       |
+| `STATE_DIRECTORY.md`, `docs/iroh-deployment.md`, `docs/cli.md` | hub-owned identity/pairing; children keep ingress; new pair/invite/list/route surface                                                                                                                                                                       |
 
 ---
 

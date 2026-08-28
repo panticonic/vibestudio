@@ -6,11 +6,9 @@ import {
 } from "@vibestudio/service-schemas/hubControl";
 import { selectedWorkspacePath } from "@vibestudio/shared/connect";
 import {
-  canonicalStoredPairing,
   loadCliCredentials,
   saveCliCredentials,
   type CliCredentials,
-  type CliStoredPairing,
 } from "../cli/credentialStore.js";
 import { RpcClient } from "../cli/rpcClient.js";
 import { ConnectionError } from "../cli/output.js";
@@ -41,22 +39,6 @@ interface BootstrapDeps {
     call(method: string, args?: unknown[]): Promise<unknown>;
     close(): Promise<void>;
   };
-}
-
-function stableReach(value: {
-  room: string;
-  fp: string;
-  sig: string;
-  v: 3;
-  ice: "all" | "relay";
-}): CliStoredPairing {
-  return canonicalStoredPairing({
-    room: value.room,
-    fp: value.fp,
-    sig: value.sig,
-    v: value.v,
-    ice: value.ice,
-  });
 }
 
 function pairingResponse(value: unknown): PairingResponse {
@@ -168,15 +150,13 @@ async function reconcileExistingCredential(
   if (route.serverId !== input.serverId || route.workspaceId !== input.workspaceId) {
     throw new Error("Development hub routed a different workspace than the instance selected");
   }
-  const workspacePairing = stableReach(route.workspaceReach);
   saveCliCredentials(
     {
       ...existing,
-      url: `webrtc://${workspacePairing.room}${selectedWorkspacePath(route.workspace)}`,
+      url: new URL(selectedWorkspacePath(route.workspace), input.gatewayUrl).toString(),
       workspaceId: route.workspaceId,
       workspaceName: route.workspace,
       serverId: route.serverId,
-      workspacePairing,
     },
     credentialFile
   );
@@ -212,19 +192,16 @@ async function pairWithInvite(
     deps
   );
 
-  const controlPairing = stableReach(input.invite);
-  const workspacePairing = stableReach(route.workspaceReach);
   const credentials: CliCredentials = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: "device",
-    url: `webrtc://${workspacePairing.room}${selectedWorkspacePath(route.workspace)}`,
+    transport: "local",
+    url: new URL(selectedWorkspacePath(route.workspace), input.gatewayUrl).toString(),
     workspaceId: route.workspaceId,
     workspaceName: route.workspace,
     serverId: route.serverId,
     deviceId: device.deviceId,
     refreshToken: device.refreshToken,
-    controlPairing,
-    workspacePairing,
     pairedAt: Date.now(),
   };
   saveCliCredentials(credentials, credentialFile);
@@ -232,7 +209,7 @@ async function pairWithInvite(
 }
 
 /**
- * Give a source-server instance its own CLI device without WebRTC/signaling.
+ * Give a source-server instance its own CLI device over the loopback topology.
  *
  * This is the same one-time root pairing and route contract used by remote
  * clients, transported over the hub's loopback HTTP ingress. The resulting
