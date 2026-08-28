@@ -108,6 +108,12 @@ function patchDigest(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
+function writePackage(root: string, name: string, version: string): void {
+  const packageRoot = path.join(root, ...name.split("/"));
+  fs.mkdirSync(packageRoot, { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name, version }));
+}
+
 describe("resolveHostDependencyProjection", () => {
   it("reuses explicitly supplied host packages only within their declared ranges", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-projection-"));
@@ -132,10 +138,30 @@ describe("resolveHostDependencyProjection", () => {
       expect(resolveHostDependencyProjection({ react: "18.0.0" }, {}, [], [root])).toBeNull();
       expect(
         resolveHostDependencyProjection({ react: "^19.0.0" }, { react: "19.2.3" }, [], [root])
-      ).toEqual({ nodeModulesDir: root, nodePaths: [root] });
+      ).toBeNull();
       expect(resolveHostDependencyProjection({ missing: "1.0.0" }, {}, [], [root])).toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not synthesize one dependency realm from separate host installations", () => {
+    const first = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-projection-"));
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-projection-"));
+    try {
+      writePackage(first, "react", "19.0.0");
+      writePackage(second, "zod", "3.25.76");
+      expect(
+        resolveHostDependencyProjection(
+          { react: "19.0.0", zod: "^3.25.76" },
+          {},
+          [],
+          [first, second]
+        )
+      ).toBeNull();
+    } finally {
+      fs.rmSync(first, { recursive: true, force: true });
+      fs.rmSync(second, { recursive: true, force: true });
     }
   });
 });
@@ -813,14 +839,14 @@ describe("ensureExternalDeps", () => {
 });
 
 describe("mergeExternalDependencySpecs", () => {
-  it("takes the higher floor when units disagree", () => {
-    const target: Record<string, string> = { react: "19.0.0" };
-    mergeExternalDependencySpecs(target, { react: "19.2.4" });
-    expect(target["react"]).toBe("19.2.4");
+  it("takes the narrower compatible range when units disagree", () => {
+    const target: Record<string, string> = { react: "^19.0.0" };
+    mergeExternalDependencySpecs(target, { react: "^19.2.4" });
+    expect(target["react"]).toBe("^19.2.4");
 
-    const reversed: Record<string, string> = { react: "19.2.4" };
-    mergeExternalDependencySpecs(reversed, { react: "19.0.0" });
-    expect(reversed["react"]).toBe("19.2.4");
+    const reversed: Record<string, string> = { react: "^19.2.4" };
+    mergeExternalDependencySpecs(reversed, { react: "^19.0.0" });
+    expect(reversed["react"]).toBe("^19.2.4");
   });
 
   it("keeps the narrowest requirement when two units share a floor", () => {
@@ -847,5 +873,11 @@ describe("mergeExternalDependencySpecs", () => {
     const target: Record<string, string> = { left: "1.2.3" };
     mergeExternalDependencySpecs(target, { left: "*" });
     expect(target["left"]).toBe("1.2.3");
+  });
+
+  it("rejects dependency requirements with no common version", () => {
+    expect(() => mergeExternalDependencySpecs({ zod: "^3.25.76" }, { zod: "^4.0.0" })).toThrow(
+      "External dependency zod has incompatible requirements ^3.25.76 and ^4.0.0"
+    );
   });
 });

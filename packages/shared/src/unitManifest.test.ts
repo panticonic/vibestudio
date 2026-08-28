@@ -181,12 +181,29 @@ describe("validateUnitManifest", () => {
           app: {
             target: "electron",
             renderer: "index.tsx",
+            startupModules: ["./components/App"],
             capabilities: ["native-menus", "notifications", "fs-write"],
           },
         },
         { unitName: "@workspace-apps/shell" }
       )
     ).not.toThrow();
+  });
+
+  it("rejects unsafe app startup module paths", () => {
+    expect(() =>
+      validateUnitManifest(
+        appUnitManifestDescriptor,
+        {
+          app: {
+            target: "electron",
+            renderer: "index.tsx",
+            startupModules: ["../native/App"],
+          },
+        },
+        { unitName: "@workspace-apps/shell" }
+      )
+    ).toThrow(/package-root-relative/u);
   });
 
   it("rejects native-process fields in app manifests", () => {

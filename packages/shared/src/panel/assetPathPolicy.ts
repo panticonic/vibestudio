@@ -54,6 +54,7 @@ export const PANEL_GATEWAY_PATH_PREFIXES: readonly string[] = [
 
 const PANEL_SHARED_STYLE_PATH = /^\/__vibestudio\/shared-style\/[0-9a-f]{64}\.css$/u;
 const PANEL_BUILD_ASSET_PATH = /^\/__vibestudio\/panel-build\/[0-9a-f]{64}\/[^/].*$/u;
+const APP_BUILD_ASSET_PATH = /^\/_a\/[0-9a-f]{64}\/[^/].*$/u;
 
 /**
  * First path segments that live OUTSIDE the underscore-reserved namespace but
@@ -160,7 +161,12 @@ export function panelAssetCacheKey(
   // to send (script, style, image all differ), and no key could be computed
   // ahead of a request — which makes prefetching them impossible, because the
   // key is only knowable once the fetch it was meant to avoid has occurred.
-  if (PANEL_BUILD_ASSET_PATH.test(representationPath)) return representationPath;
+  if (
+    PANEL_BUILD_ASSET_PATH.test(representationPath) ||
+    APP_BUILD_ASSET_PATH.test(representationPath)
+  ) {
+    return representationPath;
+  }
   if (
     VERSIONED_RUNTIME_HELPER_PATH.test(representationPath.split("?", 1)[0] ?? "") &&
     /(?:^|[?&])v=[0-9a-f]{64}(?:&|$)/u.test(representationPath)

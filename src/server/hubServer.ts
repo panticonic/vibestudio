@@ -3007,6 +3007,22 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const activeState = state;
   await startHubControlTransport(activeState, getCentralDataPath());
 
+  // A target-readiness flag is a hub-level contract, not merely a child
+  // argument. Finish the bootstrap workspace's requested preparation before
+  // publishing the ready file (and therefore before the wrapper reveals a
+  // pairing link). Other registered workspaces remain opportunistic prewarms.
+  if (args.requireMobileReady || args.requireElectronReady) {
+    console.log(
+      `[Hub] Preparing ${bootstrapWorkspace} for ${[
+        args.requireElectronReady ? "desktop" : null,
+        args.requireMobileReady ? "mobile" : null,
+      ]
+        .filter(Boolean)
+        .join(" and ")} pairing`
+    );
+    await ensureWorkspaceRuntime(activeState, bootstrapWorkspace);
+  }
+
   let startupInvite: HubPairingInvite | null = null;
   let readyPublished = false;
   const publishReady = (): void => {

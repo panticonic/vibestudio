@@ -92,7 +92,22 @@ export function collectExternalDependencyClosure(
     // install or the package graph. Their own npm deps are collected by walking
     // the package.json when available.
     if (version.startsWith("workspace:")) return;
-    // External dependency — take higher version if conflict
+    if (target === peers) {
+      const current = target[name];
+      if (!current) {
+        target[name] = version;
+        return;
+      }
+      try {
+        mergeExternalDependencySpecs(target, { [name]: version });
+      } catch {
+        // Keep closure discovery total so the owner-aware peer validation below
+        // can name every declaring package. Dependencies fail immediately, but
+        // incompatible peers need their declaration provenance in the refusal.
+        target[name] = [current, version].sort().at(-1) ?? current;
+      }
+      return;
+    }
     mergeExternalDependencySpecs(target, { [name]: version });
   }
 
@@ -571,30 +586,6 @@ function workspacePackageRoots(workspaceRoot: string): string[] {
 }
 
 /**
- * Simple semver-ish comparison. Returns >0 if a > b.
- * Handles workspace:*, *, ^x.y.z, ~x.y.z, x.y.z
- */
-function compareVersions(a: string, b: string): number {
-  // Wildcards are lowest priority
-  if (a === "*" || a === "workspace:*") return -1;
-  if (b === "*" || b === "workspace:*") return 1;
-
-  const parseVersion = (v: string): number[] => {
-    const cleaned = v.replace(/^[\^~>=<]+/, "");
-    return cleaned.split(".").map((n) => parseInt(n, 10) || 0);
-  };
-
-  const aParts = parseVersion(a);
-  const bParts = parseVersion(b);
-
-  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
-    const diff = (aParts[i] ?? 0) - (bParts[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
-/**
  * Merge dependency requirements using the same deterministic conflict rule as
  * build-graph traversal. Checkout tooling uses this when it projects several
  * independently buildable userland units into one validation environment.
@@ -609,27 +600,31 @@ export function mergeExternalDependencySpecs(
       target[name] = version;
       continue;
     }
-    const ordering = compareVersions(version, current);
-    if (ordering > 0) {
-      target[name] = version;
+    if (current === version) continue;
+    const currentRange = semver.validRange(current);
+    const incomingRange = semver.validRange(version);
+    if (currentRange && incomingRange) {
+      if (!semver.intersects(currentRange, incomingRange, { includePrerelease: true })) {
+        throw new Error(
+          `External dependency ${name} has incompatible requirements ${current} and ${version}`
+        );
+      }
+      if (semver.subset(currentRange, incomingRange, { includePrerelease: true })) continue;
+      if (semver.subset(incomingRange, currentRange, { includePrerelease: true })) {
+        target[name] = version;
+        continue;
+      }
+      // Preserve the actual intersection. Picking either range would authorize
+      // versions one of the declaring units rejected.
+      target[name] = [current, version].sort().join(" ");
       continue;
     }
-    // Same floor, different breadth (`19.0.0` vs `^19.0.0`). One spec is
-    // installed for the whole target, so keeping the broader one lets the
-    // registry resolve a version no declaring unit asked for — and a unit that
-    // pinned exactly, because its runtime refuses anything else, silently gets
-    // something else. Traversal order must not decide that.
-    if (ordering === 0 && specBreadth(version) < specBreadth(current)) target[name] = version;
+    if (current !== version) {
+      throw new Error(
+        `External dependency ${name} has incompatible non-semver requirements ${current} and ${version}`
+      );
+    }
   }
-}
-
-/** How much room a requirement leaves the resolver above its floor. */
-function specBreadth(spec: string): number {
-  if (spec === "*" || spec.startsWith("workspace:")) return 3;
-  const operator = /^[\^~>=<]+/.exec(spec)?.[0];
-  if (!operator) return 0;
-  if (operator === "~") return 1;
-  return 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,21 +1113,24 @@ export interface ExternalDependencyEnvironment {
  */
 export function resolveHostDependencyProjection(
   dependencies: Readonly<Record<string, string>>,
-  _dependencyOverrides: Readonly<Record<string, string>>,
+  dependencyOverrides: Readonly<Record<string, string>>,
   patches: readonly ExternalDependencyPatch[],
   hostNodeModules: readonly string[]
 ): { nodeModulesDir: string; nodePaths: string[] } | null {
   if (
     Object.keys(dependencies).length === 0 ||
+    Object.keys(dependencyOverrides).length > 0 ||
     patches.length > 0 ||
     hostNodeModules.length === 0
   ) {
     return null;
   }
-  const usedRoots = new Set<string>();
-  for (const [name, requested] of Object.entries(dependencies)) {
-    let matchedRoot: string | null = null;
-    for (const root of hostNodeModules) {
+  // Reuse is one complete dependency realm, never a synthetic union of roots.
+  // Combining independently installed trees lets transitive resolution choose
+  // a different package according to importer location and traversal order.
+  for (const root of hostNodeModules) {
+    let complete = true;
+    for (const [name, requested] of Object.entries(dependencies)) {
       const manifestPath = path.join(root, ...name.split("/"), "package.json");
       try {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
@@ -1144,20 +1142,17 @@ export function resolveHostDependencyProjection(
           typeof manifest.version === "string" &&
           semver.satisfies(manifest.version, requested, { includePrerelease: true })
         ) {
-          matchedRoot = root;
-          break;
+          continue;
         }
       } catch {
-        // Try the next explicit host root. A missing or malformed package is
-        // simply not a usable projection; the isolated installer remains the
-        // authoritative fallback.
+        // This root is incomplete; try the next complete installation.
       }
+      complete = false;
+      break;
     }
-    if (!matchedRoot) return null;
-    usedRoots.add(matchedRoot);
+    if (complete) return { nodeModulesDir: root, nodePaths: [root] };
   }
-  const nodePaths = [...usedRoots];
-  return { nodeModulesDir: nodePaths[0] ?? "", nodePaths };
+  return null;
 }
 
 /**

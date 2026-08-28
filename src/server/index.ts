@@ -1750,6 +1750,12 @@ async function main() {
    * a batch nothing will ever publish.
    */
   let startupExtensionStaging: Promise<void> | null = null;
+  let startupElectronArtifactPreparation: Promise<
+    import("./appHost.js").ElectronHostReadiness
+  > | null = null;
+  let startupPanelArtifactPreparation: Promise<
+    import("./startupPanelPreparation.js").StartupPanelPreparationResult
+  > | null = null;
   const reconcileDeclaredWorkspaceUnits = async (
     nextConfig: typeof workspaceConfig,
     trigger: "startup" | "meta-change"
@@ -1885,14 +1891,44 @@ async function main() {
                   })
                 );
               }
-            }
-            if (trigger === "startup") {
-              console.info("[StartupCriticalPath] App declarations staged for on-demand launch");
+              // Compiling a selected host artifact is not activation. Start
+              // that deterministic cache fill as soon as declarations are
+              // known, while the ordinary launch review continues to govern
+              // whether workspace code may run. Remote-server readiness can
+              // await this exact promise before exposing a pairing link.
+              startupElectronArtifactPreparation = appHost.prepareElectronArtifact();
+              void startupElectronArtifactPreparation.catch((err: unknown) =>
+                console.warn(
+                  "[StartupBackground] Electron host artifact preparation failed:",
+                  err instanceof Error ? err.message : String(err)
+                )
+              );
+              console.info(
+                "[StartupBackground] App declarations staged; selected Electron artifact preparation started"
+              );
             }
           }
         } catch (err) {
           console.warn("[Apps] Failed to update declared workspace app units:", err);
         }
+      }
+      if (trigger === "startup" && !startupPanelArtifactPreparation) {
+        const { prepareStartupPanels } = await import("./startupPanelPreparation.js");
+        startupPanelArtifactPreparation = prepareStartupPanels(nextConfig, primePanelRuntimeImage);
+        void startupPanelArtifactPreparation
+          .then(({ sources, elapsedMs }) => {
+            if (sources.length > 0) {
+              console.info(
+                `[StartupBackground] Prepared ${sources.length} initial panel artifact(s) in ${Math.round(elapsedMs)}ms`
+              );
+            }
+          })
+          .catch((err: unknown) =>
+            console.warn(
+              "[StartupBackground] Initial panel artifact preparation failed:",
+              err instanceof Error ? err.message : String(err)
+            )
+          );
       }
       await Promise.all(tasks);
     };
@@ -6785,9 +6821,9 @@ async function main() {
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
   const durableReconciliationCompletedAt = Date.now();
-  // Runtime creation primes new panel entities. Replaying active panels after
-  // durable hydration gives restored trees the same lazy dependency behavior
-  // without treating manifest initPanels as a build-time special case.
+  // Runtime creation primes restored panel entities after durable hydration.
+  // Manifest-declared initial panels use the same runtime-image/serving-cache
+  // path during startup preparation; neither path creates or activates a panel.
   for (const record of entityCache.listActive()) {
     if (record.kind === "panel" && record.activeBuildKey) {
       void primePanelRuntimeImage(record.source.repoPath);
@@ -7102,7 +7138,8 @@ async function main() {
   if (requireElectronReady) {
     await startupWorkspaceUnitReconcile;
     const appHost = container.get<import("./appHost.js").AppHost>("appHost");
-    const readiness = await appHost.ensureElectronReady();
+    const readiness = await (startupElectronArtifactPreparation ??
+      appHost.prepareElectronArtifact());
     if (!readiness.ready) {
       printReadinessActionBlock("Electron desktop shell app is not ready", [
         "This server was started with desktop pairing enabled, but the",
@@ -7120,6 +7157,19 @@ async function main() {
     console.log(
       `[Desktop] Electron shell app ready: ${readiness.appId} (${readiness.source}) build ${readiness.buildKey}`
     );
+    try {
+      await Promise.resolve(startupPanelArtifactPreparation);
+    } catch (err) {
+      printReadinessActionBlock("Initial desktop panel is not ready", [
+        "The desktop shell was built, but a panel declared in initPanels could not be prepared.",
+        "Publishing a pairing link now would leave the first desktop surface loading indefinitely.",
+        "",
+        err instanceof Error ? err.message : String(err),
+        "",
+        "Fix the blocking panel build above, then restart this command.",
+      ]);
+      process.exit(1);
+    }
   }
 
   // ===========================================================================

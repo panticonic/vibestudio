@@ -141,7 +141,8 @@ export const SYSTEM_GIT_AUTHOR: { name: string; email: string } = {
  * Compatible with Node's fs/promises and @workspace/runtime's RuntimeFs.
  */
 export interface FsPromisesLike {
-  readFile(path: string, encoding?: BufferEncoding): Promise<Uint8Array | string>;
+  readFile(path: string): Promise<Uint8Array | string>;
+  readFile(path: string, encoding: BufferEncoding): Promise<Uint8Array | string>;
   writeFile(path: string, data: Uint8Array | string): Promise<void>;
   unlink(path: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
@@ -224,7 +225,10 @@ function wrapFsForGit(fsPromises: FsPromisesLike): FsClient {
  * bundle. Network operations remain adapter-gated below.
  */
 const defaultLocalFs: FsPromisesLike = {
-  async readFile(path, encoding) {
+  async readFile(
+    path: string,
+    encoding?: BufferEncoding
+  ): Promise<Uint8Array | string> {
     const fs = await import("node:fs/promises");
     return encoding ? fs.readFile(path, encoding) : fs.readFile(path);
   },

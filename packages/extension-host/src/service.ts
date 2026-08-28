@@ -123,7 +123,8 @@ type ActiveExtensionInvocation = {
 interface BuildSystemLike {
   getBuild(
     unitPath: string,
-    ref?: string
+    ref?: string,
+    options?: { priority?: "interactive" | "background" }
   ): Promise<{
     dir: string;
     sourceStateHash?: string | null;
@@ -2173,7 +2174,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const previous = this.registry.get(node.name);
     const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
     this.unitHost.markBuilding(node.name);
-    const build = await this.deps.buildSystem.getBuild(node.name, ref);
+    const build = await this.deps.buildSystem.getBuild(node.name, ref, {
+      priority: "background",
+    });
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const activeDependencyEvs = this.currentDependencyEvs(node);
     const activeExternalDeps = this.currentExternalDeps(node);

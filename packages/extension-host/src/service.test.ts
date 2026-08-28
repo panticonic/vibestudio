@@ -758,7 +758,9 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "background",
+    });
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeBundleKey: "candidate-key",
@@ -778,7 +780,9 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared(declare(extensionNode.name));
     await host.whenSettled();
 
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "background",
+    });
     expect(start).not.toHaveBeenCalled();
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeBundleKey: "candidate-key",
@@ -814,7 +818,9 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "background",
+    });
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeBundleKey: "candidate-key",
       source: { repo: extensionNode.relativePath, ref: "main" },
@@ -926,7 +932,9 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "background",
+    });
   });
 
   it("serializes concurrent rebuilds of the same extension", async () => {
@@ -990,7 +998,9 @@ describe("ExtensionHost reconcileDeclared", () => {
         ],
       })
     );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "feature");
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "feature", {
+      priority: "background",
+    });
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeBundleKey: "candidate-key",
       source: { repo: extensionNode.relativePath, ref: "feature" },

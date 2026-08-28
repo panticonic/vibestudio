@@ -126,6 +126,13 @@ describe("panel asset representation keys", () => {
     expect(bare).toBe(path);
   });
 
+  it("keys an app-build subresource independently of forwarded headers", () => {
+    const path = `/_a/${"c".repeat(64)}/chunk-SHELL.js`;
+    expect(panelAssetCacheKey(path, { accept: "*/*", "user-agent": "desktop-a" })).toBe(path);
+    expect(panelAssetCacheKey(path, { accept: "text/javascript" })).toBe(path);
+    expect(panelAssetCacheKey(path, {})).toBe(path);
+  });
+
   it("keys versioned runtime helpers independently of forwarded headers", () => {
     const path = `/panels/chat/__loader.js?v=${"b".repeat(64)}`;
     expect(panelAssetCacheKey(path, { accept: "*/*", "user-agent": "desktop-a" })).toBe(path);

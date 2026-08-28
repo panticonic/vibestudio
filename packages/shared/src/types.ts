@@ -79,6 +79,12 @@ export interface PackageManifest {
     capabilities?: AppCapability[];
     renderer?: string;
     preload?: string;
+    /**
+     * Package-root-relative modules dynamically selected on the normal startup
+     * path. Their emitted closures are transferred with the initial artifact
+     * bundle without changing when or whether the modules execute.
+     */
+    startupModules?: string[];
   };
   // ----- Panel-only fields -----
   /** Top-level package.json dependencies merged in by `loadPanelManifest`. */
@@ -94,7 +100,7 @@ export interface PackageManifest {
   /** Default layout placement hint for this panel (call-site `placement` wins). */
   placement?: PanelPlacementHint;
   // ----- Build-pipeline fields -----
-  /** Whether to include inline source maps in the build. */
+  /** Whether to emit linked source maps for this unit build. */
   sourcemap?: boolean;
   /** Import-map externals (panels: produces `<script type="importmap">`). */
   externals?: Record<string, string>;

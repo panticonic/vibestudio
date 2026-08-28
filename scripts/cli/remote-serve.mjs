@@ -18,6 +18,10 @@ try {
     bannerTitle: "Pair a Vibestudio device",
     deepLinkLabel: "Pair URL",
     instructions: "Scan with the mobile app, or paste the code in Connection Settings.",
+    // A published pairing link is a readiness promise. Compile the selected
+    // desktop host artifact before exposing that link so the first client does
+    // not inherit server cold-start work over its interactive RPC session.
+    requireElectronReady: true,
   });
 } catch (error) {
   console.error(`[pair] ${error instanceof Error ? error.message : String(error)}`);

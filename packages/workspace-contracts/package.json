@@ -18,7 +18,7 @@
     "test": "cd ../.. && vitest run packages/workspace-contracts/src"
   },
   "dependencies": {
-    "zod": "^3.24.1"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

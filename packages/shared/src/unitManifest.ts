@@ -463,6 +463,31 @@ function validateAppBlock(
     );
   }
 
+  const startupModules = appRecord["startupModules"];
+  if (
+    startupModules !== undefined &&
+    (!Array.isArray(startupModules) ||
+      startupModules.length === 0 ||
+      startupModules.some(
+        (specifier) =>
+          typeof specifier !== "string" ||
+          !specifier.startsWith("./") ||
+          specifier.includes("\\") ||
+          specifier.split("/").includes("..")
+      ))
+  ) {
+    throw new UnitManifestError(
+      `App ${options.unitName} vibestudio.app.startupModules must be a non-empty array of package-root-relative module specifiers`,
+      "MANIFEST_APP_STARTUP_MODULES"
+    );
+  }
+  if (target === "terminal" && startupModules !== undefined) {
+    throw new UnitManifestError(
+      `Terminal app ${options.unitName} cannot declare vibestudio.app.startupModules`,
+      "MANIFEST_APP_STARTUP_MODULES_TARGET"
+    );
+  }
+
   // Interactive (TUI) terminal apps get the real TTY (stdio inherit) at launch.
   if (appRecord["interactive"] !== undefined) {
     if (typeof appRecord["interactive"] !== "boolean") {

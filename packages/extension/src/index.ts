@@ -80,7 +80,17 @@ export interface ExtensionsClient {
     name: K,
     options?: { streamingMethods?: Iterable<string> }
   ): WorkspaceExtensions[K];
-  on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
+  /**
+   * Subscribe to an extension event. Optional extensions are intentionally
+   * addressable by string, just like `invoke`: a consumer can observe an
+   * extension that is installed at runtime without importing its
+   * implementation package merely to augment the static API registry.
+   */
+  on(
+    name: ExtensionName | (string & {}),
+    event: string,
+    cb: (payload: unknown) => void
+  ): Disposable;
   /**
    * Call an extension method by name — the untyped primitive that `use(name).method(args)`
    * wraps. Useful when you don't have the extension's static types (e.g. server-side eval):

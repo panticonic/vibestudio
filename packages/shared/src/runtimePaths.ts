@@ -49,22 +49,24 @@ export function getExistingAppNodeModulesRoots(appRoot: string): string[] {
     path.join(layout.appUnpackedRoot, "node_modules"),
     path.join(layout.appRoot, "node_modules"),
   ];
-  // When installed via npm (e.g. <prefix>/node_modules/@panticonic/vibestudio), the
-  // package's own dependencies are hoisted to an ancestor node_modules rather
-  // than nested under the package directory. Walk ancestors and include every
-  // node_modules dir — mirroring Node's own module resolution — so runtime
-  // panel/worker builds resolve host-provided deps wherever npm hoisted them.
-  // (Harmless for the dev monorepo, where appRoot already owns node_modules.)
+  // An npm package may use the node_modules directory that directly contains
+  // it. That directory is part of the package installation, so include it, but
+  // stop there. Walking beyond this boundary lets an unrelated node_modules in
+  // a user's home directory silently become part of a published server's build
+  // environment. Besides violating install ownership, that makes identical
+  // Vibestudio installs compile different renderer code.
   let dir = layout.appRoot;
-  for (let depth = 0; depth < 12; depth++) {
+  while (true) {
     const parent = path.dirname(dir);
     if (parent === dir) break;
-    candidates.push(path.join(parent, "node_modules"));
+    if (path.basename(parent) === "node_modules") {
+      candidates.push(parent);
+      break;
+    }
     dir = parent;
   }
   return dedupePaths(candidates).filter((p) => fs.existsSync(p));
 }
-
 
 export function getPlatformPackageBinaryPath(
   appRoot: string,

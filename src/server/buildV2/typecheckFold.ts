@@ -109,6 +109,10 @@ export async function typecheckUnit(
   nodeModulesPaths: string[],
   authority?: TypecheckAuthorityInput
 ): Promise<BuildDiagnostic[]> {
+  const startedAt = performance.now();
+  let sourceLoadedAt = startedAt;
+  let checkedAt = startedAt;
+  let authorityCheckedAt = startedAt;
   const unitDir = path.join(sourceRoot, unitRelativePath);
   let service: import("@vibestudio/typecheck").TypeCheckService | undefined;
   try {
@@ -135,6 +139,10 @@ export async function typecheckUnit(
       panelPath: unitDir,
       workspaceContext,
       nodeModulesPaths,
+      // Publication consumes errors and warnings only. Suggestion diagnostics
+      // are editor affordances, require another whole-project compiler pass,
+      // and are discarded below, so they must not compete with cold builds.
+      skipSuggestions: true,
       // Protected publication enforces one platform safety floor. A unit's
       // tsconfig may describe its environment or add stricter checks, but it
       // cannot weaken the checks required for code admitted to main.
@@ -167,7 +175,9 @@ export async function typecheckUnit(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    sourceLoadedAt = performance.now();
     const result = service.check();
+    checkedAt = performance.now();
     const diagnostics = result.diagnostics
       .filter((d) => d.severity === "error" || d.severity === "warning")
       // Exact reports own exact workspace source. Diagnostics originating in
@@ -201,6 +211,7 @@ export async function typecheckUnit(
         });
       }
     }
+    authorityCheckedAt = performance.now();
     return diagnostics;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -216,6 +227,16 @@ export async function typecheckUnit(
       },
     ];
   } finally {
+    const finishedAt = performance.now();
+    if (finishedAt - startedAt >= 5_000) {
+      console.warn(
+        `[BuildV2] slow typecheck ${unitRelativePath}: ` +
+          `load=${Math.round(sourceLoadedAt - startedAt)}ms ` +
+          `typescript=${Math.round(checkedAt - sourceLoadedAt)}ms ` +
+          `authority=${Math.round(authorityCheckedAt - checkedAt)}ms ` +
+          `total=${Math.round(finishedAt - startedAt)}ms`
+      );
+    }
     service?.dispose();
   }
 }

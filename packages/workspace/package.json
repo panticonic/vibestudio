@@ -37,7 +37,7 @@
     "@vibestudio/workspace-contracts": "workspace:*",
     "dotenv": "^16.4.5",
     "yaml": "^2.8.1",
-    "zod": "^3.24.1"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

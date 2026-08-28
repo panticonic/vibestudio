@@ -7,7 +7,8 @@
  *   - Extension (Node target): ESM, no splitting
  *
  * Build options are manifest-derived, not caller-supplied.
- * Concurrency: semaphore with MAX_CONCURRENT_BUILDS = 8 by default.
+ * Concurrency: one internally parallel build lane by default, with interactive
+ * work ordered ahead of background preparation.
  * Coalescing: dedup concurrent builds of the same build key.
  *
  * Source files are materialized from the requested GAD state, so builds always
@@ -22,7 +23,7 @@ import * as path from "path";
 import * as os from "os";
 import { createHash } from "crypto";
 import { execFile } from "child_process";
-import { createRequire } from "module";
+import { builtinModules, createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
@@ -90,7 +91,7 @@ import {
   workspaceRpcSchema,
   workspaceRpcSchemaMetadata,
 } from "./workspaceRpcSchemas.js";
-import { createPanelBundleReport } from "./panelBundleReport.js";
+import { createPanelBundleReport, startupModuleOutputs } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
@@ -164,11 +165,14 @@ export async function closeBuilder(): Promise<void> {
 function resolveMaxConcurrentBuilds(): number {
   const parsed = Number.parseInt(process.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"] ?? "", 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  // Scale with the machine instead of a fixed 8. A build is mostly esbuild and
-  // a package manager -- work that is already parallel and largely IO-bound --
-  // so the useful ceiling is the machine, not a number chosen once. The budget
-  // is soft either way; `withBuildSlot` explains why.
-  return Math.max(4, os.cpus().length);
+  // A single unit build already fans out through esbuild, native TypeScript,
+  // package resolution, and hashing. Running several complete folds at once
+  // made two nominally independent builds contend on the same compiler and
+  // storage resources: the first visible chat panel grew from 11s alone to
+  // 46s beside startup extension preparation. Keep the default lane singular;
+  // operators doing throughput-oriented batch work can still raise the
+  // existing explicit override.
+  return 1;
 }
 
 const MAX_CONCURRENT_BUILDS = resolveMaxConcurrentBuilds();
@@ -190,6 +194,11 @@ const KNOWN_NATIVE_EXTERNALS = [
   "node-pty",
   "cpu-features",
   "@parcel/watcher",
+];
+const NODE_BUILTIN_EXTERNALS = [
+  ...new Set(
+    builtinModules.flatMap((name) => [name, name.startsWith("node:") ? name : `node:${name}`])
+  ),
 ];
 
 export type ExtensionDependencyMode = "auto" | "bundle" | "external";
@@ -250,7 +259,8 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
 // ---------------------------------------------------------------------------
 
 let runningBuilds = 0;
-const waitQueue: (() => void)[] = [];
+type BuildPriority = "interactive" | "background";
+const waitQueue: Array<{ priority: BuildPriority; resolve: () => void }> = [];
 
 /**
  * Narrate where a build actually is.
@@ -311,17 +321,28 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
  */
 const buildSlotHeld = new AsyncLocalStorage<true>();
 
-async function withBuildSlot<T>(run: () => Promise<T>): Promise<T> {
+async function withBuildSlot<T>(
+  run: () => Promise<T>,
+  priority: BuildPriority = "interactive"
+): Promise<T> {
   if (buildSlotHeld.getStore()) return run();
   while (runningBuilds >= MAX_CONCURRENT_BUILDS) {
-    await new Promise<void>((resolve) => waitQueue.push(resolve));
+    await new Promise<void>((resolve) => {
+      const waiter = { priority, resolve };
+      const firstBackground = waitQueue.findIndex((entry) => entry.priority === "background");
+      if (priority === "interactive" && firstBackground >= 0) {
+        waitQueue.splice(firstBackground, 0, waiter);
+      } else {
+        waitQueue.push(waiter);
+      }
+    });
   }
   runningBuilds++;
   try {
     return await buildSlotHeld.run(true, run);
   } finally {
     runningBuilds--;
-    waitQueue.shift()?.();
+    waitQueue.shift()?.resolve();
   }
 }
 
@@ -529,6 +550,171 @@ function isBareSpecifier(spec: string): boolean {
   return !spec.startsWith(".") && !spec.startsWith("/") && !spec.startsWith("node:");
 }
 
+function packageNameFromSpecifier(specifier: string): string {
+  const parts = specifier.split("/");
+  return specifier.startsWith("@") ? `${parts[0] ?? ""}/${parts[1] ?? ""}` : (parts[0] ?? "");
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function externalSpecifierMatches(specifier: string, externals: readonly string[]): boolean {
+  return externals.some((external) => {
+    if (external.endsWith("/*")) {
+      return specifier.startsWith(external.slice(0, -1));
+    }
+    return specifier === external;
+  });
+}
+
+function isOptionalImportFromOwnedPackage(
+  resolveDir: string,
+  packageName: string,
+  ownerRoots: readonly string[]
+): boolean {
+  const ownerRoot = ownerRoots
+    .filter((root) => pathIsWithin(root, resolveDir))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!ownerRoot) return false;
+  let directory = resolveDir;
+  while (pathIsWithin(ownerRoot, directory)) {
+    const manifestPath = path.join(directory, "package.json");
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        optionalDependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+      };
+      return Boolean(
+        manifest.optionalDependencies?.[packageName] ||
+        (manifest.peerDependencies?.[packageName] &&
+          manifest.peerDependenciesMeta?.[packageName]?.optional === true)
+      );
+    } catch {
+      // Continue to the package root containing this source file.
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return false;
+}
+
+/**
+ * Make the prepared dependency environment authoritative for every bare import.
+ * esbuild's default resolver starts at the importing source file, which allows
+ * a materialized workspace under ~/.config to discover ~/node_modules before
+ * consulting nodePaths. That turns machine layout into build input. Resolve
+ * source imports from the root that explicitly owns the requested package;
+ * transitive imports stay within their owning installation.
+ */
+export function createDependencyEnvironmentResolvePlugin(
+  nodePaths: readonly string[],
+  externals: readonly string[] = []
+): esbuild.Plugin {
+  const roots = nodePaths.filter(Boolean).map((entry) => path.resolve(entry));
+  const ownedPackageTargets = new Map<string, string>();
+  const recursionKey = "vibestudioDependencyEnvironmentResolve";
+
+  const registerOwnedPackageTarget = (logicalPackageRoot: string): string => {
+    let realPackageRoot = logicalPackageRoot;
+    try {
+      realPackageRoot = fs.realpathSync(logicalPackageRoot);
+    } catch {
+      // build.resolve will report a useful resolution failure below.
+    }
+    ownedPackageTargets.set(realPackageRoot, logicalPackageRoot);
+    return realPackageRoot;
+  };
+
+  const translateOwnedResolveDir = (resolveDir: string): string | undefined => {
+    if (roots.some((root) => pathIsWithin(root, resolveDir))) return resolveDir;
+    const target = [...ownedPackageTargets.entries()]
+      .filter(([realRoot]) => pathIsWithin(realRoot, resolveDir))
+      .sort(([a], [b]) => b.length - a.length)[0];
+    if (!target) return undefined;
+    const [realRoot, logicalRoot] = target;
+    return path.join(logicalRoot, path.relative(realRoot, resolveDir));
+  };
+
+  return {
+    name: "dependency-environment",
+    setup(build) {
+      build.onResolve({ filter: /^[^./]|^@/ }, async (args) => {
+        const priorData =
+          args.pluginData && typeof args.pluginData === "object"
+            ? (args.pluginData as Record<string, unknown>)
+            : {};
+        if (priorData[recursionKey] === true) return null;
+        if (externalSpecifierMatches(args.path, externals)) {
+          return { path: args.path, external: true };
+        }
+
+        const ownedResolveDir = translateOwnedResolveDir(args.resolveDir);
+        const packageName = packageNameFromSpecifier(args.path);
+        const declaredRoot = roots.find((root) =>
+          fs.existsSync(path.join(root, ...packageName.split("/"), "package.json"))
+        );
+        const declaredPackageRoot = declaredRoot
+          ? path.join(declaredRoot, ...packageName.split("/"))
+          : undefined;
+        const declaredRealPackageRoot = declaredPackageRoot
+          ? registerOwnedPackageTarget(declaredPackageRoot)
+          : undefined;
+        const resolveDir = ownedResolveDir ?? declaredRoot;
+        if (!resolveDir) {
+          return {
+            errors: [
+              {
+                text:
+                  `Dependency ${packageName || args.path} is not present in the prepared build environment. ` +
+                  "Declare it in the owning workspace package.",
+              },
+            ],
+          };
+        }
+
+        const resolved = await build.resolve(args.path, {
+          kind: args.kind,
+          resolveDir,
+          pluginData: { ...priorData, [recursionKey]: true },
+        });
+        if (
+          resolved.errors.length > 0 &&
+          ownedResolveDir &&
+          isOptionalImportFromOwnedPackage(args.resolveDir, packageName, [
+            ...roots,
+            ...ownedPackageTargets.keys(),
+          ])
+        ) {
+          return { path: args.path, external: true };
+        }
+        if (resolved.errors.length > 0 || resolved.external || resolved.namespace !== "file") {
+          return resolved;
+        }
+        if (
+          !roots.some((root) => pathIsWithin(root, resolved.path)) &&
+          ![...ownedPackageTargets.keys()].some((root) => pathIsWithin(root, resolved.path)) &&
+          !(declaredRealPackageRoot && pathIsWithin(declaredRealPackageRoot, resolved.path))
+        ) {
+          return {
+            errors: [
+              {
+                text:
+                  `Dependency ${args.path} escaped the prepared build environment to ${resolved.path}. ` +
+                  "Workspace builds cannot resolve ambient packages.",
+              },
+            ],
+          };
+        }
+        return resolved;
+      });
+    },
+  };
+}
+
 function normalizeManifestSpecList(specs: string[] | undefined): string[] {
   if (!specs) return [];
   const deduped = new Set<string>();
@@ -539,6 +725,19 @@ function normalizeManifestSpecList(specs: string[] | undefined): string[] {
     deduped.add(value);
   }
   return [...deduped].sort();
+}
+
+function normalizeStartupModuleSpecifiers(specs: string[] | undefined): string[] {
+  if (!specs) return [];
+  const normalized = new Set<string>();
+  for (const raw of specs) {
+    const value = typeof raw === "string" ? raw.trim() : "";
+    if (!value.startsWith("./") || value.includes("\\") || value.split("/").includes("..")) {
+      throw new Error(`Invalid app.startupModules specifier: ${JSON.stringify(raw)}`);
+    }
+    normalized.add(value);
+  }
+  return [...normalized].sort();
 }
 
 function escapeRegex(value: string): string {
@@ -1646,6 +1845,8 @@ export interface BuildUnitOptions {
    * worker/workerd entry instead of a panel entry that bootstraps on load.
    */
   libraryTarget?: LibraryBuildTarget;
+  /** Scheduling only; never part of the deterministic artifact identity. */
+  priority?: BuildPriority;
 }
 
 export function effectiveBuildVersion(
@@ -1678,7 +1879,7 @@ export function buildSourcemapForNode(node: GraphNode, options?: BuildUnitOption
     ? false
     : node.kind === "extension"
       ? true
-      : node.manifest.sourcemap !== false;
+      : node.manifest.sourcemap === true;
 }
 
 export function computeBuildUnitKey(
@@ -1884,7 +2085,7 @@ async function doBuild(
           authority
         );
       }
-    });
+    }, options?.priority ?? "interactive");
   } finally {
     trace.done();
   }
@@ -2340,6 +2541,7 @@ async function buildPanel(
   if (adapter.plugins) {
     plugins.push(...(await adapter.plugins()));
   }
+  plugins.push(createDependencyEnvironmentResolvePlugin(nodePaths, externalSpecifiers));
 
   // Build esbuild options with adapter-driven JSX settings
   const esbuildOptions: esbuild.BuildOptions = {
@@ -2363,10 +2565,11 @@ async function buildPanel(
     },
     minify: true,
     outdir,
-    // Keep development maps available without putting them on the startup
-    // path. Inline maps made every panel download and parse several megabytes
-    // of debugger-only data before its first render; external maps are fetched
-    // only when developer tooling asks for them.
+    // Source maps are an explicit unit-level debugging cost. Even linked maps
+    // made a representative cold panel emit ~28 MB of artifacts it never
+    // requested at runtime, substantially extending first build and cache
+    // persistence. Units that need mapped production stacks opt in through
+    // `vibestudio.sourcemap: true`.
     sourcemap: sourcemap ? "linked" : false,
     metafile: true,
     logLevel: "warning",
@@ -2430,13 +2633,28 @@ async function buildPanel(
 
     const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf-8") : "";
     const css = cssPath && fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf-8") : undefined;
-    const rawBundleReport = metafile
-      ? createPanelBundleReport(
+    const declaredStartupModules = normalizeStartupModuleSpecifiers(
+      extractedManifest.app?.startupModules
+    );
+    const startupOutputs = metafile
+      ? startupModuleOutputs(
           metafile,
           bundleOutputPath,
-          cssOutputPath,
-          sharedStyleOutputPath ? [sharedStyleOutputPath] : []
+          outdir,
+          panelSourcePath,
+          declaredStartupModules
         )
+      : [];
+    if (declaredStartupModules.length > 0 && startupOutputs.length === 0) {
+      throw new Error(
+        `${node.name} app.startupModules did not resolve to an emitted module: ${declaredStartupModules.join(", ")}`
+      );
+    }
+    const rawBundleReport = metafile
+      ? createPanelBundleReport(metafile, bundleOutputPath, cssOutputPath, [
+          ...(sharedStyleOutputPath ? [sharedStyleOutputPath] : []),
+          ...startupOutputs,
+        ])
       : undefined;
     const bundleReport = rawBundleReport
       ? {
@@ -3058,6 +3276,12 @@ async function buildWorker(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
+  plugins.push(
+    createDependencyEnvironmentResolvePlugin(nodePaths, [
+      ...WORKER_NODE_BUILTIN_EXTERNALS,
+      ...(terminalWorker ? ["yoga.wasm"] : []),
+    ])
+  );
 
   try {
     const buildResult = await esbuild.build({
@@ -3403,6 +3627,7 @@ async function buildTerminalApp(
       plugins: [
         createWorkspaceResolvePlugin(graph, sourceRoot),
         createTsExtensionPlugin(sourceRoot),
+        createDependencyEnvironmentResolvePlugin(nodePaths, WORKER_NODE_BUILTIN_EXTERNALS),
       ],
       nodePaths,
       absWorkingDir: resolveDir,
@@ -3654,6 +3879,13 @@ async function buildExtension(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
+  plugins.push(
+    createDependencyEnvironmentResolvePlugin(nodePaths, [
+      ...KNOWN_NATIVE_EXTERNALS,
+      ...NODE_BUILTIN_EXTERNALS,
+      ...expandExternalSpecifiers(runtimeExternalDeps),
+    ])
+  );
 
   try {
     await esbuild.build({
@@ -4117,6 +4349,10 @@ async function buildLibraryBundle(
         createPathShimPlugin(env.resolveDir),
         createWorkerBufferShimPlugin(env.resolveDir),
         ...(target === "worker" ? [createWorkerNodeStubPlugin()] : []),
+        createDependencyEnvironmentResolvePlugin(env.nodePaths, [
+          ...libraryExternals,
+          ...(target === "worker" ? WORKER_NODE_BUILTIN_EXTERNALS : NODE_BUILTIN_EXTERNALS),
+        ]),
       ],
       nodePaths: env.nodePaths,
       loader: LIBRARY_ASSET_LOADERS,

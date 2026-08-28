@@ -55,7 +55,7 @@ importers:
         specifier: ^1.3.2
         version: 1.3.2(react@19.0.0)
       '@radix-ui/themes':
-        specifier: ^3.2.1
+        specifier: ^3.3.0
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
       '@silvia-odwyer/photon-node':
         specifier: ^0.3.4
@@ -209,7 +209,7 @@ importers:
         version: 0.27.2
       esbuild-svelte:
         specifier: ^0.9.4
-        version: 0.9.4(esbuild@0.27.2)(svelte@5.55.0)
+        version: 0.9.4(esbuild@0.27.2)(svelte@5.56.10(@typescript-eslint/types@8.54.0))
       firebase-admin:
         specifier: ^12.7.0
         version: 12.7.0(encoding@0.1.13)
@@ -220,7 +220,7 @@ importers:
         specifier: ^1.30.1
         version: 1.36.3
       jotai:
-        specifier: ^2.15.1
+        specifier: ^2.17.0
         version: 2.17.0(@babel/core@7.29.0)(@babel/template@8.0.0)(@types/react@19.2.10)(react@19.0.0)
       lucide-react:
         specifier: ^1.31.0
@@ -241,7 +241,7 @@ importers:
         specifier: ^0.32.0
         version: 0.32.3
       node-pty:
-        specifier: ^1.0.0
+        specifier: ^1.1.0
         version: 1.1.0
       npm:
         specifier: ^11.13.0
@@ -268,14 +268,14 @@ importers:
         specifier: ^3.23.0
         version: 3.23.0
       sql.js:
-        specifier: ^1.14.0
+        specifier: ^1.14.1
         version: 1.14.1
       sucrase:
         specifier: ^3.35.1
         version: 3.35.1
       svelte:
-        specifier: ^5.55.0
-        version: 5.55.0
+        specifier: ^5.56.9
+        version: 5.56.10(@typescript-eslint/types@8.54.0)
       tldts:
         specifier: ^7.0.19
         version: 7.0.21
@@ -295,7 +295,7 @@ importers:
         specifier: ^2.8.1
         version: 2.8.2
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
       zod-to-json-schema:
         specifier: ^3.25.0
@@ -386,7 +386,7 @@ importers:
         specifier: 8.21.1
         version: 8.21.1
       zod:
-        specifier: ^3.24.0
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       '@types/ws':
@@ -453,7 +453,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/workspace-contracts
       jotai:
-        specifier: ^2.15.1
+        specifier: ^2.17.0
         version: 2.17.0(@babel/core@7.29.0)(@babel/template@8.0.0)(@types/react@19.2.10)(react@19.0.0)
       lucide-react-native:
         specifier: ^1.14.0
@@ -586,7 +586,7 @@ importers:
   packages/browser-contracts:
     dependencies:
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
 
   packages/browser-data:
@@ -601,7 +601,7 @@ importers:
         specifier: workspace:*
         version: link:../shared
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       '@types/node':
@@ -623,7 +623,7 @@ importers:
         specifier: ^0.3.2
         version: 0.3.2
       sql.js:
-        specifier: ^1.14.0
+        specifier: ^1.14.1
         version: 1.14.1
     devDependencies:
       '@types/node':
@@ -657,11 +657,11 @@ importers:
         specifier: workspace:*
         version: link:../shared
       sql.js:
-        specifier: ^1.14.0
+        specifier: ^1.14.1
         version: 1.14.1
     devDependencies:
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
 
   packages/content-addressing: {}
@@ -697,7 +697,7 @@ importers:
         specifier: workspace:*
         version: link:../shared
       sql.js:
-        specifier: ^1.14.0
+        specifier: ^1.14.1
         version: 1.14.1
     devDependencies:
       '@types/sql.js':
@@ -766,7 +766,7 @@ importers:
         specifier: ^2.8.1
         version: 2.8.2
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       '@types/node':
@@ -810,7 +810,7 @@ importers:
         specifier: workspace:*
         version: link:../sqlite
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
 
   packages/mobile-webrtc:
@@ -904,7 +904,7 @@ importers:
         specifier: workspace:*
         version: link:../workspace-contracts
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
 
   packages/shared:
@@ -940,7 +940,7 @@ importers:
         specifier: workspace:*
         version: link:../workspace-contracts
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       '@types/json-schema':
@@ -992,7 +992,7 @@ importers:
   packages/types:
     dependencies:
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       typescript:
@@ -1047,7 +1047,7 @@ importers:
         specifier: ^2.8.1
         version: 2.9.0
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       vitest:
@@ -1057,7 +1057,7 @@ importers:
   packages/workspace-contracts:
     dependencies:
       zod:
-        specifier: ^3.24.1
+        specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
       vitest:
@@ -4248,8 +4248,8 @@ packages:
   '@speed-highlight/core@1.2.15':
     resolution: {integrity: sha512-BMq1K3DsElxDWawkX6eLg9+CKJrTVGCBAWVuHXVUV2u0s2711qiChLSId6ikYPfxhdYocLNt3wWwSvDiTvFabw==}
 
-  '@sveltejs/acorn-typescript@1.0.9':
-    resolution: {integrity: sha512-lVJX6qEgs/4DOcRTpo56tmKzVPtoWAaVbL4hfO7t7NVwl9AAXzQR6cihesW1BmNMPl+bK6dreu2sOKBP2Q9CIA==}
+  '@sveltejs/acorn-typescript@1.0.13':
+    resolution: {integrity: sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ==}
     peerDependencies:
       acorn: ^8.9.0
 
@@ -5785,8 +5785,8 @@ packages:
   detect-node@2.1.0:
     resolution: {integrity: sha512-T0NIuQpnTvFDATNuHN5roPwSBG83rFsuO+MXXH9/3N1eFbn4wcPjttvjMLEPWJ0RGUYgQE7cGgS3tNxbqCGM7g==}
 
-  devalue@5.6.4:
-    resolution: {integrity: sha512-Gp6rDldRsFh/7XuouDbxMH3Mx8GMCcgzIb1pDTvNyn8pZGQ22u+Wa+lGV9dQCltFQ7uVw0MhRyb8XDskNFOReA==}
+  devalue@5.9.2:
+    resolution: {integrity: sha512-po4PAY5c53tw5XMocSnf8A/5OHhbbUftpr93aEN6BBoAdntUmK7vu7wOATqvt7cXO7m1Cl4gMVn6p7n6n4mj0w==}
 
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
@@ -6015,8 +6015,13 @@ packages:
     engines: {node: '>=4'}
     hasBin: true
 
-  esrap@2.2.4:
-    resolution: {integrity: sha512-suICpxAmZ9A8bzJjEl/+rLJiDKC0X4gYWUxT6URAWBLvlXmtbZd5ySMu/N2ZGEtMCAmflUDPSehrP9BQcsGcSg==}
+  esrap@2.3.6:
+    resolution: {integrity: sha512-yc0OC12UjPqLoc+fe+v5GNs4TOjAigUw3sTikfC+xeBPGUw7gDRz3DtYaqEhxyMVJojcSWJw7jT0QWR+CbuE/A==}
+    peerDependencies:
+      '@typescript-eslint/types': ^8.2.0
+    peerDependenciesMeta:
+      '@typescript-eslint/types':
+        optional: true
 
   estraverse@5.3.0:
     resolution: {integrity: sha512-MMdARuVEQziNTeJD8DgMqmhwR11BRQ/cBP+pLtYdSTnf3MIO8fFeiINEbX36ZdNlfU/7A9f3gUw49B3oQsvwBA==}
@@ -8657,8 +8662,8 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
-  svelte@5.55.0:
-    resolution: {integrity: sha512-SThllKq6TRMBwPtat7ASnm/9CDXnIhBR0NPGw0ujn2DVYx9rVwsPZxDaDQcYGdUz/3BYVsCzdq7pZarRQoGvtw==}
+  svelte@5.56.10:
+    resolution: {integrity: sha512-Lcxbj8I/KAbpY+VjtY4ENQBV0dDCipfGAhqb51XQZ67CIQqXgsv/8dPkbILaj4Fb6/b6JAEM/PIVbILXgDQy2g==}
     engines: {node: '>=18'}
 
   symbol-tree@3.2.4:
@@ -12770,7 +12775,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -13066,7 +13073,7 @@ snapshots:
 
   '@speed-highlight/core@1.2.15': {}
 
-  '@sveltejs/acorn-typescript@1.0.9(acorn@8.18.0)':
+  '@sveltejs/acorn-typescript@1.0.13(acorn@8.18.0)':
     dependencies:
       acorn: 8.18.0
 
@@ -13413,7 +13420,8 @@ snapshots:
       '@types/node': 24.10.9
     optional: true
 
-  '@typescript-eslint/types@8.54.0': {}
+  '@typescript-eslint/types@8.54.0':
+    optional: true
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -14713,7 +14721,7 @@ snapshots:
   detect-node@2.1.0:
     optional: true
 
-  devalue@5.6.4: {}
+  devalue@5.9.2: {}
 
   devlop@1.1.0:
     dependencies:
@@ -14927,11 +14935,11 @@ snapshots:
   es6-error@4.1.1:
     optional: true
 
-  esbuild-svelte@0.9.4(esbuild@0.27.2)(svelte@5.55.0):
+  esbuild-svelte@0.9.4(esbuild@0.27.2)(svelte@5.56.10(@typescript-eslint/types@8.54.0)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       esbuild: 0.27.2
-      svelte: 5.55.0
+      svelte: 5.56.10(@typescript-eslint/types@8.54.0)
 
   esbuild@0.27.2:
     optionalDependencies:
@@ -15013,9 +15021,10 @@ snapshots:
 
   esprima@4.0.1: {}
 
-  esrap@2.2.4:
+  esrap@2.3.6(@typescript-eslint/types@8.54.0):
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
+    optionalDependencies:
       '@typescript-eslint/types': 8.54.0
 
   estraverse@5.3.0: {}
@@ -18445,24 +18454,26 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  svelte@5.55.0:
+  svelte@5.56.10(@typescript-eslint/types@8.54.0):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       '@jridgewell/sourcemap-codec': 1.5.5
-      '@sveltejs/acorn-typescript': 1.0.9(acorn@8.18.0)
+      '@sveltejs/acorn-typescript': 1.0.13(acorn@8.18.0)
       '@types/estree': 1.0.8
       '@types/trusted-types': 2.0.7
       acorn: 8.18.0
       aria-query: 5.3.1
       axobject-query: 4.1.0
       clsx: 2.1.1
-      devalue: 5.6.4
+      devalue: 5.9.2
       esm-env: 1.2.2
-      esrap: 2.2.4
+      esrap: 2.3.6(@typescript-eslint/types@8.54.0)
       is-reference: 3.0.3
       locate-character: 3.0.0
       magic-string: 0.30.21
       zimmerframe: 1.1.4
+    transitivePeerDependencies:
+      - '@typescript-eslint/types'
 
   symbol-tree@3.2.4: {}
 

@@ -59,6 +59,7 @@ import {
 import type { HostTarget, HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
+import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
@@ -244,6 +245,7 @@ interface AppBuildArtifactLike {
   encoding: BuildArtifactManifestEntry["encoding"];
   platform?: string;
   integrity?: string;
+  byteLength?: number;
   content: string;
 }
 
@@ -276,6 +278,7 @@ interface AppBuildMetadataLike {
   sourceStateHash?: string | null;
   execution?: BuildMetadata["execution"];
   authority?: BuildMetadata["authority"];
+  bundleReport?: BuildMetadata["bundleReport"];
   details?:
     | {
         kind: "app";
@@ -1190,6 +1193,71 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
     const build = this.deps.buildSystem.getBuildByKey?.(buildKey);
     const artifactPath = normalizeArtifactPath(remainderPath || "index.html");
+    if (build && artifactPath === "__manifest.json") {
+      const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
+      const body = JSON.stringify({
+        artifacts: (build.artifacts ?? []).map((artifact) => ({
+          path: artifact.path,
+          contentType: artifact.contentType,
+          ...(artifact.byteLength === undefined ? {} : { byteLength: artifact.byteLength }),
+          ...(artifact.integrity === undefined ? {} : { integrity: artifact.integrity }),
+          ...(initialArtifacts.has(artifact.path) ? { initial: true } : {}),
+        })),
+      });
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Length": String(Buffer.byteLength(body)),
+      });
+      if (req.method === "HEAD") res.end();
+      else res.end(body);
+      return;
+    }
+    if (build && artifactPath === "__bundle") {
+      const query = new URL(req.url ?? "/", "http://app-artifact.invalid").searchParams;
+      const wanted = [
+        ...new Set(
+          (query.get("want") ?? "")
+            .split(",")
+            .map((raw) => Number.parseInt(raw, 10))
+            .filter(
+              (index) =>
+                Number.isInteger(index) && index >= 0 && index < (build.artifacts?.length ?? 0)
+            )
+        ),
+      ];
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Cache-Control": "no-store",
+        "X-Vibestudio-Bundle-Encoding": "gzip",
+      });
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      for (const index of wanted) {
+        const artifact = build.artifacts?.[index];
+        if (!artifact?.integrity) continue;
+        const raw = await readArtifactBytesAsync(build, artifact);
+        const digest = artifact.integrity.replace(/^sha256-/u, "");
+        const encoded =
+          artifact.encoding !== "base64" && raw.byteLength >= 1_024
+            ? await gzipAsync(raw, { level: 6 })
+            : null;
+        const record = encoded
+          ? encodeBlobRecord(
+              digest,
+              new Uint8Array(encoded),
+              createHash("sha256").update(encoded).digest("hex")
+            )
+          : encodeBlobRecord(digest, new Uint8Array(raw));
+        if (!res.write(record)) {
+          await new Promise<void>((resolve) => res.once("drain", resolve));
+        }
+      }
+      res.end();
+      return;
+    }
     const artifact = build?.artifacts?.find((entry) => entry.path === artifactPath);
     if (!build || !artifact) {
       res.writeHead(404, { "Content-Type": "text/plain" });
@@ -1198,8 +1266,11 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
     const headers: Record<string, string> = {
       "Content-Type": artifact.contentType,
-      "Cache-Control": "no-store",
+      // The build key names an immutable artifact graph. This allows both the
+      // loopback façade and Chromium to reuse app bytes across launches.
+      "Cache-Control": "public, max-age=31536000, immutable",
     };
+    if (artifact.integrity) headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
     if (artifact.role === "html") {
       headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
@@ -1296,6 +1367,63 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
 
     await this.reconcileHostTargetDeclaration("electron", declared, opts);
     return this.electronReadinessSnapshot(candidate.source);
+  }
+
+  /**
+   * Compile and validate the selected Electron host artifact without admitting
+   * or activating workspace code. Server readiness uses this operation so the
+   * first desktop client never becomes the build scheduler; the normal launch
+   * path still owns the trust decision and executable-principal transition.
+   */
+  async prepareElectronArtifact(source?: string | null): Promise<ElectronHostReadiness> {
+    await this.unitHost.whenDeclarationsStaged();
+
+    const current = this.electronReadinessSnapshot(source);
+    if (current.ready) return current;
+
+    const resolvedSource =
+      current.source ?? source ?? this.deps.getHostTargetDecl?.("electron")?.appSource;
+    if (!resolvedSource) return current;
+    const candidate = this.listHostTargetCandidates("electron").find(
+      (item) =>
+        item.source === normalizeRepoPath(resolvedSource) ||
+        item.name === resolvedSource ||
+        item.name === current.appId
+    );
+    if (!candidate) return current;
+    if (!candidate.compatibility.selectable) return current;
+    const declared = this.declaredForCandidate(candidate);
+    if (!declared) {
+      return {
+        ready: false,
+        source: candidate.source,
+        appId: candidate.name,
+        reason: "Electron app is not declared in meta/vibestudio.yml",
+        details: [`Declare ${candidate.source} under apps: before desktop clients can pair.`],
+      };
+    }
+
+    const build = await this.deps.buildSystem.getBuild(candidate.name, declared.ref);
+    this.validateBuildForTarget(candidate.name, "electron", build);
+    const htmlArtifact = build.artifacts?.find((artifact) => artifact.role === "html");
+    if (!htmlArtifact) {
+      return {
+        ready: false,
+        source: candidate.source,
+        appId: candidate.name,
+        reason: "Selected Electron app build has no HTML entry point",
+        details: [`${candidate.source}: build ${path.basename(build.dir)}`],
+      };
+    }
+    const buildKey = path.basename(build.dir);
+    return {
+      ready: true,
+      source: candidate.source,
+      appId: candidate.name,
+      buildKey,
+      artifactRoute: appArtifactRoute(buildKey, htmlArtifact.path),
+      details: [],
+    };
   }
 
   private electronReadinessSnapshot(source?: string | null): ElectronHostReadiness {

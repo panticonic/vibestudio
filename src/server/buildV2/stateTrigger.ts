@@ -138,7 +138,7 @@ export function isBuildableKind(kind: string): boolean {
 }
 
 export function sourcemapForKind(kind: string, manifestSourcemap: boolean | undefined): boolean {
-  return kind === "extension" || kind === "app" ? true : manifestSourcemap !== false;
+  return kind === "extension" || manifestSourcemap === true;
 }
 
 /** Map changed file paths to the graph units containing them (longest prefix). */

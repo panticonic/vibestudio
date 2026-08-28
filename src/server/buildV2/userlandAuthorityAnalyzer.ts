@@ -7,6 +7,7 @@ import {
   type Symbol as TypeScriptSymbol,
 } from "typescript/unstable/sync";
 import { TypeCheckService } from "@vibestudio/typecheck";
+import { EFFECT_IMPLEMENTATION_PACKAGES } from "./authorityEffectBoundary.js";
 
 export type AbstractString =
   | { kind: "literals"; values: ReadonlySet<string> }
@@ -84,6 +85,86 @@ const CLIENT_FACTORY_NAMES = new Set([
   "profileDO",
 ]);
 const RPC_METHOD_NAMES = new Set(["call", "stream", "streamReadable"]);
+
+// Every service value recognized below originates at one of these public
+// resolver/factory calls. Executable bundles contain thousands of unrelated
+// modules; constructing a TypeScript project for all of them made a cold
+// authority fold take minutes. Retain only modules that can seed the exact
+// analysis. Aliased imports remain visible because the exported identifier is
+// still present in the import declaration.
+const SERVICE_VALUE_SEED_IDENTIFIERS = [...RESOLVER_NAMES, ...CLIENT_FACTORY_NAMES] as const;
+
+function canSeedWorkspaceServiceValue(source: string): boolean {
+  return SERVICE_VALUE_SEED_IDENTIFIERS.some((identifier) => source.includes(identifier));
+}
+
+/**
+ * Authority facts can only originate in a module that names one of the public
+ * service resolvers/factories, or in a module that imports a wrapper exported
+ * by such a module. Walking every AST in a large panel closure is both
+ * unnecessary and expensive (the chat panel currently closes over thousands
+ * of syntax trees). Build the conservative reverse-import closure once, then
+ * perform the semantic walk only inside that closure.
+ *
+ * Runtime/transport implementation modules are not seeds: their generic
+ * dispatch machinery implements consumer intent rather than expressing it.
+ * A consumer importing a public factory still contains the factory identifier
+ * in its own import declaration and is therefore an independent seed.
+ */
+function authoritySourceFiles(input: {
+  project: Project;
+  sourceRoot: string;
+  unitRelativePath: string;
+  units: readonly AuthorityFoldUnit[];
+  sourceFiles: readonly ts.SourceFile[];
+}): ts.SourceFile[] {
+  const checker = input.project.checker;
+  const sourceFileSet = new Set(input.sourceFiles);
+  const reverseImports = new Map<ts.SourceFile, Set<ts.SourceFile>>();
+
+  for (const importer of input.sourceFiles) {
+    for (const statement of importer.statements) {
+      const moduleSpecifier =
+        ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
+          ? statement.moduleSpecifier
+          : undefined;
+      if (!moduleSpecifier) continue;
+      const symbol = unalias(checker, checker.getSymbolAtLocation(moduleSpecifier));
+      for (const declaration of declarationsOf(input.project, symbol)) {
+        const imported = declaration.getSourceFile();
+        if (!sourceFileSet.has(imported)) continue;
+        let importers = reverseImports.get(imported);
+        if (!importers) {
+          importers = new Set();
+          reverseImports.set(imported, importers);
+        }
+        importers.add(importer);
+      }
+    }
+  }
+
+  const selected = new Set<ts.SourceFile>();
+  const pending: ts.SourceFile[] = [];
+  for (const sourceFile of input.sourceFiles) {
+    if (!canSeedWorkspaceServiceValue(sourceFile.text)) continue;
+    const unit = sourceUnitForFile(input.sourceRoot, sourceFile.fileName, input.units);
+    // First-party workspace units carry their canonical name directly; only
+    // executable dependency projections carry the nested package provenance.
+    const packageName = unit?.package?.name ?? unit?.name;
+    if (packageName && EFFECT_IMPLEMENTATION_PACKAGES.has(packageName)) continue;
+    selected.add(sourceFile);
+    pending.push(sourceFile);
+  }
+  while (pending.length > 0) {
+    const imported = pending.pop()!;
+    for (const importer of reverseImports.get(imported) ?? []) {
+      if (selected.has(importer)) continue;
+      selected.add(importer);
+      pending.push(importer);
+    }
+  }
+  return [...selected];
+}
 
 function unionString(a: AbstractString, b: AbstractString): AbstractString {
   if (a.kind === "unknown" || b.kind === "unknown") return { kind: "unknown" };
@@ -307,7 +388,7 @@ export function analyzeWorkspaceServiceCalls(
   input: AnalyzeWorkspaceServiceCallsInput
 ): WorkspaceServiceCallFact[] {
   const checker = input.project.checker;
-  const sourceFiles = input.project.program
+  const programSourceFiles = input.project.program
     .getSourceFileNames()
     .flatMap((fileName) => {
       const sourceFile = input.project.program.getSourceFile(fileName);
@@ -321,6 +402,22 @@ export function analyzeWorkspaceServiceCalls(
         return file.startsWith(root);
       });
     });
+  const sourceFiles = authoritySourceFiles({
+    project: input.project,
+    sourceRoot: input.sourceRoot,
+    unitRelativePath: input.unitRelativePath,
+    units: input.units,
+    sourceFiles: programSourceFiles,
+  });
+  if (programSourceFiles.length >= 500) {
+    const sourceBytes = sourceFiles.reduce(
+      (total, sourceFile) => total + sourceFile.text.length,
+      0
+    );
+    console.info(
+      `[BuildV2] authority semantic scope ${sourceFiles.length}/${programSourceFiles.length} module(s), ${sourceBytes} source byte(s)`
+    );
+  }
 
   const declarationInitializers = new Map<string, ts.Expression>();
   const declarationFunctions = new Map<string, ts.FunctionLikeDeclaration>();
@@ -678,7 +775,9 @@ export function analyzeWorkspaceServiceCalls(
     }
   }
   const facts = [...factsByNode.values()];
-  const executableModules = input.executableModules ?? [];
+  const executableModules = (input.executableModules ?? []).filter((module) =>
+    canSeedWorkspaceServiceValue(module.source)
+  );
   if (executableModules.length > 0) {
     const executableRoot = path.resolve(input.sourceRoot, ".vibestudio-authority-executable");
     const consumerName =

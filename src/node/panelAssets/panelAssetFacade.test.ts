@@ -323,6 +323,51 @@ describe("panel asset façade content cache", () => {
     }
   });
 
+  it("prefetches a content-addressed desktop app before its import waterfall begins", async () => {
+    const buildKey = "f".repeat(64);
+    const artifact = "export const shellReady = true;".repeat(100);
+    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
+    const manifest = JSON.stringify({
+      artifacts: [
+        {
+          path: "bundle.js",
+          contentType: "application/javascript; charset=utf-8",
+          integrity: `sha256-${artifactDigest}`,
+          initial: true,
+        },
+      ],
+    });
+    const bundle = Buffer.from(encodeBlobRecord(artifactDigest, Buffer.from(artifact)));
+    const seen: string[] = [];
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      seen.push(descriptor.path);
+      if (descriptor.path.endsWith("/__manifest.json")) {
+        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      }
+      if (descriptor.path.includes("/__bundle?")) {
+        return new Response(bundle, { headers: { "content-type": "application/octet-stream" } });
+      }
+      return new Response("<!doctype html>", {
+        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
+      });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    try {
+      const origin = `http://127.0.0.1:${facade.port}`;
+      expect(await (await fetch(`${origin}/_a/${buildKey}/index.html`)).text()).toBe(
+        "<!doctype html>"
+      );
+      expect(await (await fetch(`${origin}/_a/${buildKey}/bundle.js`)).text()).toBe(artifact);
+      expect(seen.filter((value) => value.includes("/__bundle?"))).toHaveLength(1);
+      expect(seen).not.toContain(`/_a/${buildKey}/bundle.js`);
+    } finally {
+      await facade.close();
+    }
+  });
+
   it("reuses an immutable representation across credential rotation", async () => {
     const stream = vi.fn<GatewayStream>(async () => {
       return new Response("stable immutable bundle", {

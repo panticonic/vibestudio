@@ -81,18 +81,45 @@ function semanticCapabilities(transportCapabilities: ReadonlySet<string>): Set<s
   return result;
 }
 
+const HOST_METHOD_LITERAL_TOKENS = [...hostCapabilities].flatMap((capability) => {
+  const method = capability.slice("service:".length);
+  return [`"${method}"`, `'${method}'`, `\`${method}\``];
+});
+
+// Every recognition rule in unit-authority-inference has one of these finite
+// textual anchors. Checking the anchors before constructing its native
+// TypeScript syntax project is lossless and avoids reparsing megabytes of
+// unrelated dependency code (syntax highlighters, diagram engines, parsers,
+// and so on) during every cold panel build.
+const TRANSPORT_SYNTAX_ANCHORS = [
+  "EventsClient",
+  "createTypedServiceClient",
+  "createDurableObjectServiceClient",
+  "createBrowserDataClient",
+  "createGadClient",
+  "resolveService",
+] as const;
+const TRANSPORT_FACADE_PATTERN =
+  /(?:\bctx\s*\.|\bthis\s*\.\s*ctx\s*\.|\b(?:browserData|credentials|extensions|fs|git|notifications|vcs|webhooks|workers|workspace|services)\s*\.|\bruntime\s*\.\s*services\s*\.)/u;
+
+function mayContainTransportSyntax(source: string): boolean {
+  if (TRANSPORT_SYNTAX_ANCHORS.some((anchor) => source.includes(anchor))) return true;
+  if (TRANSPORT_FACADE_PATTERN.test(source)) return true;
+  return HOST_METHOD_LITERAL_TOKENS.some((token) => source.includes(token));
+}
+
 function sourceClosure(
   project: Project,
   sourceRoot: string,
   unitRelativePath: string,
   units: readonly AuthorityFoldUnit[],
   executableModules: Parameters<typeof analyzeWorkspaceServiceCalls>[0]["executableModules"]
-): string {
+): string[] {
   const unitRoots = units
     .map((unit) => ({ unit, root: `${path.resolve(sourceRoot, unit.relativePath)}${path.sep}` }))
     .sort((left, right) => right.root.length - left.root.length);
   const consumerRoot = path.resolve(sourceRoot, unitRelativePath);
-  const consumerSource = project.program
+  const consumerSources = project.program
     .getSourceFileNames()
     .flatMap((fileName) => {
       const sourceFile = project.program.getSourceFile(fileName);
@@ -106,17 +133,15 @@ function sourceClosure(
         ? path.resolve(sourceRoot, owned.unit.relativePath) === consumerRoot
         : `${file}${path.sep}`.startsWith(`${consumerRoot}${path.sep}`);
     })
-    .map((sourceFile) => sourceFile.text)
-    .join("\n");
-  const dependencySource = (executableModules ?? [])
+    .map((sourceFile) => sourceFile.text);
+  const dependencySources = (executableModules ?? [])
     .filter(
       (module) =>
         module.package.kind === "first-party" ||
         !EFFECT_IMPLEMENTATION_PACKAGES.has(module.package.name)
     )
-    .map((module) => module.source)
-    .join("\n");
-  return `${consumerSource}\n${dependencySource}`;
+    .map((module) => module.source);
+  return [...consumerSources, ...dependencySources].filter(mayContainTransportSyntax);
 }
 
 /**
@@ -153,17 +178,22 @@ export async function authorityDiagnosticsForProgram(input: {
     ];
   }
 
-  const source = sourceClosure(
+  const sources = sourceClosure(
     input.project,
     input.sourceRoot,
     input.unitRelativePath,
     input.units,
     input.executableModules
   );
-  const transports = inferUnitTransportCapabilities(source, {
-    hostCapabilities,
-    serviceMethods,
-  });
+  const transports = new Set<string>(["context.boundary"]);
+  for (const source of sources) {
+    for (const capability of inferUnitTransportCapabilities(source, {
+      hostCapabilities,
+      serviceMethods,
+    })) {
+      transports.add(capability);
+    }
+  }
   // A library package has no runtime/context boundary of its own. Its reachable
   // effects are charged to the executable consumer; explicit host calls still
   // add their semantic context dependency below.
@@ -184,6 +214,7 @@ export async function authorityDiagnosticsForProgram(input: {
   }));
   if (!input.environment) return hostDiagnostics;
 
+  const userlandStartedAt = performance.now();
   const facts = consumerAuthorityFacts(
     analyzeWorkspaceServiceCalls({
       project: input.project,
@@ -192,16 +223,19 @@ export async function authorityDiagnosticsForProgram(input: {
       units: input.units,
       // Runtime and transport packages implement the authority-bearing calls
       // that consumer syntax denotes; their internal generic dispatchers are not
-      // themselves consumer intent. Direct consumer calls remain in `program`,
-      // while non-platform dependency modules stay here so package endowments
-      // are still checked.
+      // themselves consumer intent. First-party and workspace-package source is
+      // already present in `program` through the exact internal dependency
+      // closure, with better symbols and provenance than a second synthetic
+      // project can provide. Only external executable modules need the fallback
+      // projection so their package endowments remain checked.
       executableModules: input.executableModules?.filter(
         (module) =>
-          module.package.kind === "first-party" ||
+          module.package.kind === "external" &&
           !EFFECT_IMPLEMENTATION_PACKAGES.has(module.package.name)
       ),
     })
   );
+  const userlandAnalyzedAt = performance.now();
   const factsById = new Map(facts.map((fact) => [fact.id, fact]));
   const effects: RequiredAuthorityEffect[] = [];
   const userlandDiagnostics: BuildDiagnostic[] = [];
@@ -584,6 +618,12 @@ export async function authorityDiagnosticsForProgram(input: {
           : "runtime:workerRuntime.workers.resolveService",
       },
     });
+  }
+  const userlandCompletedAt = performance.now();
+  if (userlandCompletedAt - userlandStartedAt >= 5_000) {
+    console.info(
+      `[BuildV2] slow authority fold ${input.unitRelativePath}: analysis=${Math.round(userlandAnalyzedAt - userlandStartedAt)}ms resolution=${Math.round(userlandCompletedAt - userlandAnalyzedAt)}ms facts=${facts.length}`
+    );
   }
   return [...hostDiagnostics, ...userlandDiagnostics];
 }

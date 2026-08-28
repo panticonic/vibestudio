@@ -326,6 +326,24 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
     });
 
+    it("invalidates builds when the installed dependency realm changes", async () => {
+      const dir = path.join(root, "installed");
+      writeRootFiles(dir, '{"name":"host"}', "lock\n", "ws\n");
+      const dependencyManifest = path.join(dir, "node_modules", "zod", "package.json");
+      fs.mkdirSync(path.dirname(dependencyManifest), { recursive: true });
+      fs.writeFileSync(dependencyManifest, '{"name":"zod","version":"3.25.76"}');
+
+      await setBuildRootConfig({ appRoot: dir });
+      const before = computeBuildKey("unit-a", "ev1", true);
+      expect(getRootDependencyFingerprintInfo().files.map((file) => file.file)).toContain(
+        "installed-node-modules:0"
+      );
+
+      fs.writeFileSync(dependencyManifest, '{"name":"zod","version":"4.3.6"}');
+      await setBuildRootConfig({ appRoot: dir });
+      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+    });
+
     it("uses the injected app root when VIBESTUDIO_APP_ROOT is unset", async () => {
       const dirA = path.join(root, "a");
       const dirB = path.join(root, "b");

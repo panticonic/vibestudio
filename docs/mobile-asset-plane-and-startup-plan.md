@@ -607,6 +607,13 @@ and resource contracts (R15). Store population is not speculation — it is the
 tail of a request the user made — but it still may not outrank the response it
 rides behind (C3).
 
+The desktop readiness preparation of the shell plus deduplicated `initPanels`
+is the bounded case: the manifest names the complete first-surface set, the
+ordinary runtime-image cache is used, and the work finishes before pairing is
+advertised. It does not revive workspace-wide prewarm or compile optional
+features. Build scheduling still gives later interactive demand precedence over
+background work.
+
 **P9 — Readiness is a monotonic product contract, not one boolean.** Identity
 paired, ingress routable, shell paintable, and fully reconciled are distinct
 facts. Each transition is published once by its owner and is driven by the

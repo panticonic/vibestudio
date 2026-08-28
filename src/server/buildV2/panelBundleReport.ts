@@ -70,6 +70,60 @@ function staticClosure(
   return initial;
 }
 
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] as const;
+
+function sourceSpecifierMatches(
+  inputPath: string,
+  packageRoot: string,
+  specifier: string
+): boolean {
+  const input = path.resolve(inputPath);
+  const requested = path.resolve(packageRoot, specifier);
+  if (input === requested) return true;
+  if (SOURCE_EXTENSIONS.some((extension) => input === `${requested}${extension}`)) return true;
+  return SOURCE_EXTENSIONS.some((extension) => input === path.join(requested, `index${extension}`));
+}
+
+/**
+ * Resolve declarative, package-root-relative startup modules back to their
+ * emitted dynamic chunks. This affects transfer scheduling only: the entry
+ * still controls when the dynamic import executes.
+ */
+export function startupModuleOutputs(
+  metafile: Metafile,
+  entryOutput: string,
+  outdir: string,
+  packageRoot: string,
+  specifiers: readonly string[]
+): string[] {
+  if (specifiers.length === 0) return [];
+  const moduleOutputs = new Set<string>();
+  for (const [outputPath, output] of Object.entries(metafile.outputs)) {
+    const containsStartupModule = Object.entries(output.inputs).some(([inputPath, input]) => {
+      if (input.bytesInOutput <= 0) return false;
+      const absoluteInput = path.resolve(outdir, inputPath);
+      return specifiers.some((specifier) =>
+        sourceSpecifierMatches(absoluteInput, packageRoot, specifier)
+      );
+    });
+    if (containsStartupModule) moduleOutputs.add(outputPath);
+  }
+
+  const entry = metafile.outputs[entryOutput];
+  const dynamicRoots = (entry?.imports ?? [])
+    .filter((imported) => !imported.external && imported.kind === "dynamic-import")
+    .map((imported) => importedOutput(metafile.outputs, entryOutput, imported.path))
+    .filter((outputPath): outputPath is string => outputPath !== null);
+  const selected = new Set<string>(moduleOutputs);
+  for (const dynamicRoot of dynamicRoots) {
+    const closure = staticClosure(metafile, dynamicRoot);
+    if ([...moduleOutputs].some((outputPath) => closure.has(outputPath))) {
+      selected.add(dynamicRoot);
+    }
+  }
+  return [...selected].sort();
+}
+
 function payloadReport(outputs: readonly string[], metafile: Metafile): PanelBundlePayloadReport {
   let bytes = 0;
   let jsBytes = 0;

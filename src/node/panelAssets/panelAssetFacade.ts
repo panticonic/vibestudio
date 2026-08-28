@@ -99,6 +99,9 @@ interface PrefetchManifest {
 
 interface PinnedEntry {
   buildKey: string;
+  /** Immutable route namespace used by the browser for build artifacts. */
+  artifactRoot: string;
+  /** Route namespace used by the panel runtime helpers, when present. */
   sourceRoot: string;
 }
 
@@ -495,6 +498,13 @@ async function handleRequest(
 
 function parsePinnedEntry(rawPath: string): PinnedEntry | null {
   const url = new URL(rawPath, "http://panel-facade.invalid");
+  const appMatch = url.pathname.match(/^\/_a\/([0-9a-f]{64})\/(?:index\.html)?$/u);
+  if (appMatch) {
+    const buildKey = appMatch[1]!;
+    const artifactRoot = `/_a/${buildKey}/`;
+    return { buildKey, artifactRoot, sourceRoot: artifactRoot };
+  }
+
   const buildKey = url.searchParams.get("buildKey");
   if (!buildKey || !/^[0-9a-f]{64}$/u.test(buildKey)) return null;
   const sourceRoot = url.pathname.endsWith("/")
@@ -502,15 +512,27 @@ function parsePinnedEntry(rawPath: string): PinnedEntry | null {
     : url.pathname.endsWith("/index.html")
       ? url.pathname.slice(0, -"index.html".length)
       : null;
-  return sourceRoot ? { buildKey, sourceRoot } : null;
+  return sourceRoot
+    ? {
+        buildKey,
+        artifactRoot: `/__vibestudio/panel-build/${buildKey}/`,
+        sourceRoot,
+      }
+    : null;
 }
 
 function buildKeyForRequest(rawPath: string, referer: string | undefined): string | null {
-  const direct = rawPath.match(/^\/__vibestudio\/panel-build\/([0-9a-f]{64})\//u)?.[1];
+  const direct =
+    rawPath.match(/^\/__vibestudio\/panel-build\/([0-9a-f]{64})\//u)?.[1] ??
+    rawPath.match(/^\/_a\/([0-9a-f]{64})\//u)?.[1];
   if (direct) return direct;
   if (!referer) return null;
   try {
-    const value = new URL(referer).searchParams.get("buildKey");
+    const refererUrl = new URL(referer);
+    const value =
+      refererUrl.searchParams.get("buildKey") ??
+      refererUrl.pathname.match(/^\/_a\/([0-9a-f]{64})\//u)?.[1] ??
+      null;
     return value && /^[0-9a-f]{64}$/u.test(value) ? value : null;
   } catch {
     return null;
@@ -524,7 +546,7 @@ async function prefetchInitialPanelAssets(
   entry: PinnedEntry,
   signal: AbortSignal
 ): Promise<void> {
-  const manifestPath = `/__vibestudio/panel-build/${entry.buildKey}/__manifest.json`;
+  const manifestPath = `${entry.artifactRoot}__manifest.json`;
   const manifestKey = panelAssetCacheKey(manifestPath, {});
   let manifestBytes = (await cache.get(manifestKey))?.body;
   let manifest: PrefetchManifest;
@@ -558,10 +580,7 @@ async function prefetchInitialPanelAssets(
   const missingArtifacts: Array<{ index: number; resource: PrefetchManifestResource }> = [];
   for (const [index, resource] of manifest.artifacts.entries()) {
     if (!resource.initial || !integrityDigest(resource.integrity)) continue;
-    const cacheKey = panelAssetCacheKey(
-      `/__vibestudio/panel-build/${entry.buildKey}/${resource.path}`,
-      {}
-    );
+    const cacheKey = panelAssetCacheKey(`${entry.artifactRoot}${resource.path}`, {});
     if (!(await cache.has(cacheKey))) missingArtifacts.push({ index, resource });
   }
   const missingHelpers: Array<{ index: number; resource: PrefetchManifestResource }> = [];
@@ -582,7 +601,7 @@ async function prefetchInitialPanelAssets(
   if (missingHelpers.length > 0) {
     query.set("helpers", missingHelpers.map(({ index }) => index).join(","));
   }
-  const bundlePath = `/__vibestudio/panel-build/${entry.buildKey}/__bundle?${query}`;
+  const bundlePath = `${entry.artifactRoot}__bundle?${query}`;
   const response = await fetchPrefetchResponse(serverClient, backstops, bundlePath, "bulk", signal);
   if (!response.body) throw new Error("panel prefetch bundle has no response body");
 
@@ -597,10 +616,7 @@ async function prefetchInitialPanelAssets(
     expected.set(digest, paths);
   };
   for (const { resource } of missingArtifacts) {
-    addExpected(
-      panelAssetCacheKey(`/__vibestudio/panel-build/${entry.buildKey}/${resource.path}`, {}),
-      resource
-    );
+    addExpected(panelAssetCacheKey(`${entry.artifactRoot}${resource.path}`, {}), resource);
   }
   for (const { resource } of missingHelpers) {
     addExpected(

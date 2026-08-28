@@ -536,14 +536,30 @@ export function inferUnitTransportCapabilities(
       capabilities.add(capability);
     }
   }
-  for (const capability of inferEventsClientCapabilities(source, serviceMethods)) {
-    capabilities.add(capability);
+  // These three recognizers require a native TypeScript syntax project. Their
+  // public constructors/selectors are finite grammar anchors, so unrelated
+  // executable modules must not be parsed merely because regex-only facade
+  // inference also runs for them.
+  if (source.includes("EventsClient")) {
+    for (const capability of inferEventsClientCapabilities(source, serviceMethods)) {
+      capabilities.add(capability);
+    }
   }
-  for (const capability of inferTypedServiceClientCapabilities(source, hostCapabilities)) {
-    capabilities.add(capability);
+  if (source.includes("createTypedServiceClient")) {
+    for (const capability of inferTypedServiceClientCapabilities(source, hostCapabilities)) {
+      capabilities.add(capability);
+    }
   }
-  for (const capability of inferWorkspaceServiceCapabilities(source, workspaceServiceSelectors)) {
-    capabilities.add(capability);
+  if (
+    source.includes("createDurableObjectServiceClient") ||
+    source.includes("createBrowserDataClient") ||
+    source.includes("createGadClient") ||
+    source.includes("resolveService") ||
+    /\b(?:browserData|gad)\s*\./u.test(source)
+  ) {
+    for (const capability of inferWorkspaceServiceCapabilities(source, workspaceServiceSelectors)) {
+      capabilities.add(capability);
+    }
   }
 
   for (const match of source.matchAll(

@@ -32,6 +32,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import type { PackageGraph } from "./packageGraph.js";
 import { getUserDataPath } from "@vibestudio/env-paths";
+import { getExistingAppNodeModulesRoots } from "@vibestudio/shared/runtimePaths";
 import { panelEntryProtocolFingerprint } from "./panelEntryProtocol.js";
 
 // ---------------------------------------------------------------------------
@@ -236,8 +237,9 @@ export async function persistEvState(state: Omit<PersistedEvState, "version">): 
  * "28": generated panel entries publish readiness at their mount boundary.
  * "29": worker builds preserve dynamic imports as workerd module-map chunks.
  * "30": worker exposed modules are emitted as lazy feature chunks.
+ * "31": build identity includes the installed dependency realm and hermetic resolver.
  */
-const BUILD_CACHE_VERSION = "30";
+const BUILD_CACHE_VERSION = "32";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
@@ -397,6 +399,84 @@ async function localPackageFingerprintInputs(
   return presentFiles;
 }
 
+async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<string> {
+  const records: string[] = [];
+  const visited = new Set<string>();
+
+  const visitNodeModules = async (directory: string, logicalPrefix: string): Promise<void> => {
+    const resolvedDirectory = path.resolve(directory);
+    if (visited.has(resolvedDirectory)) return;
+    visited.add(resolvedDirectory);
+    let entries: fs.Dirent[];
+    try {
+      entries = (await fs.promises.readdir(directory, { withFileTypes: true })).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name.startsWith("@") && entry.isDirectory()) {
+        const scopeEntries = (
+          await fs.promises.readdir(path.join(directory, entry.name), { withFileTypes: true })
+        ).sort((a, b) => a.name.localeCompare(b.name));
+        for (const scoped of scopeEntries) {
+          await visitPackage(
+            path.join(directory, entry.name, scoped.name),
+            `${logicalPrefix}${entry.name}/${scoped.name}`,
+            scoped
+          );
+        }
+        continue;
+      }
+      await visitPackage(path.join(directory, entry.name), `${logicalPrefix}${entry.name}`, entry);
+    }
+  };
+
+  const visitPackage = async (
+    packageRoot: string,
+    logicalName: string,
+    entry: fs.Dirent
+  ): Promise<void> => {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) return;
+    const manifestPath = path.join(packageRoot, "package.json");
+    try {
+      const contents = await fs.promises.readFile(manifestPath);
+      records.push(`package\0${logicalName}\0${await fullHash(contents)}\0`);
+    } catch {
+      return;
+    }
+    if (entry.isSymbolicLink()) {
+      records.push(`link\0${logicalName}\0${await fs.promises.readlink(packageRoot)}\0`);
+      return;
+    }
+    await visitNodeModules(path.join(packageRoot, "node_modules"), `${logicalName}/node_modules/`);
+  };
+
+  await visitNodeModules(nodeModulesRoot, "");
+  return fullHash(Buffer.from(records.join("")));
+}
+
+/**
+ * Registry ranges in package.json are not an installed graph identity. npm can
+ * resolve the same range differently on a later install, so cache keys include
+ * the manifests and nesting of the exact package-owned dependency realm.
+ */
+async function installedDependencyFingerprintInputs(
+  root: string
+): Promise<RootDependencyFingerprintFile[]> {
+  const nodeModulesRoots = getExistingAppNodeModulesRoots(root);
+  return Promise.all(
+    nodeModulesRoots.map(async (nodeModulesRoot, index) => ({
+      file: `installed-node-modules:${index}`,
+      path: nodeModulesRoot,
+      present: true,
+      contentHash: await installedPackageManifestsHash(nodeModulesRoot),
+    }))
+  );
+}
+
 function dependencyFingerprintInputs(
   root: string,
   workspaceRoot?: string
@@ -429,7 +509,7 @@ async function computeRootDependencyFingerprint(
 
   const hash = crypto.createHash("sha256");
   // Domain tag; bumped when the input set/encoding changes.
-  hash.update("root-deps-v5\0");
+  hash.update("root-deps-v6\0");
 
   const files: RootDependencyFingerprintFile[] = [];
   for (const input of dependencyFingerprintInputs(root, workspaceRoot)) {
@@ -460,6 +540,13 @@ async function computeRootDependencyFingerprint(
     hash.update("\0");
     files.push(input);
   }
+  for (const input of await installedDependencyFingerprintInputs(root)) {
+    hash.update(input.file);
+    hash.update("\0installed-tree\0");
+    hash.update(input.contentHash ?? "absent");
+    hash.update("\0");
+    files.push(input);
+  }
 
   const info: RootDependencyFingerprintInfo = {
     root,
@@ -474,14 +561,20 @@ async function computeRootDependencyFingerprint(
 function logRootDependencyFingerprint(info: RootDependencyFingerprintInfo): void {
   if (rootFingerprintLogged) return;
   rootFingerprintLogged = true;
-  const ordinaryFiles = info.files.filter((file) => !file.file.endsWith("/**"));
+  const ordinaryFiles = info.files.filter(
+    (file) => !file.file.endsWith("/**") && !file.file.startsWith("installed-node-modules:")
+  );
   const localPackages = info.files.filter((file) => file.file.endsWith("/**"));
+  const installedRoots = info.files.filter((file) =>
+    file.file.startsWith("installed-node-modules:")
+  );
   const summary = ordinaryFiles
     .map((f) => `${f.file}=${f.present ? (f.contentHash ?? "?") : "absent"}`)
     .join(" ");
   console.log(
     `[BuildV2] root-deps fingerprint ${info.value} (root=${info.root} via ${info.rootSource}): ` +
-      `${summary}; ${localPackages.length} local package implementation tree(s)`
+      `${summary}; ${localPackages.length} local package implementation tree(s); ` +
+      `${installedRoots.length} installed dependency realm(s)`
   );
 }
 

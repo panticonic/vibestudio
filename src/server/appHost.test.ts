@@ -15,6 +15,7 @@ import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
+import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import {
@@ -495,15 +496,84 @@ function createMockResponse() {
       this.statusCode = statusCode;
       this.headers = headers;
     },
+    write(chunk: string | Buffer) {
+      this.body = Buffer.concat([this.body, Buffer.from(chunk)]);
+      return true;
+    },
     end(chunk?: string | Buffer) {
-      this.body = Buffer.isBuffer(chunk)
-        ? chunk
-        : Buffer.from(typeof chunk === "string" ? chunk : "");
+      if (chunk !== undefined) {
+        this.body = Buffer.concat([this.body, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+      }
     },
   };
 }
 
 describe("AppHost", () => {
+  it("publishes one immutable initial-artifact transfer for remote desktop startup", async () => {
+    const { host, buildSystem, graphNode, root } = makeHarness();
+    installAppEntry(host, graphNode, { activeBundleKey: "app-key" });
+    const buildDir = path.join(root, "state", "builds", "app-key");
+    const script = Buffer.from("export const ready = true;".repeat(100));
+    const lazy = Buffer.from("export const later = true;");
+    const scriptArtifact = storedArtifact(buildDir, "bundle.js", script, {
+      role: "primary",
+      contentType: "application/javascript",
+      encoding: "utf8",
+    });
+    const lazyArtifact = storedArtifact(buildDir, "lazy.js", lazy, {
+      role: "asset",
+      contentType: "application/javascript",
+      encoding: "utf8",
+    });
+    buildSystem.getBuildByKey.mockReturnValue({
+      dir: buildDir,
+      buildKey: "app-key",
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        bundleReport: { initialArtifacts: ["bundle.js"] },
+      },
+      artifacts: [scriptArtifact, lazyArtifact],
+    } as never);
+
+    const manifestResponse = createMockResponse();
+    await host.handleAppArtifactRequest(
+      { method: "GET", url: "/_a/app-key/__manifest.json", headers: {} } as never,
+      manifestResponse as never,
+      "app-key",
+      "__manifest.json"
+    );
+    expect(manifestResponse.statusCode).toBe(200);
+    expect(manifestResponse.headers["Cache-Control"]).toContain("immutable");
+    expect(JSON.parse(manifestResponse.body.toString()).artifacts).toEqual([
+      expect.objectContaining({ path: "bundle.js", initial: true }),
+      expect.objectContaining({ path: "lazy.js" }),
+    ]);
+    expect(JSON.parse(manifestResponse.body.toString()).artifacts[1]).not.toHaveProperty("initial");
+
+    const bundleResponse = createMockResponse();
+    await host.handleAppArtifactRequest(
+      { method: "GET", url: "/_a/app-key/__bundle?want=0", headers: {} } as never,
+      bundleResponse as never,
+      "app-key",
+      "__bundle"
+    );
+    const reader = createBlobBundleReader();
+    const records = reader.push(new Uint8Array(bundleResponse.body));
+    reader.end();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.digest).toBe(scriptArtifact.integrity?.replace(/^sha256-/u, ""));
+    expect(gunzipSync(records[0]!.bytes)).toEqual(script);
+
+    const assetResponse = createMockResponse();
+    await host.handleAppArtifactRequest(
+      { method: "GET", url: "/_a/app-key/bundle.js", headers: {} } as never,
+      assetResponse as never,
+      "app-key",
+      "bundle.js"
+    );
+    expect(assetResponse.headers["Cache-Control"]).toContain("immutable");
+  });
+
   it("serves deterministic gzip byte ranges for resumable native app transfer", async () => {
     const { host, buildSystem, graphNode, root } = makeHarness();
     installApp(host, graphNode);
@@ -1092,6 +1162,25 @@ describe("AppHost", () => {
     });
     expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
     expect(host.registry.get("@workspace-apps/shell")?.status).toBe("available");
+  });
+
+  it("prebuilds the selected Electron artifact without admitting or activating it", async () => {
+    const { host, buildSystem, eventService, graphNode } = makeHarness();
+    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
+
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    const readiness = await host.prepareElectronArtifact();
+
+    expect(readiness).toMatchObject({
+      ready: true,
+      source: "apps/shell",
+      appId: "@workspace-apps/shell",
+      buildKey: "app-key",
+      artifactRoute: "/_a/app-key/index.html",
+    });
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
+    expect(host.registry.get("@workspace-apps/shell")).toBeNull();
+    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
   });
 
   it("advertises Electron shell artifacts as gateway routes", async () => {

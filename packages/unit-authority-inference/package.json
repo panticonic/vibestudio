@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "test": "cd ../.. && vitest run scripts/lib/unit-authority-inference.test.mjs"
+    "test": "cd ../.. && node --test scripts/lib/unit-authority-inference.test.mjs"
   },
   "dependencies": {
     "@vibestudio/typecheck": "workspace:*",

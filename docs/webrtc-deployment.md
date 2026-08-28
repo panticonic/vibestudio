@@ -197,8 +197,13 @@ vibestudio remote deploy local
 The same deployment lifecycle accepts `user@host` when the server is a
 different machine. It installs a loopback-only systemd user service, enables
 linger, validates the hub plus the default workspace, and prints the service's
-current root pairing QR. Use `remote deploy pairing`, `status`, `logs`, `update`,
-and `remove` with the same `local` or `user@host` target.
+current root pairing QR. The hub publishes its ready file only after that
+workspace has compiled and validated the desktop shell and every deduplicated
+panel source declared by `initPanels`. This is a bounded startup set, not a
+workspace-wide prewarm: optional panels and features stay lazy. The pairing
+command therefore never hands a client a link while the first desktop surface
+is still performing a cold build. Use `remote deploy pairing`, `status`,
+`logs`, `update`, and `remove` with the same `local` or `user@host` target.
 
 For a foreground session, signaling resolves as flag > environment > config >
 hosted default:

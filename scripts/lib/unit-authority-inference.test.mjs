@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   inferEventsClientCapabilities,
@@ -11,6 +13,11 @@ import {
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
 } from "@vibestudio/unit-authority-inference";
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const userlandRoot = path.resolve(
+  process.env.VIBESTUDIO_USERLAND_ROOT ?? path.join(repositoryRoot, "../vibestudio-workspace-base")
+);
 
 describe("inferWorkspaceServiceCapabilities", () => {
   const selectors = new Map([
@@ -71,7 +78,7 @@ describe("inferWorkspaceServiceCapabilities", () => {
 
 function sourceTreeContains(directory, pattern) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+    const child = path.join(directory, entry.name);
     if (entry.isDirectory()) {
       if (sourceTreeContains(child, pattern)) return true;
     } else if (
@@ -250,12 +257,12 @@ describe("declared host-method capability dependencies", () => {
   it("keeps every shipped panel-navigation manifest closed over its semantic commit", () => {
     const missing = [];
     for (const root of ["about", "apps", "panels"]) {
-      const directory = new URL(`../../workspace/${root}/`, import.meta.url);
+      const directory = path.join(userlandRoot, root);
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        const manifestUrl = new URL(`${entry.name}/package.json`, directory);
-        if (!fs.existsSync(manifestUrl)) continue;
-        const manifest = JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
+        const manifestPath = path.join(directory, entry.name, "package.json");
+        if (!fs.existsSync(manifestPath)) continue;
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
         const requests = new Set(
           (manifest.vibestudio?.authority?.requests ?? []).map((request) => request.capability)
         );
@@ -270,11 +277,11 @@ describe("declared host-method capability dependencies", () => {
   it("declares semantic navigation authority for every buildPanelLink caller", () => {
     const missing = [];
     for (const root of ["about", "apps", "panels"]) {
-      const directory = new URL(`../../workspace/${root}/`, import.meta.url);
+      const directory = path.join(userlandRoot, root);
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        const unitDirectory = new URL(`${entry.name}/`, directory);
-        const manifestUrl = new URL("package.json", unitDirectory);
+        const unitDirectory = path.join(directory, entry.name);
+        const manifestUrl = path.join(unitDirectory, "package.json");
         if (
           !fs.existsSync(manifestUrl) ||
           !sourceTreeContains(unitDirectory, /\bbuildPanelLink\b/)

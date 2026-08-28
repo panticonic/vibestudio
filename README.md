@@ -71,7 +71,10 @@ vibestudio remote deploy local
 On Linux with systemd, `deploy local` installs an always-on user service on this
 computer, enables it at login/boot, runs end-to-end diagnostics, and prints the
 first-device pairing QR. The gateway remains loopback-only; clients reach it
-through the encrypted WebRTC connection described below. Manage it with:
+through the encrypted WebRTC connection described below. The service does not
+publish pairing readiness until the default workspace can provide a compiled
+desktop shell, so first-use build work happens before a laptop consumes its
+one-time link. Manage it with:
 
 ```bash
 vibestudio remote deploy status local
@@ -348,7 +351,10 @@ On a fresh server, that root-bootstrap invite is automatically replaced when it
 expires. The foreground command prints each replacement; a managed service
 atomically updates its protected ready state, so
 `vibestudio remote deploy pairing local` always shows the current QR/link until
-the first device claims the root account.
+the first device claims the root account. Published server commands also gate
+that ready state on the selected workspace's Electron artifact: a visible pair
+URL is therefore a desktop-readiness promise, not merely proof that signaling
+started.
 
 Pairing links are one-time bearer capabilities. Consuming a link prevents
 anyone who copied or photographed it from replaying it to add another device.
