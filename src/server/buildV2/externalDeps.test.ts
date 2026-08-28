@@ -68,7 +68,10 @@ import {
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
-import { pruneUnreferencedDependencyContent } from "./dependencyContentStore.js";
+import {
+  deduplicateDependencyContent,
+  pruneUnreferencedDependencyContent,
+} from "./dependencyContentStore.js";
 
 async function ensureExternalDeps(
   deps: Record<string, string>,
@@ -713,6 +716,10 @@ describe("ensureExternalDeps", () => {
 
     const first = await ensureExternalDeps({ leftpad: "1.0.0" });
     const second = await ensureExternalDeps({ leftpad: "1.0.0", zod: "3.25.76" });
+    await Promise.all([
+      deduplicateDependencyContent(path.dirname(first)),
+      deduplicateDependencyContent(path.dirname(second)),
+    ]);
     const firstFile = fs.statSync(path.join(first, "leftpad", "index.js"));
     const secondFile = fs.statSync(path.join(second, "leftpad", "index.js"));
 
@@ -730,6 +737,7 @@ describe("ensureExternalDeps", () => {
   it("collects dependency content after its last published topology is gone", async () => {
     fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
     const nodeModules = await ensureExternalDeps({ leftpad: "1.0.0" });
+    await deduplicateDependencyContent(path.dirname(nodeModules));
     fs.rmSync(path.dirname(nodeModules), { recursive: true, force: true });
 
     const pruned = await pruneUnreferencedDependencyContent();

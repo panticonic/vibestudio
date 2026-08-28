@@ -768,7 +768,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     });
   });
 
-  it("builds approved on-invoke extensions without starting them until first use", async () => {
+  it("defers approved on-invoke extension builds and execution until first use", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
     const { host, buildSystem, extensionNode } = makeHost({
       installed: false,
@@ -780,18 +780,19 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared(declare(extensionNode.name));
     await host.whenSettled();
 
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
-      priority: "background",
-    });
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      activeBundleKey: "candidate-key",
+      activeBundleKey: null,
       status: "available",
     });
 
     await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).resolves.toBe(
       "transport-result"
     );
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "interactive",
+    });
     expect(start).toHaveBeenCalledTimes(1);
   });
 

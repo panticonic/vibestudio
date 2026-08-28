@@ -5730,6 +5730,16 @@ async function main() {
             const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
             return buildWorkspaceDeclarations(config);
           },
+          prepareRuntimeImage: (source, buildRef) => {
+            void buildSystemInst
+              .bindRuntimeImage(source, buildRef)
+              .catch((err: unknown) =>
+                console.warn(
+                  `[Workers] Demand-driven preparation failed for ${source}:`,
+                  err instanceof Error ? err.message : String(err)
+                )
+              );
+          },
           activateDurableObject: ({
             source,
             className,

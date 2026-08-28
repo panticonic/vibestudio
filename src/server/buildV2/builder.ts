@@ -167,13 +167,14 @@ function resolveMaxConcurrentBuilds(): number {
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   // A unit build already fans out through esbuild, native TypeScript, package
   // resolution, and hashing, so unconstrained machine-wide concurrency makes
-  // each user-visible fold slower. Two lanes are nevertheless useful because
-  // remote readiness needs exactly two independent cold artifacts: the shell
-  // and its initial panel. Empty-state startup profiles show that overlapping
-  // those two wins at the readiness boundary once both reuse the Host realm.
+  // each user-visible fold slower. Three lanes are nevertheless useful because
+  // the scheduler gives them distinct jobs: one remains available for direct
+  // user demand, one admits required background startup, and one may prepare a
+  // speculative next operation. Dependency installation remains serialized,
+  // so the third lane does not multiply the dominant cold-start npm workload.
   // Operators doing throughput-oriented batch work can still raise the
   // existing explicit override.
-  return 2;
+  return 3;
 }
 
 const MAX_CONCURRENT_BUILDS = resolveMaxConcurrentBuilds();
@@ -260,8 +261,33 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
 // ---------------------------------------------------------------------------
 
 let runningBuilds = 0;
-type BuildPriority = "interactive" | "background";
+let runningNonInteractiveBuilds = 0;
+let runningSpeculativeBuilds = 0;
+type BuildPriority = "interactive" | "background" | "speculative";
 const waitQueue: Array<{ priority: BuildPriority; resolve: () => void }> = [];
+
+/**
+ * Speculative preparation must not occupy every build lane. Required
+ * background work still belongs to workspace startup and may use a free lane;
+ * speculative work exists only to make a possible later operation faster.
+ * Neither can be preempted once npm, TypeScript, or esbuild is running, so
+ * queue ordering alone is insufficient to protect required work.
+ */
+export function hasBuildSlotCapacity(
+  priority: BuildPriority,
+  activeBuilds: number,
+  activeNonInteractiveBuilds: number,
+  activeSpeculativeBuilds: number,
+  maxConcurrentBuilds: number
+): boolean {
+  if (activeBuilds >= maxConcurrentBuilds) return false;
+  if (priority === "interactive") return true;
+  const nonInteractiveLimit = Math.max(1, maxConcurrentBuilds - 1);
+  if (activeNonInteractiveBuilds >= nonInteractiveLimit) return false;
+  if (priority === "background") return true;
+  const speculativeLimit = Math.max(1, maxConcurrentBuilds - 2);
+  return activeSpeculativeBuilds < speculativeLimit;
+}
 
 /**
  * Narrate where a build actually is.
@@ -284,7 +310,9 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
       `[BuildV2] ${label} still in ${stage} after ` +
         `${Math.round((Date.now() - stageStarted) / 1000)}s ` +
         `(${Math.round((Date.now() - started) / 1000)}s total; ` +
-        `${runningBuilds}/${MAX_CONCURRENT_BUILDS} permits held, ${waitQueue.length} waiting)`
+        `${runningBuilds}/${MAX_CONCURRENT_BUILDS} permits held ` +
+        `(${runningNonInteractiveBuilds} non-interactive, ` +
+        `${runningSpeculativeBuilds} speculative), ${waitQueue.length} waiting)`
     );
   }, STAGE_STALL_NOTICE_MS);
   timer.unref?.();
@@ -327,22 +355,33 @@ async function withBuildSlot<T>(
   priority: BuildPriority = "interactive"
 ): Promise<T> {
   if (buildSlotHeld.getStore()) return run();
-  while (runningBuilds >= MAX_CONCURRENT_BUILDS) {
+  while (
+    !hasBuildSlotCapacity(
+      priority,
+      runningBuilds,
+      runningNonInteractiveBuilds,
+      runningSpeculativeBuilds,
+      MAX_CONCURRENT_BUILDS
+    )
+  ) {
     await new Promise<void>((resolve) => {
       const waiter = { priority, resolve };
-      const firstBackground = waitQueue.findIndex((entry) => entry.priority === "background");
-      if (priority === "interactive" && firstBackground >= 0) {
-        waitQueue.splice(firstBackground, 0, waiter);
-      } else {
-        waitQueue.push(waiter);
-      }
+      const rank = (candidate: BuildPriority): number =>
+        candidate === "interactive" ? 0 : candidate === "background" ? 1 : 2;
+      const insertionPoint = waitQueue.findIndex((entry) => rank(entry.priority) > rank(priority));
+      if (insertionPoint >= 0) waitQueue.splice(insertionPoint, 0, waiter);
+      else waitQueue.push(waiter);
     });
   }
   runningBuilds++;
+  if (priority !== "interactive") runningNonInteractiveBuilds++;
+  if (priority === "speculative") runningSpeculativeBuilds++;
   try {
     return await buildSlotHeld.run(true, run);
   } finally {
     runningBuilds--;
+    if (priority !== "interactive") runningNonInteractiveBuilds--;
+    if (priority === "speculative") runningSpeculativeBuilds--;
     waitQueue.shift()?.resolve();
   }
 }
@@ -3218,6 +3257,8 @@ async function buildWorker(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
+  const profileStartedAt = Date.now();
+  const profileStartedRss = process.memoryUsage().rss;
   const env = await prepareBuildEnv(
     node,
     buildKey,
@@ -3226,6 +3267,7 @@ async function buildWorker(
     sourceRoot,
     "runtime-root"
   );
+  const environmentReadyAt = Date.now();
   const { outdir, nodePaths, resolveDir } = env;
   const entryFile = resolveEntryPoint(node, env.sourcePath, {
     conditions: WORKER_CONDITIONS,
@@ -3264,6 +3306,7 @@ async function buildWorker(
     authority,
     rpcSchemas,
   });
+  const rpcCatalogReadyAt = Date.now();
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
   const terminalWorker = isTerminalWorker(extractedManifest);
@@ -3315,6 +3358,7 @@ async function buildWorker(
       ...(terminalWorker ? ["yoga.wasm"] : []),
     ])
   );
+  const configureReadyAt = Date.now();
 
   try {
     const buildResult = await esbuild.build({
@@ -3354,6 +3398,7 @@ async function buildWorker(
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
     });
+    const compileReadyAt = Date.now();
     const executableModules = executableModulesFromMetafile(
       buildResult.metafile,
       outdir,
@@ -3361,11 +3406,32 @@ async function buildWorker(
       node,
       graph
     );
+    const executableModulesReadyAt = Date.now();
 
     const workerArtifacts = workerBundleArtifacts(outdir, buildResult.outputFiles ?? []);
     const bundle = workerArtifacts.entries.find((artifact) => artifact.role === "primary")!.content;
     const iconArtifact = manifestIconArtifact(extractedManifest, workerSourcePath);
     if (iconArtifact) workerArtifacts.entries.push(iconArtifact);
+    const artifactsReadyAt = Date.now();
+
+    const logProfile = (storedAt: number): void => {
+      const totalMs = storedAt - profileStartedAt;
+      if (totalMs < 5_000 && !isVerboseBuildLogEnabled()) return;
+      console.warn(`[BuildV2] worker build profile ${node.relativePath}`, {
+        environmentMs: environmentReadyAt - profileStartedAt,
+        rpcCatalogMs: rpcCatalogReadyAt - environmentReadyAt,
+        configureMs: configureReadyAt - rpcCatalogReadyAt,
+        esbuildMs: compileReadyAt - configureReadyAt,
+        executableModuleScanMs: executableModulesReadyAt - compileReadyAt,
+        artifactCollectionMs: artifactsReadyAt - executableModulesReadyAt,
+        storeMs: storedAt - artifactsReadyAt,
+        totalMs,
+        rssDeltaBytes: process.memoryUsage().rss - profileStartedRss,
+        inputModules: Object.keys(buildResult.metafile?.inputs ?? {}).length,
+        outputArtifacts: workerArtifacts.entries.length,
+        executableModules: executableModules.length,
+      });
+    };
 
     if (terminalWorker) {
       // Emit the JS bundle plus the extracted yoga.wasm so workerdManager can
@@ -3398,10 +3464,12 @@ async function buildWorker(
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
-      return buildStore.put(buildKey, artifacts, metadata);
+      const stored = await buildStore.put(buildKey, artifacts, metadata);
+      logProfile(Date.now());
+      return stored;
     }
 
-    return storeSimpleBuild(
+    const stored = await storeSimpleBuild(
       buildKey,
       bundle,
       node,
@@ -3415,6 +3483,8 @@ async function buildWorker(
       },
       workerArtifacts
     );
+    logProfile(Date.now());
+    return stored;
   } finally {
     await env.cleanup();
   }

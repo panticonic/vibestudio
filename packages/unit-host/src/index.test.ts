@@ -887,6 +887,25 @@ describe("UnitHost", () => {
     });
     expect(registry.get(node.name)).toMatchObject({ status: "building" });
     expect(built).toEqual([node.name, `missing:${node.name}`]);
+
+    registry.delete(node.name);
+    await host.applyRuntimeDeclaration({
+      node,
+      decl: { source: node.relativePath, ref: "main" },
+      needsBuildRefresh: () => true,
+      deferBuild: () => true,
+      buildAndActivate: async (n) => {
+        built.push(`deferred:${n.name}`);
+      },
+      activateCurrent: async () => {
+        activated.push("deferred");
+      },
+    });
+    expect(registry.get(node.name)).toMatchObject({
+      status: "available",
+      activeBundleKey: null,
+    });
+    expect(built).toEqual([node.name, `missing:${node.name}`]);
   });
 
   it("marks runtime declaration failures as registry errors", async () => {

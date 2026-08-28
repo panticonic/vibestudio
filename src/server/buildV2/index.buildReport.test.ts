@@ -36,7 +36,12 @@ let typecheckDiagnostics: (unitRelativePath: string) => Array<{
 let typecheckCalls = 0;
 let typecheckInputs: Array<{ unitRelativePath: string; authority?: unknown }> = [];
 // Records every non-cache-hit build the mock actually performs.
-let buildCalls: Array<{ name: string; key: string; stateRef: string }> = [];
+let buildCalls: Array<{
+  name: string;
+  key: string;
+  stateRef: string;
+  priority?: "interactive" | "background" | "speculative";
+}> = [];
 
 function writeUnit(
   workspaceRoot: string,
@@ -146,13 +151,13 @@ async function loadWithMocks(): Promise<{
           _graph: unknown,
           _root: string,
           stateRef: string,
-          options?: unknown
+          options?: { priority?: "interactive" | "background" | "speculative" }
         ) => {
           const key = actual.computeBuildUnitKey(node as never, ev, options as never);
           // Cache hit → reuse (exactly like the real builder + coalescing).
           const cached = buildStore.get(key);
           if (cached) return cached;
-          buildCalls.push({ name: node.name, key, stateRef });
+          buildCalls.push({ name: node.name, key, stateRef, priority: options?.priority });
           if (shouldFail(node.name, ev, stateRef)) {
             throw new Error(`mock build failed: ${node.name}`);
           }
@@ -298,6 +303,21 @@ describe("BuildSystemV2 — explicit build reports", () => {
 
     expect(report.status).toBe("ok");
     expect(phases).toEqual(["panels/app:bundling", "panels/app:typechecking"]);
+  });
+
+  it("carries speculative preparation priority into the canonical build", async () => {
+    env = await loadWithMocks();
+
+    await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW, undefined, {
+      priority: "speculative",
+    });
+
+    expect(buildCalls).toEqual([
+      expect.objectContaining({
+        name: "@workspace-panels/app",
+        priority: "speculative",
+      }),
+    ]);
   });
 
   it("does not retain reports produced by transient validation failures", async () => {

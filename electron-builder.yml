@@ -19,6 +19,8 @@ asarUnpack:
   - "package.json"
   # utilityProcess.fork() needs a physical server entry point.
   - "dist/server-electron.cjs"
+  # Spawned after startup for low-priority dependency content maintenance.
+  - "dist/dependency-content-maintenance.cjs"
   # Server auto-spawn uses child_process.fork() for the standalone headless host.
   - "dist/headless-host/**/*"
   # Runtime panel/worker builds use esbuild against installed packages. Keep

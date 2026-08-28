@@ -91,7 +91,8 @@ export function createBuildService(deps: {
           diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
         return diagnostics && diagnostics.length > 0 ? { ...metadata, diagnostics } : metadata;
       },
-      getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
+      getBuildReport: (_ctx, [unit, ref, options]) =>
+        deps.buildSystem.getBuildReport(unit, ref, undefined, options),
       getPerformanceProfile: async (_ctx, [unit, ref, options]) => {
         const startedAt = Date.now();
         const firstStartedAt = performance.now();

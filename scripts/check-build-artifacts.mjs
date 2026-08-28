@@ -56,6 +56,12 @@ const contracts = [
     ],
   },
   {
+    path: "dist/dependency-content-maintenance.cjs",
+    runtime: "detached Node dependency-cache maintenance",
+    format: "cjs",
+    mustContain: ['"use strict"'],
+  },
+  {
     path: "dist/server.mjs",
     runtime: "standalone Node server",
     format: "esm",

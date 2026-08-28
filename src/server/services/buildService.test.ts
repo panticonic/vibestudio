@@ -191,6 +191,24 @@ describe("build service extension diagnostics", () => {
     expect(metadata).not.toHaveProperty("executableModules");
   });
 
+  it("schedules ahead-of-use build reports in the background", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
+
+    await service.handler(
+      { caller: createVerifiedCaller("panel:chat", "panel") },
+      "getBuildReport",
+      ["workers/agent-worker", "ctx:feature", { priority: "background" }]
+    );
+
+    expect(buildSystem.getBuildReport).toHaveBeenCalledWith(
+      "workers/agent-worker",
+      "ctx:feature",
+      undefined,
+      { priority: "background" }
+    );
+  });
+
   it("profiles exact builds without returning artifact or module contents", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({ buildSystem, listUnits: () => [] });

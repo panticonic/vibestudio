@@ -803,8 +803,15 @@ export const buildMethods = defineServiceMethods({
         .describe(
           "Workspace state to build from: omitted = main HEAD, 'ctx:<contextId>' = that context's exact working head, or a 'state:…' hash."
         ),
+      z
+        .object({ priority: z.enum(["interactive", "background", "speculative"]).optional() })
+        .strict()
+        .optional()
+        .describe(
+          "Scheduling priority. Use speculative only when preparing an immutable artifact for an operation the user may never request."
+        ),
     ]),
-    argumentNames: ["unit", "ref"],
+    argumentNames: ["unit", "ref", "options"],
     returns: unitBuildReportSchema,
     examples: [
       {

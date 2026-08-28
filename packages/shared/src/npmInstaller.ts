@@ -7,6 +7,21 @@ import { pathToFileURL } from "url";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 
 const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
+let npmInstallTail: Promise<void> = Promise.resolve();
+
+async function withNpmInstallSlot<T>(run: () => Promise<T>): Promise<T> {
+  const predecessor = npmInstallTail;
+  let release!: () => void;
+  npmInstallTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await predecessor;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
 
 export type NpmResolutionFailure = "package-not-found" | "version-not-found";
 
@@ -57,7 +72,7 @@ export function resolveBundledNpmCliPath(appRoot: string | undefined): string {
   );
 }
 
-export async function runNpmInstall(
+async function runNpmInstallInSlot(
   cwd: string,
   options: {
     appRoot: string;
@@ -186,6 +201,18 @@ export async function runNpmInstall(
       await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
     }
   }
+}
+
+/**
+ * npm cache population is one writer pipeline. Distinct dependency trees may
+ * build concurrently, but overlapping npm processes otherwise fetch the same
+ * packages and contend on the same empty profile cache, making both slower.
+ */
+export function runNpmInstall(
+  cwd: string,
+  options: Parameters<typeof runNpmInstallInSlot>[1]
+): Promise<void> {
+  return withNpmInstallSlot(() => runNpmInstallInSlot(cwd, options));
 }
 
 function classifyNpmInstallError(error: unknown): unknown {

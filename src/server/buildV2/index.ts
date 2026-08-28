@@ -471,7 +471,8 @@ export interface BuildSystemV2 {
   getBuildReport(
     unitName: string,
     stateHash?: string,
-    onProgress?: (progress: BuildReportProgress) => void
+    onProgress?: (progress: BuildReportProgress) => void,
+    options?: { priority?: "interactive" | "background" | "speculative" }
   ): Promise<UnitBuildReport>;
 
   /** Most recent structured build diagnostics for a unit, if any were captured. */
@@ -1478,7 +1479,8 @@ export async function initBuildSystemV2(
     spec:
       | { target: "runtime" }
       | { target: "library:panel" | "library:worker"; exportPath: string },
-    onProgress?: (progress: BuildReportProgress) => void
+    onProgress?: (progress: BuildReportProgress) => void,
+    priority: "interactive" | "background" | "speculative" = "interactive"
   ): Promise<{
     target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
     reusable: boolean;
@@ -1489,13 +1491,14 @@ export async function initBuildSystemV2(
         : spec.target === "library:worker"
           ? "worker"
           : null;
-    const options: BuildUnitOptions | undefined = libraryTarget
+    const options: BuildUnitOptions = libraryTarget
       ? {
           library: true,
           libraryTarget,
           libraryEntrySubpath: (spec as { exportPath: string }).exportPath,
+          priority,
         }
-      : undefined;
+      : { priority };
     const buildKey = computeBuildUnitKey(node, ev, options);
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
@@ -1686,7 +1689,8 @@ export async function initBuildSystemV2(
     node: GraphNode,
     view: GraphView,
     viewStateHash: string,
-    onProgress?: (progress: BuildReportProgress) => void
+    onProgress?: (progress: BuildReportProgress) => void,
+    priority: "interactive" | "background" | "speculative" = "interactive"
   ): Promise<{ report: UnitBuildReport; reusable: boolean }> => {
     const ev = view.evMap[node.name];
     const base: Omit<UnitBuildReport, "status" | "diagnostics" | "builds"> = {
@@ -1723,14 +1727,23 @@ export async function initBuildSystemV2(
               view.graph,
               viewStateHash,
               { target, exportPath },
-              onProgress
+              onProgress,
+              priority
             )
           );
         }
       }
     } else {
       outcomes.push(
-        await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" }, onProgress)
+        await buildOneTarget(
+          node,
+          ev,
+          view.graph,
+          viewStateHash,
+          { target: "runtime" },
+          onProgress,
+          priority
+        )
       );
     }
 
@@ -2556,7 +2569,8 @@ export async function initBuildSystemV2(
     async getBuildReport(
       unitName: string,
       stateHash?: string,
-      onProgress?: (progress: BuildReportProgress) => void
+      onProgress?: (progress: BuildReportProgress) => void,
+      options?: { priority?: "interactive" | "background" | "speculative" }
     ): Promise<UnitBuildReport> {
       const ref = validateBuildRef(stateHash);
       let view: GraphView;
@@ -2632,7 +2646,7 @@ export async function initBuildSystemV2(
         }
       };
 
-      const flight = buildUnitReport(node, view, viewStateHash, emitProgress)
+      const flight = buildUnitReport(node, view, viewStateHash, emitProgress, options?.priority)
         .then(({ report, reusable }) => (reusable ? cacheBuildReport(cacheKey, report) : report))
         .finally(() => {
           buildReportFlights.delete(cacheKey);

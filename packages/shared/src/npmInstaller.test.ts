@@ -166,6 +166,26 @@ describe("runNpmInstall", () => {
     expect(readAttempts(fixture.installDir)).toHaveLength(2);
   });
 
+  it("serializes concurrent installs so the first can populate the shared cache", async () => {
+    const first = createFakeNpmFixture();
+    const second = createFakeNpmFixture();
+    const cacheDir = path.join(first.root, "shared-cache");
+    const restoreEnv = replaceEnv({ VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS: "200" });
+
+    try {
+      const firstInstall = runNpmInstall(first.installDir, { appRoot: first.appRoot, cacheDir });
+      await vi.waitFor(() => expect(readAttempts(first.installDir)).toHaveLength(1));
+      const secondInstall = runNpmInstall(second.installDir, { appRoot: second.appRoot, cacheDir });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fs.existsSync(path.join(second.installDir, "attempts.json"))).toBe(false);
+      await Promise.all([firstInstall, secondInstall]);
+    } finally {
+      restoreEnv();
+    }
+
+    expect(readAttempts(second.installDir)).toHaveLength(1);
+  });
+
   it("hard-stops and retries an npm process that ignores SIGTERM", async () => {
     const fixture = createFakeNpmFixture();
     getSharedDerivedDataPath.mockReturnValue(path.join(fixture.root, "shared-derived-data"));
@@ -244,6 +264,9 @@ if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE === cacheDir) {
 if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR) {
   process.stderr.write(process.env.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR + "\\n");
   process.exit(1);
+}
+if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS) {
+  setTimeout(() => {}, Number(process.env.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS));
 }
 `
   );

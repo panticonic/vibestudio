@@ -189,6 +189,21 @@ const serverElectronConfig = {
   logOverride,
 };
 
+// Detached, low-priority derived-cache maintenance. Keeping this as its own
+// executable prevents dependency hashing from sharing the workspace server's
+// event loop or heap after the startup grace period.
+const dependencyContentMaintenanceConfig = {
+  entryPoints: ["src/server/buildV2/dependencyContentMaintenanceProcess.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: "dist/dependency-content-maintenance.cjs",
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
 // Stub out 'electron' for the standalone ESM server build.
 //
 // Problem: Shared code in src/main/ contains `try { require("electron") } catch`
@@ -780,6 +795,7 @@ async function build() {
       buildHostArtifact(workspaceRpcCatalogWorkerConfig),
       buildHostArtifact(sqliteIntegrityWorkerElectronConfig),
       buildHostArtifact(sqliteIntegrityWorkerConfig),
+      buildHostArtifact(dependencyContentMaintenanceConfig),
     ]);
     assertHostBuildMetafiles(serverBuilds);
 

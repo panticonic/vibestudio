@@ -108,6 +108,11 @@ export function createWorkerService(deps: {
   workspaceId?: string;
   getCallerContextId?: (callerId: string) => string | null;
   loadContextDeclarations?: (contextId: string) => Promise<WorkspaceDeclarations | null>;
+  /**
+   * Begin immutable artifact preparation for a structurally resolved service.
+   * This is cache work only: it must neither execute nor activate the provider.
+   */
+  prepareRuntimeImage?: (source: string, buildRef?: string) => void;
   // Resolution makes a declared target available; it does not create ownership.
   // The resolving subject remains the caller of its subsequent RPC unchanged.
   activateDurableObject?: (args: {
@@ -344,6 +349,14 @@ export function createWorkerService(deps: {
           objectKey == null ? null : String(objectKey)
         );
         const { service } = scoped;
+        const singleton =
+          service.kind === "durable-object"
+            ? scoped.decls.singletons.find(service.source, service.className)
+            : undefined;
+        const buildRef = singleton?.contextId
+          ? undefined
+          : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
+        deps.prepareRuntimeImage?.(service.source, buildRef);
         const capability = `workspace-service:${service.name}`;
         const serviceTitle = service.title?.trim() || humanizeServiceName(service.name);
         const resourceKey =

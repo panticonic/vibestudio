@@ -343,6 +343,7 @@ export interface ExtensionHostDeps {
 }
 
 export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
+  private readonly deferredBuildIdentityKeys = new Map<string, string>();
   readonly registry: UnitRegistry<RegistryEntry>;
   readonly processes: ExtensionProcessManager;
   private readonly extensionTrustResolver: UnitTrustResolver<RegistryEntry>;
@@ -486,6 +487,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       applyGroup: (node) => (this.activatesEagerly(node) ? 0 : 1),
       removeUndeclared: async (entry) => {
+        this.deferredBuildIdentityKeys.delete(entry.name);
         this.unregisterBuildProvidersFor(entry.name);
         try {
           await this.processes.stop(entry.name);
@@ -646,7 +648,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         validateBeforeActivateCurrent: () =>
           this.validateExtensionManifestAtPath(node.path, node.name),
         needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node),
-        buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref),
+        deferBuild: (_node, declaration) => {
+          if (this.activatesEagerly(node)) return false;
+          const identity = this.unitHost.trustForDeclaration(node, declaration);
+          this.deferredBuildIdentityKeys.set(node.name, identity.identityKey);
+          return true;
+        },
+        buildAndActivate: async (_node, d) =>
+          this.buildAndActivate(node.name, d.ref, "background"),
         activateCurrent: async () => {
           if (this.activatesEagerly(node)) {
             await this.ensureActivated(node.name);
@@ -898,6 +907,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
             );
           }
           await this.whenDeclarationsStaged();
+          await this.prepareTargetBuild(name);
           const entry = this.lookupForInvoke(name);
           if (!entry?.activeBundleKey) {
             throw new ServiceError(
@@ -1043,6 +1053,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
     await this.whenDeclarationsStaged();
+    await this.prepareTargetBuild(name);
     let entry = this.lookupForInvoke(name);
     if (!entry) {
       await this.waitForTargetActivation(name, ctx.signal);
@@ -1434,6 +1445,43 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
     const entry = this.registry.get(resolvedName);
     return entry?.activeBundleKey ? entry : null;
+  }
+
+  /**
+   * Materialize one approved `onInvoke` extension at the operation boundary
+   * that needs its sealed method metadata. Declaration reconciliation owns
+   * trust; this method only turns that already-approved identity into bytes.
+   */
+  private async prepareTargetBuild(nameOrProvider: string): Promise<void> {
+    const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
+    if (this.lookupForInvoke(requestedName)) return;
+
+    let node: ReturnType<ExtensionHost["findExtensionNode"]>;
+    try {
+      node = this.findExtensionNode(requestedName);
+    } catch {
+      return;
+    }
+    const entry = this.registry.get(node.name);
+    if (!entry || entry.activeBundleKey || entry.status !== "available") return;
+    const declaration = this.lastDeclared.find((candidate) => {
+      try {
+        return this.findExtensionNode(candidate.source).name === node.name;
+      } catch {
+        return false;
+      }
+    });
+    if (!declaration) return;
+    const trust = this.unitHost.trustForDeclaration(node, declaration);
+    if (
+      trust.decision === "needs-approval" &&
+      this.deferredBuildIdentityKeys.get(node.name) !== trust.identityKey
+    ) {
+      return;
+    }
+
+    await this.buildAndActivate(node.name, declaration.ref, "interactive");
+    this.deferredBuildIdentityKeys.delete(node.name);
   }
 
   /**
@@ -2165,17 +2213,27 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.registerBuildProvidersFor(entry);
   }
 
-  private async buildAndActivate(name: string, ref?: string): Promise<void> {
-    await this.runActivationExclusive(name, () => this.buildAndActivateOnce(name, ref));
+  private async buildAndActivate(
+    name: string,
+    ref?: string,
+    priority: "interactive" | "background" = "interactive"
+  ): Promise<void> {
+    await this.runActivationExclusive(name, () =>
+      this.buildAndActivateOnce(name, ref, priority)
+    );
   }
 
-  private async buildAndActivateOnce(name: string, ref?: string): Promise<void> {
+  private async buildAndActivateOnce(
+    name: string,
+    ref: string | undefined,
+    priority: "interactive" | "background"
+  ): Promise<void> {
     const node = this.findExtensionNode(name);
     const previous = this.registry.get(node.name);
     const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
     this.unitHost.markBuilding(node.name);
     const build = await this.deps.buildSystem.getBuild(node.name, ref, {
-      priority: "background",
+      priority,
     });
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const activeDependencyEvs = this.currentDependencyEvs(node);

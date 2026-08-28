@@ -179,6 +179,28 @@ export async function deduplicateDependencyContent(
   return result;
 }
 
+/**
+ * Make a dependency tree immutable without reading and hashing every payload.
+ * Immutability is a publication invariant; physical sharing is maintenance.
+ */
+export async function makeDependencyTreeImmutable(root: string): Promise<void> {
+  const files = await regularFiles(root);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(32, files.length) }, async () => {
+      for (;;) {
+        const filePath = files[cursor++];
+        if (!filePath) return;
+        const stat = await fs.promises.lstat(filePath);
+        const immutableMode = stat.mode & 0o555;
+        if ((stat.mode & 0o7777) !== immutableMode) {
+          await fs.promises.chmod(filePath, immutableMode);
+        }
+      }
+    })
+  );
+}
+
 async function pruneShaTree(root: string): Promise<DependencyContentPrune> {
   const result = { files: 0, bytes: 0 };
   const pending = [root];

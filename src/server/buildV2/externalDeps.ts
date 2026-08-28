@@ -27,8 +27,10 @@ import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageG
 import { BuildRequestError } from "./diagnostics.js";
 import {
   deduplicateDependencyContent,
+  makeDependencyTreeImmutable,
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
+import { scheduleDependencyContentMaintenance } from "./dependencyContentMaintenance.js";
 
 // ---------------------------------------------------------------------------
 // Transitive collection
@@ -1081,6 +1083,7 @@ export async function acquireExternalDeps(
     appRoot: options.appRoot,
     overrides,
     patches,
+    contentDeduplication: "background",
   });
 }
 
@@ -1235,6 +1238,7 @@ export async function ensureExtensionRuntimeDeps(
     appRoot,
     overrides,
     patches: validatedPatches,
+    contentDeduplication: "blocking",
   });
 }
 
@@ -1245,6 +1249,7 @@ type EnsureDepsOptions = {
   appRoot: string;
   overrides?: Record<string, string>;
   patches?: readonly ExternalDependencyPatch[];
+  contentDeduplication: "blocking" | "background";
 };
 
 // Builds for several panels commonly converge on the same dependency graph.
@@ -1271,6 +1276,27 @@ async function ensureDepsInstalledOnce(
   deps: Record<string, string>,
   options: EnsureDepsOptions
 ): Promise<string> {
+  const profileStartedAt = Date.now();
+  const profile = {
+    cacheValidationMs: 0,
+    npmInstallMs: 0,
+    patchMs: 0,
+    receiptMs: 0,
+    contentFinalizationMs: 0,
+    publishMs: 0,
+  };
+  const logProfile = (result: "hit" | "installed"): void => {
+    const totalMs = Date.now() - profileStartedAt;
+    if (totalMs < 5_000 && process.env["VIBESTUDIO_VERBOSE_BUILD_LOG"] !== "1") return;
+    console.warn("[externalDeps] dependency environment profile", {
+      key: options.key,
+      result,
+      directDependencies: Object.keys(deps).length,
+      patches: options.patches?.length ?? 0,
+      ...profile,
+      totalMs,
+    });
+  };
   if (Object.keys(deps).length === 0) {
     // No external deps — return a dummy path
     return "";
@@ -1288,7 +1314,11 @@ async function ensureDepsInstalledOnce(
   // the immutable installed tree. Invalid or partial trees are rebuilt.
   try {
     await fs.promises.access(sentinelPath);
-    if (await isReusableExternalDepsCache(cacheDir)) return nodeModulesDir;
+    if (await isReusableExternalDepsCache(cacheDir)) {
+      profile.cacheValidationMs = Date.now() - profileStartedAt;
+      logProfile("hit");
+      return nodeModulesDir;
+    }
     try {
       await fs.promises.rm(cacheDir, { recursive: true, force: true });
       validatedCacheReceipts.delete(cacheDir);
@@ -1298,6 +1328,7 @@ async function ensureDepsInstalledOnce(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  profile.cacheValidationMs = Date.now() - profileStartedAt;
 
   // Install to temp dir, then atomically rename. Use crypto.randomBytes for
   // an unpredictable name; predictable names invite local symlink races
@@ -1317,23 +1348,36 @@ async function ensureDepsInstalledOnce(
   await fs.promises.writeFile(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
 
   try {
+    const npmStartedAt = Date.now();
     await runNpmInstall(tmpDir, {
       appRoot: options.appRoot,
       ignoreScripts: options.ignoreScripts,
     });
+    profile.npmInstallMs = Date.now() - npmStartedAt;
 
+    const patchStartedAt = Date.now();
     const patchedFiles = await applyExternalDependencyPatches(tmpDir, options.patches ?? []);
+    profile.patchMs = Date.now() - patchStartedAt;
 
     // Validate npm's installed package identities before making the cache
     // visible, then publish the receipt atomically with the directory rename.
+    const receiptStartedAt = Date.now();
     await writeExternalDepsReceipt(tmpDir, await createExternalDepsReceipt(tmpDir, patchedFiles));
+    profile.receiptMs = Date.now() - receiptStartedAt;
 
     // A closure owns resolution topology, not another physical copy of every
     // immutable package byte. Content-address the completed, patched tree while
     // it is still unpublished so readers never observe a partially linked view.
-    await deduplicateDependencyContent(tmpDir);
+    const deduplicateStartedAt = Date.now();
+    if (options.contentDeduplication === "blocking") {
+      await deduplicateDependencyContent(tmpDir);
+    } else {
+      await makeDependencyTreeImmutable(tmpDir);
+    }
+    profile.contentFinalizationMs = Date.now() - deduplicateStartedAt;
 
     // Race-safe promotion: try rename, handle concurrent winner
+    const publishStartedAt = Date.now();
     try {
       await fs.promises.rename(tmpDir, cacheDir);
     } catch (err: unknown) {
@@ -1369,6 +1413,12 @@ async function ensureDepsInstalledOnce(
         throw err;
       }
     }
+
+    profile.publishMs = Date.now() - publishStartedAt;
+    if (options.contentDeduplication === "background") {
+      scheduleDependencyContentMaintenance(cacheDir, options.appRoot);
+    }
+    logProfile("installed");
 
     return nodeModulesDir;
   } catch (error) {

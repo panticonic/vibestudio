@@ -354,6 +354,12 @@ export interface UnitRuntimeApplyOptions<
   validateBeforeApply?: (node: Node, decl: Decl) => void;
   validateBeforeActivateCurrent?: (entry: Entry, node: Node, decl: Decl) => void;
   needsBuildRefresh: (entry: Entry, node: Node, decl: Decl) => boolean;
+  /**
+   * Leave a trusted declaration unbuilt until its owning runtime operation
+   * requests it. The registry records availability, while activation identity
+   * remains absent until the ordinary build path seals real artifact bytes.
+   */
+  deferBuild?: (node: Node, decl: Decl) => boolean;
   buildAndActivate: (node: Node, decl: Decl) => Promise<void>;
   activateCurrent: (entry: Entry, node: Node, decl: Decl) => Promise<void>;
   onError?: (node: Node, decl: Decl, message: string) => void;
@@ -809,6 +815,10 @@ export class UnitHost<
       ) {
         if (!entry) {
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
+        }
+        if ((!entry || !entry.activeBundleKey) && opts.deferBuild?.(node, decl)) {
+          this.opts.registry.patch(node.name, { status: "available", lastError: null } as Partial<Entry>);
+          return;
         }
         await opts.buildAndActivate(node, decl);
         return;

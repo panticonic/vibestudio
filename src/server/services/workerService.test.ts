@@ -206,6 +206,22 @@ function browserDataExtensionCaller() {
 }
 
 describe("workerService workspace service resolution", () => {
+  it("starts cache-only provider preparation from structural service demand", async () => {
+    const deps = createDeps();
+    const prepareRuntimeImage = vi.fn();
+    const service = createWorkerService({
+      ...(deps as object),
+      prepareRuntimeImage,
+    } as never);
+
+    await service.authorityPreparation?.["workers.resolveService.workspace-service"]?.(panelCtx, [
+      "example.store.v1",
+      "chat",
+    ]);
+
+    expect(prepareRuntimeImage).toHaveBeenCalledWith("workers/example-store", "main");
+  });
+
   it("resolves workspace source exclusively from the workspace manifest", async () => {
     const deps = createDeps();
     const dispatcher = createTestServiceDispatcher();
