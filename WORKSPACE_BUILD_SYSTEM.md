@@ -205,7 +205,11 @@ Two build strategies, selected by unit kind:
 - Used by `imports` parameter of the eval tool with `"npm:<version>"` values
 - Native addons are not supported (esbuild will fail to bundle `.node` files)
 
-**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 8` by default (override via `VIBESTUDIO_MAX_CONCURRENT_BUILDS`). Build coalescing deduplicates concurrent builds of the same key.
+**Concurrency:** The latency-oriented semaphore admits two builds by default so
+the selected shell and initial panel can advance together without unbounded
+compiler contention (override via `VIBESTUDIO_MAX_CONCURRENT_BUILDS`).
+Interactive waiters precede background work, and build coalescing deduplicates
+concurrent builds of the same key.
 
 **Workspace resolve plugin:** Resolves `@workspace/*` imports from the materialized source tree. Reads `package.json` exports fields with condition-based resolution (panel: `vibestudio-panel`, `import`, `default`; extension: `import`, `default`). Since build sources do not include generated `dist/` output, the plugin maps `dist/` paths to their TypeScript source equivalents.
 

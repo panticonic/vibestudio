@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
+import { parse as parseYaml } from "yaml";
 import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const defaultAppRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -158,6 +159,80 @@ export function collectHostReuseRangeFindings(appRoot, userlandRoot) {
   return findings;
 }
 
+/**
+ * Startup artifacts are part of remote readiness, so their complete external
+ * closures must already belong to the published Host dependency realm. A
+ * package that only happens to be hoisted from another dependency is not a
+ * product contract: a fresh npm install may nest or remove it and silently
+ * turn first launch into a second package-manager installation.
+ */
+export async function collectStartupHostReuseFindings(appRoot, userlandRoot) {
+  const hostRoot = path.resolve(appRoot);
+  const workspaceRoot = path.resolve(userlandRoot);
+  const hostManifest = JSON.parse(fs.readFileSync(path.join(hostRoot, "package.json"), "utf8"));
+  const hostDependencies = hostManifest.dependencies ?? {};
+  const config = parseYaml(
+    fs.readFileSync(path.join(workspaceRoot, "meta", "vibestudio.yml"), "utf8")
+  );
+  const sources = new Set();
+  const electronApp = config?.hostTargets?.electron?.app;
+  if (typeof electronApp === "string") sources.add(electronApp);
+  for (const entry of config?.initPanels ?? []) {
+    const source = typeof entry === "string" ? entry : entry?.source;
+    if (typeof source === "string") sources.add(source);
+  }
+
+  const { discoverPackageGraph } = await import("../src/server/buildV2/packageGraph.js");
+  const {
+    collectExternalDependencyClosure,
+    collectTransitiveDependencyOverrides,
+    collectTransitiveDependencyPatches,
+  } = await import("../src/server/buildV2/externalDeps.js");
+  const graph = discoverPackageGraph(workspaceRoot);
+  const appNodeModules = [path.join(hostRoot, "node_modules")];
+  const findings = [];
+
+  for (const unitPath of [...sources].sort()) {
+    const unit = graph.allNodes().find((candidate) => candidate.relativePath === unitPath);
+    if (!unit) {
+      findings.push({ unitPath, problem: "unit is not present in the Base package graph" });
+      continue;
+    }
+    const closure = collectExternalDependencyClosure(unit, graph, workspaceRoot, appNodeModules);
+    const overrides = collectTransitiveDependencyOverrides(
+      unit,
+      graph,
+      workspaceRoot,
+      appNodeModules
+    );
+    const patches = await collectTransitiveDependencyPatches(unit, graph, workspaceRoot);
+    const missing = Object.entries(closure.installSet)
+      .filter(([name]) => typeof hostDependencies[name] !== "string")
+      .map(([name, specifier]) => `${name}@${specifier}`)
+      .sort();
+    const incompatible = Object.entries(closure.installSet)
+      .filter(([name, specifier]) => {
+        const hostSpecifier = hostDependencies[name];
+        return (
+          typeof hostSpecifier === "string" &&
+          (!semver.validRange(hostSpecifier) ||
+            !semver.validRange(specifier) ||
+            !semver.subset(hostSpecifier, specifier, { includePrerelease: true }))
+        );
+      })
+      .map(([name, specifier]) => `${name}@${hostDependencies[name]} (Base accepts ${specifier})`)
+      .sort();
+    const policies = [
+      ...Object.keys(overrides).map((selector) => `override:${selector}`),
+      ...patches.map((patch) => `patch:${patch.selector}`),
+    ].sort();
+    if (missing.length > 0 || incompatible.length > 0 || policies.length > 0) {
+      findings.push({ unitPath, missing, incompatible, policies });
+    }
+  }
+  return findings;
+}
+
 export async function collectUserlandDependencyFindings(appRoot, userlandRoot) {
   const { discoverPackageGraph } = await import("../src/server/buildV2/packageGraph.js");
   const { auditWorkspaceDependencies } = await import("../src/server/buildV2/dependencyAudit.js");
@@ -179,7 +254,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const findings = await collectUserlandDependencyFindings(defaultAppRoot, userlandRoot);
   const exactPins = collectExactUserlandDependencyPins(userlandRoot);
   const reuseRanges = collectHostReuseRangeFindings(defaultAppRoot, userlandRoot);
-  if (findings.length > 0 || exactPins.length > 0 || reuseRanges.length > 0) {
+  const startupReuse = await collectStartupHostReuseFindings(defaultAppRoot, userlandRoot);
+  if (
+    findings.length > 0 ||
+    exactPins.length > 0 ||
+    reuseRanges.length > 0 ||
+    startupReuse.length > 0
+  ) {
     if (exactPins.length > 0) {
       console.error(`Userland has ${exactPins.length} undocumented exact dependency pin(s):\n`);
       for (const finding of exactPins) {
@@ -205,6 +286,24 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
         "\nNarrow the Host range so every version it may install is accepted by Base.\n"
       );
     }
+    if (startupReuse.length > 0) {
+      console.error(
+        `Base has ${startupReuse.length} startup unit(s) that cannot use the published Host dependency realm:\n`
+      );
+      for (const finding of startupReuse) {
+        console.error(`  ${finding.unitPath}`);
+        if (finding.problem) console.error(`    ${finding.problem}`);
+        if (finding.missing?.length) console.error(`    missing: ${finding.missing.join(", ")}`);
+        if (finding.incompatible?.length)
+          console.error(`    incompatible: ${finding.incompatible.join(", ")}`);
+        if (finding.policies?.length)
+          console.error(`    isolated policies: ${finding.policies.join(", ")}`);
+      }
+      console.error(
+        "\nDeclare the complete canonical startup closure in Host dependencies, or remove the\n" +
+          "startup unit's isolated dependency policy. Do not make first launch run npm install.\n"
+      );
+    }
   }
   if (findings.length > 0) {
     console.error(`Userland dependency ownership is unsatisfied in ${findings.length} unit(s):\n`);
@@ -217,6 +316,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
         "realm that loads it. See skills/workspace-dev/DEPENDENCIES.md in the Base checkout."
     );
   }
-  if (findings.length > 0 || exactPins.length > 0 || reuseRanges.length > 0) process.exit(1);
-  console.log("Userland dependency ownership and Host reuse ranges OK.");
+  if (
+    findings.length > 0 ||
+    exactPins.length > 0 ||
+    reuseRanges.length > 0 ||
+    startupReuse.length > 0
+  )
+    process.exit(1);
+  console.log("Userland dependency ownership, Host reuse ranges, and startup closure reuse OK.");
 }

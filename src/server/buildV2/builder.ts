@@ -165,14 +165,15 @@ export async function closeBuilder(): Promise<void> {
 function resolveMaxConcurrentBuilds(): number {
   const parsed = Number.parseInt(process.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"] ?? "", 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  // A single unit build already fans out through esbuild, native TypeScript,
-  // package resolution, and hashing. Running several complete folds at once
-  // made two nominally independent builds contend on the same compiler and
-  // storage resources: the first visible chat panel grew from 11s alone to
-  // 46s beside startup extension preparation. Keep the default lane singular;
-  // operators doing throughput-oriented batch work can still raise the
+  // A unit build already fans out through esbuild, native TypeScript, package
+  // resolution, and hashing, so unconstrained machine-wide concurrency makes
+  // each user-visible fold slower. Two lanes are nevertheless useful because
+  // remote readiness needs exactly two independent cold artifacts: the shell
+  // and its initial panel. Empty-state startup profiles show that overlapping
+  // those two wins at the readiness boundary once both reuse the Host realm.
+  // Operators doing throughput-oriented batch work can still raise the
   // existing explicit override.
-  return 1;
+  return 2;
 }
 
 const MAX_CONCURRENT_BUILDS = resolveMaxConcurrentBuilds();
@@ -2449,6 +2450,8 @@ async function buildPanel(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
+  const profileStartedAt = Date.now();
+  const profileStartedRss = process.memoryUsage().rss;
   const env = await prepareBuildEnv(
     node,
     buildKey,
@@ -2457,6 +2460,7 @@ async function buildPanel(
     sourceRoot,
     "runtime-root"
   );
+  const environmentReadyAt = Date.now();
   const { outdir, nodePaths } = env;
   const entryFile = resolveEntryPoint(node, env.sourcePath, {
     conditions: PANEL_CONDITIONS,
@@ -2590,7 +2594,9 @@ async function buildPanel(
   }
 
   try {
+    const compileStartedAt = Date.now();
     const result = await esbuild.build(esbuildOptions);
+    const compileReadyAt = Date.now();
     const metafile = result.metafile;
 
     if (isVerboseBuildLogEnabled() && metafile) {
@@ -2772,6 +2778,15 @@ async function buildPanel(
       content: html,
     });
 
+    const artifactCollectionReadyAt = Date.now();
+    const executableModules = executableModulesFromMetafile(
+      metafile,
+      outdir,
+      sourceRoot,
+      node,
+      graph
+    );
+    const executableModulesReadyAt = Date.now();
     const metadata: BuildMetadata = {
       kind: node.kind,
       name: node.name,
@@ -2781,7 +2796,7 @@ async function buildPanel(
       sourceStateHash,
       sourcemap,
       authority,
-      executableModules: executableModulesFromMetafile(metafile, outdir, sourceRoot, node, graph),
+      executableModules,
       ...(node.kind === "panel" && extractedManifest.stateArgs
         ? { stateArgsSchema: extractedManifest.stateArgs }
         : {}),
@@ -2802,7 +2817,25 @@ async function buildPanel(
       builtAt: new Date().toISOString(),
     };
 
-    return buildStore.put(buildKey, { entries: artifactEntries }, metadata);
+    const stored = await buildStore.put(buildKey, { entries: artifactEntries }, metadata);
+    const storedAt = Date.now();
+    const totalMs = storedAt - profileStartedAt;
+    if (totalMs >= 5_000 || isVerboseBuildLogEnabled()) {
+      console.warn(`[BuildV2] panel build profile ${node.relativePath}`, {
+        environmentMs: environmentReadyAt - profileStartedAt,
+        configureMs: compileStartedAt - environmentReadyAt,
+        esbuildMs: compileReadyAt - compileStartedAt,
+        artifactCollectionMs: artifactCollectionReadyAt - compileReadyAt,
+        executableModuleScanMs: executableModulesReadyAt - artifactCollectionReadyAt,
+        storeMs: storedAt - executableModulesReadyAt,
+        totalMs,
+        rssDeltaBytes: process.memoryUsage().rss - profileStartedRss,
+        inputModules: Object.keys(metafile?.inputs ?? {}).length,
+        outputArtifacts: artifactEntries.length,
+        executableModules: executableModules.length,
+      });
+    }
+    return stored;
   } finally {
     await env.cleanup();
   }

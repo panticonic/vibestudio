@@ -352,9 +352,9 @@ expires. The foreground command prints each replacement; a managed service
 atomically updates its protected ready state, so
 `vibestudio remote deploy pairing local` always shows the current QR/link until
 the first device claims the root account. Published server commands also gate
-that ready state on the selected workspace's Electron artifact: a visible pair
-URL is therefore a desktop-readiness promise, not merely proof that signaling
-started.
+that ready state on the selected workspace's Electron artifact and every
+deduplicated `initPanels` artifact. A visible pair URL is therefore a
+first-surface readiness promise, not merely proof that signaling started.
 
 Pairing links are one-time bearer capabilities. Consuming a link prevents
 anyone who copied or photographed it from replaying it to add another device.
