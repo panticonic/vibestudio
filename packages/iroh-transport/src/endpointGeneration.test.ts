@@ -9,6 +9,7 @@ import { IROH_REACH_VERSION, type IrohReach } from "./reach.js";
 
 const PEER_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const LOCAL_ID = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+const OTHER_PEER_ID = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 const reach: IrohReach = {
   endpointId: PEER_ID,
   relays: ["https://relay-one.example/", "https://relay-two.example/"],
@@ -125,6 +126,34 @@ describe("endpoint generation owner", () => {
     ]);
     expect(active).toEqual([1, 1]);
     expect(maximumInFlight).toBe(1);
+    await owner.close();
+  });
+
+  it("reuses the last successful relay across peers sharing one endpoint", async () => {
+    const binding = new FakeBinding();
+    const owner = new EndpointGenerationOwner(binding);
+
+    const hub = await owner.dial({
+      reach,
+      overallDeadlineMs: 1_000,
+      perAttemptDeadlineMs: 10,
+    });
+    expect(hub).toMatchObject({ relayUrl: reach.relays[1], attempts: 2, generation: 2 });
+
+    const workspace = await owner.dial({
+      reach: { ...reach, endpointId: OTHER_PEER_ID },
+      overallDeadlineMs: 1_000,
+      perAttemptDeadlineMs: 10,
+    });
+
+    expect(workspace).toMatchObject({
+      relayUrl: reach.relays[1],
+      attempts: 1,
+      generation: 2,
+    });
+    expect(binding.endpoints).toHaveLength(2);
+    expect(binding.endpoints[1]?.closed).toBe(false);
+    expect(binding.endpoints[1]?.attempts).toEqual([reach.relays[1], reach.relays[1]]);
     await owner.close();
   });
 

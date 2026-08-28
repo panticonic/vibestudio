@@ -64,6 +64,7 @@ export class EndpointGenerationOwner<
   private closed = false;
   private operationTail: Promise<void> = Promise.resolve();
   private bindingPromise: Promise<Endpoint> | null = null;
+  private lastSuccessfulRelay: string | null = null;
   private readonly generationListeners = new Set<(snapshot: EndpointGenerationSnapshot) => void>();
 
   constructor(private readonly binding: IrohEndpointBinding<Connection, Endpoint>) {}
@@ -106,7 +107,14 @@ export class EndpointGenerationOwner<
 
     const startedAt = Date.now();
     const failures: unknown[] = [];
-    const relays = orderedRelays(options.reach, options.preferredRelay);
+    const explicitPreferredRelay = options.preferredRelay;
+    const preferredRelay =
+      explicitPreferredRelay && options.reach.relays.includes(explicitPreferredRelay)
+        ? explicitPreferredRelay
+        : this.lastSuccessfulRelay && options.reach.relays.includes(this.lastSuccessfulRelay)
+          ? this.lastSuccessfulRelay
+          : undefined;
+    const relays = orderedRelays(options.reach, preferredRelay);
     for (let index = 0; index < relays.length; index += 1) {
       const elapsed = Date.now() - startedAt;
       const remaining = options.overallDeadlineMs - elapsed;
@@ -122,6 +130,14 @@ export class EndpointGenerationOwner<
           relayUrl,
           deadlineMs
         );
+        // The endpoint is process-wide: hub and workspace reaches share it. A
+        // timed-out native dial can only be cancelled by replacing that whole
+        // endpoint generation, which also closes every healthy connection on
+        // it. Carry the last working relay across peers so a second reach does
+        // not retry a relay this endpoint has just proved unreachable and tear
+        // down the first reach while doing so. This is only a dial-order hint;
+        // each reach remains authoritative and the hint is ignored when absent.
+        this.lastSuccessfulRelay = relayUrl;
         return {
           connection,
           relayUrl,
