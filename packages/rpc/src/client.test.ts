@@ -824,6 +824,20 @@ describe("createRpcClient — pending-call policy (§3.4)", () => {
     expect(err.code).toBe("CONNECTION_LOST");
   });
 
+  it("rejects direct-server pendings as soon as a reconnecting transport leaves connected", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const call = rpc.call("main", "model.getSettings", []);
+    fake.emitStatus("connecting");
+
+    await expect(call).rejects.toMatchObject({ code: "CONNECTION_LOST" });
+  });
+
   it("also treats target 'server' as a direct-server call", async () => {
     const fake = controllableTransport();
     const rpc = createRpcClient({

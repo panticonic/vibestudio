@@ -2,6 +2,7 @@ import type { RpcConnectionStatus, RpcEnvelope, RpcStreamTrafficClass } from "..
 import type { DecodedFramedStream } from "../protocol/streamCodec.js";
 import type { IrohClientPipe, IrohClientSession, IrohClientSessionOptions } from "./irohClient.js";
 import type { IrohConnectionDiagnostics } from "@vibestudio/iroh-transport";
+import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 
 export interface ReconnectingIrohPipeOptions {
   peerEndpointId: string;
@@ -36,6 +37,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
     (timer as unknown as { unref?: () => void }).unref?.();
+  });
+}
+
+function workspaceServerUnavailableError(): Error & { code: string; errorKind: "transport" } {
+  return Object.assign(new Error("Workspace server is temporarily unavailable"), {
+    code: SESSION_CONNECTION_LOST_CODE,
+    errorKind: "transport" as const,
   });
 }
 
@@ -85,7 +93,7 @@ class ReconnectingSession implements IrohClientSession {
   }
 
   async send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
-    return (await this.ensureInner()).send(envelope, signal);
+    return (await this.requireAvailableInner()).send(envelope, signal);
   }
 
   async stream(
@@ -95,7 +103,7 @@ class ReconnectingSession implements IrohClientSession {
     headTimeoutMs?: number,
     trafficClass?: RpcStreamTrafficClass
   ): Promise<Response> {
-    const inner = await this.ensureInner();
+    const inner = await this.requireAvailableInner();
     if (!inner.stream) throw new Error("Iroh session does not implement streaming RPC");
     return inner.stream(envelope, signal, body, headTimeoutMs, trafficClass);
   }
@@ -107,7 +115,7 @@ class ReconnectingSession implements IrohClientSession {
     headTimeoutMs?: number,
     trafficClass?: RpcStreamTrafficClass
   ): Promise<DecodedFramedStream> {
-    const inner = await this.ensureInner();
+    const inner = await this.requireAvailableInner();
     if (!inner.streamReadable)
       throw new Error("Iroh session does not implement readable streaming");
     return inner.streamReadable(envelope, signal, body, headTimeoutMs, trafficClass);
@@ -152,6 +160,25 @@ class ReconnectingSession implements IrohClientSession {
     if (this.terminal) throw new Error(`Iroh session ${this.sid} is terminal`);
     const { pipe, generation } = await this.owner.ensureConnected();
     return this.activate(pipe, generation);
+  }
+
+  /**
+   * Initial authentication may wait for the first dial, but operations on a
+   * previously-live session must never queue behind the unbounded reconnect
+   * loop. The logical session remains desired and is reopened automatically;
+   * callers get one typed, retryable availability failure for work attempted
+   * during the outage.
+   */
+  private requireAvailableInner(): Promise<IrohClientSession> {
+    if (this.closed) return Promise.reject(new Error(`Iroh session ${this.sid} is closed`));
+    if (this.terminal) return Promise.reject(new Error(`Iroh session ${this.sid} is terminal`));
+    if (this.authenticatedCallerId !== null && this.owner.status() !== "connected") {
+      return Promise.reject(workspaceServerUnavailableError());
+    }
+    if (this.inner && this.generation === this.owner.generation()) {
+      return Promise.resolve(this.inner);
+    }
+    return this.ensureInner();
   }
 
   private async openInner(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {

@@ -885,6 +885,45 @@ describe("ViewManager", () => {
       });
     });
 
+    it("accepts a desired surface before materialization without a missing-view warning", async () => {
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
+        sealedLaunchIdentity: "@workspace-apps/shell",
+        supportedProtocolVersions: [1],
+      });
+      if (!connected.accepted) throw new Error("expected Electron panel host handshake");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      await expect(
+        vm.applyNativePanelSurfaces("@workspace-apps/shell", {
+          protocolVersion: 1,
+          hostGeneration: connected.handshake.hostGeneration,
+          shellGeneration: connected.handshake.shellGeneration,
+          revision: 1,
+          surfaces: [
+            {
+              surfaceId: "slot-new",
+              materialization: {
+                runtimeEntityId: "panel:not-materialized-yet",
+                leaseConnectionId: "lease-new",
+              },
+              visible: true,
+              focused: true,
+              bounds: { x: 10, y: 20, width: 300, height: 200 },
+            },
+          ],
+        })
+      ).resolves.toMatchObject({ accepted: true });
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
     it("keeps an unbound panel hidden until hosted shell binds its measured slot", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.setViewVisible("panel-1", true);
@@ -2130,6 +2169,7 @@ describe("ViewManager", () => {
 
       const superseded = vm.navigateView("test-view", "https://example.com/old");
       await vm.navigateView("test-view", "https://example.com/new");
+      expect(view.webContents.stop).toHaveBeenCalledOnce();
       rejectFirst(Object.assign(new Error("ERR_ABORTED (-3)"), { code: -3 }));
 
       await expect(superseded).resolves.toBeUndefined();
@@ -2157,6 +2197,7 @@ describe("ViewManager", () => {
       const first = vm.navigateView("test-view", "https://example.com/desired");
       const second = vm.navigateView("test-view", "https://example.com/desired");
       expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
+      expect(view.webContents.stop).not.toHaveBeenCalled();
       resolveLoad();
 
       await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);

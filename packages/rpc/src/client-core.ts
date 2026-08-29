@@ -1089,7 +1089,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   //
   // Direct client→server responses are NEVER inboxed server-side, so any pipe
   // drop makes an in-flight direct-server call permanently unrecoverable. Reject
-  // those pendings the instant the transport reports `disconnected`. Routed
+  // those pendings the instant the transport leaves `connected` (the reconnecting
+  // Iroh owner reports `connecting` while it redials). Routed
   // caller↔caller pendings survive this flip: the server inbox can still replay
   // their responses across a clean reconnect. The one case inbox replay cannot
   // cover — a routed REQUEST or RESPONSE that was queued but never hit the
@@ -1105,7 +1106,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   // a `routed-response-error` (RECONNECT_GRACE_EXPIRED), which the transport
   // turns into a rejecting response here.
   config.transport.onStatusChange?.((status) => {
-    if (status === "disconnected") {
+    if (status !== "connected") {
       rejectPendingRequests(isServerTarget, makeConnectionLostError());
     }
   });

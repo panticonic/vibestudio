@@ -7,6 +7,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import { createIpcTransport } from "./ipcTransport.js";
+import type { WorkspaceConnectionState } from "@vibestudio/shared/workspaceConnection";
 
 let nextListenerId = 1;
 const activeListeners = new Map<
@@ -67,6 +68,17 @@ const vibestudioApp = {
 
 contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);
 contextBridge.exposeInMainWorld("__vibestudioTransport", appTransport);
+contextBridge.exposeInMainWorld("__vibestudioWorkspaceConnection", {
+  getCurrent: () =>
+    ipcRenderer.invoke(
+      "vibestudio:workspace-connection-state:get"
+    ) as Promise<WorkspaceConnectionState>,
+  onChange(handler: (state: WorkspaceConnectionState) => void) {
+    const listener = (_event: IpcRendererEvent, state: WorkspaceConnectionState) => handler(state);
+    ipcRenderer.on("vibestudio:workspace-connection-state", listener);
+    return () => ipcRenderer.off("vibestudio:workspace-connection-state", listener);
+  },
+});
 contextBridge.exposeInMainWorld("__vibestudioShellOverlay", {
   on(handler: (event: unknown) => void) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);

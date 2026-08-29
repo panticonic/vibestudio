@@ -1113,7 +1113,13 @@ export class ViewManager {
       })),
     });
     for (const surface of normalized) {
-      this.setViewVisible(surface.materialization!.runtimeEntityId, surface.visible);
+      const panelId = surface.materialization!.runtimeEntityId;
+      // A desired native surface is allowed to precede its WebContents. The
+      // slot declaration above carries geometry/focus until materialization;
+      // visibility is applied by attachDeclaredPanelSlot when the view exists.
+      // Treating that normal declarative state as an imperative missing-view
+      // error produced noisy warnings on every cold panel creation.
+      if (this.views.has(panelId)) this.setViewVisible(panelId, surface.visible);
     }
     this.nativePanelSlots.desiredFingerprint = fingerprint;
     this.nativePanelSlots.observationRevision += 1;
@@ -2824,6 +2830,13 @@ export class ViewManager {
       return;
     }
 
+    // Electron's loadURL installs completion listeners for each invocation.
+    // Superseding without stopping the prior main-frame load leaves all of
+    // those listeners alive until Chromium eventually settles every obsolete
+    // navigation, which caused MaxListeners warnings under repeated panel
+    // materialization. One WebContents has exactly one desired navigation.
+    if (managed.navigation && !contents.isDestroyed()) contents.stop();
+
     const revision = ++managed.navigationRevision;
     const promise = this.performManagedViewNavigation(managed, url, documentId, revision);
     managed.navigation = { url, documentId, revision, promise };
@@ -2831,6 +2844,9 @@ export class ViewManager {
   }
 
   private restartManagedViewUrl(managed: ManagedView, url: string): Promise<void> {
+    if (managed.navigation && !managed.view.webContents.isDestroyed()) {
+      managed.view.webContents.stop();
+    }
     const revision = ++managed.navigationRevision;
     const promise = this.performManagedViewNavigation(
       managed,

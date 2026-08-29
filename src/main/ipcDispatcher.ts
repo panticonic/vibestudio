@@ -42,6 +42,7 @@ import {
 import type { PanelSession, ServerClient } from "./serverClient.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { createIpcResponsivenessReporter } from "./ipcResponsiveness.js";
+import { SESSION_CONNECTION_LOST_CODE } from "@vibestudio/rpc/protocol/remoteSession";
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
 const log = createDevLogger("IpcDispatcher");
@@ -757,18 +758,22 @@ export class IpcDispatcher {
       })
       .catch((err: unknown) => {
         const message = envelope.message;
+        const errorCode = (err as { code?: string } | null)?.code;
         if (message?.type === "request") {
           this.sendResponse(sender, envelope, {
             type: "response",
             requestId: (message as RpcRequest).requestId,
             error: err instanceof Error ? err.message : String(err),
             errorKind: "transport",
+            ...(errorCode ? { errorCode } : {}),
           });
         }
-        console.warn(
-          `[IpcDispatcher] panel relay failed for ${callerId}: ` +
-            `${err instanceof Error ? err.message : String(err)}`
-        );
+        if (errorCode !== SESSION_CONNECTION_LOST_CODE) {
+          console.warn(
+            `[IpcDispatcher] panel relay failed for ${callerId}: ` +
+              `${err instanceof Error ? err.message : String(err)}`
+          );
+        }
       });
   }
 

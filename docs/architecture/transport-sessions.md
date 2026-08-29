@@ -45,6 +45,27 @@ resume binds a new generation from the same durable secret.
   rebuilds it from durable intent.
 - a terminal session close is never reopened automatically.
 
+### Workspace availability
+
+Physical loss produces one host-owned workspace availability transition; it is
+not projected as a separate failure in every panel. After a previously-live
+session leaves `connected`:
+
+- in-flight direct-server calls reject with the typed `CONNECTION_LOST` code;
+- new work on an authenticated logical session fails immediately with the same
+  retryable code instead of waiting behind the unbounded redial loop;
+- the logical session remains desired and reopens automatically on the next
+  physical generation;
+- after a short anti-flicker delay, the hosted shell takes native overlay
+  ownership, hides the independent panel views, and presents one reconnecting
+  surface with a direct route to connection settings;
+- external transport errors, Endpoint IDs, and credentials never become user
+  copy; a terminal authentication/session close becomes the distinct
+  `Connection ended` state; and
+- `online` is published only after logical-session recovery and shell replay
+  complete, so hiding the overlay is a semantic readiness boundary rather than
+  a raw QUIC-connect event.
+
 ## Invariants
 
 - Authenticate the expected Endpoint ID before remote application auth.

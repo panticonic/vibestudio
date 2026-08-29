@@ -141,6 +141,41 @@ describe("reconnecting Iroh client", () => {
     expect(closeEndpoint).toHaveBeenCalledOnce();
   });
 
+  it("fails work attempted during an outage immediately and resumes the same session", async () => {
+    const first = new FakePipe();
+    const second = new FakePipe();
+    let resolveRedial!: (pipe: IrohClientPipe) => void;
+    const redial = new Promise<IrohClientPipe>((resolve) => {
+      resolveRedial = resolve;
+    });
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial: vi.fn().mockResolvedValueOnce(first).mockReturnValueOnce(redial),
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const session = owner.openSession({ sid: "workspace:available", getToken: () => "credential" });
+    await session.ready?.();
+
+    first.disconnect();
+    await eventually(() => expect(owner.status()).toBe("connecting"));
+    const attempted = session.send(eventEnvelope).catch((error: unknown) => error);
+    const error = await attempted;
+    expect(error).toMatchObject({
+      message: "Workspace server is temporarily unavailable",
+      code: "CONNECTION_LOST",
+      errorKind: "transport",
+    });
+
+    resolveRedial(second);
+    await eventually(() => expect(second.sessions).toHaveLength(1));
+    await session.send(eventEnvelope);
+    expect(second.sessions[0]?.sent).toEqual([eventEnvelope]);
+    await owner.close();
+  });
+
   it("does not reopen a logical session after a terminal authentication close", async () => {
     const first = new FakePipe();
     const second = new FakePipe();

@@ -868,6 +868,48 @@ describe("IpcDispatcher", () => {
       expect(close).not.toHaveBeenCalled();
     });
 
+    it("returns one typed availability failure without recycling or warning", async () => {
+      const panelWc = makeWebContents(33);
+      const unavailable = Object.assign(new Error("Workspace server is temporarily unavailable"), {
+        code: "CONNECTION_LOST",
+        errorKind: "transport",
+      });
+      const panelSend = vi.fn().mockRejectedValue(unavailable);
+      const close = vi.fn();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const openPanelSession = vi.fn(async () => ({
+        send: panelSend,
+        onMessage: vi.fn(() => vi.fn()),
+        status: () => "connecting" as const,
+        isClosed: () => false,
+        close,
+      }));
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        openPanelSession,
+      });
+
+      ipcHandlers.get("vibestudio:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("unavailable") as never
+      );
+
+      await vi.waitFor(() =>
+        expectSentRpcMessage(panelWc, "panel-1", {
+          type: "response",
+          requestId: "unavailable",
+          error: "Workspace server is temporarily unavailable",
+          errorKind: "transport",
+          errorCode: "CONNECTION_LOST",
+        })
+      );
+      expect(openPanelSession).toHaveBeenCalledOnce();
+      expect(close).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("panel relay failed"));
+    });
+
     it("recycles (and re-opens) only a terminally closed session", async () => {
       const panelWc = makeWebContents(31);
       let closed = false;

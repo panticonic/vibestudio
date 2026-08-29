@@ -64,6 +64,10 @@ import {
   startEventLoopResponsivenessMonitor,
   type EventLoopResponsivenessSample,
 } from "../eventLoopResponsiveness.js";
+import {
+  WorkspaceConnectionStateController,
+  type WorkspaceConnectionState,
+} from "@vibestudio/shared/workspaceConnection";
 
 const log = createDevLogger("App");
 const mainEventLoopSamples: EventLoopResponsivenessSample[] = [];
@@ -510,6 +514,24 @@ const applicationWindow = new ApplicationWindowController({
     electronHostLaunchLastStatusKey = null;
   },
 });
+
+function broadcastWorkspaceConnectionState(state: WorkspaceConnectionState): void {
+  const viewManager = applicationWindow.viewManager;
+  if (!viewManager) return;
+  const sent = new Set<number>();
+  const send = (contents: WebContents | null | undefined) => {
+    if (!contents || contents.isDestroyed() || sent.has(contents.id)) return;
+    sent.add(contents.id);
+    contents.send("vibestudio:workspace-connection-state", state);
+  };
+  send(viewManager.getShellWebContents());
+  for (const viewId of viewManager.getViewIds()) send(viewManager.getWebContents(viewId));
+}
+
+const workspaceConnection = new WorkspaceConnectionStateController(
+  startupMode.kind === "local" ? "local" : "remote",
+  broadcastWorkspaceConnectionState
+);
 
 app.on("second-instance", () => {
   applicationWindow.showAndFocus();
@@ -1575,6 +1597,17 @@ function normalizeBootstrapWorkspaceName(rawName: unknown): string {
 }
 
 function installBootstrapConnectionHandlers(): void {
+  ipcMain.handle("vibestudio:workspace-connection-state:get", (event) => {
+    const viewManager = applicationWindow.viewManager;
+    if (!viewManager) return workspaceConnection.snapshot();
+    const viewId = viewManager.findViewIdByWebContentsId(event.sender.id);
+    const info = viewId ? viewManager.getViewInfo(viewId) : null;
+    if (!info || info.type !== "app" || !info.hostChrome) {
+      throw new Error("Workspace connection state is available only to the hosted shell");
+    }
+    return workspaceConnection.snapshot();
+  });
+
   ipcMain.handle("vibestudio:bootstrap:get-state", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:get-state");
     return getBootstrapConnectionState();
@@ -2096,6 +2129,7 @@ app.on("ready", async () => {
   performance.mark("startup:services-registered");
 
   let serverClientRef: import("./serverClient.js").ServerClient | null = null;
+  let semanticRecoveryEpoch = 0;
   const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
     await serverEventSubscriptions.recover();
     if (recoveredLocalServerCrash) {
@@ -2243,6 +2277,7 @@ app.on("ready", async () => {
     // once the WS lifecycle begins.
     const remoteHost = !skipRemotePairingLaunch ? storedRemoteAtLaunch?.workspaceName : undefined;
     const isRemoteSession = pendingRemotePairing !== null || remotePairedAtLaunch;
+    workspaceConnection.begin(isRemoteSession ? "remote" : "local");
     pushBootstrapConnectionState();
 
     eventService.emit("server-connection-changed", {
@@ -2284,43 +2319,40 @@ app.on("ready", async () => {
         storedRemote: storedRemoteAtLaunch ?? undefined,
         centralData,
         onMainSessionTerminalClose: (error) => {
+          semanticRecoveryEpoch += 1;
           const message = error.message || "The paired server ended this session.";
+          log.error(`[connection] paired workspace session ended: ${message}`);
+          workspaceConnection.end();
           eventService.emit("server-connection-changed", {
             status: "disconnected",
             isRemote: true,
             remoteHost,
           });
-          eventService.emit("notification:show", {
-            id: "remote-main-session-ended",
-            type: "error",
-            title: "Paired server session ended",
-            message: `${message} Re-pair this device or relaunch Vibestudio.`,
-            ttl: 0,
-          });
         },
         onConnectionStatusChanged: (status) => {
+          if (status !== "connected") semanticRecoveryEpoch += 1;
+          const wasRecovering = workspaceConnection.snapshot().phase === "reconnecting";
+          // A physical Iroh path can be connected while its logical sessions
+          // and replay subscriptions are still reopening. Keep the outage
+          // presentation up until onRecovery finishes that semantic boundary.
+          if (!(status === "connected" && wasRecovering)) {
+            // One host-owned availability state covers every native surface.
+            // Individual panel error events here used to turn one outage into
+            // many unrelated error UIs and retry loops.
+            workspaceConnection.transport(status);
+          }
           const remoteTransport = serverClientRef?.transportDiagnostics() ?? undefined;
-          eventService.emit("server-connection-changed", {
-            status,
-            isRemote: isRemoteSession,
-            remoteHost,
-            ...(remoteTransport ? { remoteTransport } : {}),
-          });
-          if (status === "disconnected") {
-            for (const entry of panelRegistry?.listPanels() ?? []) {
-              const wc = applicationWindow.viewManager?.getWebContents(entry.panelId);
-              if (wc && !wc.isDestroyed()) {
-                wc.send("vibestudio:event", "runtime:connection-error", {
-                  code: 1006,
-                  reason:
-                    "The workspace server connection closed. Reconnect, then retry this panel.",
-                  source: "server",
-                });
-              }
-            }
+          if (!(status === "connected" && wasRecovering)) {
+            eventService.emit("server-connection-changed", {
+              status,
+              isRemote: isRemoteSession,
+              remoteHost,
+              ...(remoteTransport ? { remoteTransport } : {}),
+            });
           }
         },
         onReconnectProgress: (progress) => {
+          workspaceConnection.reconnect(progress);
           eventService.emit("server-connection-changed", {
             status: "connecting",
             isRemote: true,
@@ -2339,10 +2371,35 @@ app.on("ready", async () => {
               wc.send("vibestudio:rpc:recovery", kind);
             }
           }
-          void recoverShellStateFromServer(kind).catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`[recovery] ${kind} failed: ${msg}`);
-          });
+          // Iroh invokes this hook while the main logical session is still
+          // opening. Start replay without awaiting it here: replay itself uses
+          // that session, so awaiting would make session-open wait on an RPC
+          // that cannot be sent until session-open completes. The epoch keeps
+          // an older replay from declaring a newer, flapping connection ready.
+          if (workspaceConnection.snapshot().phase !== "reconnecting") return;
+          const recoveryEpoch = ++semanticRecoveryEpoch;
+          void recoverShellStateFromServer(kind)
+            .then(() => {
+              if (
+                recoveryEpoch !== semanticRecoveryEpoch ||
+                serverClientRef?.getConnectionStatus() !== "connected"
+              ) {
+                return;
+              }
+              workspaceConnection.transport("connected");
+              const remoteTransport = serverClientRef.transportDiagnostics() ?? undefined;
+              eventService.emit("server-connection-changed", {
+                status: "connected",
+                isRemote: isRemoteSession,
+                remoteHost,
+                ...(remoteTransport ? { remoteTransport } : {}),
+              });
+            })
+            .catch((err: unknown) => {
+              if (recoveryEpoch !== semanticRecoveryEpoch) return;
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`[recovery] ${kind} failed: ${msg}`);
+            });
         },
       });
 
@@ -2361,6 +2418,7 @@ app.on("ready", async () => {
       throw error;
     }
     serverClientRef = serverSession.serverClient;
+    workspaceConnection.transport("connected");
     bindHostDirectServerEvents(serverClientRef, handleServerEvent);
     if (!IS_HEADLESS_HOST || IS_DEVELOPMENT_CLIENT_EXECUTOR) {
       const { CurrentHostDevelopmentClientExecutor } =
