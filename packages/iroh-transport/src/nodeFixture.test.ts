@@ -18,7 +18,7 @@ import { loadIrohNodeBinding, resolveIrohNodeBinding } from "./nodeBinding.js";
 import {
   bindNodeEndpoint,
   configureNodeConnection,
-  IROH_MAX_CONCURRENT_BI_STREAMS,
+  IROH_CONCURRENT_BI_STREAM_WINDOW,
   VIBESTUDIO_IROH_ALPN,
   VIBESTUDIO_IROH_ALPN_TEXT,
 } from "./nodeEndpoint.js";
@@ -103,8 +103,10 @@ describe("Iroh Node transport fixture", () => {
     endpoints.clear();
   });
 
-  it("advertises the complete QUIC bidirectional stream range", () => {
-    expect(IROH_MAX_CONCURRENT_BI_STREAMS).toBe(1n << 60n);
+  it("advertises a finite, replenishing QUIC stream flow-control window", () => {
+    expect(IROH_CONCURRENT_BI_STREAM_WINDOW).toBe(32_768n);
+    expect(IROH_CONCURRENT_BI_STREAM_WINDOW).toBeGreaterThan(320n);
+    expect(IROH_CONCURRENT_BI_STREAM_WINDOW).toBeLessThan(1n << 60n);
   });
 
   it("binds fixed identities with explicit minimal config and completes a verified handshake", async () => {

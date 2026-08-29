@@ -133,5 +133,12 @@ for (;;) {
 
   const signal = shutdown.requestedSignal() ?? result.signal;
   await stopTypeCheck();
+  if (result.signal && !shutdown.requestedSignal()) {
+    console.error(
+      `[dev] Electron terminated by ${result.signal} (shell exit ${signalExitCode(result.signal)})`
+    );
+  } else if (!signal && result.code) {
+    console.error(`[dev] Electron exited with code ${result.code}`);
+  }
   process.exit(signal ? signalExitCode(signal) : (result.code ?? 0));
 }

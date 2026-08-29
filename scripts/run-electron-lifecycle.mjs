@@ -1,3 +1,5 @@
+import { constants as osConstants } from "node:os";
+
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
   SIGINT: 130,
@@ -5,7 +7,8 @@ const SIGNAL_EXIT_CODES = {
 };
 
 export function signalExitCode(signal) {
-  return SIGNAL_EXIT_CODES[signal] ?? 1;
+  const signalNumber = osConstants.signals[signal];
+  return SIGNAL_EXIT_CODES[signal] ?? (signalNumber ? 128 + signalNumber : 1);
 }
 
 export function createRunnerShutdown({

@@ -78,5 +78,8 @@ describe("Electron development runner lifecycle", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
     expect(signalExitCode("SIGINT")).toBe(130);
     expect(signalExitCode("SIGTERM")).toBe(143);
+    expect(signalExitCode("SIGTRAP")).toBe(133);
+    expect(signalExitCode("SIGKILL")).toBe(137);
+    expect(signalExitCode("SIGSEGV")).toBe(139);
   });
 });

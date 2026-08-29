@@ -4,13 +4,18 @@ import { VIBESTUDIO_IROH_ALPN } from "./alpn.js";
 
 export { VIBESTUDIO_IROH_ALPN, VIBESTUDIO_IROH_ALPN_TEXT } from "./alpn.js";
 /**
- * Do not impose a product concurrency policy beneath RPC. QUIC already owns
- * stream lifetime and backpressure, and RFC 9000 permits at most 2^60 streams
- * of each type. Advertising the protocol maximum prevents normal application
- * fan-out from hitting an unrelated transport window. Resource protection for
- * unauthenticated/incomplete admissions remains at the ingress boundary.
+ * QUIC's MAX_STREAMS value is a replenishing flow-control window, not a cap on
+ * the number of streams a connection may carry over its lifetime. Do not use
+ * RFC 9000's 2^60 encoding maximum here: native QUIC implementations are free
+ * to size stream bookkeeping from the advertised window, and Electron's
+ * allocator terminates the process when that theoretical value reaches it.
+ *
+ * 32K simultaneously open request streams preserves the transport headroom
+ * already proven by Vibestudio's native fan-out coverage while keeping the
+ * advertised resource contract finite. Closed streams continuously replenish
+ * the window, and logical sessions and RPC requests retain no product ceiling.
  */
-export const IROH_MAX_CONCURRENT_BI_STREAMS = 1n << 60n;
+export const IROH_CONCURRENT_BI_STREAM_WINDOW = 32_768n;
 
 export interface BindNodeEndpointOptions {
   secretKey: SecretKey;
@@ -48,6 +53,6 @@ export async function connectNodeEndpoint(
 }
 
 export function configureNodeConnection(connection: Connection): void {
-  connection.setMaxConcurrentBiStreams(IROH_MAX_CONCURRENT_BI_STREAMS);
+  connection.setMaxConcurrentBiStreams(IROH_CONCURRENT_BI_STREAM_WINDOW);
   connection.setMaxConcurrentUniStreams(0n);
 }
