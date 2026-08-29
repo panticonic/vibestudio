@@ -703,6 +703,88 @@
       ]
     },
     "methods": {
+      "beginImportAcquisition": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.beginImportAcquisition"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.beginImportAcquisition"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.beginImportAcquisition"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.beginImportAcquisition"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.beginImportAcquisition",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.beginImportAcquisition",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "code"
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.create",
+          "rationale": "Presents trusted platform UI and stages only the browser export explicitly selected by the user."
+        },
+        "capability": "service:browserEnvironment.beginImportAcquisition",
+        "presentation": {
+          "title": "Choose browser data to import",
+          "action": "choose browser data to import",
+          "description": "Open trusted device controls to export or choose browser data.",
+          "group": "files",
+          "authorityCategory": {
+            "domain": "files",
+            "verb": "act"
+          }
+        }
+      },
       "cancelDownload": {
         "authority": {
           "requirement": {
@@ -974,6 +1056,88 @@
           "group": "network",
           "authorityCategory": {
             "domain": "web",
+            "verb": "see"
+          }
+        }
+      },
+      "listImportAcquisitionOptions": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.listImportAcquisitionOptions"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.listImportAcquisitionOptions"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.listImportAcquisitionOptions"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.listImportAcquisitionOptions"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.listImportAcquisitionOptions",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.listImportAcquisitionOptions",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "code"
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Lists host-owned ways to enroll a transient browser export without opening platform UI."
+        },
+        "capability": "service:browserEnvironment.listImportAcquisitionOptions",
+        "presentation": {
+          "title": "Check browser export options",
+          "action": "check browser export options",
+          "description": "Check how this device can provide a browser export.",
+          "group": "files",
+          "authorityCategory": {
+            "domain": "files",
             "verb": "see"
           }
         }
@@ -1607,6 +1771,88 @@
           "authorityCategory": {
             "domain": "web",
             "verb": "see"
+          }
+        }
+      },
+      "releaseImportSource": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.releaseImportSource"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.releaseImportSource"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.releaseImportSource"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.releaseImportSource"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.releaseImportSource",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.releaseImportSource",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "code"
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.retire",
+          "rationale": "Deletes transient host-owned staging for a completed or abandoned browser export."
+        },
+        "capability": "service:browserEnvironment.releaseImportSource",
+        "presentation": {
+          "title": "Remove staged browser export",
+          "action": "remove staged browser export",
+          "description": "Remove the temporary browser export held by this device.",
+          "group": "files",
+          "authorityCategory": {
+            "domain": "files",
+            "verb": "manage"
           }
         }
       },

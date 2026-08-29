@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:a6ba19e16f96fb4cb26f48b0e63d11491081385e84289798f1933fb4703694e4",
+  "censusDigest": "sha256:f851fd9eaa466e38c1177ebc086b25b1042c17d8c116dea8768fb5a8930c2c50",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -465,6 +465,18 @@
     "host:browserEnvironment.startSensitiveImport": {
       "review": "sealed-sensitive-browser-import",
       "change": "The reviewed Base broker selects an opaque source and exact sensitive categories, while Electron reads and stores plaintext entirely inside the host. The operation is idempotent by caller-minted operation ID and returns aggregate counts only; the ordinary frame channel rejects sensitive categories."
+    },
+    "host:browserEnvironment.listImportAcquisitionOptions": {
+      "review": "exact-host-browser-export-option-read",
+      "change": "Adds a read-only projection of the host-owned export-enrollment options supported by one exact browser-import device. Installed code reaches it only through the existing prepared browser broker leaf; it opens no platform UI, stages no data, and exposes no browser records or ambient files."
+    },
+    "host:browserEnvironment.beginImportAcquisition": {
+      "review": "trusted-host-browser-export-acquisition",
+      "change": "Runs one exact host-advertised enrollment option for the selected browser-import device, with any file or platform selection occurring in trusted native UI. The receiver returns only an opaque transient source reference and bounded source metadata; raw browser data remains host-owned and installed code reaches the effect only through the prepared browser broker leaf."
+    },
+    "host:browserEnvironment.releaseImportSource": {
+      "review": "exact-transient-browser-export-retirement",
+      "change": "Retires one opaque transient import source on the exact device that created it and deletes its host-owned staging. The effect only reduces retained state: callers cannot enumerate, inspect, or release unrelated sources, and no browser record crosses the service boundary."
     },
     "host:browserEnvironment.previewSensitiveImport": {
       "review": "reviewed-provider-aggregate-sensitive-import-preview",

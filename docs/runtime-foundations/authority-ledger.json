@@ -8066,6 +8066,94 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:browserEnvironment.beginImportAcquisition",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "beginImportAcquisition",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.create",
+      "reviewRationale": "Presents trusted platform UI and stages only the browser export explicitly selected by the user.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.beginImportAcquisition"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.beginImportAcquisition\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.beginImportAcquisition\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.beginImportAcquisition\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "trusted-host-browser-export-acquisition",
+        "change": "Runs one exact host-advertised enrollment option for the selected browser-import device, with any file or platform selection occurring in trusted native UI. The receiver returns only an opaque transient source reference and bounded source metadata; raw browser data remains host-owned and installed code reaches the effect only through the prepared browser broker leaf."
+      },
+      "capability": "service:browserEnvironment.beginImportAcquisition",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.beginImportAcquisition#capability:service:browserEnvironment.beginImportAcquisition",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "beginImportAcquisition",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.create",
+      "reviewRationale": "Presents trusted platform UI and stages only the browser export explicitly selected by the user.",
+      "capability": "service:browserEnvironment.beginImportAcquisition",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "browserEnvironment.broker.beginImportAcquisition"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:browserEnvironment.cancelDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
@@ -8346,6 +8434,94 @@
       "resourceDerivation": {
         "kind": "prepared",
         "resolver": "browserEnvironment.broker.listDownloads"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.listImportAcquisitionOptions",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "listImportAcquisitionOptions",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.read",
+      "reviewRationale": "Lists host-owned ways to enroll a transient browser export without opening platform UI.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.listImportAcquisitionOptions"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.listImportAcquisitionOptions\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.listImportAcquisitionOptions\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.listImportAcquisitionOptions\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "exact-host-browser-export-option-read",
+        "change": "Adds a read-only projection of the host-owned export-enrollment options supported by one exact browser-import device. Installed code reaches it only through the existing prepared browser broker leaf; it opens no platform UI, stages no data, and exposes no browser records or ambient files."
+      },
+      "capability": "service:browserEnvironment.listImportAcquisitionOptions",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.listImportAcquisitionOptions#capability:service:browserEnvironment.listImportAcquisitionOptions",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "listImportAcquisitionOptions",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.read",
+      "reviewRationale": "Lists host-owned ways to enroll a transient browser export without opening platform UI.",
+      "capability": "service:browserEnvironment.listImportAcquisitionOptions",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "browserEnvironment.broker.listImportAcquisitionOptions"
       },
       "authorityPrincipals": [
         "code"
@@ -9078,6 +9254,94 @@
         "change": "Lets only the exact installed and reviewed browser-data provider request aggregate counts for protected import categories. Native parsing and protected rows remain inside Electron, no values or records cross the service, and the provider's public review flow owns the user-facing policy."
       },
       "capability": "service:browserEnvironment.previewSensitiveImport",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.releaseImportSource",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "releaseImportSource",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.retire",
+      "reviewRationale": "Deletes transient host-owned staging for a completed or abandoned browser export.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.releaseImportSource"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.releaseImportSource\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.releaseImportSource\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.releaseImportSource\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "exact-transient-browser-export-retirement",
+        "change": "Retires one opaque transient import source on the exact device that created it and deletes its host-owned staging. The effect only reduces retained state: callers cannot enumerate, inspect, or release unrelated sources, and no browser record crosses the service boundary."
+      },
+      "capability": "service:browserEnvironment.releaseImportSource",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.releaseImportSource#capability:service:browserEnvironment.releaseImportSource",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "releaseImportSource",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.retire",
+      "reviewRationale": "Deletes transient host-owned staging for a completed or abandoned browser export.",
+      "capability": "service:browserEnvironment.releaseImportSource",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "browserEnvironment.broker.releaseImportSource"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {

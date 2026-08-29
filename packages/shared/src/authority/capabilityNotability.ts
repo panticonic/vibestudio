@@ -86,8 +86,13 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // Browser-host maintenance and download controls are the ordinary machinery
   // of their explicit built-in panels. Launching a downloaded file or exposing
   // it in the OS crosses out of the workspace and remains prominent.
+  // Discovering or invoking native browser-export enrollment is prominent:
+  // those operations expose device capabilities or open trusted platform UI.
+  // Releasing the exact opaque staging source only removes transient host state.
+  { key: "service:browserEnvironment.beginImportAcquisition", notability: "headline" },
   { key: "service:browserEnvironment.cancelDownload", notability: "everyday" },
   { key: "service:browserEnvironment.cancelImportRead", notability: "everyday" },
+  { key: "service:browserEnvironment.listImportAcquisitionOptions", notability: "headline" },
   { key: "service:browserEnvironment.listImportHosts", notability: "headline" },
   { key: "service:browserEnvironment.listDownloads", notability: "everyday" },
   { key: "service:browserEnvironment.listImportOpenTabs", notability: "headline" },
@@ -97,6 +102,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "service:browserEnvironment.pauseDownload", notability: "everyday" },
   { key: "service:browserEnvironment.previewImportSource", notability: "headline" },
   { key: "service:browserEnvironment.previewSensitiveImport", notability: "headline" },
+  { key: "service:browserEnvironment.releaseImportSource", notability: "everyday" },
   { key: "service:browserEnvironment.resumeDownload", notability: "everyday" },
   { key: "service:browserEnvironment.revealDownload", notability: "headline" },
   { key: "service:browserEnvironment.startImportRead", notability: "headline" },

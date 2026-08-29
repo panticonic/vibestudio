@@ -1060,6 +1060,27 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "browserEnvironment.beginImportAcquisition": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.create",
+      rationale:
+        "Presents trusted platform UI and stages only the browser export explicitly selected by the user.",
+    },
+    capability: "service:browserEnvironment.beginImportAcquisition",
+    presentation: {
+      title: "Choose browser data to import",
+      action: "choose browser data to import",
+      description: "Open trusted device controls to export or choose browser data.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
+  },
   "browserEnvironment.cancelDownload": {
     tier: {
       tier: "open",
@@ -1138,6 +1159,27 @@ export const HOST_AUTHORITY_METHODS = {
       group: "network",
       authorityCategory: {
         domain: "web",
+        verb: "see",
+      },
+    },
+  },
+  "browserEnvironment.listImportAcquisitionOptions": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.read",
+      rationale:
+        "Lists host-owned ways to enroll a transient browser export without opening platform UI.",
+    },
+    capability: "service:browserEnvironment.listImportAcquisitionOptions",
+    presentation: {
+      title: "Check browser export options",
+      action: "check browser export options",
+      description: "Check how this device can provide a browser export.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
         verb: "see",
       },
     },
@@ -1326,6 +1368,27 @@ export const HOST_AUTHORITY_METHODS = {
       authorityCategory: {
         domain: "web",
         verb: "see",
+      },
+    },
+  },
+  "browserEnvironment.releaseImportSource": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.retire",
+      rationale:
+        "Deletes transient host-owned staging for a completed or abandoned browser export.",
+    },
+    capability: "service:browserEnvironment.releaseImportSource",
+    presentation: {
+      title: "Remove staged browser export",
+      action: "remove staged browser export",
+      description: "Remove the temporary browser export held by this device.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
+        verb: "manage",
       },
     },
   },
@@ -8102,9 +8165,15 @@ export const HOST_AUTHORITY_METHODS = {
 } as const satisfies Record<string, GeneratedHostAuthorityMethod>;
 
 export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
+  "browserEnvironment.beginImportAcquisition": [
+    "service:browserEnvironment.beginImportAcquisition",
+  ],
   "browserEnvironment.cancelDownload": ["service:browserEnvironment.cancelDownload"],
   "browserEnvironment.cancelImportRead": ["service:browserEnvironment.cancelImportRead"],
   "browserEnvironment.listDownloads": ["service:browserEnvironment.listDownloads"],
+  "browserEnvironment.listImportAcquisitionOptions": [
+    "service:browserEnvironment.listImportAcquisitionOptions",
+  ],
   "browserEnvironment.listImportHosts": ["service:browserEnvironment.listImportHosts"],
   "browserEnvironment.listImportOpenTabs": ["service:browserEnvironment.listImportOpenTabs"],
   "browserEnvironment.listImportSources": ["service:browserEnvironment.listImportSources"],
@@ -8112,6 +8181,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.openDownload": ["service:browserEnvironment.openDownload"],
   "browserEnvironment.pauseDownload": ["service:browserEnvironment.pauseDownload"],
   "browserEnvironment.previewImportSource": ["service:browserEnvironment.previewImportSource"],
+  "browserEnvironment.releaseImportSource": ["service:browserEnvironment.releaseImportSource"],
   "browserEnvironment.resumeDownload": ["service:browserEnvironment.resumeDownload"],
   "browserEnvironment.revealDownload": ["service:browserEnvironment.revealDownload"],
   "browserEnvironment.startImportRead": ["service:browserEnvironment.startImportRead"],
@@ -8358,6 +8428,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "computer",
     verb: "see",
   },
+  "service:browserEnvironment.beginImportAcquisition": {
+    domain: "files",
+    verb: "act",
+  },
   "service:browserEnvironment.cancelDownload": {
     domain: "web",
     verb: "manage",
@@ -8372,6 +8446,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   },
   "service:browserEnvironment.listDownloads": {
     domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.listImportAcquisitionOptions": {
+    domain: "files",
     verb: "see",
   },
   "service:browserEnvironment.listImportHosts": {
@@ -8409,6 +8487,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "service:browserEnvironment.previewSensitiveImport": {
     domain: "web",
     verb: "see",
+  },
+  "service:browserEnvironment.releaseImportSource": {
+    domain: "files",
+    verb: "manage",
   },
   "service:browserEnvironment.resumeDownload": {
     domain: "web",
@@ -9025,6 +9107,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "see",
     },
   },
+  "service:browserEnvironment.beginImportAcquisition": {
+    title: "Choose browser data to import",
+    action: "choose browser data to import",
+    description: "Open trusted device controls to export or choose browser data.",
+    group: "files",
+    authorityCategory: {
+      domain: "files",
+      verb: "act",
+    },
+  },
   "service:browserEnvironment.cancelDownload": {
     title: "Cancel browser downloads",
     action: "cancel browser downloads",
@@ -9062,6 +9154,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "network",
     authorityCategory: {
       domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.listImportAcquisitionOptions": {
+    title: "Check browser export options",
+    action: "check browser export options",
+    description: "Check how this device can provide a browser export.",
+    group: "files",
+    authorityCategory: {
+      domain: "files",
       verb: "see",
     },
   },
@@ -9153,6 +9255,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "web",
       verb: "see",
+    },
+  },
+  "service:browserEnvironment.releaseImportSource": {
+    title: "Remove staged browser export",
+    action: "remove staged browser export",
+    description: "Remove the temporary browser export held by this device.",
+    group: "files",
+    authorityCategory: {
+      domain: "files",
+      verb: "manage",
     },
   },
   "service:browserEnvironment.resumeDownload": {
