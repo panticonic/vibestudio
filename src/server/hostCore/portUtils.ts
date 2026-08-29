@@ -121,12 +121,14 @@ function probePort(
  */
 export async function findServicePort(
   service: keyof typeof PORT_RANGES,
-  host = "127.0.0.1"
+  host = "127.0.0.1",
+  excludedPorts: ReadonlySet<number> = new Set()
 ): Promise<number> {
   const { start, end } = PORT_RANGES[service];
   let lastError: NodeJS.ErrnoException | null = null;
 
   for (let port = start; port < end; port++) {
+    if (excludedPorts.has(port)) continue;
     const lease = tryLeasePort(service, port);
     if (lease === null) continue;
     const result = await probePort(port, host);

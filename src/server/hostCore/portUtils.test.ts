@@ -31,4 +31,14 @@ describe("findServicePort", () => {
     await expect(findServicePort("workerd")).resolves.toBe(first);
     releaseServicePort("workerd", first);
   });
+
+  it("can exclude a just-retired port from the next generation", async () => {
+    const retired = await findServicePort("workerd");
+    releaseServicePort("workerd", retired);
+
+    const replacement = await findServicePort("workerd", "127.0.0.1", new Set([retired]));
+
+    expect(replacement).toBeGreaterThan(retired);
+    releaseServicePort("workerd", replacement);
+  });
 });

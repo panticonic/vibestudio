@@ -554,7 +554,11 @@ export class WorkerdManager {
   private unresponsiveRecovery: Promise<void> | null = null;
   private configDir: string;
   private port: number | null = null;
+  /** Immediate predecessor excluded from the next generation's lease. */
+  private retiredPort: number | null = null;
   private inspectorPort: number | null = null;
+  /** Immediate predecessor excluded from the next generation's inspector lease. */
+  private retiredInspectorPort: number | null = null;
   private deps: ResolvedWorkerdManagerDeps;
   /** Derived exact DO attachments. WorkspaceDO entity rows are their durable owner. */
   private readonly sealedDoImages = new Map<string, RuntimeImageRecord>();
@@ -2321,7 +2325,12 @@ export class WorkerdManager {
     // Find a port
     if (!this.port) {
       const { findServicePort } = await import("./hostCore/portUtils.js");
-      this.port = await findServicePort("workerd");
+      this.port = await findServicePort(
+        "workerd",
+        "127.0.0.1",
+        this.retiredPort === null ? undefined : new Set([this.retiredPort])
+      );
+      this.retiredPort = null;
     }
 
     // Inject WORKERD_URL into DO services (needs port to be resolved)
@@ -2811,7 +2820,12 @@ export class WorkerdManager {
     const binary = this.findWorkerdBinary();
     if (!this.inspectorPort && workerdInspectorEnabled()) {
       const { findServicePort } = await import("./hostCore/portUtils.js");
-      this.inspectorPort = await findServicePort("workerdInspector");
+      this.inspectorPort = await findServicePort(
+        "workerdInspector",
+        "127.0.0.1",
+        this.retiredInspectorPort === null ? undefined : new Set([this.retiredInspectorPort])
+      );
+      this.retiredInspectorPort = null;
     }
     const args = [
       "serve",
@@ -3142,11 +3156,13 @@ export class WorkerdManager {
       // kernel-release race and the still-bound unkillable process.
       if (this.port) {
         const { releaseServicePort } = await import("./hostCore/portUtils.js");
+        this.retiredPort = this.port;
         releaseServicePort("workerd", this.port);
       }
       this.port = null;
       if (this.inspectorPort) {
         const { releaseServicePort } = await import("./hostCore/portUtils.js");
+        this.retiredInspectorPort = this.inspectorPort;
         releaseServicePort("workerdInspector", this.inspectorPort);
       }
       this.inspectorPort = null;

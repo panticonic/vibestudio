@@ -1124,6 +1124,32 @@ describe("WorkerdManager", () => {
         expect.any(Object)
       );
     });
+
+    it("moves planned generations away from their immediate predecessor ports", async () => {
+      vi.mocked(findServicePort).mockImplementation(
+        async (service, _host, excludedPorts = new Set()) => {
+          const start = service === "workerdInspector" ? 49652 : 49552;
+          return excludedPorts.has(start) ? start + 1 : start;
+        }
+      );
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      expect(mgr.getPort()).toBe(49552);
+
+      await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+
+      expect(mgr.getPort()).toBe(49553);
+      expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
+        "workerd",
+        "127.0.0.1",
+        new Set([49552])
+      );
+      expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
+        "workerdInspector",
+        "127.0.0.1",
+        new Set([49652])
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
