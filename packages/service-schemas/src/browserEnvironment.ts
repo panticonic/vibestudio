@@ -143,7 +143,7 @@ const ImportProviderFrameSchema = z.discriminatedUnion("type", [
 ]);
 
 export const browserEnvironmentMethods = defineServiceMethods({
-  getImportHost: {
+  listImportHosts: {
     tier: {
       tier: "open",
       session: "family",
@@ -152,11 +152,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
       rationale:
         "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
     },
-    description: "Describe the trusted browser-import provider on this host.",
+    description: "List browser-import providers available to the initiating device.",
     args: z.tuple([]),
-    returns: ImportHostSummarySchema,
+    returns: z.array(ImportHostSummarySchema),
     access: { sensitivity: "read" },
-    ...brokerPolicy("getImportHost", {
+    ...brokerPolicy("listImportHosts", {
       title: "Access browser import details",
       action: "access browser import details",
       description: "Check which browser can provide data for import.",
@@ -174,7 +174,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
         "Enumerates importable external browser profiles; read-only discovery gated by authority principals.",
     },
     description: "List opaque browser sources discoverable by this trusted host.",
-    args: z.tuple([]),
+    args: z.tuple([z.string().min(1)]),
     returns: z.array(BrowserImportSourceSchema),
     access: { sensitivity: "read" },
     ...brokerPolicy("listImportSources", {
@@ -195,7 +195,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
         "Read-only preview of an external browser profile import; gated by authority principals.",
     },
     description: "Preview normalized import counts without exposing browser secrets.",
-    args: z.tuple([z.string().min(1), z.array(BrowserImportDataTypeSchema).min(1)]),
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1),
+      z.array(BrowserImportDataTypeSchema).min(1),
+    ]),
     returns: ImportSummarySchema.extend({
       breakdowns: z.array(ImportCategoryBreakdownSchema),
       openTabCount: z.number().int().nonnegative(),
@@ -220,7 +224,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
         "Returns aggregate review counts for protected browser categories without returning records or values.",
     },
     description: "Preview selected sensitive browser categories using aggregate counts only.",
-    args: z.tuple([z.string().min(1), SensitiveImportDataTypesSchema]),
+    args: z.tuple([z.string().min(1), z.string().min(1), SensitiveImportDataTypesSchema]),
     returns: ImportSummarySchema.extend({
       breakdowns: z.array(ImportCategoryBreakdownSchema),
       openTabCount: z.number().int().nonnegative(),
@@ -245,7 +249,11 @@ export const browserEnvironmentMethods = defineServiceMethods({
         "Starts a streamed read of an external browser profile for import; gated by authority principals.",
     },
     description: "Start a bounded, cancellable read of non-sensitive browser data.",
-    args: z.tuple([z.string().min(1), z.array(BrowserPublicImportDataTypeSchema).min(1)]),
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1),
+      z.array(BrowserPublicImportDataTypeSchema).min(1),
+    ]),
     returns: z.string().min(1),
     access: { sensitivity: "read" },
     ...brokerPolicy("startImportRead", {
@@ -267,7 +275,12 @@ export const browserEnvironmentMethods = defineServiceMethods({
     },
     description:
       "Import selected sensitive browser data directly into the host vault without exposing plaintext frames.",
-    args: z.tuple([z.string().min(1), SensitiveImportDataTypesSchema, z.string().min(1).max(200)]),
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1),
+      SensitiveImportDataTypesSchema,
+      z.string().min(1).max(200),
+    ]),
     returns: SensitiveImportStatusSchema,
     access: { sensitivity: "write" },
     ...reviewedProviderPolicy("startSensitiveImport", {
@@ -368,7 +381,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
         "Reads open tabs from an external browser profile for import; gated by authority principals.",
     },
     description: "List importable HTTP(S) tabs without exposing source filesystem paths.",
-    args: z.tuple([z.string().min(1)]),
+    args: z.tuple([z.string().min(1), z.string().min(1)]),
     returns: z.array(ImportedOpenTabSchema),
     access: { sensitivity: "read" },
     ...brokerPolicy("listImportOpenTabs", {

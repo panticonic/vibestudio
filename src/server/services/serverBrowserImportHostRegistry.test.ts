@@ -45,6 +45,74 @@ function detachedContext(version?: string) {
 }
 
 describe("ServerBrowserImportHostRegistry", () => {
+  it("lists and routes only the initiating device while keeping operation handles opaque", async () => {
+    const statePath = mkdtempSync(path.join(tmpdir(), "server-browser-import-"));
+    roots.push(statePath);
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const connection = {
+      callerId: "shell:device-a",
+      call: vi.fn(async (method: string, args: unknown[]) => {
+        calls.push({ method, args });
+        if (method === "browserEnvironment.listImportHosts") {
+          return [
+            {
+              hostId: "device:a",
+              displayName: "This device",
+              platform: "linux",
+              location: "device",
+              connected: true,
+            },
+          ];
+        }
+        if (method === "browserEnvironment.listImportSources") return [];
+        if (method === "browserEnvironment.startImportRead") return "device-operation";
+        if (method === "browserEnvironment.nextImportFrame") {
+          return { type: "complete", summary: { dataTypes: [], warnings: [] } };
+        }
+        if (method === "browserEnvironment.cancelImportRead") return undefined;
+        throw new Error(`Unexpected device method: ${method}`);
+      }),
+    };
+    const registry = new ServerBrowserImportHostRegistry({
+      workspaceId: "workspace-a",
+      statePath,
+      doDispatch: { dispatch: vi.fn() } as never,
+      createProvider: async () => ({
+        listSources: vi.fn(async () => []),
+        preview: vi.fn(),
+        listOpenTabs: vi.fn(async () => []),
+        openImport: vi.fn(),
+      }),
+      resolveDeviceConnection: () => connection,
+    });
+
+    await expect(registry.listHosts(initiatingContext())).resolves.toEqual([
+      expect.objectContaining({ hostId: "device:a", location: "device" }),
+      expect.objectContaining({ hostId: "server:workspace-a", location: "server" }),
+    ]);
+    await expect(registry.listSources(initiatingContext(), "device:a")).resolves.toEqual([]);
+    const handle = await registry.startImportRead(
+      initiatingContext(),
+      "device:a",
+      "firefox-source",
+      ["bookmarks"]
+    );
+    expect(handle).toMatch(/^bir_/);
+    expect(handle).not.toContain("device-operation");
+    await expect(registry.nextImportFrame(detachedContext(), handle)).resolves.toMatchObject({
+      type: "complete",
+    });
+    expect(calls).toContainEqual({
+      method: "browserEnvironment.startImportRead",
+      args: ["device:a", "firefox-source", ["bookmarks"]],
+    });
+    expect(calls).toContainEqual({
+      method: "browserEnvironment.nextImportFrame",
+      args: ["device-operation"],
+    });
+    registry.stop();
+  });
+
   it("reads protected cookies in the host and writes them directly to the caller vault", async () => {
     const statePath = mkdtempSync(path.join(tmpdir(), "server-browser-import-"));
     roots.push(statePath);
@@ -95,9 +163,15 @@ describe("ServerBrowserImportHostRegistry", () => {
     });
     const context = initiatingContext();
 
-    registry.startSensitiveImport(context, "firefox-source", ["cookies"], "operation-a");
-    await vi.waitFor(() => {
-      expect(registry.observeSensitiveImport(detachedContext(), "operation-a").state).toBe(
+    await registry.startSensitiveImport(
+      context,
+      "server:workspace-a",
+      "firefox-source",
+      ["cookies"],
+      "operation-a"
+    );
+    await vi.waitFor(async () => {
+      expect((await registry.observeSensitiveImport(detachedContext(), "operation-a")).state).toBe(
         "complete"
       );
     });
@@ -115,7 +189,9 @@ describe("ServerBrowserImportHostRegistry", () => {
         cookies: [expect.objectContaining({ name: "sid", value: "protected-value" })],
       }
     );
-    expect(registry.observeSensitiveImport(detachedContext(), "operation-a")).toEqual({
+    await expect(
+      registry.observeSensitiveImport(detachedContext(), "operation-a")
+    ).resolves.toEqual({
       operationId: "operation-a",
       state: "complete",
       counts: [{ dataType: "cookies", read: 1, stored: 1, skipped: 0, errors: 0 }],
@@ -159,7 +235,12 @@ describe("ServerBrowserImportHostRegistry", () => {
       }),
     });
 
-    const handle = registry.startImportRead(initiatingContext(), "chromium-source", ["bookmarks"]);
+    const handle = await registry.startImportRead(
+      initiatingContext(),
+      "server:workspace-a",
+      "chromium-source",
+      ["bookmarks"]
+    );
     expect(handle).toMatch(/^bir_[A-Za-z0-9_-]{32}$/);
 
     const detached = detachedContext();
@@ -183,7 +264,12 @@ describe("ServerBrowserImportHostRegistry", () => {
       code: "EACCES",
     });
 
-    const cancelled = registry.startImportRead(initiatingContext(), "chromium-source", ["history"]);
+    const cancelled = await registry.startImportRead(
+      initiatingContext(),
+      "server:workspace-a",
+      "chromium-source",
+      ["history"]
+    );
     expect(() => registry.cancelImportRead(detachedContext("ev-other"), cancelled)).toThrow(
       "invalid or expired"
     );

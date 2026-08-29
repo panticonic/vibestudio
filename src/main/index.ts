@@ -3046,20 +3046,19 @@ app.on("ready", async () => {
         },
       })
     );
-    const { createBrowserEnvironmentService } =
+    const { createBrowserEnvironmentService, localBrowserEnvironmentImportRouter } =
       await import("./services/browserEnvironmentService.js");
     const { workspaceProviderExtensionRepoPath } =
       await import("@vibestudio/workspace/configParser");
-    electronContainer.registerRpc(
-      createBrowserEnvironmentService({
-        getDownloads: () => browserDownloadManager,
-        getImportProvider: () => browserImportHostProvider,
-        browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
-          conn.workspaceConfig,
-          "browserData"
-        ),
-      })
-    );
+    const desktopBrowserEnvironment = createBrowserEnvironmentService({
+      getDownloads: () => browserDownloadManager,
+      importRouter: localBrowserEnvironmentImportRouter(() => browserImportHostProvider),
+      browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
+        conn.workspaceConfig,
+        "browserData"
+      ),
+    });
+    electronContainer.registerRpc(desktopBrowserEnvironment);
     const { createDesktopBrowserPrivacyPresentation } =
       await import("./services/desktopBrowserPrivacyPresentation.js");
     const desktopBrowserPrivacyPresentation = createDesktopBrowserPrivacyPresentation({
@@ -3101,6 +3100,7 @@ app.on("ready", async () => {
     const { publishHostService } = await import("./hostServicePublisher.js");
     publishHostService(sc, dispatcher, desktopPhoneProvider);
     publishHostService(sc, dispatcher, desktopBrowserPrivacyPresentation);
+    publishHostService(sc, dispatcher, desktopBrowserEnvironment);
 
     // =========================================================================
     // Register ipcMain.handle handlers for __vibestudioShell (panel preload)

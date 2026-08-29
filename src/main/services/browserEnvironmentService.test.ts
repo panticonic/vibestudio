@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
-import { createBrowserEnvironmentService } from "./browserEnvironmentService.js";
+import {
+  createBrowserEnvironmentService,
+  localBrowserEnvironmentImportRouter,
+} from "./browserEnvironmentService.js";
 
 function service() {
   return createBrowserEnvironmentService({
     getDownloads: () => null,
-    getImportProvider: () => null,
+    importRouter: localBrowserEnvironmentImportRouter(() => null),
     browserDataBrokerRepoPath: "extensions/browser-data",
   });
 }
@@ -23,7 +26,7 @@ describe("browserEnvironment authority", () => {
       requested: [],
     });
     const prepare = definition.authorityPreparation?.["browserEnvironment.broker.startImportRead"];
-    expect(prepare?.({ caller }, ["source", ["bookmarks"]])).toEqual({
+    expect(prepare?.({ caller }, ["device:test", "source", ["bookmarks"]])).toEqual({
       selections: [
         expect.objectContaining({
           capability: "service:browserEnvironment.startImportRead",
@@ -72,7 +75,11 @@ describe("browserEnvironment authority", () => {
 
   it("keeps sensitive values out of the plaintext import-frame contract", () => {
     expect(() =>
-      browserEnvironmentMethods["startImportRead"]!.args.parse(["source", ["passwords"]])
+      browserEnvironmentMethods["startImportRead"]!.args.parse([
+        "device:test",
+        "source",
+        ["passwords"],
+      ])
     ).toThrow();
     expect(() =>
       browserEnvironmentMethods["nextImportFrame"]!.returns!.parse({
@@ -84,11 +91,12 @@ describe("browserEnvironment authority", () => {
     ).toThrow();
     expect(
       browserEnvironmentMethods["startSensitiveImport"]!.args.parse([
+        "device:test",
         "source",
         ["cookies", "passwords", "formFill"],
         "operation-id",
       ])
-    ).toEqual(["source", ["cookies", "passwords", "formFill"], "operation-id"]);
+    ).toEqual(["device:test", "source", ["cookies", "passwords", "formFill"], "operation-id"]);
   });
 
   it("routes sensitive imports to the sealed provider operation", async () => {
@@ -99,7 +107,13 @@ describe("browserEnvironment authority", () => {
     }));
     const definition = createBrowserEnvironmentService({
       getDownloads: () => null,
-      getImportProvider: () => ({ startSensitiveImport }) as never,
+      importRouter: localBrowserEnvironmentImportRouter(
+        () =>
+          ({
+            summary: () => ({ hostId: "device:test" }),
+            startSensitiveImport,
+          }) as never
+      ),
       browserDataBrokerRepoPath: "extensions/browser-data",
     });
 
@@ -114,6 +128,7 @@ describe("browserEnvironment authority", () => {
     approvedCaller.codeApproved = true;
     await expect(
       definition.handler({ caller: approvedCaller } as never, "startSensitiveImport", [
+        "device:test",
         "source",
         ["cookies"],
         "operation-id",
@@ -134,13 +149,20 @@ describe("browserEnvironment authority", () => {
     }));
     const definition = createBrowserEnvironmentService({
       getDownloads: () => null,
-      getImportProvider: () => ({ startSensitiveImport }) as never,
+      importRouter: localBrowserEnvironmentImportRouter(
+        () =>
+          ({
+            summary: () => ({ hostId: "device:test" }),
+            startSensitiveImport,
+          }) as never
+      ),
       browserDataBrokerRepoPath: "extensions/browser-data",
     });
     const caller = createVerifiedCaller("shell:main", "shell");
     caller.hostOriginated = true;
     await expect(
       definition.handler({ caller } as never, "startSensitiveImport", [
+        "device:test",
         "source",
         ["cookies"],
         "operation-id",
@@ -154,7 +176,13 @@ describe("browserEnvironment authority", () => {
   it("relies on exact method capability admission and rejects a wrong broker source", async () => {
     const definition = createBrowserEnvironmentService({
       getDownloads: () => null,
-      getImportProvider: () => ({ startSensitiveImport: vi.fn() }) as never,
+      importRouter: localBrowserEnvironmentImportRouter(
+        () =>
+          ({
+            summary: () => ({ hostId: "device:test" }),
+            startSensitiveImport: vi.fn(),
+          }) as never
+      ),
       browserDataBrokerRepoPath: "extensions/browser-data",
     });
     const admitted = createVerifiedCaller("extension-1", "extension", {
@@ -167,6 +195,7 @@ describe("browserEnvironment authority", () => {
     });
     await expect(
       definition.handler({ caller: admitted } as never, "startSensitiveImport", [
+        "device:test",
         "source",
         ["cookies"],
         "operation-id",
@@ -178,6 +207,7 @@ describe("browserEnvironment authority", () => {
     };
     await expect(
       definition.handler({ caller: wrong } as never, "startSensitiveImport", [
+        "device:test",
         "source",
         ["cookies"],
         "operation-id",

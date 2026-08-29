@@ -88,7 +88,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // it in the OS crosses out of the workspace and remains prominent.
   { key: "service:browserEnvironment.cancelDownload", notability: "everyday" },
   { key: "service:browserEnvironment.cancelImportRead", notability: "everyday" },
-  { key: "service:browserEnvironment.getImportHost", notability: "headline" },
+  { key: "service:browserEnvironment.listImportHosts", notability: "headline" },
   { key: "service:browserEnvironment.listDownloads", notability: "everyday" },
   { key: "service:browserEnvironment.listImportOpenTabs", notability: "headline" },
   { key: "service:browserEnvironment.listImportSources", notability: "headline" },

@@ -8287,94 +8287,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:browserEnvironment.getImportHost",
-      "rpcPlane": "host-service",
-      "owner": "browserEnvironment",
-      "method": "getImportHost",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "browserEnvironment.read",
-      "reviewRationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:browserEnvironment.getImportHost"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.getImportHost\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.getImportHost\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.getImportHost\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:browserEnvironment.getImportHost",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:browserEnvironment.getImportHost#capability:service:browserEnvironment.getImportHost",
-      "rpcPlane": "host-service",
-      "owner": "browserEnvironment",
-      "method": "getImportHost",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "browserEnvironment.read",
-      "reviewRationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
-      "capability": "service:browserEnvironment.getImportHost",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "browserEnvironment.broker.getImportHost"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:browserEnvironment.listDownloads",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
@@ -8434,6 +8346,94 @@
       "resourceDerivation": {
         "kind": "prepared",
         "resolver": "browserEnvironment.broker.listDownloads"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.listImportHosts",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "listImportHosts",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.read",
+      "reviewRationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.listImportHosts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.listImportHosts\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.listImportHosts\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.listImportHosts\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserEnvironment.listImportHosts",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.listImportHosts#capability:service:browserEnvironment.listImportHosts",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "listImportHosts",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.read",
+      "reviewRationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
+      "capability": "service:browserEnvironment.listImportHosts",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "browserEnvironment.broker.listImportHosts"
       },
       "authorityPrincipals": [
         "code"

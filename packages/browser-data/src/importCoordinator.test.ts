@@ -70,7 +70,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: provider(),
     });
@@ -94,7 +94,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: identity.ownerUserId,
       displayName: "Owner A laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: providerA,
     });
@@ -103,7 +103,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: ownerB.ownerUserId,
       displayName: "Owner B laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: providerB,
     });
@@ -127,7 +127,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: provider(),
     });
@@ -168,7 +168,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: importProvider,
     });
@@ -214,7 +214,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: importProvider,
     });
@@ -254,7 +254,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: provider(),
     });
@@ -292,7 +292,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: importProvider,
     });
@@ -339,7 +339,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: provider(),
     });
@@ -367,7 +367,7 @@ describe("BrowserImportCoordinator", () => {
       ownerUserId: "user-a",
       displayName: "Laptop",
       platform: "linux",
-      location: "desktop",
+      location: "device",
       connected: true,
       provider: provider(),
     });

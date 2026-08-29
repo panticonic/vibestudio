@@ -22,12 +22,15 @@ type ProviderFrame =
   | { type: "complete"; summary: ImportSummary }
   | { type: "error"; message: string };
 
-/** Adapts the authenticated desktop endpoint to the common import provider. */
+/** Adapts one authenticated device/server endpoint to the common import provider. */
 export class RemoteBrowserImportProvider implements BrowserImportProvider {
-  constructor(private readonly call: <T>(method: string, ...args: unknown[]) => Promise<T>) {}
+  constructor(
+    private readonly hostId: string,
+    private readonly call: <T>(method: string, ...args: unknown[]) => Promise<T>
+  ) {}
 
   listSources(_signal: AbortSignal): Promise<BrowserImportSource[]> {
-    return this.call("listImportSources");
+    return this.call("listImportSources", this.hostId);
   }
 
   async preview(
@@ -38,6 +41,7 @@ export class RemoteBrowserImportProvider implements BrowserImportProvider {
   ): Promise<ImportPreviewSummary> {
     const summary = await this.call<ImportPreviewSummary>(
       "previewImportSource",
+      this.hostId,
       sourceId,
       dataTypes
     );
@@ -50,7 +54,12 @@ export class RemoteBrowserImportProvider implements BrowserImportProvider {
     dataTypes: BrowserImportDataType[],
     signal: AbortSignal
   ): Promise<BrowserImportRead> {
-    const operationId = await this.call<string>("startImportRead", sourceId, dataTypes);
+    const operationId = await this.call<string>(
+      "startImportRead",
+      this.hostId,
+      sourceId,
+      dataTypes
+    );
     const cancel = () => void this.call("cancelImportRead", operationId).catch(() => {});
     signal.addEventListener("abort", cancel, { once: true });
     return {
@@ -90,6 +99,6 @@ export class RemoteBrowserImportProvider implements BrowserImportProvider {
   }
 
   listOpenTabs(sourceId: string, _signal: AbortSignal): Promise<ImportedBrowserOpenTab[]> {
-    return this.call("listImportOpenTabs", sourceId);
+    return this.call("listImportOpenTabs", this.hostId, sourceId);
   }
 }

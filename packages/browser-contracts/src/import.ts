@@ -34,13 +34,13 @@ export const BROWSER_IMPORT_DATA_TYPES = [
 export type BrowserImportDataType = (typeof BROWSER_IMPORT_DATA_TYPES)[number];
 export const BrowserImportDataTypeSchema = z.enum(BROWSER_IMPORT_DATA_TYPES);
 
-export const IMPORT_HOST_PLATFORMS = ["darwin", "linux", "win32"] as const;
+export const IMPORT_HOST_PLATFORMS = ["darwin", "linux", "win32", "ios", "android"] as const;
 export type ImportHostPlatform = (typeof IMPORT_HOST_PLATFORMS)[number];
 export interface ImportHostSummary {
   hostId: string;
   displayName: string;
   platform: ImportHostPlatform;
-  location: "desktop" | "server";
+  location: "device" | "server";
   connected: boolean;
 }
 export const ImportHostSummarySchema = z
@@ -48,7 +48,7 @@ export const ImportHostSummarySchema = z
     hostId: z.string().min(1),
     displayName: z.string().min(1).max(200),
     platform: z.enum(IMPORT_HOST_PLATFORMS),
-    location: z.enum(["desktop", "server"]),
+    location: z.enum(["device", "server"]),
     connected: z.boolean(),
   })
   .strict();

@@ -119,7 +119,7 @@ export class BrowserImportHostProvider {
     private readonly host: {
       hostId: string;
       displayName: string;
-      location?: "server" | "desktop";
+      location?: "server" | "device";
     },
     options: {
       createProvider?: () => Promise<BrowserImportProvider>;
@@ -152,7 +152,7 @@ export class BrowserImportHostProvider {
       hostId: this.host.hostId,
       displayName: this.host.displayName,
       platform: normalizedPlatform(),
-      location: this.host.location ?? ("desktop" as const),
+      location: this.host.location ?? ("device" as const),
       connected: true,
     };
   }

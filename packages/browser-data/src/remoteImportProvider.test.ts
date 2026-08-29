@@ -13,6 +13,7 @@ describe("RemoteBrowserImportProvider", () => {
       throw new Error(`Unexpected method: ${method}`);
     });
     const provider = new RemoteBrowserImportProvider(
+      "device:test",
       call as unknown as <T>(method: string, ...args: unknown[]) => Promise<T>
     );
 
@@ -22,6 +23,9 @@ describe("RemoteBrowserImportProvider", () => {
       new AbortController().signal
     );
     expect(calls).toEqual(["startImportRead"]);
+    expect(call).toHaveBeenNthCalledWith(1, "startImportRead", "device:test", "firefox:default", [
+      "bookmarks",
+    ]);
 
     await expect(read.consume({ store: vi.fn(), progress: vi.fn() })).resolves.toEqual({
       dataTypes: [],

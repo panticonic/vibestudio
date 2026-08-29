@@ -1121,27 +1121,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "browserEnvironment.getImportHost": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "browserEnvironment.read",
-      rationale:
-        "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
-    },
-    capability: "service:browserEnvironment.getImportHost",
-    presentation: {
-      title: "Access browser import details",
-      action: "access browser import details",
-      description: "Check which browser can provide data for import.",
-      group: "network",
-      authorityCategory: {
-        domain: "web",
-        verb: "see",
-      },
-    },
-  },
   "browserEnvironment.listDownloads": {
     tier: {
       tier: "open",
@@ -1156,6 +1135,27 @@ export const HOST_AUTHORITY_METHODS = {
       title: "View browser downloads",
       action: "view browser downloads",
       description: "See your current and recent browser downloads.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
+  },
+  "browserEnvironment.listImportHosts": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.read",
+      rationale:
+        "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
+    },
+    capability: "service:browserEnvironment.listImportHosts",
+    presentation: {
+      title: "Access browser import details",
+      action: "access browser import details",
+      description: "Check which browser can provide data for import.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -8104,8 +8104,8 @@ export const HOST_AUTHORITY_METHODS = {
 export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.cancelDownload": ["service:browserEnvironment.cancelDownload"],
   "browserEnvironment.cancelImportRead": ["service:browserEnvironment.cancelImportRead"],
-  "browserEnvironment.getImportHost": ["service:browserEnvironment.getImportHost"],
   "browserEnvironment.listDownloads": ["service:browserEnvironment.listDownloads"],
+  "browserEnvironment.listImportHosts": ["service:browserEnvironment.listImportHosts"],
   "browserEnvironment.listImportOpenTabs": ["service:browserEnvironment.listImportOpenTabs"],
   "browserEnvironment.listImportSources": ["service:browserEnvironment.listImportSources"],
   "browserEnvironment.nextImportFrame": ["service:browserEnvironment.nextImportFrame"],
@@ -8370,11 +8370,11 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "web",
     verb: "manage",
   },
-  "service:browserEnvironment.getImportHost": {
+  "service:browserEnvironment.listDownloads": {
     domain: "web",
     verb: "see",
   },
-  "service:browserEnvironment.listDownloads": {
+  "service:browserEnvironment.listImportHosts": {
     domain: "web",
     verb: "see",
   },
@@ -9055,20 +9055,20 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "manage",
     },
   },
-  "service:browserEnvironment.getImportHost": {
-    title: "Access browser import details",
-    action: "access browser import details",
-    description: "Check which browser can provide data for import.",
+  "service:browserEnvironment.listDownloads": {
+    title: "View browser downloads",
+    action: "view browser downloads",
+    description: "See your current and recent browser downloads.",
     group: "network",
     authorityCategory: {
       domain: "web",
       verb: "see",
     },
   },
-  "service:browserEnvironment.listDownloads": {
-    title: "View browser downloads",
-    action: "view browser downloads",
-    description: "See your current and recent browser downloads.",
+  "service:browserEnvironment.listImportHosts": {
+    title: "Access browser import details",
+    action: "access browser import details",
+    description: "Check which browser can provide data for import.",
     group: "network",
     authorityCategory: {
       domain: "web",

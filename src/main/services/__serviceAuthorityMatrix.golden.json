@@ -896,88 +896,6 @@
           }
         }
       },
-      "getImportHost": {
-        "authority": {
-          "requirement": {
-            "kind": "any",
-            "requirements": [
-              {
-                "kind": "capability",
-                "principal": "host",
-                "capability": "service:browserEnvironment.getImportHost"
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "code",
-                    "capability": "service:browserEnvironment.getImportHost"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "session",
-                    "capability": "service:browserEnvironment.getImportHost"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              }
-            ]
-          },
-          "resource": {
-            "kind": "literal",
-            "key": "service:browserEnvironment.getImportHost"
-          },
-          "prepared": {
-            "resolver": "browserEnvironment.broker.getImportHost",
-            "leaves": [
-              {
-                "capability": "service:browserEnvironment.getImportHost",
-                "requirement": {
-                  "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
-                },
-                "tier": "gated"
-              }
-            ]
-          }
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "browserEnvironment.read",
-          "rationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers."
-        },
-        "capability": "service:browserEnvironment.getImportHost",
-        "presentation": {
-          "title": "Access browser import details",
-          "action": "access browser import details",
-          "description": "Check which browser can provide data for import.",
-          "group": "network",
-          "authorityCategory": {
-            "domain": "web",
-            "verb": "see"
-          }
-        }
-      },
       "listDownloads": {
         "authority": {
           "requirement": {
@@ -1053,6 +971,88 @@
           "title": "View browser downloads",
           "action": "view browser downloads",
           "description": "See your current and recent browser downloads.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "see"
+          }
+        }
+      },
+      "listImportHosts": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.listImportHosts"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.listImportHosts"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.listImportHosts"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.listImportHosts"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.listImportHosts",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.listImportHosts",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "code"
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers."
+        },
+        "capability": "service:browserEnvironment.listImportHosts",
+        "presentation": {
+          "title": "Access browser import details",
+          "action": "access browser import details",
+          "description": "Check which browser can provide data for import.",
           "group": "network",
           "authorityCategory": {
             "domain": "web",

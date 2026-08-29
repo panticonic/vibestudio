@@ -5,10 +5,17 @@ import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   BrowserCookieInput,
+  BrowserImportDataType,
   BrowserImportProvider,
+  BrowserImportSource,
   FormFillValueInput,
+  ImportedBrowserOpenTab,
   ImportedPassword,
+  ImportHostSummary,
+  ImportPreviewSummary,
 } from "@vibestudio/browser-data";
+import { ImportHostSummarySchema } from "@vibestudio/browser-data";
+import type { BrowserEnvironmentImportRouter } from "../../main/services/browserEnvironmentService.js";
 import { BrowserImportHostProvider } from "../../main/services/browserImportHostProvider.js";
 import type {
   BrowserImportProviderFrame,
@@ -24,8 +31,38 @@ interface ScopedHost {
   provider: BrowserImportHostProvider;
 }
 
+interface ImportEndpoint {
+  summary: ImportHostSummary;
+  listSources(signal?: AbortSignal): Promise<BrowserImportSource[]>;
+  preview(
+    sourceId: string,
+    dataTypes: BrowserImportDataType[],
+    signal?: AbortSignal
+  ): Promise<ImportPreviewSummary>;
+  startImport(sourceId: string, dataTypes: BrowserPublicImportDataType[]): string | Promise<string>;
+  nextFrame(operationId: string): Promise<BrowserImportProviderFrame>;
+  cancel(operationId: string): void | Promise<void>;
+  listOpenTabs(sourceId: string, signal?: AbortSignal): Promise<ImportedBrowserOpenTab[]>;
+  startSensitiveImport(
+    sourceId: string,
+    dataTypes: BrowserSensitiveImportDataType[],
+    operationId: string
+  ): SensitiveBrowserImportStatus | Promise<SensitiveBrowserImportStatus>;
+  observeSensitiveImport(
+    operationId: string
+  ): SensitiveBrowserImportStatus | Promise<SensitiveBrowserImportStatus>;
+  cancelSensitiveImport(
+    operationId: string
+  ): SensitiveBrowserImportStatus | Promise<SensitiveBrowserImportStatus>;
+}
+
+export interface BrowserImportDeviceConnection {
+  callerId: string;
+  call(method: string, args: unknown[]): Promise<unknown>;
+}
+
 interface BoundRead {
-  provider: BrowserImportHostProvider;
+  endpoint: ImportEndpoint;
   providerOperationId: string;
   callerKey: string;
   timer: NodeJS.Timeout;
@@ -33,7 +70,7 @@ interface BoundRead {
 }
 
 interface BoundSensitiveImport {
-  provider: BrowserImportHostProvider;
+  endpoint: ImportEndpoint;
   callerKey: string;
   timer: NodeJS.Timeout;
 }
@@ -46,7 +83,7 @@ const DEFAULT_HANDLE_TTL_MS = 30 * 60_000;
  * session files never enter the workspace extension: the host reads them and
  * writes protected categories straight into the caller's BrowserVaultDO.
  */
-export class ServerBrowserImportHostRegistry {
+export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImportRouter {
   private readonly hosts = new Map<string, ScopedHost>();
   private readonly reads = new Map<string, BoundRead>();
   private readonly sensitiveImports = new Map<string, BoundSensitiveImport>();
@@ -59,22 +96,52 @@ export class ServerBrowserImportHostRegistry {
       doDispatch: DoDispatcher;
       createProvider?: () => Promise<BrowserImportProvider>;
       readHandleTtlMs?: number;
+      resolveDeviceConnection?(ctx: ServiceContext): BrowserImportDeviceConnection | null;
     }
   ) {
     this.ledgerDir = path.join(deps.statePath, "browser-import", "sensitive-ledgers");
     mkdirSync(this.ledgerDir, { recursive: true, mode: 0o700 });
   }
 
-  startImportRead(
+  async listHosts(ctx: ServiceContext): Promise<ImportHostSummary[]> {
+    const server = this.localEndpoint(ctx).summary;
+    const connection = this.deps.resolveDeviceConnection?.(ctx);
+    if (!connection) return [server];
+    try {
+      const value = await connection.call("browserEnvironment.listImportHosts", []);
+      const devices = ImportHostSummarySchema.array()
+        .parse(value)
+        .filter((host) => host.location === "device" && host.connected);
+      return [...devices, server];
+    } catch {
+      return [server];
+    }
+  }
+
+  async listSources(ctx: ServiceContext, hostId: string): Promise<BrowserImportSource[]> {
+    return (await this.endpoint(ctx, hostId)).listSources(ctx.signal);
+  }
+
+  async preview(
     ctx: ServiceContext,
+    hostId: string,
+    sourceId: string,
+    dataTypes: BrowserImportDataType[]
+  ): Promise<ImportPreviewSummary> {
+    return (await this.endpoint(ctx, hostId)).preview(sourceId, dataTypes, ctx.signal);
+  }
+
+  async startImportRead(
+    ctx: ServiceContext,
+    hostId: string,
     sourceId: string,
     dataTypes: BrowserPublicImportDataType[]
-  ): string {
-    const provider = this.forContext(ctx);
-    const providerOperationId = provider.startImport(sourceId, dataTypes);
+  ): Promise<string> {
+    const endpoint = await this.endpoint(ctx, hostId);
+    const providerOperationId = await endpoint.startImport(sourceId, dataTypes);
     const handle = `bir_${randomBytes(24).toString("base64url")}`;
     const entry: BoundRead = {
-      provider,
+      endpoint,
       providerOperationId,
       callerKey: readCallerKey(ctx),
       timer: undefined as never,
@@ -82,7 +149,7 @@ export class ServerBrowserImportHostRegistry {
     };
     entry.timer = this.expiryTimer(() => {
       this.reads.delete(handle);
-      provider.cancel(providerOperationId);
+      void Promise.resolve(endpoint.cancel(providerOperationId)).catch(() => undefined);
     });
     this.reads.set(handle, entry);
     return handle;
@@ -93,7 +160,7 @@ export class ServerBrowserImportHostRegistry {
     if (entry.reading) throw invalidReadHandle();
     entry.reading = true;
     try {
-      const frame = await entry.provider.nextFrame(entry.providerOperationId);
+      const frame = await entry.endpoint.nextFrame(entry.providerOperationId);
       if (frame.type === "complete" || frame.type === "error") this.deleteRead(handle, false);
       else this.refreshRead(handle, entry);
       return frame;
@@ -107,28 +174,35 @@ export class ServerBrowserImportHostRegistry {
     this.deleteRead(handle, true);
   }
 
-  startSensitiveImport(
+  async listOpenTabs(
     ctx: ServiceContext,
+    hostId: string,
+    sourceId: string
+  ): Promise<ImportedBrowserOpenTab[]> {
+    return (await this.endpoint(ctx, hostId)).listOpenTabs(sourceId, ctx.signal);
+  }
+
+  async startSensitiveImport(
+    ctx: ServiceContext,
+    hostId: string,
     sourceId: string,
     dataTypes: BrowserSensitiveImportDataType[],
     operationId: string
-  ): SensitiveBrowserImportStatus {
+  ): Promise<SensitiveBrowserImportStatus> {
     const callerKey = readCallerKey(ctx);
     const existing = this.sensitiveImports.get(operationId);
     if (existing && existing.callerKey !== callerKey) throw invalidReadHandle();
-    const provider = existing?.provider ?? this.forContext(ctx);
-    const status = provider.startSensitiveImport(sourceId, dataTypes, operationId);
+    const endpoint = existing?.endpoint ?? (await this.endpoint(ctx, hostId));
+    const status = await endpoint.startSensitiveImport(sourceId, dataTypes, operationId);
     if (!existing) {
       const entry: BoundSensitiveImport = {
-        provider,
+        endpoint,
         callerKey,
         timer: undefined as never,
       };
       entry.timer = this.expiryTimer(() => {
         this.sensitiveImports.delete(operationId);
-        if (provider.observeSensitiveImport(operationId).state === "running") {
-          provider.cancelSensitiveImport(operationId);
-        }
+        void this.cancelIfRunning(endpoint, operationId);
       });
       this.sensitiveImports.set(operationId, entry);
     } else {
@@ -137,16 +211,22 @@ export class ServerBrowserImportHostRegistry {
     return status;
   }
 
-  observeSensitiveImport(ctx: ServiceContext, operationId: string): SensitiveBrowserImportStatus {
+  async observeSensitiveImport(
+    ctx: ServiceContext,
+    operationId: string
+  ): Promise<SensitiveBrowserImportStatus> {
     const entry = this.requireSensitive(ctx, operationId);
     this.refreshSensitive(operationId, entry);
-    return entry.provider.observeSensitiveImport(operationId);
+    return entry.endpoint.observeSensitiveImport(operationId);
   }
 
-  cancelSensitiveImport(ctx: ServiceContext, operationId: string): SensitiveBrowserImportStatus {
+  async cancelSensitiveImport(
+    ctx: ServiceContext,
+    operationId: string
+  ): Promise<SensitiveBrowserImportStatus> {
     const entry = this.requireSensitive(ctx, operationId);
     this.refreshSensitive(operationId, entry);
-    return entry.provider.cancelSensitiveImport(operationId);
+    return entry.endpoint.cancelSensitiveImport(operationId);
   }
 
   forContext(ctx: ServiceContext): BrowserImportHostProvider {
@@ -189,6 +269,53 @@ export class ServerBrowserImportHostRegistry {
     return provider;
   }
 
+  private localEndpoint(ctx: ServiceContext): ImportEndpoint {
+    const provider = this.forContext(ctx);
+    return {
+      summary: provider.summary(),
+      listSources: (signal) => provider.listSources(signal),
+      preview: (sourceId, dataTypes, signal) => provider.preview(sourceId, dataTypes, signal),
+      startImport: (sourceId, dataTypes) => provider.startImport(sourceId, dataTypes),
+      nextFrame: (operationId) => provider.nextFrame(operationId),
+      cancel: (operationId) => provider.cancel(operationId),
+      listOpenTabs: (sourceId, signal) => provider.listOpenTabs(sourceId, signal),
+      startSensitiveImport: (sourceId, dataTypes, operationId) =>
+        provider.startSensitiveImport(sourceId, dataTypes, operationId),
+      observeSensitiveImport: (operationId) => provider.observeSensitiveImport(operationId),
+      cancelSensitiveImport: (operationId) => provider.cancelSensitiveImport(operationId),
+    };
+  }
+
+  private async endpoint(ctx: ServiceContext, hostId: string): Promise<ImportEndpoint> {
+    const local = this.localEndpoint(ctx);
+    if (local.summary.hostId === hostId) return local;
+    const connection = this.deps.resolveDeviceConnection?.(ctx);
+    if (!connection) throw unavailableHost(hostId);
+    const summaries = ImportHostSummarySchema.array().parse(
+      await connection.call("browserEnvironment.listImportHosts", [])
+    );
+    const summary = summaries.find(
+      (candidate) =>
+        candidate.hostId === hostId && candidate.location === "device" && candidate.connected
+    );
+    if (!summary) throw unavailableHost(hostId);
+    const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
+      connection.call(`browserEnvironment.${method}`, args) as Promise<T>;
+    return {
+      summary,
+      listSources: () => call("listImportSources", hostId),
+      preview: (sourceId, dataTypes) => call("previewImportSource", hostId, sourceId, dataTypes),
+      startImport: (sourceId, dataTypes) => call("startImportRead", hostId, sourceId, dataTypes),
+      nextFrame: (operationId) => call("nextImportFrame", operationId),
+      cancel: (operationId) => call("cancelImportRead", operationId),
+      listOpenTabs: (sourceId) => call("listImportOpenTabs", hostId, sourceId),
+      startSensitiveImport: (sourceId, dataTypes, operationId) =>
+        call("startSensitiveImport", hostId, sourceId, dataTypes, operationId),
+      observeSensitiveImport: (operationId) => call("observeSensitiveImport", operationId),
+      cancelSensitiveImport: (operationId) => call("cancelSensitiveImport", operationId),
+    };
+  }
+
   stop(): void {
     for (const [handle] of this.reads) this.deleteRead(handle, true);
     for (const entry of this.sensitiveImports.values()) clearTimeout(entry.timer);
@@ -214,7 +341,9 @@ export class ServerBrowserImportHostRegistry {
     if (!entry) return;
     clearTimeout(entry.timer);
     this.reads.delete(handle);
-    if (cancel) entry.provider.cancel(entry.providerOperationId);
+    if (cancel) {
+      void Promise.resolve(entry.endpoint.cancel(entry.providerOperationId)).catch(() => undefined);
+    }
   }
 
   private refreshRead(handle: string, entry: BoundRead): void {
@@ -222,7 +351,7 @@ export class ServerBrowserImportHostRegistry {
     entry.timer = this.expiryTimer(() => {
       if (this.reads.get(handle) !== entry) return;
       this.reads.delete(handle);
-      entry.provider.cancel(entry.providerOperationId);
+      void Promise.resolve(entry.endpoint.cancel(entry.providerOperationId)).catch(() => undefined);
     });
   }
 
@@ -231,9 +360,7 @@ export class ServerBrowserImportHostRegistry {
     entry.timer = this.expiryTimer(() => {
       if (this.sensitiveImports.get(operationId) === entry) {
         this.sensitiveImports.delete(operationId);
-        if (entry.provider.observeSensitiveImport(operationId).state === "running") {
-          entry.provider.cancelSensitiveImport(operationId);
-        }
+        void this.cancelIfRunning(entry.endpoint, operationId);
       }
     });
   }
@@ -242,6 +369,16 @@ export class ServerBrowserImportHostRegistry {
     const timer = setTimeout(expire, this.deps.readHandleTtlMs ?? DEFAULT_HANDLE_TTL_MS);
     timer.unref();
     return timer;
+  }
+
+  private async cancelIfRunning(endpoint: ImportEndpoint, operationId: string): Promise<void> {
+    try {
+      if ((await endpoint.observeSensitiveImport(operationId)).state === "running") {
+        await endpoint.cancelSensitiveImport(operationId);
+      }
+    } catch {
+      // Expiration is best-effort cleanup; the selected host may have disconnected.
+    }
   }
 }
 
@@ -261,6 +398,12 @@ function readCallerKey(ctx: ServiceContext): string {
 
 function invalidReadHandle(): Error {
   return Object.assign(new Error("Browser import read handle is invalid or expired"), {
+    code: "EACCES",
+  });
+}
+
+function unavailableHost(hostId: string): Error {
+  return Object.assign(new Error(`Browser import host is unavailable: ${hostId}`), {
     code: "EACCES",
   });
 }

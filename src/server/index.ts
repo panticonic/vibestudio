@@ -28,6 +28,7 @@ import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest
 import {
   createHostCaller,
   createVerifiedCaller,
+  verifiedInitiator,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
 import { omitTrailingUndefined, parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
@@ -1589,6 +1590,8 @@ async function main() {
     if (!file || file.content.kind !== "text") return null;
     return file.content.text;
   };
+  let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
+
   {
     // Origin is the axis every unit review is organized on, and it is the one
     // relationship context every review should present consistently. It is
@@ -3702,27 +3705,32 @@ async function main() {
           workspaceId,
           statePath,
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+          resolveDeviceConnection: (ctx) => {
+            const initiator = verifiedInitiator(ctx);
+            if (initiator.runtime.kind !== "panel" && initiator.runtime.kind !== "app") return null;
+            const rpcServer = rpcServerForGateway;
+            const shell = rpcServer?.getAuthorizingShell(initiator.runtime.id) ?? null;
+            const userId = initiator.subject?.userId;
+            if (
+              !shell ||
+              shell.caller.runtime.kind !== "shell" ||
+              shell.clientPlatform !== "desktop" ||
+              !userId ||
+              userId === "system" ||
+              shell.userId !== userId
+            ) {
+              return null;
+            }
+            const callerId = shell.caller.runtime.id;
+            const bridge = rpcServer?.getClientBridge(callerId);
+            return bridge
+              ? { callerId, call: (method, args) => bridge.call(callerId, method, args) }
+              : null;
+          },
         });
         browserEnvironmentDefinition = createBrowserEnvironmentService({
           getDownloads: () => null,
-          getImportProvider: (ctx) => assertPresent(browserImportHosts).forContext(ctx),
-          startImportRead: (ctx, sourceId, dataTypes) =>
-            assertPresent(browserImportHosts).startImportRead(ctx, sourceId, dataTypes),
-          nextImportFrame: (ctx, operationId) =>
-            assertPresent(browserImportHosts).nextImportFrame(ctx, operationId),
-          cancelImportRead: (ctx, operationId) =>
-            assertPresent(browserImportHosts).cancelImportRead(ctx, operationId),
-          startSensitiveImport: (ctx, sourceId, dataTypes, operationId) =>
-            assertPresent(browserImportHosts).startSensitiveImport(
-              ctx,
-              sourceId,
-              dataTypes,
-              operationId
-            ),
-          observeSensitiveImport: (ctx, operationId) =>
-            assertPresent(browserImportHosts).observeSensitiveImport(ctx, operationId),
-          cancelSensitiveImport: (ctx, operationId) =>
-            assertPresent(browserImportHosts).cancelSensitiveImport(ctx, operationId),
+          importRouter: assertPresent(browserImportHosts),
           browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
             workspaceConfig,
             "browserData"
@@ -4579,8 +4587,6 @@ async function main() {
     const { createMobileNativeService } = await import("./services/mobileNativeService.js");
     container.registerRpc(createMobileNativeService({ appRoot }));
   }
-
-  let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
 
   container.registerManaged({
     name: "rpcServer",
