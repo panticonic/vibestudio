@@ -105,6 +105,11 @@ interface PinnedEntry {
   sourceRoot: string;
 }
 
+interface PrefetchFlight {
+  entry: PinnedEntry;
+  completion: Promise<void>;
+}
+
 /** Distinguishes a backstop/cancel abort from a generic pipe error (nicer copy). */
 class AssetBackstopError extends Error {
   constructor(message: string) {
@@ -244,7 +249,7 @@ export async function startPanelAssetFacade(
     connectMs: options.connectBackstopMs ?? ASSET_CONNECT_BACKSTOP_MS,
     stallMs: options.stallBackstopMs ?? ASSET_STALL_BACKSTOP_MS,
   };
-  const prefetchFlights = new Map<string, Promise<void>>();
+  const prefetchFlights = new Map<string, PrefetchFlight>();
   const prefetchedBuilds = new Set<string>();
   const prefetchLifetime = new AbortController();
   const server = http.createServer((req, res) => {
@@ -269,7 +274,7 @@ export async function startPanelAssetFacade(
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((err) => (err ? rejectClose(err) : resolveClose()));
       });
-      await Promise.allSettled(prefetchFlights.values());
+      await Promise.allSettled([...prefetchFlights.values()].map((flight) => flight.completion));
       await cache?.close();
     },
   };
@@ -333,7 +338,7 @@ function writePersistedPort(portFile: string, port: number): void {
 async function handleRequest(
   serverClient: PanelAssetStreamClient,
   cache: AssetDiskCache | null,
-  prefetchFlights: Map<string, Promise<void>>,
+  prefetchFlights: Map<string, PrefetchFlight>,
   prefetchedBuilds: Set<string>,
   prefetchLifetime: AbortSignal,
   backstops: ResolvedBackstops,
@@ -395,16 +400,18 @@ async function handleRequest(
         );
       })
       .finally(() => prefetchFlights.delete(pinnedEntry.buildKey));
-    prefetchFlights.set(pinnedEntry.buildKey, flight);
+    prefetchFlights.set(pinnedEntry.buildKey, { entry: pinnedEntry, completion: flight });
   }
 
-  // Subresources requested while the entry document is parsing join the one
-  // build flight. This is the synchronization point that replaces dozens of
-  // independent RPC round trips; a failed flight simply falls through to the
-  // normal per-resource fetch below.
-  const requestBuildKey = buildKeyForRequest(gatewayPath, req.headers.referer);
-  const prefetchFlight = requestBuildKey ? prefetchFlights.get(requestBuildKey) : undefined;
-  if (prefetchFlight && !pinnedEntry) await prefetchFlight;
+  // Build-owned subresources requested while the entry document is parsing
+  // join the one build flight. This replaces dozens of independent RPC round
+  // trips without coupling unrelated shared assets to a panel prefetch.
+  const prefetchFlight = prefetchFlightForRequest(
+    gatewayPath,
+    req.headers.referer,
+    prefetchFlights
+  );
+  if (prefetchFlight && !pinnedEntry) await prefetchFlight.completion;
 
   // Worker routes may be panel-reachable through bridge-tunneled gatewayFetch,
   // but they are dynamic surfaces and never belong on this unauthenticated
@@ -537,6 +544,29 @@ function buildKeyForRequest(rawPath: string, referer: string | undefined): strin
   } catch {
     return null;
   }
+}
+
+/**
+ * A browser Referer identifies the build that caused a request; it does not
+ * make every request from that document part of the build. Shell-owned unit
+ * icons, fonts, and future shared resources must remain independent of a panel
+ * bundle flight. Only the immutable artifact namespace or the panel/app source
+ * namespace represented by the flight may join its atomic cache publication.
+ */
+function prefetchFlightForRequest(
+  rawPath: string,
+  referer: string | undefined,
+  flights: Map<string, PrefetchFlight>
+): PrefetchFlight | undefined {
+  const buildKey = buildKeyForRequest(rawPath, referer);
+  if (!buildKey) return undefined;
+  const flight = flights.get(buildKey);
+  if (!flight) return undefined;
+  const pathname = new URL(rawPath, "http://panel-facade.invalid").pathname;
+  return pathname.startsWith(flight.entry.artifactRoot) ||
+    pathname.startsWith(flight.entry.sourceRoot)
+    ? flight
+    : undefined;
 }
 
 async function prefetchInitialPanelAssets(
@@ -676,9 +706,15 @@ async function fetchPrefetchResponse(
   signal: AbortSignal
 ): Promise<Response> {
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  let released = false;
+  const releaseLifetime = (): void => {
+    if (released) return;
+    released = true;
+    signal.removeEventListener("abort", abort);
+  };
+  const abort = () => controller.abort(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
-  if (signal.aborted) controller.abort();
+  if (signal.aborted) abort();
   let response: Response;
   try {
     response = await withConnectBackstop(
@@ -697,14 +733,75 @@ async function fetchPrefetchResponse(
       path,
       backstops.connectMs
     );
-  } finally {
-    signal.removeEventListener("abort", abort);
+  } catch (error) {
+    releaseLifetime();
+    throw error;
   }
   if (!response.ok) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
+    releaseLifetime();
     throw new Error(`panel prefetch ${path} returned HTTP ${response.status}`);
   }
-  return response;
+  return bindResponseToPrefetchLifetime(response, controller.signal, releaseLifetime);
+}
+
+/** Keep façade shutdown attached until the response body—not merely its HEAD—settles. */
+function bindResponseToPrefetchLifetime(
+  response: Response,
+  signal: AbortSignal,
+  releaseLifetime: () => void
+): Response {
+  if (!response.body) {
+    releaseLifetime();
+    return response;
+  }
+  const reader = response.body.getReader();
+  let settled = false;
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    signal.removeEventListener("abort", abort);
+    releaseLifetime();
+    reader.releaseLock();
+  };
+  const abort = (): void => {
+    void reader.cancel(signal.reason).then(settle, settle);
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          settle();
+          controller.close();
+        } else {
+          controller.enqueue(next.value);
+        }
+      } catch (error) {
+        settle();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        settle();
+      }
+    },
+  });
+  const wrapped = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  if (response.url) {
+    Object.defineProperty(wrapped, "url", { value: response.url, configurable: true });
+  }
+  return wrapped;
 }
 
 async function readResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {

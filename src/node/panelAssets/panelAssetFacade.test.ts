@@ -368,6 +368,119 @@ describe("panel asset façade content cache", () => {
     }
   });
 
+  it("never enrolls unrelated unit icons in a panel build prefetch", async () => {
+    const buildKey = "e".repeat(64);
+    const artifact = "export const panelReady = true;";
+    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
+    const manifest = JSON.stringify({
+      artifacts: [
+        {
+          path: "bundle.js",
+          contentType: "application/javascript; charset=utf-8",
+          integrity: `sha256-${artifactDigest}`,
+          initial: true,
+        },
+      ],
+    });
+    const bundle = Buffer.from(encodeBlobRecord(artifactDigest, Buffer.from(artifact)));
+    let releaseBundle!: () => void;
+    const bundleReleased = new Promise<void>((resolve) => {
+      releaseBundle = resolve;
+    });
+    let announceBundle!: () => void;
+    const bundleStarted = new Promise<void>((resolve) => {
+      announceBundle = resolve;
+    });
+    const seen: string[] = [];
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      seen.push(descriptor.path);
+      if (descriptor.path.endsWith("/__manifest.json")) {
+        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      }
+      if (descriptor.path.includes("/__bundle?")) {
+        announceBundle();
+        await bundleReleased;
+        return new Response(bundle, { headers: { "content-type": "application/octet-stream" } });
+      }
+      if (descriptor.path.startsWith("/__vibestudio/unit-icon?")) {
+        return new Response("<svg/>", { headers: { "content-type": "image/svg+xml" } });
+      }
+      return new Response("<!doctype html>", {
+        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
+      });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    const origin = `http://127.0.0.1:${facade.port}`;
+    const entryUrl = `${origin}/panels/chat/?contextId=one&buildKey=${buildKey}`;
+    const iconPath = "/__vibestudio/unit-icon?source=workers%2Fagent-worker&path=assets%2Ficon.svg";
+    try {
+      await (await fetch(entryUrl)).text();
+      await bundleStarted;
+      const iconResponse = fetch(`${origin}${iconPath}`, { headers: { referer: entryUrl } });
+      await vi.waitFor(() => expect(seen).toContain(iconPath));
+      expect(await (await iconResponse).text()).toBe("<svg/>");
+    } finally {
+      releaseBundle();
+      await facade.close();
+    }
+  });
+
+  it("cancels a stalled prefetch body when the façade closes", async () => {
+    const buildKey = "d".repeat(64);
+    const artifact = "export const eventuallyReady = true;";
+    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
+    const manifest = JSON.stringify({
+      artifacts: [
+        {
+          path: "bundle.js",
+          contentType: "application/javascript; charset=utf-8",
+          integrity: `sha256-${artifactDigest}`,
+          initial: true,
+        },
+      ],
+    });
+    let announceBundle!: () => void;
+    const bundleStarted = new Promise<void>((resolve) => {
+      announceBundle = resolve;
+    });
+    let bodyCancelled = false;
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      if (descriptor.path.endsWith("/__manifest.json")) {
+        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      }
+      if (descriptor.path.includes("/__bundle?")) {
+        announceBundle();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1, 2, 3]));
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          }),
+          { headers: { "content-type": "application/octet-stream" } }
+        );
+      }
+      return new Response("<!doctype html>", {
+        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
+      });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    const origin = `http://127.0.0.1:${facade.port}`;
+    await (await fetch(`${origin}/panels/chat/?contextId=one&buildKey=${buildKey}`)).text();
+    await bundleStarted;
+
+    await expect(facade.close()).resolves.toBeUndefined();
+    expect(bodyCancelled).toBe(true);
+  });
+
   it("reuses an immutable representation across credential rotation", async () => {
     const stream = vi.fn<GatewayStream>(async () => {
       return new Response("stable immutable bundle", {

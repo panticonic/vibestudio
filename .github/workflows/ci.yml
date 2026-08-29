@@ -43,6 +43,9 @@ jobs:
       - name: Production host builds without userland source
         run: pnpm test:host-build-without-workspace
 
+      - name: Native Iroh remote transport
+        run: pnpm test:remote-transport
+
       - name: Lint
         run: pnpm lint
 

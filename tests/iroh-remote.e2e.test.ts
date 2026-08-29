@@ -37,7 +37,9 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
+import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startPanelAssetFacade } from "../src/node/panelAssets/panelAssetFacade.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
 import { startIrohIngress, type IrohIngress } from "../src/server/irohIngress.js";
 import { PanelRuntimeCoordinator } from "../src/server/panelRuntimeCoordinator.js";
@@ -93,6 +95,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   let workspaceId: string;
   const dispatched: Array<{ method: string; args: unknown[]; subject?: string; body?: string }> =
     [];
+  let gatewayHandler: ((args: unknown[]) => Promise<Response>) | null = null;
 
   const createClient = async (
     secret: SecretKeyType = SecretKey.generate()
@@ -172,12 +175,15 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
       initialized: true,
       dispatch: async (
         context: ServiceContext,
-        _service: string,
+        service: string,
         method: string,
         args: unknown[]
       ) => {
         const body = context.body ? await new Response(context.body).text() : undefined;
         dispatched.push({ method, args, subject: context.caller.subject?.userId, body });
+        if (service === "gateway" && method === "fetch" && gatewayHandler) {
+          return gatewayHandler(args);
+        }
         if (method === "stream") {
           return new Response(`download:${body ?? ""}`, {
             status: 206,
@@ -370,6 +376,113 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     );
     await closeClient(paired);
   }, 30_000);
+
+  it("keeps unrelated façade assets and RPCs live during a build prefetch", async () => {
+    const paired = await pairFresh();
+    const buildKey = "a".repeat(64);
+    const entryPath = `/panels/chat/?contextId=remote&buildKey=${buildKey}`;
+    const manifestPath = `/__vibestudio/panel-build/${buildKey}/__manifest.json`;
+    const bundlePrefix = `/__vibestudio/panel-build/${buildKey}/__bundle?`;
+    const artifact = "export const ready = true;";
+    const artifactDigest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(artifact)
+    );
+    const artifactHash = Buffer.from(artifactDigest).toString("hex");
+    const bundle = Buffer.from(encodeBlobRecord(artifactHash, Buffer.from(artifact)));
+    const manifest = JSON.stringify({
+      artifacts: [
+        {
+          path: "bundle.js",
+          contentType: "application/javascript; charset=utf-8",
+          integrity: `sha256-${artifactHash}`,
+          initial: true,
+        },
+      ],
+    });
+    let releaseBundle!: () => void;
+    const bundleReleased = new Promise<void>((resolve) => {
+      releaseBundle = resolve;
+    });
+    let announceBundle!: () => void;
+    const bundleStarted = new Promise<void>((resolve) => {
+      announceBundle = resolve;
+    });
+    const requested: string[] = [];
+    gatewayHandler = async (args) => {
+      const descriptor = args[0] as { path: string };
+      requested.push(descriptor.path);
+      if (descriptor.path === manifestPath) {
+        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      }
+      if (descriptor.path.startsWith(bundlePrefix)) {
+        announceBundle();
+        await bundleReleased;
+        return new Response(bundle, {
+          headers: { "content-type": "application/octet-stream" },
+        });
+      }
+      if (descriptor.path.startsWith("/__vibestudio/unit-icon?")) {
+        return new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", {
+          headers: { "content-type": "image/svg+xml" },
+        });
+      }
+      if (descriptor.path === entryPath) {
+        return new Response("<!doctype html><main>chat</main>", {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "public, max-age=31536000, immutable",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const facade = await startPanelAssetFacade(
+      {
+        stream: (_service, _method, args, options) =>
+          paired.rpc.stream("main", "gateway.fetch", args ?? [], options),
+      },
+      { stateDir: path.join(tmp, `facade-${Date.now()}`) }
+    );
+    try {
+      const origin = `http://127.0.0.1:${facade.port}`;
+      const entryUrl = `${origin}${entryPath}`;
+      const entry = await fetch(entryUrl);
+      expect(entry.status).toBe(200);
+      expect(await entry.text()).toContain("chat");
+      await within(bundleStarted, "panel prefetch never started", 2_000);
+
+      const iconPaths = [
+        "/__vibestudio/unit-icon?source=workers%2Flinked-agent&path=assets%2Ficon.svg",
+        "/__vibestudio/unit-icon?source=workers%2Fagent-worker&path=assets%2Ficon.svg",
+        "/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg",
+      ];
+      const iconResponses = await within(
+        Promise.all(
+          iconPaths.map((iconPath) =>
+            fetch(`${origin}${iconPath}`, { headers: { referer: entryUrl } })
+          )
+        ),
+        "unrelated façade assets waited behind panel prefetch",
+        2_000
+      );
+      expect(iconResponses.every((response) => response.status === 200)).toBe(true);
+      await expect(
+        within(
+          paired.rpc.call("main", "demo.echo", ["beside-prefetch"]),
+          "short RPC waited behind panel prefetch",
+          2_000
+        )
+      ).resolves.toMatchObject({ args: ["beside-prefetch"] });
+      expect(requested).toEqual(expect.arrayContaining(iconPaths));
+    } finally {
+      releaseBundle();
+      gatewayHandler = null;
+      await facade.close();
+      await closeClient(paired);
+    }
+  }, 15_000);
 
   it("recycles native stream credit across a concurrent unary burst", async () => {
     const paired = await pairFresh();
