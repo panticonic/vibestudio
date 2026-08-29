@@ -47,6 +47,7 @@ import { RpcServer } from "../src/server/rpcServer.js";
 import { createHubCredentialRedeemer } from "../src/server/services/authService.js";
 
 const RUN = process.env["VIBESTUDIO_RUN_IROH_E2E"] === "1";
+const STARTUP_FAN_OUT_REGRESSION_COUNT = 320;
 const { SecretKey } = loadIrohNodeBinding();
 
 interface ConnectedClient {
@@ -96,6 +97,7 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   const dispatched: Array<{ method: string; args: unknown[]; subject?: string; body?: string }> =
     [];
   let gatewayHandler: ((args: unknown[]) => Promise<Response>) | null = null;
+  let dispatchGate: { method: string; started: number; wait: Promise<void> } | null = null;
 
   const createClient = async (
     secret: SecretKeyType = SecretKey.generate()
@@ -183,6 +185,10 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
         dispatched.push({ method, args, subject: context.caller.subject?.userId, body });
         if (service === "gateway" && method === "fetch" && gatewayHandler) {
           return gatewayHandler(args);
+        }
+        if (dispatchGate?.method === method) {
+          dispatchGate.started += 1;
+          await dispatchGate.wait;
         }
         if (method === "stream") {
           return new Response(`download:${body ?? ""}`, {
@@ -340,6 +346,32 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     });
     await closeClient(paired);
   }, 30_000);
+
+  it("does not constrain authenticated logical sessions to guessed product fan-out", async () => {
+    const paired = await pairFresh({ connectionId: "primary-shell" });
+    try {
+      const refresh = `refresh:${paired.credential.deviceId}:${paired.credential.refreshToken}`;
+      const additional = Array.from({ length: 64 }, (_, index) =>
+        paired.pipe.openSession({
+          sid: `panel-${index}`,
+          connectionId: `panel-lease-${index}`,
+          getToken: () => refresh,
+        })
+      );
+
+      await within(
+        Promise.all(additional.map((session) => session.ready?.())),
+        "authenticated logical sessions were admission-limited",
+        5_000
+      );
+      await expect(
+        rpcFor(additional.at(-1)!).call("main", "demo.echo", ["panel-64"])
+      ).resolves.toMatchObject({ args: ["panel-64"] });
+      expect(paired.pipe.diagnostics()?.logicalSessions).toBe(65);
+    } finally {
+      await closeClient(paired);
+    }
+  }, 15_000);
 
   it("streams an upload and response body over a dedicated native QUIC stream", async () => {
     const paired = await pairFresh();
@@ -501,13 +533,53 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     await closeClient(paired);
   }, 10_000);
 
+  it("keeps startup traffic live while more than 256 RPC dispatches await landing", async () => {
+    const paired = await pairFresh();
+    let release!: () => void;
+    try {
+      dispatchGate = {
+        method: "await-landing",
+        started: 0,
+        wait: new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      };
+
+      const pending = Array.from({ length: STARTUP_FAN_OUT_REGRESSION_COUNT }, (_, index) =>
+        paired.rpc.call("main", "demo.await-landing", [index])
+      );
+      const settled = Promise.allSettled(pending);
+      try {
+        await waitFor(() => (dispatchGate?.started ?? 0) >= 256);
+        await expect(
+          within(
+            paired.rpc.call("main", "demo.echo", ["beside-landing"]),
+            "short RPC was blocked by unresolved startup dispatches",
+            2_000
+          )
+        ).resolves.toMatchObject({ args: ["beside-landing"] });
+      } finally {
+        release();
+        dispatchGate = null;
+      }
+
+      const results = await within(settled, "startup dispatches did not retire", 5_000);
+      expect(results).toHaveLength(STARTUP_FAN_OUT_REGRESSION_COUNT);
+      expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+    } finally {
+      dispatchGate = null;
+      await closeClient(paired);
+    }
+  }, 15_000);
+
   it("keeps short RPCs available beside the product's long-lived stream budget", async () => {
     const paired = await pairFresh();
     const held: Response[] = [];
     try {
-      for (let index = 0; index < 96; index += 1) {
+      for (let index = 0; index < STARTUP_FAN_OUT_REGRESSION_COUNT; index += 1) {
         held.push(await paired.rpc.stream("main", "demo.hold", [index]));
       }
+      expect(paired.pipe.diagnostics()?.activeRequests).toBe(STARTUP_FAN_OUT_REGRESSION_COUNT);
       const calls = Array.from({ length: 8 }, (_, index) =>
         paired.rpc.call("main", "demo.echo", [`beside-hold-${index}`])
       );

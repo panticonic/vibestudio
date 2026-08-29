@@ -48,7 +48,6 @@ import { FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   IROH_WIRE_VERSION,
-  MAX_LOGICAL_SESSIONS_PER_CONNECTION,
   MAX_PENDING_STREAM_ADMISSIONS,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
@@ -4579,13 +4578,6 @@ export class RpcServer {
   // message class is silently discarded below that bound.
   private static readonly WS_BACKPRESSURE_HARD_LIMIT = 128 * 1024 * 1024;
 
-  /**
-   * Ceiling on concurrent logical sessions per authenticated Iroh connection.
-   * Each `open` drives a full handleConnection (10s auth timer + auth work), so
-   * an unbounded flood of opens is a pre-auth DoS. A legitimate client multiplexes
-   * its panels + shell — dozens at most — so this is far above any real need; a
-   * re-open of an already-tracked sid is never blocked.
-   */
   private static readonly IROH_PREAUTH_TIMEOUT_MS = 10_000;
   private static readonly IROH_STREAM_ADMISSION_TIMEOUT_MS = 10_000;
 
@@ -4948,6 +4940,10 @@ export class RpcServer {
       contractVersion: RPC_CONTRACT_VERSION,
     });
 
+    // Completed logical sessions are product principals, not admission work:
+    // panels may legitimately keep any number alive on one physical path.
+    // handleConnection's shared RPC_MAX_PENDING_AUTHENTICATIONS budget bounds
+    // the expensive unauthenticated phase regardless of transport.
     const sessions = new Map<string, IrohRpcSessionChannel>();
     let stopped = false;
     const closeAll = (reason: string): void => {
@@ -4973,16 +4969,6 @@ export class RpcServer {
         );
         switch (frame.t) {
           case IROH_SESSION_OPEN: {
-            if (!sessions.has(frame.sid) && sessions.size >= MAX_LOGICAL_SESSIONS_PER_CONNECTION) {
-              await writeControl({
-                t: IROH_SESSION_OPEN_RESULT,
-                sid: frame.sid,
-                success: false,
-                error: "Too many concurrent sessions on this connection",
-                terminal: true,
-              });
-              continue;
-            }
             sessions.get(frame.sid)?.remoteClosed(4000, "superseded by re-open");
             const session = new IrohRpcSessionChannel({
               sid: frame.sid,

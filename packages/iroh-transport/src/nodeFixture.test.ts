@@ -103,8 +103,8 @@ describe("Iroh Node transport fixture", () => {
     endpoints.clear();
   });
 
-  it("derives transport headroom above the complete application fan-out", () => {
-    expect(IROH_MAX_CONCURRENT_BI_STREAMS).toBe(32_768n);
+  it("advertises the complete QUIC bidirectional stream range", () => {
+    expect(IROH_MAX_CONCURRENT_BI_STREAMS).toBe(1n << 60n);
   });
 
   it("binds fixed identities with explicit minimal config and completes a verified handshake", async () => {

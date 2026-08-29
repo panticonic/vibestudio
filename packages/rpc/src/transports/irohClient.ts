@@ -1,7 +1,6 @@
 import {
   decodeJsonFrame,
   IROH_WIRE_VERSION,
-  MAX_ACTIVE_REQUESTS_PER_SESSION,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
   MAX_PENDING_STREAM_ADMISSIONS,
@@ -305,9 +304,6 @@ class ClientSession implements IrohClientSession {
     ) {
       if (this.inboundRequests.has(requestId)) {
         throw new Error(`Duplicate Iroh inbound request id ${requestId}`);
-      }
-      if (this.inboundRequests.size >= MAX_ACTIVE_REQUESTS_PER_SESSION) {
-        throw new Error(`Iroh session ${this.sid} exceeded its active request bound`);
       }
       this.inboundRequests.set(requestId, { stream, settled: false });
       this.pipe.diagnosticsChanged();

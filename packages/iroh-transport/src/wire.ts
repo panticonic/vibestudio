@@ -15,17 +15,6 @@ export const MAX_REQUEST_ID_BYTES = 128;
  */
 export const MAX_PENDING_STREAM_ADMISSIONS = 128;
 
-/** Logical-session fan-out carried by one authenticated physical connection. */
-export const MAX_LOGICAL_SESSIONS_PER_CONNECTION = 64;
-
-/**
- * One logical session cannot retain an unbounded set of request streams. The
- * bound is intentionally above the desktop's entire expected request fan-out;
- * it protects memory from a retained-stream flood rather than scheduling
- * ordinary work.
- */
-export const MAX_ACTIVE_REQUESTS_PER_SESSION = 256;
-
 export type IrohStreamKind = "control" | "envelope" | "message" | "stream";
 
 export type IrohStreamPreamble =
