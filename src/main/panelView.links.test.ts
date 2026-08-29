@@ -61,6 +61,7 @@ function createHarness(
     updateCodeIdentity: vi.fn(),
     updateAppView: vi.fn(async () => undefined),
     createView: vi.fn(() => ({ webContents: wc.webContents })),
+    destroyView: vi.fn(),
     getWebContents: vi.fn(() => wc.webContents),
     getViewInfo: vi.fn((id: string) =>
       id === panelId
@@ -467,6 +468,21 @@ describe("PanelView plain panel links", () => {
     await vi.waitFor(() => {
       expect(panelOrchestrator.closePanel).toHaveBeenCalledWith(panelId);
     });
+  });
+
+  it("does not close durable panels when the owning desktop window is disposed", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness();
+    await panelView.createViewForBrowser(
+      panelId,
+      "https://accounts.google.com/",
+      "ctx-current",
+      "persist:browser-test"
+    );
+
+    panelView.dispose();
+    webContents.emit("destroyed");
+
+    expect(panelOrchestrator.closePanel).not.toHaveBeenCalled();
   });
 
   it("hands OS protocol links to the confirmed external-open path", async () => {

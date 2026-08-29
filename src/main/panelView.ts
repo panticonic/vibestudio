@@ -142,6 +142,8 @@ export class PanelView implements PanelViewLike {
     string,
     { domReady?: () => void; didFinishLoad?: () => void }
   >();
+  /** Window-owned teardown has begun; native destruction is no longer panel intent. */
+  private disposed = false;
 
   constructor(deps: {
     viewManager: ViewManager;
@@ -421,16 +423,50 @@ export class PanelView implements PanelViewLike {
 
   destroyView(panelId: string): void {
     const contents = this.viewManager.getWebContents(panelId);
+    this.releaseViewResources(panelId, contents ?? undefined);
+    this.viewManager.destroyView(panelId);
+  }
+
+  /**
+   * Release every observer owned by this window generation before ViewManager
+   * destroys native children. Durable panel state outlives a desktop window;
+   * host-owned teardown must therefore never be interpreted as window.close().
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    const panelIds = new Set([
+      ...this.browserStateCleanup.keys(),
+      ...this.browserFaviconCleanup.keys(),
+      ...this.linkInterceptionHandlers.keys(),
+      ...this.contentLoadHandlers.keys(),
+    ]);
+    const failures: unknown[] = [];
+    for (const panelId of panelIds) {
+      try {
+        this.releaseViewResources(panelId, this.viewManager.getWebContents(panelId) ?? undefined);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "PanelView resources could not all be released");
+    }
+  }
+
+  private releaseViewResources(panelId: string, contents?: Electron.WebContents): void {
+    // Disarm self-destruction first. Later cleanup is allowed to fail without
+    // turning the ensuing host-owned native destroy into durable panel intent.
+    this.cleanupBrowserStateTracking(panelId, contents);
     if (this.formFillManager && contents && !contents.isDestroyed()) {
       this.formFillManager.detachFromWebContents(contents.id, contents);
     }
-    this.cleanupBrowserStateTracking(panelId, contents ?? undefined);
     this.browserFaviconCleanup.get(panelId)?.();
     this.browserFaviconCleanup.delete(panelId);
-    this.cleanupLinkInterception(panelId, contents ?? undefined);
+    this.cleanupLinkInterception(panelId, contents);
     this.cdpHost.cleanupPanelAccess(panelId);
     this.cdpHost.unregisterTarget(panelId);
-    this.viewManager.destroyView(panelId);
   }
 
   reloadView(panelId: string): Promise<boolean> {
@@ -723,6 +759,7 @@ export class PanelView implements PanelViewLike {
 
     const destroyedHandler = () => {
       cleanup();
+      if (this.disposed) return;
       // window.close() is the normal completion path for OAuth popups. The
       // native view is already gone, so close its durable panel tree entry too.
       if (!this.panelRegistry.getPanel(panelId)) return;

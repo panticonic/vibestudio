@@ -246,6 +246,26 @@ describe("ApplicationWindowController window lifetime", () => {
     expect(harness.onWindowClosed).toHaveBeenCalledOnce();
     expect(harness.controller.window).toBeNull();
   });
+
+  it("disarms PanelView intent before destroying native child views", () => {
+    const harness = createHarness();
+    harness.controller.create();
+    const window = expectPresent(mocks.windows[0]);
+    const panelView = {
+      dispose: vi.fn(() => mocks.lifecycleEvents.push("panel:dispose")),
+    };
+    const internal = harness.controller as unknown as {
+      currentLifetime: { panelView: typeof panelView } | null;
+    };
+    expect(internal.currentLifetime).not.toBeNull();
+    internal.currentLifetime!.panelView = panelView;
+    mocks.lifecycleEvents.length = 0;
+
+    window.emit("close");
+
+    expect(panelView.dispose).toHaveBeenCalledOnce();
+    expect(mocks.lifecycleEvents.slice(0, 2)).toEqual(["panel:dispose", "view:destroy"]);
+  });
 });
 
 function expectPresent<T>(value: T | undefined): T {

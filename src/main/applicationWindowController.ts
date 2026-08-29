@@ -381,6 +381,20 @@ export class ApplicationWindowController {
     if (lifetime.closed) return;
     lifetime.closed = true;
 
+    // PanelView owns the meaning of child WebContents destruction. Disarm its
+    // per-view observers before ViewManager performs host-owned native teardown
+    // so closing a desktop window cannot masquerade as a panel calling
+    // window.close() and issue durable close RPCs during session shutdown.
+    try {
+      lifetime.panelView?.dispose();
+    } catch (error) {
+      log.error(
+        `[window] Failed to dispose PanelView: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
     // ViewManager owns timers, native overlays, child views, and callbacks. It
     // must be destroyed while the rest of this generation is still reachable;
     // clearing references first would orphan those resources permanently.
