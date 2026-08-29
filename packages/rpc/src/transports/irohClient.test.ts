@@ -111,7 +111,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       // complete. It must not head-of-line block a later independent event
       // stream admitted on the same QUIC connection.
       const stalled = await server.openBi();
-      await stalled.send.writeAll([0, 0, 0, 16]);
+      await stalled.send.writeAll(new Uint8Array([0, 0, 0, 16]));
       const eventStream = await server.openBi();
       await writeIrohStreamPreamble(eventStream.send, {
         k: "message",
@@ -178,6 +178,10 @@ describe("Iroh RPC client over real local QUIC", () => {
       dialAttempts: 2,
       endpointGeneration: 3,
     });
+    const diagnostics: Array<NonNullable<ReturnType<typeof pipe.diagnostics>>> = [];
+    const unsubscribeDiagnostics = pipe.onDiagnosticsChange((snapshot) => {
+      if (snapshot) diagnostics.push(snapshot);
+    });
     const session = pipe.openSession({ sid: "shell", getToken: () => "token" });
     const independentEvent = new Promise<RpcEnvelope>((resolve) => {
       session.onMessage((envelope) => {
@@ -192,12 +196,23 @@ describe("Iroh RPC client over real local QUIC", () => {
       transport: session,
     });
     await expect(rpc.call("main", "echo", ["hello"])).resolves.toBe("hello");
+    await Promise.resolve();
+    expect(diagnostics.some((snapshot) => snapshot.logicalSessions === 1)).toBe(true);
+    expect(diagnostics.some((snapshot) => snapshot.activeRequests === 1)).toBe(true);
+    expect(pipe.diagnostics()).toMatchObject({
+      logicalSessions: 1,
+      activeRequests: 0,
+      transmittedBytes: expect.any(Number),
+      receivedBytes: expect.any(Number),
+      lostBytes: expect.any(Number),
+    });
     const receivedEvent = await independentEvent;
     expect(receivedEvent.message).toMatchObject({ type: "event", event: "ready" });
     expect((receivedEvent.message as { payload: string }).payload).toHaveLength(
       serverMessagePayload.length
     );
     await serverTask;
+    unsubscribeDiagnostics();
     await pipe.close();
   });
 
@@ -284,7 +299,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         }),
         MAX_ENVELOPE_FRAME_BYTES
       );
-      await requestStream.send.writeAll([...responseBody]);
+      await requestStream.send.writeAll(responseBody);
       await requestStream.send.finish();
     })();
 

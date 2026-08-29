@@ -1,17 +1,10 @@
 import {
   rpcErrorDataOf,
   rpcErrorKindOf,
-  responseEnvelopeFor,
   type RpcCausalParent,
   type RpcEnvelope,
   type RpcStreamRequest,
 } from "@vibestudio/rpc";
-import {
-  FRAME_DATA,
-  FRAME_END,
-  FRAME_ERROR,
-  FRAME_HEAD,
-} from "@vibestudio/rpc/protocol/streamCodec";
 import {
   parseServiceMethod,
   type CallerKind,
@@ -22,12 +15,10 @@ import {
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import type { StreamFrame } from "../services/egressProxy.js";
 import type { WsClientState } from "./connectionRegistry.js";
 import type { AuthenticatedHttpRpcCaller, HttpRpcAdmission } from "./httpRpcHandler.js";
 
-const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const STREAM_HEADERS = {
   "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
@@ -701,19 +692,6 @@ export class StreamingRelay {
     request: RpcStreamRequest,
     envelope: RpcEnvelope
   ): (frame: StreamFrame) => Promise<void> | void {
-    const fallbackMessage = (frameType: number, payload: string): WsServerMessage => ({
-      type: "ws:rpc",
-      envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-        type: "stream-frame",
-        requestId: request.requestId,
-        fromId: "main",
-        frameType,
-        payload,
-      }),
-    });
-    const utf8Json = (value: unknown): Uint8Array =>
-      new TextEncoder().encode(JSON.stringify(value));
-
     return (frame): Promise<void> | void => {
       if (frame.kind === "end" || frame.kind === "error") {
         client.uploadBodies?.fail(
@@ -721,49 +699,7 @@ export class StreamingRelay {
           new Error("Streaming RPC response completed before its request body settled")
         );
       }
-      if (frame.kind === "head") {
-        const value = {
-          status: frame.status,
-          statusText: frame.statusText,
-          headerPairs: frame.headerPairs,
-          finalUrl: frame.finalUrl,
-        };
-        return client.ws.sendStreamFrame(
-          request.requestId,
-          FRAME_HEAD,
-          utf8Json(value),
-          fallbackMessage(FRAME_HEAD, JSON.stringify(value))
-        );
-      } else if (frame.kind === "chunk") {
-        return client.ws.sendStreamFrame(
-          request.requestId,
-          FRAME_DATA,
-          frame.bytes,
-          fallbackMessage(FRAME_DATA, Buffer.from(frame.bytes).toString("base64"))
-        );
-      } else if (frame.kind === "end") {
-        const value = { bytesIn: frame.bytesIn };
-        return client.ws.sendStreamFrame(
-          request.requestId,
-          FRAME_END,
-          utf8Json(value),
-          fallbackMessage(FRAME_END, JSON.stringify(value))
-        );
-      } else {
-        const value = {
-          status: frame.status,
-          message: frame.message,
-          code: frame.code,
-          errorKind: frame.errorKind,
-          ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
-        };
-        return client.ws.sendStreamFrame(
-          request.requestId,
-          FRAME_ERROR,
-          utf8Json(value),
-          fallbackMessage(FRAME_ERROR, JSON.stringify(value))
-        );
-      }
+      return client.ws.sendStreamFrame(envelope, frame);
     };
   }
 

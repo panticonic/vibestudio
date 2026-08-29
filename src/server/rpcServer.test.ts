@@ -11,7 +11,7 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { awaitRpcAdmissionResolution, RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer/connectionRegistry.js";
-import type { RpcSessionChannel } from "./rpcServer/sessionChannel.js";
+import { encodeWebSocketStreamFrame, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   createVerifiedCaller,
@@ -51,6 +51,7 @@ import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefin
 import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import { bytesToBase64 } from "@vibestudio/rpc";
+import type { StreamFrame } from "./services/egressProxy.js";
 
 const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
 const testProductAppRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rpc-product-root-"));
@@ -364,13 +365,8 @@ function createClient(callerId = "panel:nav-a"): WsClientState {
     transportBinding: { kind: "local" } as const,
     sendMessage: vi.fn(),
     takeInboundBody: vi.fn(() => undefined),
-    sendStreamFrame: vi.fn(
-      async (
-        _requestId: string,
-        _frameType: number,
-        _payload: Uint8Array,
-        fallbackMessage: WsServerMessage
-      ) => channel.sendMessage(fallbackMessage)
+    sendStreamFrame: vi.fn(async (envelope: RpcEnvelope, frame: StreamFrame) =>
+      channel.sendMessage(encodeWebSocketStreamFrame(envelope, frame))
     ),
     close: vi.fn(),
     terminate: vi.fn(),
@@ -468,13 +464,8 @@ function createTestWs() {
     send,
     sendMessage: vi.fn((message: WsServerMessage) => send(JSON.stringify(message))),
     takeInboundBody: vi.fn(() => undefined),
-    sendStreamFrame: vi.fn(
-      async (
-        _requestId: string,
-        _frameType: number,
-        _payload: Uint8Array,
-        fallbackMessage: WsServerMessage
-      ) => send(JSON.stringify(fallbackMessage))
+    sendStreamFrame: vi.fn(async (envelope: RpcEnvelope, frame: StreamFrame) =>
+      send(JSON.stringify(encodeWebSocketStreamFrame(envelope, frame)))
     ),
     close: vi.fn(),
     terminate: vi.fn(),
@@ -541,10 +532,10 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
 
     const client = createClient();
-    const sends: Array<{ requestId: string; type: number; payload: Uint8Array }> = [];
+    const sends: Array<{ envelope: RpcEnvelope; frame: StreamFrame }> = [];
     const sendStreamFrame = vi.fn(
-      (requestId: string, type: number, payload: Uint8Array): Promise<void> | false => {
-        sends.push({ requestId, type, payload });
+      (envelope: RpcEnvelope, frame: StreamFrame): Promise<void> | false => {
+        sends.push({ envelope, frame });
         return Promise.resolve();
       }
     );
@@ -552,14 +543,18 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
 
     await handleRpc(server, client, streamRequest("sr-1"));
 
-    expect(sends.map((s) => s.type)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
-    expect(sends.every((s) => s.requestId === "sr-1")).toBe(true);
-    expect(JSON.parse(new TextDecoder().decode(sends[0]!.payload))).toMatchObject({
-      status: 200,
-    });
-    // DATA is the RAW body bytes — no base64, no JSON envelope.
-    expect(new TextDecoder().decode(sends[1]!.payload)).toBe("hello!");
-    expect(JSON.parse(new TextDecoder().decode(sends[2]!.payload))).toEqual({ bytesIn: 6 });
+    expect(sends.map((s) => s.frame.kind)).toEqual(["head", "chunk", "end"]);
+    expect(
+      sends.every(
+        (s) => "requestId" in s.envelope.message && s.envelope.message.requestId === "sr-1"
+      )
+    ).toBe(true);
+    expect(sends[0]!.frame).toMatchObject({ kind: "head", status: 200 });
+    const bodyFrame = sends[1]!.frame;
+    expect(bodyFrame.kind).toBe("chunk");
+    if (bodyFrame.kind === "chunk")
+      expect(new TextDecoder().decode(bodyFrame.bytes)).toBe("hello!");
+    expect(sends[2]!.frame).toEqual({ kind: "end", bytesIn: 6 });
     // Nothing went over the JSON ws.send path.
     expect(sentStreamFrames(client)).toHaveLength(0);
   });
@@ -4822,10 +4817,10 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     });
 
     const client = createClient();
-    const sends: Array<{ type: number; payload: Uint8Array }> = [];
+    const sends: StreamFrame[] = [];
     (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(
-      (_requestId: string, frameType: number, payload: Uint8Array) => {
-        sends.push({ type: frameType, payload });
+      (_envelope: RpcEnvelope, frame: StreamFrame) => {
+        sends.push(frame);
         return Promise.resolve();
       }
     );
@@ -4843,8 +4838,10 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
 
     expect(forward).not.toHaveBeenCalled();
     expect(sends).toHaveLength(1);
-    expect(sends[0]!.type).toBe(FRAME_ERROR);
-    expect(new TextDecoder().decode(sends[0]!.payload)).toContain("exactly one");
+    expect(sends[0]).toMatchObject({
+      kind: "error",
+      message: expect.stringContaining("exactly one"),
+    });
   });
 
   it("a loopback session without an upload dispatches with no request body", async () => {

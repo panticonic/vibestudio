@@ -1,15 +1,15 @@
 export const LENGTH_PREFIX_BYTES = 4;
 
 export interface FrameSendStream {
-  writeAll(bytes: number[]): Promise<void>;
+  writeAll(bytes: Uint8Array): Promise<void>;
 }
 
 export interface FrameReceiveStream {
-  readExact(length: number): Promise<number[]>;
+  readExact(length: number): Promise<Uint8Array>;
 }
 
 export interface ChunkReceiveStream {
-  read(maximumBytes: number): Promise<number[]>;
+  read(maximumBytes: number): Promise<Uint8Array>;
 }
 
 export class FrameLimitError extends Error {
@@ -39,22 +39,22 @@ export async function writeFrame(
   if (payload.byteLength > maximumBytes) {
     throw new FrameLimitError(payload.byteLength, maximumBytes);
   }
-  await stream.writeAll([...encodeLengthPrefix(payload.byteLength)]);
-  if (payload.byteLength > 0) await stream.writeAll([...payload]);
+  await stream.writeAll(encodeLengthPrefix(payload.byteLength));
+  if (payload.byteLength > 0) await stream.writeAll(payload);
 }
 
 export async function readFrame(
   stream: FrameReceiveStream,
   maximumBytes: number
 ): Promise<Uint8Array> {
-  const prefix = Uint8Array.from(await stream.readExact(LENGTH_PREFIX_BYTES));
+  const prefix = await stream.readExact(LENGTH_PREFIX_BYTES);
   const declaredBytes = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength).getUint32(
     0,
     false
   );
   if (declaredBytes > maximumBytes) throw new FrameLimitError(declaredBytes, maximumBytes);
   if (declaredBytes === 0) return new Uint8Array();
-  return Uint8Array.from(await stream.readExact(declaredBytes));
+  return stream.readExact(declaredBytes);
 }
 
 /**
@@ -73,7 +73,7 @@ export async function readToEnd(
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   while (true) {
-    const chunk = Uint8Array.from(await stream.read(chunkBytes));
+    const chunk = await stream.read(chunkBytes);
     if (chunk.byteLength === 0) break;
     totalBytes += chunk.byteLength;
     if (!Number.isSafeInteger(totalBytes))
@@ -99,8 +99,8 @@ export async function writeChunked(
     throw new Error("Iroh write chunk size must be a positive safe integer");
   }
   for (let offset = 0; offset < payload.byteLength; offset += chunkBytes) {
-    await stream.writeAll([
-      ...payload.subarray(offset, Math.min(payload.byteLength, offset + chunkBytes)),
-    ]);
+    await stream.writeAll(
+      payload.subarray(offset, Math.min(payload.byteLength, offset + chunkBytes))
+    );
   }
 }

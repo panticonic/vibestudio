@@ -100,7 +100,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     // preamble. That stream consumes one negotiated stream slot, but it must
     // not block admission and dispatch of an independent later RPC stream.
     const stalled = await clientConnection.openBi();
-    await stalled.send.writeAll([0, 0, 0, 16]);
+    await stalled.send.writeAll(new Uint8Array([0, 0, 0, 16]));
 
     const result = rpc.call("main", "test.echo", ["through-iroh"]);
     await vi.waitFor(() => expect(dispatcher.dispatch).toHaveBeenCalled(), { timeout: 2_000 });

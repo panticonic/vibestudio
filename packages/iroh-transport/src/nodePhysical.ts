@@ -25,8 +25,12 @@ import {
 class NodeSendStream implements IrohPhysicalSendStream {
   constructor(readonly native: SendStream) {}
 
-  writeAll(bytes: number[]): Promise<void> {
-    return this.native.writeAll(bytes);
+  writeAll(bytes: Uint8Array): Promise<void> {
+    // The pinned upstream N-API surface requires a real Array<number> and
+    // rejects Uint8Array at runtime. Keep that unavoidable conversion at this
+    // single physical edge; the shared protocol and mobile bridge remain typed
+    // byte surfaces and can adopt a future official zero-copy binding directly.
+    return this.native.writeAll(Array.from(bytes));
   }
 
   finish(): Promise<void> {
@@ -45,12 +49,12 @@ class NodeSendStream implements IrohPhysicalSendStream {
 class NodeReceiveStream implements IrohPhysicalReceiveStream {
   constructor(readonly native: RecvStream) {}
 
-  read(maximumBytes: number): Promise<number[]> {
-    return this.native.read(maximumBytes);
+  async read(maximumBytes: number): Promise<Uint8Array> {
+    return Uint8Array.from(await this.native.read(maximumBytes));
   }
 
-  readExact(length: number): Promise<number[]> {
-    return this.native.readExact(length);
+  async readExact(length: number): Promise<Uint8Array> {
+    return Uint8Array.from(await this.native.readExact(length));
   }
 
   stop(errorCode: bigint): Promise<void> {
@@ -71,6 +75,11 @@ function wrapBiStream(stream: BiStream): IrohPhysicalBiStream {
 
 export class NodePhysicalConnection implements IrohPhysicalConnection {
   readonly peerEndpointId: string;
+  private readonly diagnosticsListeners = new Set<
+    (diagnostics: ReturnType<NodePhysicalConnection["diagnostics"]>) => void
+  >();
+  private diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
+  private diagnosticsFingerprint = "";
 
   constructor(readonly native: Connection) {
     this.peerEndpointId = native.remoteId().toString();
@@ -89,13 +98,17 @@ export class NodePhysicalConnection implements IrohPhysicalConnection {
   }
 
   closed(): Promise<string> {
-    return this.native.closed();
+    return this.native.closed().finally(() => this.stopDiagnostics());
   }
 
   diagnostics() {
     const rtt = this.native.rtt();
+    const stats = this.native.stats();
     return {
       ...(rtt === null ? {} : { rttMs: Number(rtt) }),
+      transmittedBytes: stats.udpTxBytes,
+      receivedBytes: stats.udpRxBytes,
+      lostBytes: stats.lostBytes,
       paths: this.native.paths().map((path) => ({
         selected: path.isSelected,
         kind: path.isRelay ? ("relay" as const) : ("direct" as const),
@@ -103,6 +116,42 @@ export class NodePhysicalConnection implements IrohPhysicalConnection {
         rttMs: Number(path.rttMs),
       })),
     };
+  }
+
+  onDiagnosticsChange(
+    handler: (diagnostics: ReturnType<NodePhysicalConnection["diagnostics"]>) => void
+  ): () => void {
+    this.diagnosticsListeners.add(handler);
+    const diagnostics = this.diagnostics();
+    this.diagnosticsFingerprint = JSON.stringify(diagnostics);
+    handler(diagnostics);
+    if (!this.diagnosticsTimer) {
+      this.diagnosticsTimer = setInterval(() => this.sampleDiagnostics(), 1_000);
+      this.diagnosticsTimer.unref?.();
+    }
+    return () => {
+      this.diagnosticsListeners.delete(handler);
+      if (this.diagnosticsListeners.size === 0) this.stopDiagnostics();
+    };
+  }
+
+  private sampleDiagnostics(): void {
+    if (this.diagnosticsListeners.size === 0) {
+      this.stopDiagnostics();
+      return;
+    }
+    const diagnostics = this.diagnostics();
+    const fingerprint = JSON.stringify(diagnostics);
+    if (fingerprint === this.diagnosticsFingerprint) return;
+    this.diagnosticsFingerprint = fingerprint;
+    for (const listener of [...this.diagnosticsListeners]) listener(diagnostics);
+  }
+
+  private stopDiagnostics(): void {
+    if (this.diagnosticsTimer) clearInterval(this.diagnosticsTimer);
+    this.diagnosticsTimer = null;
+    this.diagnosticsFingerprint = "";
+    this.diagnosticsListeners.clear();
   }
 }
 

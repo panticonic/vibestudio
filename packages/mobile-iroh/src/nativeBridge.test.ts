@@ -73,10 +73,10 @@ describe("mobile Iroh native bridge", () => {
     const endpoint = await createMobileEndpointBinding("identity-1", reach.relays).bind();
     const connection = await endpoint.connect(reach, reach.relays[0]!);
     const stream = await connection.openBi();
-    expect(await stream.recv.read(4096)).toEqual([1, 2, 3]);
+    expect(await stream.recv.read(4096)).toEqual(new Uint8Array([1, 2, 3]));
     expect(native.read).toHaveBeenCalledWith("receive-1", 4096);
-    expect(await stream.recv.readExact(2)).toEqual([4, 5]);
-    await stream.send.writeAll([7, 8]);
+    expect(await stream.recv.readExact(2)).toEqual(new Uint8Array([4, 5]));
+    await stream.send.writeAll(new Uint8Array([7, 8]));
     expect(native.write).toHaveBeenCalledWith("send-1", Buffer.from([7, 8]).toString("base64"));
     await stream.send.reset(513n);
     await stream.recv.stop(514n);

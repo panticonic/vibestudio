@@ -263,7 +263,9 @@ reset, not a repair operation.
 `remote deploy` accepts repeatable `--relay-url` values and writes their ordered
 set to `VIBESTUDIO_IROH_RELAYS`. Without flags it uses the product relay pair.
 Server startup rejects malformed, credential-bearing, non-HTTPS, duplicate, or
-oversized relay coordinates and never enables n0 public presets or address lookup.
+oversized relay coordinates. The product pair is an explicit reviewed public
+n0 configuration; the binding's implicit relay preset and address lookup remain
+disabled.
 
 Production Cloudflare deploys are rooted in the repo scripts:
 

@@ -26,6 +26,7 @@ export interface IrohReconnectProgress {
 export interface LifecycleIrohClientPipe extends IrohClientPipe {
   suspend(): Promise<void>;
   resume(): Promise<void>;
+  invalidateEndpointGeneration(generation: number, reason: string): void;
   onReconnectProgress(handler: (progress: IrohReconnectProgress) => void): () => void;
 }
 
@@ -217,6 +218,7 @@ class ReconnectingSession implements IrohClientSession {
 interface ConnectedGeneration {
   pipe: IrohClientPipe;
   generation: number;
+  disposeObservers(): void;
 }
 
 class ReconnectingPipe implements IrohClientPipe {
@@ -224,6 +226,9 @@ class ReconnectingPipe implements IrohClientPipe {
   private readonly sessions = new Set<ReconnectingSession>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
   private readonly reconnectListeners = new Set<(progress: IrohReconnectProgress) => void>();
+  private readonly diagnosticsListeners = new Set<
+    (diagnostics: IrohConnectionDiagnostics | null) => void
+  >();
   private connected: ConnectedGeneration | null = null;
   private connecting: Promise<ConnectedGeneration> | null = null;
   private statusValue: RpcConnectionStatus = "connecting";
@@ -253,6 +258,14 @@ class ReconnectingPipe implements IrohClientPipe {
     return () => this.reconnectListeners.delete(handler);
   }
 
+  onDiagnosticsChange(
+    handler: (diagnostics: IrohConnectionDiagnostics | null) => void
+  ): () => void {
+    this.diagnosticsListeners.add(handler);
+    handler(this.diagnostics());
+    return () => this.diagnosticsListeners.delete(handler);
+  }
+
   diagnostics(): IrohConnectionDiagnostics | null {
     return this.connected?.pipe.diagnostics() ?? null;
   }
@@ -266,8 +279,10 @@ class ReconnectingPipe implements IrohClientPipe {
     this.suspended = true;
     const connected = this.connected;
     this.connected = null;
+    this.emitDiagnostics();
     this.setStatus("disconnected");
     if (connected) {
+      connected.disposeObservers();
       for (const session of this.sessions) session.invalidate(connected.generation);
       await connected.pipe.close().catch(() => undefined);
     }
@@ -279,6 +294,13 @@ class ReconnectingPipe implements IrohClientPipe {
     this.suspended = false;
     this.setStatus("connecting");
     await this.ensureConnected();
+  }
+
+  invalidateEndpointGeneration(generation: number, reason: string): void {
+    if (this.closed || this.suspended) return;
+    const connected = this.connected;
+    if (!connected || connected.pipe.diagnostics()?.endpointGeneration !== generation) return;
+    this.invalidate(connected, reason);
   }
 
   openSession(options: IrohClientSessionOptions): IrohClientSession {
@@ -299,10 +321,15 @@ class ReconnectingPipe implements IrohClientPipe {
     this.sessions.clear();
     await Promise.all(sessions.map((session) => session.close()));
     const pipe = this.connected?.pipe;
+    this.connected?.disposeObservers();
     this.connected = null;
+    this.emitDiagnostics();
     await pipe?.close().catch(() => undefined);
     await this.options.closeEndpoint();
     await this.connecting?.catch(() => undefined);
+    this.diagnosticsListeners.clear();
+    this.statusListeners.clear();
+    this.reconnectListeners.clear();
   }
 
   removeSession(session: ReconnectingSession): void {
@@ -346,11 +373,23 @@ class ReconnectingPipe implements IrohClientPipe {
           break;
         }
         const generation = ++this.generationValue;
-        const connected = { pipe, generation };
-        this.connected = connected;
-        pipe.onStatusChange((status) => {
-          if (status === "disconnected") this.invalidate(connected);
+        let connected!: ConnectedGeneration;
+        const unsubscribeStatus = pipe.onStatusChange((status) => {
+          if (status === "disconnected") {
+            this.invalidate(connected, "physical Iroh connection closed");
+          }
         });
+        const unsubscribeDiagnostics = pipe.onDiagnosticsChange(() => this.emitDiagnostics());
+        connected = {
+          pipe,
+          generation,
+          disposeObservers: () => {
+            unsubscribeStatus();
+            unsubscribeDiagnostics();
+          },
+        };
+        this.connected = connected;
+        this.emitDiagnostics();
         this.setStatus("connected");
         this.options.onReconnectResult?.({ attempt, success: true });
         await Promise.allSettled(
@@ -375,14 +414,16 @@ class ReconnectingPipe implements IrohClientPipe {
     );
   }
 
-  private invalidate(connected: ConnectedGeneration): void {
+  private invalidate(connected: ConnectedGeneration, reason: string): void {
     if (this.connected !== connected || this.closed) return;
     this.connected = null;
+    connected.disposeObservers();
+    this.emitDiagnostics();
     this.setStatus("connecting");
     this.emitReconnect({
       attempt: 1,
       phase: "scheduled",
-      reason: "physical Iroh connection closed",
+      reason,
       nextRetryInMs: 0,
     });
     for (const session of this.sessions) session.invalidate(connected.generation);
@@ -398,6 +439,11 @@ class ReconnectingPipe implements IrohClientPipe {
 
   private emitReconnect(progress: IrohReconnectProgress): void {
     for (const listener of [...this.reconnectListeners]) listener(progress);
+  }
+
+  private emitDiagnostics(): void {
+    const diagnostics = this.diagnostics();
+    for (const listener of [...this.diagnosticsListeners]) listener(diagnostics);
   }
 }
 

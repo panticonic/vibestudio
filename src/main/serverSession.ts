@@ -24,6 +24,7 @@ import {
   type StoredRemote,
 } from "./services/deviceCredentialStore.js";
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
+import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { CentralDataManager, HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
@@ -206,6 +207,7 @@ export async function establishServerSession(args: {
   /** Structured startup progress for the bootstrap timeline. */
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: IrohReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   onMainSessionTerminalClose?: (error: Error) => void;
@@ -392,6 +394,7 @@ export async function establishServerSession(args: {
 type RemoteConnectArgs = {
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: IrohReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   onMainSessionTerminalClose?: (error: Error) => void;
@@ -450,6 +453,7 @@ async function establishRemoteSession(
       getShellToken: auth,
       onPaired: rotate,
       onConnectionStatusChanged: args.onConnectionStatusChanged,
+      onTransportDiagnosticsChanged: args.onTransportDiagnosticsChanged,
       onReconnectProgress: args.onReconnectProgress,
       onRecovery: args.onRecovery,
       onMainSessionTerminalClose: args.onMainSessionTerminalClose,
@@ -611,6 +615,7 @@ async function establishFreshPairSession(
         persistFreshDeviceCredential(currentStored);
       },
       onConnectionStatusChanged: args.onConnectionStatusChanged,
+      onTransportDiagnosticsChanged: args.onTransportDiagnosticsChanged,
       onReconnectProgress: args.onReconnectProgress,
       onRecovery: args.onRecovery,
       onMainSessionTerminalClose: args.onMainSessionTerminalClose,

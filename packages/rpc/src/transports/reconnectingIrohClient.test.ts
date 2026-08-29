@@ -61,6 +61,11 @@ class FakePipe implements IrohClientPipe {
   readonly sessions: FakeSession[] = [];
   private currentStatus: RpcConnectionStatus = "connected";
   private readonly statuses = new Set<(status: RpcConnectionStatus) => void>();
+  private readonly diagnosticListeners = new Set<
+    (diagnostics: ReturnType<FakePipe["diagnostics"]>) => void
+  >();
+
+  constructor(private readonly endpointGeneration: number | null = null) {}
 
   ready(): Promise<void> {
     return Promise.resolve();
@@ -68,8 +73,17 @@ class FakePipe implements IrohClientPipe {
   status(): RpcConnectionStatus {
     return this.currentStatus;
   }
-  diagnostics(): null {
-    return null;
+  diagnostics() {
+    return this.endpointGeneration === null
+      ? null
+      : { paths: [], endpointGeneration: this.endpointGeneration };
+  }
+  onDiagnosticsChange(
+    handler: (diagnostics: ReturnType<FakePipe["diagnostics"]>) => void
+  ): () => void {
+    this.diagnosticListeners.add(handler);
+    handler(this.diagnostics());
+    return () => this.diagnosticListeners.delete(handler);
   }
   openSession(options: IrohClientSessionOptions): IrohClientSession {
     const session = new FakeSession(options);
@@ -139,6 +153,44 @@ describe("reconnecting Iroh client", () => {
 
     await owner.close();
     expect(closeEndpoint).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates a matching process endpoint generation before its pipe closes independently", async () => {
+    const first = new FakePipe(7);
+    const second = new FakePipe(8);
+    const dial = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial,
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const session = owner.openSession({
+      sid: "workspace:generation",
+      getToken: () => "credential",
+    });
+    const progress = vi.fn();
+    owner.onReconnectProgress(progress);
+    await session.ready?.();
+
+    owner.invalidateEndpointGeneration(6, "stale generation");
+    expect(dial).toHaveBeenCalledOnce();
+
+    owner.invalidateEndpointGeneration(7, "process endpoint replaced");
+    await eventually(() => expect(dial).toHaveBeenCalledTimes(2));
+    await eventually(() => expect(second.sessions).toHaveLength(1));
+    expect(progress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 1,
+        phase: "scheduled",
+        reason: "process endpoint replaced",
+        nextRetryInMs: 0,
+      })
+    );
+    expect(second.sessions[0]?.sid).toBe("workspace:generation");
+    await owner.close();
   });
 
   it("fails work attempted during an outage immediately and resumes the same session", async () => {

@@ -16,6 +16,11 @@ export type DesktopIrohClientOptions = Omit<
   "reach" | "endpointSecret" | "endpointOwner" | "pipe"
 >;
 
+interface DesktopIrohConnectionSupervisorOptions {
+  endpointOwner?: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>;
+  createClient?: typeof createIrohServerClient;
+}
+
 /**
  * Process-level owner for every remote Iroh connection made by one desktop.
  *
@@ -31,23 +36,40 @@ export class DesktopIrohConnectionSupervisor {
     NodePhysicalEndpoint
   >;
   private readonly clients = new Set<IrohServerClient>();
+  private readonly unsubscribeInvalidation: () => void;
+  private readonly createClient: typeof createIrohServerClient;
   private closing: Promise<void> | null = null;
 
-  constructor(endpointSecret: Uint8Array, relays: readonly string[]) {
+  constructor(
+    endpointSecret: Uint8Array,
+    relays: readonly string[],
+    options: DesktopIrohConnectionSupervisorOptions = {}
+  ) {
     if (endpointSecret.byteLength !== 32) {
       throw new Error("Stored Iroh endpoint identity is invalid");
     }
-    this.endpointOwner = new EndpointGenerationOwner(
-      createNodeEndpointBinding({
-        secretKey: loadIrohNodeBinding().SecretKey.fromBytes([...endpointSecret]),
-        relayUrls: relays,
-      })
-    );
+    this.endpointOwner =
+      options.endpointOwner ??
+      new EndpointGenerationOwner(
+        createNodeEndpointBinding({
+          secretKey: loadIrohNodeBinding().SecretKey.fromBytes([...endpointSecret]),
+          relayUrls: relays,
+        })
+      );
+    this.createClient = options.createClient ?? createIrohServerClient;
+    this.unsubscribeInvalidation = this.endpointOwner.onInvalidation((invalidation) => {
+      for (const client of this.clients) {
+        client.invalidateEndpointGeneration(
+          invalidation.generation,
+          `Iroh endpoint generation ${invalidation.generation} replaced after a timed-out dial`
+        );
+      }
+    });
   }
 
   async connect(reach: IrohReach, options: DesktopIrohClientOptions): Promise<IrohServerClient> {
     if (this.closing) throw new Error("Desktop Iroh connection supervisor is closing");
-    const client = await createIrohServerClient({
+    const client = await this.createClient({
       reach,
       endpointOwner: this.endpointOwner,
       ...options,
@@ -64,6 +86,7 @@ export class DesktopIrohConnectionSupervisor {
     return (this.closing ??= (async () => {
       const clients = [...this.clients];
       this.clients.clear();
+      this.unsubscribeInvalidation();
       // Logical sessions finish their control writers while the native
       // endpoint is still alive. Only then release the process endpoint.
       const clientResults = await Promise.allSettled(

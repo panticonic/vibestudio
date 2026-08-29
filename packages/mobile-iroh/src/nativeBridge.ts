@@ -74,17 +74,17 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function decodeBase64(value: string): number[] {
+function decodeBase64(value: string): Uint8Array {
   const binary = atob(value);
-  const bytes = new Array<number>(binary.length);
+  const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;
 }
 
 class MobileSendStream implements IrohPhysicalSendStream {
   constructor(private readonly handle: string) {}
-  writeAll(bytes: number[]): Promise<void> {
-    return module().write(this.handle, encodeBase64(Uint8Array.from(bytes)));
+  writeAll(bytes: Uint8Array): Promise<void> {
+    return module().write(this.handle, encodeBase64(bytes));
   }
   finish(): Promise<void> {
     return module().finish(this.handle);
@@ -100,10 +100,10 @@ class MobileSendStream implements IrohPhysicalSendStream {
 
 class MobileReceiveStream implements IrohPhysicalReceiveStream {
   constructor(private readonly handle: string) {}
-  async read(maximumBytes: number): Promise<number[]> {
+  async read(maximumBytes: number): Promise<Uint8Array> {
     return decodeBase64(await module().read(this.handle, maximumBytes));
   }
-  async readExact(length: number): Promise<number[]> {
+  async readExact(length: number): Promise<Uint8Array> {
     return decodeBase64(await module().readExact(this.handle, length));
   }
   stop(errorCode: bigint): Promise<void> {

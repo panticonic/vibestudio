@@ -2351,6 +2351,16 @@ app.on("ready", async () => {
             });
           }
         },
+        onTransportDiagnosticsChanged: (remoteTransport) => {
+          const client = serverClientRef;
+          if (!client || !isRemoteSession) return;
+          eventService.emit("server-connection-changed", {
+            status: client.getConnectionStatus(),
+            isRemote: true,
+            remoteHost,
+            ...(remoteTransport ? { remoteTransport } : {}),
+          });
+        },
         onReconnectProgress: (progress) => {
           workspaceConnection.reconnect(progress);
           eventService.emit("server-connection-changed", {

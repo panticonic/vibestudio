@@ -79,7 +79,9 @@ describe("endpoint generation owner", () => {
     const binding = new FakeBinding();
     const owner = new EndpointGenerationOwner(binding);
     const generations: number[] = [];
+    const invalidations: number[] = [];
     owner.onGeneration(({ generation }) => generations.push(generation));
+    owner.onInvalidation(({ generation }) => invalidations.push(generation));
 
     const result = await owner.dial({
       reach,
@@ -93,6 +95,7 @@ describe("endpoint generation owner", () => {
     expect(binding.endpoints[0]?.attempts).toEqual([reach.relays[0]]);
     expect(binding.endpoints[1]?.attempts).toEqual([reach.relays[1]]);
     expect(generations).toEqual([1, 2]);
+    expect(invalidations).toEqual([1]);
     await owner.close();
   });
 

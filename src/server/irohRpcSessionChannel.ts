@@ -10,23 +10,16 @@ import {
   type IrohPhysicalBiStream,
   type IrohPhysicalConnection,
 } from "@vibestudio/iroh-transport";
-import {
-  FRAME_END,
-  FRAME_ERROR,
-  FRAME_HEAD,
-  parseErrorFrame,
-  parseHeadFrame,
-  type FrameType,
-} from "@vibestudio/rpc/protocol/streamCodec";
+import { type RpcEnvelope, type RpcMessage } from "@vibestudio/rpc";
 import { encodeIrohStreamResponseHead } from "@vibestudio/rpc/protocol/irohStreamResponse";
 import {
   IROH_SESSION_CLOSED,
   IROH_SESSION_OPEN_RESULT,
   type IrohSessionControlFrame,
 } from "@vibestudio/rpc/protocol/irohSession";
-import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import type { RpcSessionChannel, RpcSessionTransportBinding } from "./rpcServer/sessionChannel.js";
+import type { StreamFrame } from "./services/egressProxy.js";
 
 const OPEN = 1;
 const CLOSED = 3;
@@ -194,17 +187,17 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     return body;
   }
 
-  sendStreamFrame(
-    requestId: string,
-    frameType: FrameType,
-    payload: Uint8Array,
-    _fallbackMessage: WsServerMessage
-  ): Promise<void> {
+  sendStreamFrame(requestEnvelope: RpcEnvelope, frame: StreamFrame): Promise<void> {
+    const request = requestEnvelope.message;
+    if (request.type !== "stream-request") {
+      throw new Error(`Streaming response requires a stream-request, received ${request.type}`);
+    }
+    const requestId = request.requestId;
     const route = this.requests.get(requestId);
     if (!route || !route.streaming || route.settled || this.state !== OPEN) {
       throw new Error(`Iroh response stream ${requestId} is not open`);
     }
-    if (frameType === FRAME_HEAD) {
+    if (frame.kind === "head") {
       if (route.headSent) {
         void route.stream.send.reset(STREAM_CANCEL_CODE).catch(() => undefined);
         throw new Error(`Iroh response stream ${requestId} already sent its head`);
@@ -212,27 +205,31 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       route.headSent = true;
       const written = writeFrame(
         route.stream.send,
-        encodeIrohStreamResponseHead(parseHeadFrame(payload)),
+        encodeIrohStreamResponseHead({
+          status: frame.status,
+          statusText: frame.statusText,
+          headerPairs: frame.headerPairs,
+          finalUrl: frame.finalUrl,
+        }),
         MAX_ENVELOPE_FRAME_BYTES
       );
       return written;
     }
-    if (frameType === FRAME_ERROR) {
-      const error = parseErrorFrame(payload);
+    if (frame.kind === "error") {
       const written = route.headSent
         ? route.stream.send.reset(STREAM_CANCEL_CODE)
         : writeFrame(
             route.stream.send,
             encodeIrohStreamResponseHead({
-              status: error.status,
+              status: frame.status,
               statusText: "RPC Error",
               headerPairs: [],
               finalUrl: "",
               error: {
-                message: error.message,
-                errorKind: error.errorKind,
-                ...(error.code ? { code: error.code } : {}),
-                ...(error.errorData !== undefined ? { errorData: error.errorData } : {}),
+                message: frame.message,
+                errorKind: frame.errorKind,
+                ...(frame.code ? { code: frame.code } : {}),
+                ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
               },
             }),
             MAX_ENVELOPE_FRAME_BYTES
@@ -242,7 +239,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       this.inboundBodies.delete(requestId);
       return written;
     }
-    if (frameType === FRAME_END) {
+    if (frame.kind === "end") {
       route.settled = true;
       this.requests.delete(requestId);
       this.inboundBodies.delete(requestId);
@@ -251,7 +248,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     if (!route.headSent) {
       throw new Error(`Iroh response stream ${requestId} received body data before its head`);
     }
-    return this.writeMetered(route.stream, payload);
+    return this.writeMetered(route.stream, frame.bytes);
   }
 
   remoteClosed(code?: number, reason?: string): void {
@@ -409,7 +406,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     const settle = (): void => {
       this.pendingBytes -= bytes.byteLength;
     };
-    return stream.send.writeAll([...bytes]).then(settle, (error) => {
+    return stream.send.writeAll(bytes).then(settle, (error) => {
       settle();
       throw error;
     });

@@ -76,7 +76,33 @@ export function startIrohIngress<
           selectedPath?.kind ?? "unknown"
         }${selectedPath?.remoteAddress ? ` remote=${selectedPath.remoteAddress}` : ""}`
       );
-      void connection.closed().finally(() => live.delete(connection));
+      let lastPath = selectedPath
+        ? `${selectedPath.kind}\x00${selectedPath.remoteAddress}`
+        : "unknown";
+      const unsubscribeDiagnostics = connection.onDiagnosticsChange?.((diagnostics) => {
+        const selected = diagnostics.paths.find((path) => path.selected);
+        const nextPath = selected ? `${selected.kind}\x00${selected.remoteAddress}` : "unknown";
+        if (nextPath === lastPath) return;
+        lastPath = nextPath;
+        options.log?.(
+          `Iroh peer path changed endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
+            selected?.kind ?? "unknown"
+          }${selected?.remoteAddress ? ` remote=${selected.remoteAddress}` : ""}${
+            selected?.rttMs === undefined ? "" : ` rttMs=${selected.rttMs}`
+          }`
+        );
+      });
+      void connection
+        .closed()
+        .then((reason) =>
+          options.log?.(
+            `Iroh peer closed endpoint=${connection.peerEndpointId.slice(0, 12)} reason=${reason}`
+          )
+        )
+        .finally(() => {
+          unsubscribeDiagnostics?.();
+          live.delete(connection);
+        });
       void options.attach(connection).catch((error) => {
         live.delete(connection);
         const reason = error instanceof Error ? error.message : String(error);

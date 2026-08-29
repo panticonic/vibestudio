@@ -129,6 +129,7 @@ export interface IrohClientPipe {
   status(): RpcConnectionStatus;
   onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;
   diagnostics(): IrohConnectionDiagnostics | null;
+  onDiagnosticsChange(handler: (diagnostics: IrohConnectionDiagnostics | null) => void): () => void;
   close(): Promise<void>;
 }
 
@@ -166,6 +167,10 @@ class ClientSession implements IrohClientSession {
 
   isClosed(): boolean {
     return this.terminal;
+  }
+
+  activeRequestCount(): number {
+    return this.inboundRequests.size + this.outboundRequests.size;
   }
 
   status(): RpcConnectionStatus {
@@ -207,6 +212,7 @@ class ClientSession implements IrohClientSession {
       if (inbound) {
         await this.respondOnInboundStream(inbound, envelope);
         this.inboundRequests.delete(requestId);
+        this.pipe.diagnosticsChanged();
         return;
       }
     }
@@ -232,18 +238,19 @@ class ClientSession implements IrohClientSession {
       (envelope.message.type === "request" || envelope.message.type === "stream-request")
     ) {
       this.outboundRequests.set(requestId, stream);
+      this.pipe.diagnosticsChanged();
     }
     const abort = (): void => {
       void stream.send.reset(IROH_CANCEL_CODE).catch(() => undefined);
       void stream.recv.stop(IROH_CANCEL_CODE).catch(() => undefined);
-      if (requestId) this.outboundRequests.delete(requestId);
+      if (requestId && this.outboundRequests.delete(requestId)) this.pipe.diagnosticsChanged();
     };
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
     void this.readResponses(stream, requestId).finally(() => {
       if (expectsResponse) void stream.send.finish().catch(() => undefined);
       signal?.removeEventListener("abort", abort);
-      if (requestId) this.outboundRequests.delete(requestId);
+      if (requestId && this.outboundRequests.delete(requestId)) this.pipe.diagnosticsChanged();
     });
   }
 
@@ -303,6 +310,7 @@ class ClientSession implements IrohClientSession {
         throw new Error(`Iroh session ${this.sid} exceeded its active request bound`);
       }
       this.inboundRequests.set(requestId, { stream, settled: false });
+      this.pipe.diagnosticsChanged();
     } else {
       await stream.send.finish().catch(() => undefined);
     }
@@ -388,6 +396,7 @@ class ClientSession implements IrohClientSession {
     const stream = this.outboundRequests.get(message.requestId);
     if (!stream) return;
     this.outboundRequests.delete(message.requestId);
+    this.pipe.diagnosticsChanged();
     await Promise.all([
       stream.send.reset(IROH_CANCEL_CODE).catch(() => undefined),
       stream.recv.stop(IROH_CANCEL_CODE).catch(() => undefined),
@@ -413,11 +422,13 @@ class ClientSession implements IrohClientSession {
 
     const stream = await this.pipe.connection.openBi();
     this.outboundRequests.set(request.requestId, stream);
+    this.pipe.diagnosticsChanged();
     let cancelled = false;
     const cancel = (reason?: unknown): void => {
       if (cancelled) return;
       cancelled = true;
       this.outboundRequests.delete(request.requestId);
+      this.pipe.diagnosticsChanged();
       void stream.send.reset(IROH_CANCEL_CODE).catch(() => undefined);
       void stream.recv.stop(IROH_CANCEL_CODE).catch(() => undefined);
       if (body) void body.cancel(reason).catch(() => undefined);
@@ -475,6 +486,7 @@ class ClientSession implements IrohClientSession {
     const responseBody = irohReceiveStreamBody(stream.recv, cancel, () => {
       signal?.removeEventListener("abort", onAbort);
       this.outboundRequests.delete(request.requestId);
+      this.pipe.diagnosticsChanged();
       if (!body) void stream.send.finish().catch(() => undefined);
     });
     return {
@@ -499,9 +511,9 @@ class ClientSession implements IrohClientSession {
         if (done) break;
         if (!value || value.byteLength === 0) continue;
         for (let offset = 0; offset < value.byteLength; offset += MAX_STREAM_CHUNK_BYTES) {
-          await stream.send.writeAll([
-            ...value.subarray(offset, Math.min(value.byteLength, offset + MAX_STREAM_CHUNK_BYTES)),
-          ]);
+          await stream.send.writeAll(
+            value.subarray(offset, Math.min(value.byteLength, offset + MAX_STREAM_CHUNK_BYTES))
+          );
         }
       }
       await stream.send.finish();
@@ -562,6 +574,7 @@ class ClientSession implements IrohClientSession {
       void inbound.stream.recv.stop(IROH_SESSION_CLOSE_CODE).catch(() => undefined);
     }
     this.inboundRequests.clear();
+    this.pipe.diagnosticsChanged();
   }
 }
 
@@ -571,6 +584,9 @@ class ClientPipe implements IrohClientPipe {
   private readonly sessions = new Map<string, ClientSession>();
   private readonly pendingOpens = new Map<string, PendingOpen>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
+  private readonly diagnosticsListeners = new Set<
+    (diagnostics: IrohConnectionDiagnostics | null) => void
+  >();
   private statusValue: RpcConnectionStatus = "connecting";
   private controlWriter: SerializedControlWriter | null = null;
   private startPromise: Promise<void> | null = null;
@@ -581,6 +597,7 @@ class ClientPipe implements IrohClientPipe {
     this.helloResolve = resolve;
     this.helloReject = reject;
   });
+  private readonly unsubscribePhysicalDiagnostics: (() => void) | null;
 
   constructor(
     connection: IrohPhysicalConnection,
@@ -592,6 +609,8 @@ class ClientPipe implements IrohClientPipe {
   ) {
     this.connection = connection;
     this.peerEndpointId = connection.peerEndpointId;
+    this.unsubscribePhysicalDiagnostics =
+      connection.onDiagnosticsChange?.(() => this.diagnosticsChanged()) ?? null;
   }
 
   status(): RpcConnectionStatus {
@@ -603,11 +622,24 @@ class ClientPipe implements IrohClientPipe {
     return () => this.statusListeners.delete(handler);
   }
 
+  onDiagnosticsChange(
+    handler: (diagnostics: IrohConnectionDiagnostics | null) => void
+  ): () => void {
+    this.diagnosticsListeners.add(handler);
+    handler(this.diagnostics());
+    return () => this.diagnosticsListeners.delete(handler);
+  }
+
   diagnostics(): IrohConnectionDiagnostics | null {
     const physical = this.connection.diagnostics?.();
     if (!physical && !this.dialMetadata) return null;
     return {
       ...(physical ?? { paths: [] }),
+      logicalSessions: this.sessions.size,
+      activeRequests: [...this.sessions.values()].reduce(
+        (total, session) => total + session.activeRequestCount(),
+        0
+      ),
       ...(this.dialMetadata
         ? {
             dialRelayUrl: this.dialMetadata.relayUrl,
@@ -627,6 +659,7 @@ class ClientPipe implements IrohClientPipe {
     if (this.sessions.has(session.sid))
       throw new Error(`Iroh session ${session.sid} already exists`);
     this.sessions.set(session.sid, session);
+    this.diagnosticsChanged();
     return session;
   }
 
@@ -635,11 +668,15 @@ class ClientPipe implements IrohClientPipe {
       this.setStatus("disconnected");
       for (const session of this.sessions.values()) session.fail(new Error("Iroh pipe closed"));
       this.sessions.clear();
+      this.unsubscribePhysicalDiagnostics?.();
+      this.diagnosticsChanged();
       for (const pending of this.pendingOpens.values())
         pending.reject(new Error("Iroh pipe closed"));
       this.pendingOpens.clear();
       await this.controlWriter?.finish().catch(() => undefined);
       this.connection.close(0n, new TextEncoder().encode("client closed"));
+      this.diagnosticsListeners.clear();
+      this.statusListeners.clear();
     })());
   }
 
@@ -661,7 +698,15 @@ class ClientPipe implements IrohClientPipe {
   }
 
   removeSession(sid: string, session: ClientSession): void {
-    if (this.sessions.get(sid) === session) this.sessions.delete(sid);
+    if (this.sessions.get(sid) === session) {
+      this.sessions.delete(sid);
+      this.diagnosticsChanged();
+    }
+  }
+
+  diagnosticsChanged(): void {
+    const diagnostics = this.diagnostics();
+    for (const listener of [...this.diagnosticsListeners]) listener(diagnostics);
   }
 
   private async start(): Promise<void> {

@@ -10,6 +10,10 @@ export interface EndpointGenerationSnapshot {
   generation: number;
 }
 
+export interface EndpointGenerationInvalidation extends EndpointGenerationSnapshot {
+  reason: "dial-timeout";
+}
+
 export interface EndpointGenerationDialOptions {
   reach: IrohReach;
   overallDeadlineMs: number;
@@ -66,6 +70,9 @@ export class EndpointGenerationOwner<
   private bindingPromise: Promise<Endpoint> | null = null;
   private lastSuccessfulRelay: string | null = null;
   private readonly generationListeners = new Set<(snapshot: EndpointGenerationSnapshot) => void>();
+  private readonly invalidationListeners = new Set<
+    (invalidation: EndpointGenerationInvalidation) => void
+  >();
 
   constructor(private readonly binding: IrohEndpointBinding<Connection, Endpoint>) {}
 
@@ -77,6 +84,17 @@ export class EndpointGenerationOwner<
   onGeneration(handler: (snapshot: EndpointGenerationSnapshot) => void): () => void {
     this.generationListeners.add(handler);
     return () => this.generationListeners.delete(handler);
+  }
+
+  /**
+   * Fires before a live native endpoint generation is closed because the
+   * binding cannot cancel one timed-out dial. Process-level connection owners
+   * use this edge to invalidate every peer connection atomically instead of
+   * waiting for each connection's close watcher to notice independently.
+   */
+  onInvalidation(handler: (invalidation: EndpointGenerationInvalidation) => void): () => void {
+    this.invalidationListeners.add(handler);
+    return () => this.invalidationListeners.delete(handler);
   }
 
   dial(options: EndpointGenerationDialOptions): Promise<EndpointGenerationDialResult<Connection>> {
@@ -201,6 +219,12 @@ export class EndpointGenerationOwner<
       await attempt.catch(() => undefined);
       return;
     }
+    const invalidation = {
+      endpointId: endpoint.endpointId,
+      generation: this.generation,
+      reason: "dial-timeout" as const,
+    };
+    for (const listener of [...this.invalidationListeners]) listener(invalidation);
     this.endpoint = null;
     await endpoint.close();
     await attempt.then(

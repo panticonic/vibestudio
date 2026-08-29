@@ -5,10 +5,13 @@ Vibestudio remote RPC uses stock `iroh-relay` 1.0.2 from the frozen
 transport; application RPC remains end-to-end encrypted and authenticated by
 the hub or workspace child.
 
-Production requires two independent public relay hosts. Give each a stable
-DNS-only hostname, TCP 80/443, UDP 7842, an operator-only metrics listener,
-central logs, and capacity alerts. Do not proxy relay traffic through a Worker,
-Tunnel, or generic WebSocket service.
+Production uses Vibestudio's explicit reviewed public Iroh relay pair by
+default, so it does not depend on operator-owned relay infrastructure. This
+runbook applies only when an operator deliberately replaces that set with two
+owned relay hosts for capacity, geography, telemetry, or policy reasons. Give
+each a stable DNS-only hostname, TCP 80/443, UDP 7842, an operator-only metrics
+listener, central logs, and capacity alerts. Do not proxy relay traffic through
+a Worker, Tunnel, or generic WebSocket service.
 
 ## Installation and verification
 
@@ -27,16 +30,18 @@ the child. Tests must always terminate and await this process.
 
 ## Admission
 
-Open access is permitted only for the explicitly capacity-limited beta. The
-production target is `access.http`: the relay sends the authenticated Endpoint
-ID to a minimal registry, and the registry returns true only for bootstrap IDs
-with an unexpired pairing invitation or live, non-revoked device IDs. The
-relay-to-registry bearer belongs in `IROH_RELAY_HTTP_BEARER_TOKEN`; it is never
-shipped to clients. Application authorization remains at the Iroh ingress.
+Open access on an owned relay is permitted only for an explicitly
+capacity-limited deployment. The preferred owned-relay target is `access.http`:
+the relay sends the authenticated Endpoint ID to a minimal registry, and the
+registry returns true only for bootstrap IDs with an unexpired pairing
+invitation or live, non-revoked device IDs. The relay-to-registry bearer belongs
+in `IROH_RELAY_HTTP_BEARER_TOKEN`; it is never shipped to clients. Application
+authorization remains at the Iroh ingress.
 
-Do not deploy authenticated production relays until fresh pairing, reconnect,
-rotation, revocation latency, denial behavior, and registry outage behavior
-pass against both regions. A global shared client token is forbidden.
+Do not select an authenticated owned-relay override until fresh pairing,
+reconnect, rotation, revocation latency, denial behavior, and registry outage
+behavior pass against both regions. Failure of this gate leaves the shipped
+public default in place. A global shared client token is forbidden.
 
 ## Rollout and outage
 
@@ -46,11 +51,13 @@ TCP relay, UDP address discovery, then restore it before touching the second
 region. Rollback means restoring the prior pinned binary/config while keeping
 the same DNS and certificates.
 
-Alert on process absence, TCP/UDP probe failure, admission failures, connection
+For an owned override, alert on process absence, TCP/UDP probe failure,
+admission failures, connection
 accept saturation, rate-limited bytes, sustained relayed bandwidth, and one
-region disappearing from connection diagnostics. If both relays fail, preserve
-credentials and report offline/reconnecting; never enable public discovery or
-an alternate application transport as an emergency fallback.
+region disappearing from connection diagnostics. If both configured relays
+fail, preserve credentials and report offline/reconnecting; do not silently
+change the reach advertised to already-paired clients or enable an alternate
+application transport.
 
 Certificate/key rotation is one region at a time. Endpoint identity rotation is
 unrelated and destructive: it invalidates stored reaches and requires explicit

@@ -5,10 +5,11 @@ Base worktrees. Iroh is the only remote transport and the retired transport
 infrastructure has been deleted. Focused protocol, product, packaging, Base
 mobile, type, lint, formatting, dependency, native-artifact, and absence checks
 are green. Shipment remains blocked on the explicitly external gates recorded
-below: production relay provisioning/failover/load proof, retained-platform
-packaged and physical-device validation, and a repeated startup sample proving
-the remaining delta is not a credible regression. Managed system-test bootstrap now reaches a paired ready
-workspace, but the configured test model is unavailable locally (`needs-setup`).
+below: retained-platform packaged and physical-device validation and a repeated
+startup sample proving the remaining delta is not a credible regression.
+Self-hosted relays are an optional operational enhancement, not a production
+availability prerequisite. Managed system-test bootstrap reaches a paired ready
+workspace and the configured model is available.
 
 **Decision date:** 2026-08-28
 
@@ -67,10 +68,12 @@ React Native WebRTC module. It does not merely rename them.
    its digest, the exact `iroh`/`iroh-base` version embedded by those bindings,
    and the matching `iroh-relay` release. Do not depend on `latest`, Git
    branches, a Vibestudio fork, or visually matching version labels.
-3. **No default production preset.** JavaScript `Endpoint.bind()` enables n0's
-   public discovery and relays by default. Product code must construct an
-   explicit endpoint configuration. A test-only fixture may use the n0 public
-   preset.
+3. **A resilient public-relay product default.** JavaScript `Endpoint.bind()`
+   implicitly enables n0 discovery and whatever defaults the binding release
+   happens to ship. Product code instead constructs an explicit endpoint
+   configuration with Vibestudio's reviewed public n0 relay set and address
+   lookup disabled. Operators may override that set with owned relays, but
+   production availability never depends on provisioning Vibestudio relays.
 4. **No transport reinvention above QUIC.** Every request owns a QUIC stream.
    Backpressure is awaiting that stream's writes. Cancellation is QUIC
    reset/stop. We do not rebuild lanes, ACKs, fragment sets, sequence windows,
@@ -175,8 +178,8 @@ matrix on that set. Never mix successful results from different release sets.
             \                  /
              \-- direct UDP --/
               \               /
-               +-- E2E relay -+   Iroh public relays in Phase 0/test;
-                                   stock self-hosted relays in production
+               +-- E2E relay -+   explicit Iroh public relays by default;
+                                   optional owned stock-relay override
 ```
 
 Each client process/app owns one Iroh `Endpoint` for its lifetime and uses it
@@ -317,10 +320,11 @@ identical ordering, cancellation, and failure results for Node, Swift, and
 Kotlin adapters.
 
 The compact QR/deep-link representation stays a Vibestudio codec so its size and
-security properties are under our control. A default production relay set may
-be represented by a small relay-set identifier only if the identifier resolves
-locally from shipped configuration and old identifiers remain intentionally
-served. It must never silently select n0 infrastructure.
+security properties are under our control. The default public relay set may be
+represented by a small relay-set identifier only if the identifier resolves
+locally from reviewed shipped configuration and old identifiers remain
+intentionally served. The binding's implicit discovery/preset is still never
+used: the product default is explicit, versioned Vibestudio configuration.
 
 Pairing flow:
 
@@ -492,6 +496,34 @@ The native regression returns a 20 MiB unary result over real local Iroh while
 an independent short RPC completes on another QUIC stream. This is both the
 former ceiling regression and the head-of-line independence proof.
 
+### Post-cutover carrier-boundary and generation correction (2026-08-29)
+
+The relay layer originally constructed WebSocket JSON fallback messages before
+calling the selected carrier. Iroh discarded those messages, but every binary
+stream chunk had already paid for an array copy and base64 expansion. The
+session contract now carries semantic stream frames; WebSocket alone serializes
+its wire shape, while Iroh writes the typed payload directly. Internal physical
+stream APIs use `Uint8Array` throughout. The pinned Node N-API binding currently
+accepts only JavaScript number arrays, so the Node adapter performs one explicit
+conversion at that unavoidable native edge; no carrier-neutral layer does so.
+
+Endpoint recreation is process-wide because the binding exposes no cancellable
+dial primitive. A timed-out dial now emits one generation invalidation before
+closing the endpoint. The desktop supervisor broadcasts that edge to every hub
+and workspace connection using the generation, and each reconnect owner rejects
+stale generations, closes its old physical pipe, and redials proactively. This
+prevents independent clients from discovering one shared endpoint replacement
+as unrelated stream-reset failures.
+
+Connection diagnostics are evented from one sampled native stats source per
+physical connection and include endpoint generation, selected path, RTT,
+transmitted/received/lost bytes, logical-session count, and active requests.
+Sampling exists only while an observer is registered and is disposed with the
+connection. The upstream `watchPaths()` binding entry cannot safely be invoked
+from JavaScript in this release because it requires a Tokio reactor that the
+N-API call does not enter; the single change-detected sampler is the supported
+contract, not a parallel compatibility path.
+
 ### Scheduling and fairness
 
 Do not port the WebRTC 8:4:1 scheduler. QUIC provides independent streams and
@@ -549,9 +581,9 @@ WebRTC-shaped repair path.
 - Package the native artifact through the existing Electron and server native
   dependency pipeline; verify signing, notarization, ASAR unpacking, pnpm
   deployment, installed CLI startup, and source checkout startup.
-- Construct endpoints with a fixed secret, exact ALPN, explicit relay mode, and
-  production address-lookup disabled. Never call the default `Endpoint.bind()`
-  path from product code.
+- Construct endpoints with a fixed secret, exact ALPN, the explicit shipped
+  public relay set (or an operator override), and address lookup disabled. Never
+  call the default `Endpoint.bind()` path from product code.
 - Create one small physical adapter around endpoint/connection/stream lifecycle.
   The shared session protocol above remains TypeScript and is used by server,
   desktop, and CLI.
@@ -619,33 +651,27 @@ hidden fallback in this transport change.
 
 ## Relay and discovery deployment
 
-### Phase 0 and automated testing
+### Default topology and automated testing
 
-Use Iroh's existing public relays for the initial cross-network spike and
-developer test environments. They require no account or service setup and are
-explicitly recommended upstream for development/testing. Tests must record
-which public relay was used and must not make production readiness claims from
-public-relay availability or performance.
+Use the explicit reviewed pair of Iroh public relays in development, tests, and
+production by default. They require no Vibestudio-operated infrastructure and
+ensure a deployment remains usable when no owned relays have been provisioned.
+Tests record which relay was used; performance evidence records whether the
+path was direct or relayed rather than assuming public-relay timing is fixed.
 
 Unit and deterministic integration tests may also launch the exact pinned
 `iroh-relay` binary as an owned local fixture. This exercises the real relay
 protocol, not a fake relay or transport mock. The fixture is always terminated
 and awaited in cleanup.
 
-### Production
+### Optional owned relays
 
-Run the stock pinned `iroh-relay` binary on conventional public compute: a small
-VM or a normal container host with public IP/DNS, inbound TCP 443, TCP 80 when
-using its built-in HTTP-01 ACME flow, and the configured UDP/QUIC
-address-discovery port. Start with at least two stateless relays in different
-regions; use different providers only when the added operational surface is
-justified. Use stable DNS names, health checks, per-client
-bandwidth/connection limits, metrics, logs, and an explicit capacity/runbook
-owner.
-
-This avoids an Iroh Services subscription or user account setup; it does not
-pretend production relay compute and bandwidth are free. Those are ordinary
-Vibestudio-operated infrastructure costs.
+An operator may replace the shipped public set with stock pinned `iroh-relay`
+instances on conventional public compute when capacity, geography, telemetry,
+or policy justifies owning that data plane. Use at least two stateless relays in
+different regions, stable DNS names, health checks, limits, metrics, logs, and
+an explicit capacity/runbook owner. This is an override, not a hidden runtime
+fallback: every reach advertises the exact ordered set it uses.
 
 Cloudflare may host DNS records in **DNS-only** mode. It is not the relay data
 plane:
@@ -658,9 +684,9 @@ plane:
 - Cloudflare Tunnel also requires an origin process and does not replace the
   public UDP listener.
 
-The relay remains end-to-end blind and stateless, but an unauthenticated public
-relay can be abused. Before production, choose and prove one supported admission
-model using stock `iroh-relay` facilities:
+An owned relay remains end-to-end blind and stateless, but an unauthenticated
+relay can be abused. Before selecting an owned-relay override, choose and prove
+one supported admission model using stock `iroh-relay` facilities:
 
 1. preferred: its HTTP access-control hook authorizes Endpoint IDs against a
    minimal Vibestudio-operated registry, including a coherent bootstrap flow;
@@ -673,20 +699,21 @@ the endpoint-bound device credential. The registry's initial-admission flow must
 be designed as an explicit bootstrap protocol; it must not smuggle application
 RPC, assets, or a second remote transport through the callback relay. If the
 stock hook cannot support fresh pairing and returning devices without that
-architectural split, authenticated production relay deployment is blocked even
-though Phase 0 can continue on public relays.
+architectural split, do not deploy the owned override; retain the shipped
+public relay set.
 
-### No production address lookup dependency
+### No address lookup dependency
 
-Disable n0 address lookup and public-relay presets in production. Persist the
-server Endpoint ID and its stable ordered relay set. The shared connection owner
-dials one advertised relay address at a time, while Iroh learns and upgrades to
-direct addresses dynamically after connection. A server endpoint may keep only
-one active home relay and may need time to select another after a sustained
-outage; the reconnect bound must include and expose that behavior rather than
-assuming seamless live migration. Phase 0 must prove restart, readdressing, NAT
-traversal, and multi-relay reconnection with no n0 address lookup before this
-reach schema is frozen.
+Disable n0 address lookup and the binding's implicit relay preset. Persist the
+server Endpoint ID and its stable ordered relay set, which is the explicit
+shipped public set unless an operator supplies an override. The shared
+connection owner dials one advertised relay address at a time, while Iroh learns
+and upgrades to direct addresses dynamically after connection. A server
+endpoint may keep only one active home relay and may need time to select another
+after a sustained outage; the reconnect bound must include and expose that
+behavior rather than assuming seamless live migration. Phase 0 must prove
+restart, readdressing, NAT traversal, and multi-relay reconnection with no
+address lookup before this reach schema is frozen.
 
 ## Observability and operations
 
@@ -710,7 +737,8 @@ must not contain user, device, endpoint, workspace, or request IDs.
 Add a remote-transport doctor that verifies:
 
 - endpoint-secret existence/permissions and derived advertised ID;
-- explicit production relay configuration and absence of n0 defaults;
+- explicit shipped-or-operator relay configuration and absence of implicit
+  binding defaults;
 - relay registration and ALPN acceptance;
 - device credential endpoint binding;
 - one bounded direct/relayed probe where the environment permits it;
@@ -843,8 +871,8 @@ The transport kernel lives in `packages/iroh-transport` and the product cutover
 uses the provisional release set. As of 2026-08-28 it proves on local Linux:
 
 - explicit endpoint construction with fixed secrets, the exact
-  `vibestudio-rpc/4` ALPN, no default n0 relay/discovery preset, and full
-  handshake peer-ID verification;
+  `vibestudio-rpc/4` ALPN, the shipped public relay topology with address lookup
+  disabled, and full handshake peer-ID verification;
 - one bidirectional stream per request, bounded big-endian control/request-head
   framing, FIN-delimited result payloads, rejection before allocation for an
   oversized header declaration, stream reset/stop, and
@@ -856,8 +884,9 @@ uses the provisional release set. As of 2026-08-28 it proves on local Linux:
   manifest;
 - absence of an exposed early-data method in the selected JavaScript binding.
 
-The focused transport suite passes 71 tests across 16 files, with another 16
-tests across the deployment/doctor/pairing operational surfaces. The pinned
+The focused transport suite passes 80 tests across 18 files, the complete
+native remote smoke passes 8 tests, and another 16 tests cover the
+deployment/doctor/pairing operational surfaces. The pinned
 stock relay integration command launches and owns `iroh-relay@1.0.2`, registers
 two real endpoints, proves bidirectional traffic traversed the relay, exchanges
 a QUIC stream, and terminates the relay in cleanup. Package TypeScript,
@@ -907,26 +936,33 @@ separate branches/worktrees:
   lint/format, dependency and native-host contracts, staging/build/import and
   npm dry-run packaging, and host-plus-Base cutover absence checks are green.
 
-The managed system-test owner now injects the explicit ordered public Phase-0
-relay set and no longer inherits unprovisioned product DNS. Its isolated doctor
-run provisioned and paired a ready workspace; startup preparation then stopped
-at the configured Codex model with `needs-setup`. The exact managed instance was
-stopped. Deeper agentic product tests require that external model credential.
+The managed system-test owner injects the same explicit ordered public relay
+set as the product default and never inherits an unrelated operator override.
+Its isolated doctor run provisions and pairs a ready workspace, and the
+configured model is available for agentic product tests.
+
+The 2026-08-29 carrier/generation correction passed the 5,933-test host suite,
+the 104-test complete remote-transport matrix, deterministic panel lifecycle
+and chat-transcript system tests, the large-result terminal test, first-connect
+and transient delivery recovery, terminal delivery after a vessel restart, and
+the real workspace-panel reload profile. One broader project-creation system
+test built its panel successfully but its Base `EvalDO.appendAuthorityEvent`
+remained pending after the primary model reported a usage limit; the owned run
+and managed instance were cancelled and stopped. No Iroh reset, disconnect,
+asset failure, or RPC failure accompanied that separate harness stall, so it is
+not treated as transport evidence or hidden by a retry.
 
 The remaining gates are deliberately not papered over by repository code:
 
-1. provision two real production relays and prove TLS/DNS, admission, limits,
-   metrics, load, outage, and ordered failover with public n0 infrastructure
-   disabled;
-2. build/load/sign/archive on every retained desktop/server target and run the
+1. build/load/sign/archive on every retained desktop/server target and run the
    physical Android/iOS lifecycle, network-change, pressure, cancellation, and
    performance matrix (Android SDK and Apple/Xcode hardware are unavailable in
    this Linux environment);
-3. repeat the identical native startup profile enough times to distinguish the
+2. repeat the identical native startup profile enough times to distinguish the
    residual semantic-import variance from a credible regression, then repair
    any measured owner or accept the result explicitly;
-4. provide a usable managed-system-test model credential and run the smallest
-   exact remote behavior tests.
+3. if an owned-relay override is desired, prove its TLS/DNS, admission, limits,
+   metrics, load, outage, and ordered failover before selecting it.
 
 ## Implementation workstreams
 
@@ -1021,18 +1057,20 @@ mobile performance gates.
 ### WP6 — Relay, deployment, and operations
 
 1. Add an owned local relay fixture pinned to the application dependency.
-2. Provision two production-class stock relays on conventional public compute;
-   configure stable DNS-only names, TLS, UDP/QUIC, limits, metrics, and logs.
-3. Prove the chosen stock relay admission model, including first pairing,
-   returning device, rotation, revocation timing, and abuse limits.
+2. Ship and test the explicit reviewed public relay pair as the production
+   default with no operator setup.
+3. Support an explicit ordered owned-relay override; before using it, prove its
+   first pairing, returning device, rotation, revocation, limits, and outage
+   behavior.
 4. Add direct/relayed/failover diagnostics and alerts.
 5. Replace WebRTC deployment docs and scripts; retain callback-relay deployment
    independently.
 6. Add capacity, upgrade, rollback-before-cutover, outage, and key-rotation
-   runbooks. Relay upgrades roll one stateless region at a time.
+   runbooks for owned overrides. Relay upgrades roll one stateless region at a
+   time.
 
-Exit: the self-hosted two-relay topology passes the Phase 0 network gates and
-load/capacity test with n0 infrastructure disabled.
+Exit: the shipped public topology passes the network gates, and an owned
+override is never selected until its separate load/capacity gate passes.
 
 ### WP7 — Atomic cutover and deletion
 
@@ -1201,8 +1239,8 @@ repository-wide text patterns because they have unrelated meanings elsewhere.
 | Security                | Returning auth requires refresh credential and the originally paired client Endpoint key.                                |
 | Mobile background       | Endpoint shuts down and reconnects on foreground; no promise of indefinite background reachability.                      |
 | macOS Intel             | No build, updater artifact, or support claim.                                                                            |
-| Developer setup         | Public Iroh relays are sufficient for the spike/tests; no signaling/TURN account setup.                                  |
-| Production operations   | Two stock self-hosted Iroh relays on ordinary public compute; Cloudflare is DNS/callback infrastructure only.            |
+| Developer setup         | The shipped public Iroh relays require no signaling/TURN or relay account setup.                                         |
+| Production operations   | The shipped public pair is the resilient default; two owned stock relays are an optional explicit override.              |
 
 ## Risks and stop conditions
 
@@ -1210,9 +1248,9 @@ repository-wide text patterns because they have unrelated meanings elsewhere.
 | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Official Android AAR is incomplete, unverifiable, or fails to load                | Stop; do not retain WebRTC, rebuild upstream casually, or ship an opaque binary. Evaluate one newer aligned official release set or reassess Iroh. |
 | React Native bridge cannot meet bounded cold-path performance                     | Stop and re-derive the mobile architecture; no JSI side channel or native protocol duplication.                                                    |
-| Multi-relay failover stalls or loses reachability                                 | Stop production adoption until one exact upstream release set and topology passes the forced outage gate.                                          |
+| Multi-relay failover stalls or loses reachability                                 | Stop and repair the shipped ordered topology; do not require an owned-relay deployment as the availability fix.                                    |
 | Endpoint ID plus relay URLs cannot reconnect without n0 lookup after readdressing | Redesign the durable reach/discovery model before freezing the pairing codec; do not silently enable public lookup.                                |
-| Stock relay admission cannot cleanly support initial and returning clients        | Phase 0 may use public relays, but production is blocked. Do not embed a global application token.                                                 |
+| Owned-relay admission cannot cleanly support initial and returning clients        | Do not select the owned override. Retain the shipped public set and do not embed a global application token.                                       |
 | Iroh native load/startup materially regresses user-visible readiness              | Profile and repair ownership/laziness. Reject the cutover if the single implementation cannot meet the agreed bound.                               |
 | A required RPC cannot map cleanly to control or one QUIC stream                   | Re-derive that RPC boundary. Do not add a mux lane or secondary transport.                                                                         |
 | Callback relay is mistaken for a transport fallback                               | Keep its third-party HTTP purpose and deployment ownership explicit; no app RPC or assets may flow through it.                                     |
@@ -1225,8 +1263,9 @@ The migration is complete only when:
    on one exact binding/core/relay release set;
 2. desktop, mobile, CLI, hub, and child use the same logical protocol and Iroh is
    the sole remote physical transport;
-3. production works through two self-hosted stock relays with n0 lookup/public
-   relays disabled, or production shipment remains explicitly blocked;
+3. production works through the explicit shipped public relay set without
+   address lookup or owned infrastructure, while an optional owned override is
+   validated before selection;
 4. direct/relayed paths, failover, recovery, resource bounds, and endpoint-bound
    auth are observable and tested;
 5. native performance measurements meet the precommitted gates;

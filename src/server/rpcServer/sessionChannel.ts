@@ -1,6 +1,66 @@
-import type { FrameType } from "@vibestudio/rpc/protocol/streamCodec";
+import { responseEnvelopeFor, type RpcEnvelope } from "@vibestudio/rpc";
+import {
+  FRAME_DATA,
+  FRAME_END,
+  FRAME_ERROR,
+  FRAME_HEAD,
+} from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { WebSocket } from "ws";
+import type { StreamFrame } from "../services/egressProxy.js";
+
+const SESSION_SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
+
+export function encodeWebSocketStreamFrame(
+  requestEnvelope: RpcEnvelope,
+  frame: StreamFrame
+): WsServerMessage {
+  const request = requestEnvelope.message;
+  if (request.type !== "stream-request") {
+    throw new Error(`Streaming response requires a stream-request, received ${request.type}`);
+  }
+  let frameType: number;
+  let payload: string;
+  switch (frame.kind) {
+    case "head":
+      frameType = FRAME_HEAD;
+      payload = JSON.stringify({
+        status: frame.status,
+        statusText: frame.statusText,
+        headerPairs: frame.headerPairs,
+        finalUrl: frame.finalUrl,
+      });
+      break;
+    case "chunk":
+      frameType = FRAME_DATA;
+      payload = Buffer.from(frame.bytes).toString("base64");
+      break;
+    case "end":
+      frameType = FRAME_END;
+      payload = JSON.stringify({ bytesIn: frame.bytesIn });
+      break;
+    case "error":
+      frameType = FRAME_ERROR;
+      payload = JSON.stringify({
+        status: frame.status,
+        message: frame.message,
+        code: frame.code,
+        errorKind: frame.errorKind,
+        ...(frame.errorData === undefined ? {} : { errorData: frame.errorData }),
+      });
+      break;
+  }
+  return {
+    type: "ws:rpc",
+    envelope: responseEnvelopeFor(requestEnvelope, SESSION_SERVER_RESPONDER, {
+      type: "stream-frame",
+      requestId: request.requestId,
+      fromId: "main",
+      frameType,
+      payload,
+    }),
+  };
+}
 
 export type RpcSessionTransportBinding = { kind: "local" } | { kind: "iroh"; endpointId: string };
 
@@ -23,12 +83,12 @@ export interface RpcSessionChannel {
   close(code?: number, reason?: string): void;
   terminate(): void;
   takeInboundBody(requestId: string): ReadableStream<Uint8Array> | undefined;
-  sendStreamFrame(
-    requestId: string,
-    frameType: FrameType,
-    payload: Uint8Array,
-    fallbackMessage: WsServerMessage
-  ): Promise<void>;
+  /**
+   * Deliver one semantic streaming response frame. The carrier owns its wire
+   * encoding: loopback WebSocket serializes the legacy JSON frame envelope,
+   * while Iroh writes the binary body directly to the request's QUIC stream.
+   */
+  sendStreamFrame(requestEnvelope: RpcEnvelope, frame: StreamFrame): Promise<void>;
 }
 
 /** Loopback WebSocket carrier for the transport-neutral session channel. */
@@ -83,13 +143,8 @@ export class WebSocketSessionChannel implements RpcSessionChannel {
     return undefined;
   }
 
-  async sendStreamFrame(
-    _requestId: string,
-    _frameType: FrameType,
-    _payload: Uint8Array,
-    fallbackMessage: WsServerMessage
-  ): Promise<void> {
-    this.sendMessage(fallbackMessage);
+  async sendStreamFrame(requestEnvelope: RpcEnvelope, frame: StreamFrame): Promise<void> {
+    this.sendMessage(encodeWebSocketStreamFrame(requestEnvelope, frame));
   }
 
   close(code?: number, reason?: string): void {

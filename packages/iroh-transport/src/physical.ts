@@ -1,15 +1,15 @@
 import type { IrohReach } from "./reach.js";
 
 export interface IrohPhysicalSendStream {
-  writeAll(bytes: number[]): Promise<void>;
+  writeAll(bytes: Uint8Array): Promise<void>;
   finish(): Promise<void>;
   reset(errorCode: bigint): Promise<void>;
   stopped(): Promise<number | null>;
 }
 
 export interface IrohPhysicalReceiveStream {
-  read(maximumBytes: number): Promise<number[]>;
-  readExact(length: number): Promise<number[]>;
+  read(maximumBytes: number): Promise<Uint8Array>;
+  readExact(length: number): Promise<Uint8Array>;
   stop(errorCode: bigint): Promise<void>;
   receivedReset(): Promise<number | null>;
 }
@@ -30,6 +30,7 @@ export interface IrohPhysicalConnection {
   close(code: bigint, reason: Uint8Array): void;
   closed(): Promise<string>;
   diagnostics?(): IrohConnectionDiagnostics;
+  onDiagnosticsChange?(handler: (diagnostics: IrohConnectionDiagnostics) => void): () => void;
 }
 
 export interface IrohConnectionPath {
@@ -44,6 +45,11 @@ export interface IrohConnectionDiagnostics {
   dialRelayUrl?: string;
   dialAttempts?: number;
   endpointGeneration?: number;
+  transmittedBytes?: number;
+  receivedBytes?: number;
+  lostBytes?: number;
+  logicalSessions?: number;
+  activeRequests?: number;
   paths: readonly IrohConnectionPath[];
 }
 

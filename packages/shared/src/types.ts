@@ -156,6 +156,12 @@ export interface RemoteTransportDiagnostics {
   remoteAddress?: string;
   relayUrl?: string;
   endpointGeneration?: number;
+  dialAttempts?: number;
+  transmittedBytes?: number;
+  receivedBytes?: number;
+  lostBytes?: number;
+  logicalSessions?: number;
+  activeRequests?: number;
 }
 
 export interface PanelInfo {

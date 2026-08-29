@@ -33,6 +33,7 @@ import {
   type IrohClientSession,
 } from "@vibestudio/rpc/transports/irohClient";
 import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
+import type { LifecycleIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import { EndpointGenerationOwner, type IrohReach } from "@vibestudio/iroh-transport";
 import {
@@ -75,6 +76,7 @@ export interface IrohServerClientArgs {
    */
   onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onTransportDiagnosticsChanged?: (diagnostics: RemoteTransportDiagnostics | null) => void;
   onReconnectProgress?: (progress: {
     attempt: number;
     phase: "scheduled" | "failed";
@@ -91,12 +93,47 @@ export interface IrohServerClientArgs {
  * The desktop shell's `ServerClient` over the Iroh pipe, plus additive
  * transport observability the loopback WS client has no equivalent for.
  */
-export interface IrohServerClient extends ServerClient {}
+export interface IrohServerClient extends ServerClient {
+  /** Process-supervisor edge for one atomic native endpoint replacement. */
+  invalidateEndpointGeneration(generation: number, reason: string): void;
+}
+
+function remoteDiagnosticsOf(
+  diagnostics: ReturnType<IrohClientPipe["diagnostics"]>
+): RemoteTransportDiagnostics | null {
+  const selected = diagnostics?.paths.find((path) => path.selected);
+  if (!selected) return null;
+  return {
+    path: selected.kind,
+    ...(selected.rttMs == null && diagnostics?.rttMs == null
+      ? {}
+      : { rttMs: selected.rttMs ?? diagnostics?.rttMs }),
+    ...(selected.remoteAddress ? { remoteAddress: selected.remoteAddress } : {}),
+    ...(diagnostics?.dialRelayUrl ? { relayUrl: diagnostics.dialRelayUrl } : {}),
+    ...(diagnostics?.endpointGeneration
+      ? { endpointGeneration: diagnostics.endpointGeneration }
+      : {}),
+    ...(diagnostics?.dialAttempts === undefined ? {} : { dialAttempts: diagnostics.dialAttempts }),
+    ...(diagnostics?.transmittedBytes === undefined
+      ? {}
+      : { transmittedBytes: diagnostics.transmittedBytes }),
+    ...(diagnostics?.receivedBytes === undefined
+      ? {}
+      : { receivedBytes: diagnostics.receivedBytes }),
+    ...(diagnostics?.lostBytes === undefined ? {} : { lostBytes: diagnostics.lostBytes }),
+    ...(diagnostics?.logicalSessions === undefined
+      ? {}
+      : { logicalSessions: diagnostics.logicalSessions }),
+    ...(diagnostics?.activeRequests === undefined
+      ? {}
+      : { activeRequests: diagnostics.activeRequests }),
+  };
+}
 
 export async function createIrohServerClient(
   args: IrohServerClientArgs
 ): Promise<IrohServerClient> {
-  if (!args.endpointOwner && args.endpointSecret?.byteLength !== 32) {
+  if (!args.pipe && !args.endpointOwner && args.endpointSecret?.byteLength !== 32) {
     throw new Error("Iroh endpoint secret must contain exactly 32 bytes");
   }
   const ownsEndpoint = !args.pipe && !args.endpointOwner;
@@ -110,10 +147,11 @@ export async function createIrohServerClient(
         })
       ));
   let transport: IrohClientPipe;
+  let lifecycleTransport: LifecycleIrohClientPipe | null = null;
   if (args.pipe) {
     transport = args.pipe;
   } else {
-    transport = createReconnectingIrohClientPipe({
+    lifecycleTransport = createReconnectingIrohClientPipe({
       peerEndpointId: args.reach.endpointId,
       dial: async () => {
         const dialed = await endpointOwner!.dial({
@@ -143,6 +181,7 @@ export async function createIrohServerClient(
         }
       },
     });
+    transport = lifecycleTransport;
   }
   let mainSessionTerminalError: Error | null = null;
   const recoveryHandlers = new Set<
@@ -171,6 +210,9 @@ export async function createIrohServerClient(
   const effectiveConnectionStatus = (): ConnectionStatus =>
     mainSessionTerminalError ? "disconnected" : transport.status();
   transport.onStatusChange(() => args.onConnectionStatusChanged?.(effectiveConnectionStatus()));
+  transport.onDiagnosticsChange((diagnostics) =>
+    args.onTransportDiagnosticsChanged?.(remoteDiagnosticsOf(diagnostics))
+  );
   const rpc = createRpcClient({
     selfId: args.callerId,
     callerKind: "shell",
@@ -191,7 +233,7 @@ export async function createIrohServerClient(
     session: IrohClientSession;
     rpc: RpcClient;
     closed: boolean;
-    close(): void;
+    close(): Promise<void>;
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
   const materializedScopedClients = new Set<ScopedClient>();
@@ -219,7 +261,7 @@ export async function createIrohServerClient(
     });
     await session.ready?.();
     if (closing) {
-      session.close();
+      await session.close().catch(() => undefined);
       throw new Error("Iroh server client is closing");
     }
     const scopedRpc = createRpcClient({
@@ -234,10 +276,11 @@ export async function createIrohServerClient(
       session,
       rpc: scopedRpc,
       closed: false,
-      close: () => {
+      close: async () => {
         materializedScopedClients.delete(client);
+        if (client.closed) return;
         client.closed = true;
-        void session.close();
+        await session.close().catch(() => undefined);
       },
     };
     materializedScopedClients.add(client);
@@ -256,7 +299,7 @@ export async function createIrohServerClient(
       // so re-grant a fresh session when EITHER the pipe is down or the session died.
       if (transport.status() === "connected" && !client.closed) return client;
       scopedClients.delete(key);
-      client.close();
+      void client.close();
     }
     const next = createScopedClient(caller).catch((err) => {
       scopedClients.delete(key);
@@ -304,6 +347,9 @@ export async function createIrohServerClient(
   };
 
   return {
+    invalidateEndpointGeneration(generation, reason): void {
+      lifecycleTransport?.invalidateEndpointGeneration(generation, reason);
+    },
     exposeHostMethod(method: string, handler: HostServiceHandler): void {
       exposeServerOriginatedHostMethod(rpc, method, handler);
     },
@@ -361,29 +407,15 @@ export async function createIrohServerClient(
       return effectiveConnectionStatus();
     },
     transportDiagnostics(): RemoteTransportDiagnostics | null {
-      const diagnostics = transport.diagnostics();
-      const selected = diagnostics?.paths.find((path) => path.selected);
-      if (!selected) return null;
-      return {
-        path: selected.kind,
-        ...(selected.rttMs == null && diagnostics?.rttMs == null
-          ? {}
-          : { rttMs: selected.rttMs ?? diagnostics?.rttMs }),
-        ...(selected.remoteAddress ? { remoteAddress: selected.remoteAddress } : {}),
-        ...(diagnostics?.dialRelayUrl ? { relayUrl: diagnostics.dialRelayUrl } : {}),
-        ...(diagnostics?.endpointGeneration
-          ? { endpointGeneration: diagnostics.endpointGeneration }
-          : {}),
-      };
+      return remoteDiagnosticsOf(transport.diagnostics());
     },
     async close(): Promise<void> {
       closing = true;
       const scoped = [...materializedScopedClients];
       scopedClients.clear();
-      await mainSession.close().catch(() => undefined);
-      await transport.close();
-      for (const client of scoped) client.close();
+      await Promise.allSettled([mainSession.close(), ...scoped.map((client) => client.close())]);
       materializedScopedClients.clear();
+      await transport.close();
     },
   };
 }
