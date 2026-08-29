@@ -891,6 +891,27 @@ describe("PanelOrchestrator local presentation", () => {
     });
   });
 
+  it("hydrates a query-first panel when its native slot is declared", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/native-slot-before-projection");
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
+    shellCore.getPanel.mockImplementationOnce(async () => {
+      registry.addPanel(panel, null, { addAsRoot: true });
+      return panel;
+    });
+    let loaded = false;
+    panelView.createViewForPanel.mockImplementationOnce(async () => {
+      loaded = true;
+    });
+    panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id && loaded);
+
+    orchestrator.onNativeSlotDeclared(panel.id);
+
+    await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalled());
+    expect(shellCore.getPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
+    expect(registry.getPanel(panel.id)).toBe(panel);
+  });
+
   it("represents normal lease contention as unavailable with takeover identity", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-contended", [], {

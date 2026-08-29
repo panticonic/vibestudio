@@ -620,8 +620,7 @@ export class PanelPresentationController {
     leaseMode: "acquire" | "takeOver" = "acquire",
     force = leaseMode === "takeOver"
   ): Promise<void> {
-    const panel = this.deps.registry.getPanel(panelId);
-    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    if (!this.deps.registry.getPanel(panelId)) await this.hydrateAddressedPanel(panelId);
     void this.present(panelId, leaseMode, force);
     await this.progressBySlot.get(panelId);
     const presentation = this.getPresentation(panelId).presentation;
@@ -632,8 +631,8 @@ export class PanelPresentationController {
   }
 
   async reloadPanelView(panelId: string): Promise<boolean> {
-    const panel = this.deps.registry.getPanel(panelId);
-    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    let panel = this.deps.registry.getPanel(panelId);
+    if (!panel) panel = await this.hydrateAddressedPanel(panelId);
     const view = this.deps.getPanelView();
     if (!view?.hasView(panelId)) {
       await this.loadPanelIntoView(panelId, "acquire", true);
@@ -691,8 +690,8 @@ export class PanelPresentationController {
     force = false,
     ownedLease?: PanelRuntimeLease
   ): Promise<PresentationAttemptResult> {
-    const panel = this.deps.registry.getPanel(panelId);
-    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    let panel = this.deps.registry.getPanel(panelId);
+    if (!panel) panel = await this.hydrateAddressedPanel(panelId);
     const targetKey = this.targetKeyFor(panel, ownedLease?.runtimeEntityId);
     const currentAttempt = this.attemptBySlot.get(panelId);
     const currentSnapshot = this.getPresentation(panelId).presentation;
@@ -723,6 +722,22 @@ export class PanelPresentationController {
     })();
     this.trackProgress(panelId, progress);
     return attempt.completion;
+  }
+
+  /**
+   * Resolve one durable slot into this host's bounded runtime projection.
+   *
+   * Query-first shells intentionally render durable tree rows without eagerly
+   * copying every panel into the Electron host. Native slot declaration is the
+   * first addressed presentation boundary, so presentation itself must hydrate
+   * that exact slot instead of depending on an unrelated tree or lease event
+   * having populated the local registry first.
+   */
+  private async hydrateAddressedPanel(panelId: string): Promise<Panel> {
+    const hydrated = await this.deps.shellCore.getPanel(asPanelSlotId(panelId));
+    const panel = this.deps.registry.getPanel(panelId) ?? hydrated ?? undefined;
+    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    return panel;
   }
 
   private targetKeyFor(
