@@ -3,9 +3,34 @@ import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { loadShellCredential } from "./connect.js";
 import { retryBundleTransfer } from "./bundleTransferRetry.js";
 
-export const RN_HOST_ABI = "rn-host-3";
+export const RN_HOST_ABI = "rn-host-4";
+
+export interface BrowserImportArchiveEntry {
+  name: string;
+  size: number;
+}
+
+export interface BrowserImportArchiveHandle {
+  handle: string;
+  displayName: string;
+  mimeType?: string;
+  size: number;
+  entries: BrowserImportArchiveEntry[];
+}
 
 export interface NativeBundleHost {
+  openSafariBrowserDataExport(): Promise<{
+    opened: boolean;
+    unavailableReason?: string;
+  }>;
+  pickBrowserImportArchive(): Promise<BrowserImportArchiveHandle | null>;
+  readBrowserImportEntry(
+    handle: string,
+    name: string,
+    offset: number,
+    maxBytes: number
+  ): Promise<{ dataBase64: string; eof: boolean }>;
+  releaseBrowserImportArchive(handle: string): Promise<void>;
   appendBundleChunk(
     base64: string,
     buildKey: string,

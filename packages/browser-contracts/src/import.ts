@@ -53,6 +53,50 @@ export const ImportHostSummarySchema = z
   })
   .strict();
 
+export const IMPORT_ACQUISITION_KINDS = [
+  "system-export",
+  "external-export",
+  "file-picker",
+] as const;
+export type ImportAcquisitionKind = (typeof IMPORT_ACQUISITION_KINDS)[number];
+
+/**
+ * One host-owned way to create a transient browser-import source. The host
+ * performs the action so platform-specific file and settings authority never
+ * leaks into a workspace panel.
+ */
+export interface BrowserImportAcquisitionOption {
+  acquisitionId: string;
+  browser: BrowserName;
+  displayName: string;
+  description: string;
+  kind: ImportAcquisitionKind;
+  primary: boolean;
+}
+export const BrowserImportAcquisitionOptionSchema = z
+  .object({
+    acquisitionId: z.string().min(1).max(200),
+    browser: BrowserNameSchema,
+    displayName: z.string().min(1).max(200),
+    description: z.string().min(1).max(2_000),
+    kind: z.enum(IMPORT_ACQUISITION_KINDS),
+    primary: z.boolean(),
+  })
+  .strict();
+
+export type BrowserImportAcquisitionResult =
+  | { state: "presented"; message: string }
+  | { state: "selected"; source: BrowserImportSource }
+  | { state: "cancelled" };
+
+export const BrowserImportAcquisitionResultSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("presented"), message: z.string().min(1).max(2_000) }).strict(),
+  z
+    .object({ state: z.literal("selected"), source: z.lazy(() => BrowserImportSourceSchema) })
+    .strict(),
+  z.object({ state: z.literal("cancelled") }).strict(),
+]);
+
 export const IMPORT_SOURCE_STATUSES = ["readable", "blocked", "unsupported"] as const;
 export type ImportSourceStatus = (typeof IMPORT_SOURCE_STATUSES)[number];
 export interface BrowserImportSource {
@@ -63,6 +107,8 @@ export interface BrowserImportSource {
   localDataSetCount: number;
   supportedDataTypes: BrowserImportDataType[];
   lastActivityAt?: number;
+  /** The host is retaining user-selected staging only for this import session. */
+  transient?: boolean;
   warnings: string[];
 }
 export const BrowserImportSourceSchema = z
@@ -74,6 +120,7 @@ export const BrowserImportSourceSchema = z
     localDataSetCount: z.number().int().nonnegative(),
     supportedDataTypes: z.array(BrowserImportDataTypeSchema),
     lastActivityAt: z.number().finite().optional(),
+    transient: z.boolean().optional(),
     warnings: z.array(z.string().max(2_000)),
   })
   .strict();

@@ -3714,7 +3714,7 @@ async function main() {
             if (
               !shell ||
               shell.caller.runtime.kind !== "shell" ||
-              shell.clientPlatform !== "desktop" ||
+              (shell.clientPlatform !== "desktop" && shell.clientPlatform !== "mobile") ||
               !userId ||
               userId === "system" ||
               shell.userId !== userId

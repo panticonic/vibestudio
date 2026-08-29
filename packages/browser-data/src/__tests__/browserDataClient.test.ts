@@ -68,6 +68,31 @@ describe("createBrowserDataClient", () => {
     );
   });
 
+  it("routes export acquisition and transient cleanup through the same import broker", async () => {
+    const rpc = makeRpc();
+    const client = createBrowserDataClient(rpc);
+
+    await client.listImportAcquisitionOptions("device:phone");
+    await client.beginImportAcquisition("device:phone", "choose-export");
+    await client.releaseImportSource("device:phone", "export:temporary");
+
+    expect(rpc.callService).toHaveBeenNthCalledWith(1, "extensions", "invokeProvider", [
+      "browserData",
+      "listImportAcquisitionOptions",
+      ["device:phone"],
+    ]);
+    expect(rpc.callService).toHaveBeenNthCalledWith(2, "extensions", "invokeProvider", [
+      "browserData",
+      "beginImportAcquisition",
+      ["device:phone", "choose-export"],
+    ]);
+    expect(rpc.callService).toHaveBeenNthCalledWith(3, "extensions", "invokeProvider", [
+      "browserData",
+      "releaseImportSource",
+      ["device:phone", "export:temporary"],
+    ]);
+  });
+
   it("keeps sensitive preview and durable control on the sealed provider contract", async () => {
     const rpc = makeRpc();
     const client = createBrowserDataClient(rpc);

@@ -1,0 +1,29 @@
+{
+  "name": "@vibestudio/browser-import-archive",
+  "version": "0.1.0",
+  "description": "Runtime-neutral parsers for user-selected browser export archives",
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vibestudio/browser-data": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "^3.2.4"
+  }
+}

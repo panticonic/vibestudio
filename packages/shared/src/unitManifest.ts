@@ -162,6 +162,10 @@ export const APP_CAPABILITY_CATALOG = {
     targets: ["electron", "react-native", "terminal"],
     nativeHosts: ["electron", "react-native"],
   },
+  "browser-import": {
+    targets: ["react-native"],
+    nativeHosts: ["react-native"],
+  },
   "window-management": { targets: ["electron"], nativeHosts: ["electron"] },
   camera: { targets: ["electron", "react-native"] },
   microphone: { targets: ["electron"] },

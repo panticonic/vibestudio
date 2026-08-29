@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
   BrowserCookieInput,
+  BrowserImportAcquisitionOption,
+  BrowserImportAcquisitionResult,
   BrowserImportDataType,
   BrowserImportProvider,
   BrowserImportSource,
@@ -166,6 +168,28 @@ export class BrowserImportHostProvider {
         "Browser profiles could not be discovered. Check operating-system browser-data access, then try again."
       );
     }
+  }
+
+  async listAcquisitionOptions(signal?: AbortSignal): Promise<BrowserImportAcquisitionOption[]> {
+    const provider = await this.provider();
+    return provider.listAcquisitionOptions?.(signal ?? new AbortController().signal) ?? [];
+  }
+
+  async beginAcquisition(
+    acquisitionId: string,
+    signal?: AbortSignal
+  ): Promise<BrowserImportAcquisitionResult> {
+    const provider = await this.provider();
+    if (!provider.beginAcquisition) {
+      throw Object.assign(new Error("This browser import host cannot enroll export files"), {
+        code: "EUNSUPPORTED",
+      });
+    }
+    return provider.beginAcquisition(acquisitionId, signal ?? new AbortController().signal);
+  }
+
+  async releaseSource(sourceId: string): Promise<void> {
+    await (await this.provider()).releaseSource?.(sourceId);
   }
 
   async preview(

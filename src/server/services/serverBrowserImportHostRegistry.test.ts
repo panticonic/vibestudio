@@ -65,6 +65,22 @@ describe("ServerBrowserImportHostRegistry", () => {
           ];
         }
         if (method === "browserEnvironment.listImportSources") return [];
+        if (method === "browserEnvironment.listImportAcquisitionOptions") {
+          return [
+            {
+              acquisitionId: "choose-export",
+              browser: "safari",
+              displayName: "Choose export",
+              description: "Choose a browser export archive from this device.",
+              kind: "file-picker",
+              primary: true,
+            },
+          ];
+        }
+        if (method === "browserEnvironment.beginImportAcquisition") {
+          return { state: "cancelled" };
+        }
+        if (method === "browserEnvironment.releaseImportSource") return undefined;
         if (method === "browserEnvironment.startImportRead") return "device-operation";
         if (method === "browserEnvironment.nextImportFrame") {
           return { type: "complete", summary: { dataTypes: [], warnings: [] } };
@@ -91,6 +107,13 @@ describe("ServerBrowserImportHostRegistry", () => {
       expect.objectContaining({ hostId: "server:workspace-a", location: "server" }),
     ]);
     await expect(registry.listSources(initiatingContext(), "device:a")).resolves.toEqual([]);
+    await expect(registry.listAcquisitionOptions(initiatingContext(), "device:a")).resolves.toEqual(
+      [expect.objectContaining({ acquisitionId: "choose-export" })]
+    );
+    await expect(
+      registry.beginAcquisition(initiatingContext(), "device:a", "choose-export")
+    ).resolves.toEqual({ state: "cancelled" });
+    await registry.releaseSource(initiatingContext(), "device:a", "export:temporary");
     const handle = await registry.startImportRead(
       initiatingContext(),
       "device:a",
@@ -109,6 +132,14 @@ describe("ServerBrowserImportHostRegistry", () => {
     expect(calls).toContainEqual({
       method: "browserEnvironment.nextImportFrame",
       args: ["device-operation"],
+    });
+    expect(calls).toContainEqual({
+      method: "browserEnvironment.beginImportAcquisition",
+      args: ["device:a", "choose-export"],
+    });
+    expect(calls).toContainEqual({
+      method: "browserEnvironment.releaseImportSource",
+      args: ["device:a", "export:temporary"],
     });
     registry.stop();
   });

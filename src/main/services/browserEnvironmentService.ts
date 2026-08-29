@@ -14,6 +14,9 @@ import type { BrowserImportHostProvider } from "./browserImportHostProvider.js";
 
 export interface BrowserEnvironmentImportRouter {
   listHosts(ctx: ServiceContext): unknown;
+  listAcquisitionOptions(ctx: ServiceContext, hostId: string): unknown;
+  beginAcquisition(ctx: ServiceContext, hostId: string, acquisitionId: string): unknown;
+  releaseSource(ctx: ServiceContext, hostId: string, sourceId: string): unknown;
   listSources(ctx: ServiceContext, hostId: string): unknown;
   preview(
     ctx: ServiceContext,
@@ -56,6 +59,11 @@ export function localBrowserEnvironmentImportRouter(
   };
   return {
     listHosts: (ctx) => [provider(ctx).summary()],
+    listAcquisitionOptions: (ctx, hostId) =>
+      provider(ctx, hostId).listAcquisitionOptions(ctx.signal),
+    beginAcquisition: (ctx, hostId, acquisitionId) =>
+      provider(ctx, hostId).beginAcquisition(acquisitionId, ctx.signal),
+    releaseSource: (ctx, hostId, sourceId) => provider(ctx, hostId).releaseSource(sourceId),
     listSources: (ctx, hostId) => provider(ctx, hostId).listSources(ctx.signal),
     preview: (ctx, hostId, sourceId, dataTypes) =>
       provider(ctx, hostId).preview(sourceId, dataTypes, ctx.signal),
@@ -119,6 +127,12 @@ export function createBrowserEnvironmentService(deps: {
     authorityPreparation,
     handler: defineServiceHandler("browserEnvironment", browserEnvironmentMethods, {
       listImportHosts: (_ctx) => deps.importRouter.listHosts(_ctx),
+      listImportAcquisitionOptions: (_ctx, [hostId]) =>
+        deps.importRouter.listAcquisitionOptions(_ctx, hostId),
+      beginImportAcquisition: (_ctx, [hostId, acquisitionId]) =>
+        deps.importRouter.beginAcquisition(_ctx, hostId, acquisitionId),
+      releaseImportSource: (_ctx, [hostId, sourceId]) =>
+        deps.importRouter.releaseSource(_ctx, hostId, sourceId),
       listImportSources: (_ctx, [hostId]) => deps.importRouter.listSources(_ctx, hostId),
       previewImportSource: (_ctx, [hostId, sourceId, dataTypes]) =>
         deps.importRouter.preview(_ctx, hostId, sourceId, dataTypes),

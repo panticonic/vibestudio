@@ -11,23 +11,31 @@ import { FAVICON_MIME_TYPES, type FaviconMimeType } from "./favicon.js";
 import {
   BrowserImportDataTypeSchema,
   ImportCategoryProgressSchema,
+  type BrowserImportAcquisitionOption,
+  type BrowserImportAcquisitionResult,
   type BrowserImportDataType,
   type BrowserImportSource,
   type ImportCategoryProgress,
 } from "@vibestudio/browser-contracts/import";
 export {
   BROWSER_IMPORT_DATA_TYPES,
+  BrowserImportAcquisitionOptionSchema,
+  BrowserImportAcquisitionResultSchema,
   BrowserImportDataTypeSchema,
   BrowserImportSourceSchema,
+  IMPORT_ACQUISITION_KINDS,
   IMPORT_HOST_PLATFORMS,
   IMPORT_SOURCE_STATUSES,
   ImportCategoryProgressSchema,
   ImportHostSummarySchema,
+  type BrowserImportAcquisitionOption,
+  type BrowserImportAcquisitionResult,
   type BrowserImportDataType,
   type BrowserImportSource,
   type ImportCategoryProgress,
   type ImportHostPlatform,
   type ImportHostSummary,
+  type ImportAcquisitionKind,
   type ImportSourceStatus,
 } from "@vibestudio/browser-contracts/import";
 
@@ -231,6 +239,14 @@ export interface BrowserImportRead {
 
 export interface BrowserImportProvider {
   listSources(signal: AbortSignal): Promise<BrowserImportSource[]>;
+  /** Host-specific source enrollment, such as a system export sheet or file picker. */
+  listAcquisitionOptions?(signal: AbortSignal): Promise<BrowserImportAcquisitionOption[]>;
+  beginAcquisition?(
+    acquisitionId: string,
+    signal: AbortSignal
+  ): Promise<BrowserImportAcquisitionResult>;
+  /** Mark a transient source for cleanup once no active read retains it. */
+  releaseSource?(sourceId: string): void | Promise<void>;
   preview(
     sourceId: string,
     dataTypes: BrowserImportDataType[],

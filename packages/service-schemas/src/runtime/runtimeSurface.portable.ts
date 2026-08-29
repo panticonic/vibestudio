@@ -124,9 +124,7 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
       minItems: 2,
       maxItems: 3,
     },
-    examples: [
-      { args: ["workers/notes", "NotesDO", { key: "disposable-probe" }] },
-    ],
+    examples: [{ args: ["workers/notes", "NotesDO", { key: "disposable-probe" }] }],
   },
   list: {
     signature: "list(): Promise<WorkerEntityInfo[]>",
@@ -298,6 +296,9 @@ export const CREDENTIALS_MEMBERS = [
 export const BROWSER_DATA_MEMBERS = [
   "getBrowserEnvironment",
   "listImportHosts",
+  "listImportAcquisitionOptions",
+  "beginImportAcquisition",
+  "releaseImportSource",
   "listImportSources",
   "previewImport",
   "previewSensitiveImport",

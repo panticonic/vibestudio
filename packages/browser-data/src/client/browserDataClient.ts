@@ -1,6 +1,8 @@
 import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type {
   BrowserEnvironmentIdentity,
+  BrowserImportAcquisitionOption,
+  BrowserImportAcquisitionResult,
   BrowserImportDataType,
   BrowserDownloadRecord,
   BrowserImportSelection,
@@ -90,6 +92,12 @@ export type BrowserPrivacySection = "credentials" | "formFill" | "inspect" | "de
 export interface BrowserDataClient {
   getBrowserEnvironment(): Promise<BrowserEnvironmentIdentity>;
   listImportHosts(): Promise<ImportHostSummary[]>;
+  listImportAcquisitionOptions(hostId: string): Promise<BrowserImportAcquisitionOption[]>;
+  beginImportAcquisition(
+    hostId: string,
+    acquisitionId: string
+  ): Promise<BrowserImportAcquisitionResult>;
+  releaseImportSource(hostId: string, sourceId: string): Promise<void>;
   listImportSources(hostId: string): Promise<BrowserImportSource[]>;
   previewImport(selection: NonSensitiveBrowserImportSelection): Promise<ImportPreview>;
   previewSensitiveImport(
@@ -192,6 +200,10 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
   return {
     getBrowserEnvironment: () => callNative("getBrowserEnvironment"),
     listImportHosts: () => callNative("listImportHosts"),
+    listImportAcquisitionOptions: (hostId) => callNative("listImportAcquisitionOptions", hostId),
+    beginImportAcquisition: (hostId, acquisitionId) =>
+      callNative("beginImportAcquisition", hostId, acquisitionId),
+    releaseImportSource: (hostId, sourceId) => callNative("releaseImportSource", hostId, sourceId),
     listImportSources: (hostId) => callNative("listImportSources", hostId),
     previewImport: (selection) => callNative("previewImport", selection),
     previewSensitiveImport: (request) => callNative("previewSensitiveImport", request),

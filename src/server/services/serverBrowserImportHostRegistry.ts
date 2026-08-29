@@ -5,6 +5,8 @@ import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   BrowserCookieInput,
+  BrowserImportAcquisitionOption,
+  BrowserImportAcquisitionResult,
   BrowserImportDataType,
   BrowserImportProvider,
   BrowserImportSource,
@@ -33,6 +35,12 @@ interface ScopedHost {
 
 interface ImportEndpoint {
   summary: ImportHostSummary;
+  listAcquisitionOptions(signal?: AbortSignal): Promise<BrowserImportAcquisitionOption[]>;
+  beginAcquisition(
+    acquisitionId: string,
+    signal?: AbortSignal
+  ): Promise<BrowserImportAcquisitionResult>;
+  releaseSource(sourceId: string): void | Promise<void>;
   listSources(signal?: AbortSignal): Promise<BrowserImportSource[]>;
   preview(
     sourceId: string,
@@ -120,6 +128,25 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
 
   async listSources(ctx: ServiceContext, hostId: string): Promise<BrowserImportSource[]> {
     return (await this.endpoint(ctx, hostId)).listSources(ctx.signal);
+  }
+
+  async listAcquisitionOptions(
+    ctx: ServiceContext,
+    hostId: string
+  ): Promise<BrowserImportAcquisitionOption[]> {
+    return (await this.endpoint(ctx, hostId)).listAcquisitionOptions(ctx.signal);
+  }
+
+  async beginAcquisition(
+    ctx: ServiceContext,
+    hostId: string,
+    acquisitionId: string
+  ): Promise<BrowserImportAcquisitionResult> {
+    return (await this.endpoint(ctx, hostId)).beginAcquisition(acquisitionId, ctx.signal);
+  }
+
+  async releaseSource(ctx: ServiceContext, hostId: string, sourceId: string): Promise<void> {
+    await (await this.endpoint(ctx, hostId)).releaseSource(sourceId);
   }
 
   async preview(
@@ -273,6 +300,9 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
     const provider = this.forContext(ctx);
     return {
       summary: provider.summary(),
+      listAcquisitionOptions: (signal) => provider.listAcquisitionOptions(signal),
+      beginAcquisition: (acquisitionId, signal) => provider.beginAcquisition(acquisitionId, signal),
+      releaseSource: (sourceId) => provider.releaseSource(sourceId),
       listSources: (signal) => provider.listSources(signal),
       preview: (sourceId, dataTypes, signal) => provider.preview(sourceId, dataTypes, signal),
       startImport: (sourceId, dataTypes) => provider.startImport(sourceId, dataTypes),
@@ -303,6 +333,9 @@ export class ServerBrowserImportHostRegistry implements BrowserEnvironmentImport
       connection.call(`browserEnvironment.${method}`, args) as Promise<T>;
     return {
       summary,
+      listAcquisitionOptions: () => call("listImportAcquisitionOptions", hostId),
+      beginAcquisition: (acquisitionId) => call("beginImportAcquisition", hostId, acquisitionId),
+      releaseSource: (sourceId) => call("releaseImportSource", hostId, sourceId),
       listSources: () => call("listImportSources", hostId),
       preview: (sourceId, dataTypes) => call("previewImportSource", hostId, sourceId, dataTypes),
       startImport: (sourceId, dataTypes) => call("startImportRead", hostId, sourceId, dataTypes),

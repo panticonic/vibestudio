@@ -14,6 +14,8 @@ export {
 export type { ImportPreview } from "./client/browserDataClient.js";
 export type {
   BrowserImportSelection,
+  BrowserImportAcquisitionOption,
+  BrowserImportAcquisitionResult,
   BrowserDownloadRecord,
   BrowserImportSource,
   ImportCategoryBreakdown,

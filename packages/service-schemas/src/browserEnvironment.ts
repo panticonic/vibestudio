@@ -5,6 +5,8 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 import type { CapabilityPresentation } from "@vibestudio/shared/authorityPresentation";
 import {
+  BrowserImportAcquisitionOptionSchema,
+  BrowserImportAcquisitionResultSchema,
   BrowserImportDataTypeSchema,
   BrowserImportSourceSchema,
   ImportCategoryProgressSchema,
@@ -162,6 +164,69 @@ export const browserEnvironmentMethods = defineServiceMethods({
       description: "Check which browser can provide data for import.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
+    }),
+  },
+  listImportAcquisitionOptions: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.read",
+      rationale:
+        "Lists host-owned ways to enroll a transient browser export without opening platform UI.",
+    },
+    description: "List ways the selected device can enroll a browser export.",
+    args: z.tuple([z.string().min(1)]),
+    returns: z.array(BrowserImportAcquisitionOptionSchema),
+    access: { sensitivity: "read" },
+    ...brokerPolicy("listImportAcquisitionOptions", {
+      title: "Check browser export options",
+      action: "check browser export options",
+      description: "Check how this device can provide a browser export.",
+      group: "files",
+      authorityCategory: { domain: "files", verb: "see" },
+    }),
+  },
+  beginImportAcquisition: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.create",
+      rationale:
+        "Presents trusted platform UI and stages only the browser export explicitly selected by the user.",
+    },
+    description: "Run a host-owned browser export or file-selection action.",
+    args: z.tuple([z.string().min(1), z.string().min(1).max(200)]),
+    returns: BrowserImportAcquisitionResultSchema,
+    access: { sensitivity: "read" },
+    ...brokerPolicy("beginImportAcquisition", {
+      title: "Choose browser data to import",
+      action: "choose browser data to import",
+      description: "Open trusted device controls to export or choose browser data.",
+      group: "files",
+      authorityCategory: { domain: "files", verb: "act" },
+    }),
+  },
+  releaseImportSource: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.retire",
+      rationale:
+        "Deletes transient host-owned staging for a completed or abandoned browser export.",
+    },
+    description: "Release a transient browser export source and its staging data.",
+    args: z.tuple([z.string().min(1), z.string().min(1).max(512)]),
+    returns: z.void(),
+    access: { sensitivity: "write" },
+    ...brokerPolicy("releaseImportSource", {
+      title: "Remove staged browser export",
+      action: "remove staged browser export",
+      description: "Remove the temporary browser export held by this device.",
+      group: "files",
+      authorityCategory: { domain: "files", verb: "manage" },
     }),
   },
   listImportSources: {
