@@ -774,7 +774,7 @@ export const buildMethods = defineServiceMethods({
       rationale: "Read-only inspection of an immutable local build record",
     },
     description:
-      "Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. Pass includeExecutableModules:false for compact profiling and provenance reads that do not need the sealed source inventory.",
+      "Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. The response is compact by default; pass includeExecutableModules:true only when the sealed source inventory is required.",
     args: z.tuple([
       z.string(),
       z.object({ includeExecutableModules: z.boolean().optional() }).strict().optional(),

@@ -84,9 +84,9 @@ export function createBuildService(deps: {
         const build = bs.getBuildByKey(key);
         if (!build) return null;
         const metadata =
-          options?.includeExecutableModules === false
-            ? (({ executableModules: _executableModules, ...compact }) => compact)(build.metadata)
-            : build.metadata;
+          options?.includeExecutableModules === true
+            ? build.metadata
+            : (({ executableModules: _executableModules, ...compact }) => compact)(build.metadata);
         const diagnostics =
           diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
         return diagnostics && diagnostics.length > 0 ? { ...metadata, diagnostics } : metadata;

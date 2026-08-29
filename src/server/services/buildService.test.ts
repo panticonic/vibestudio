@@ -158,13 +158,32 @@ describe("build service extension diagnostics", () => {
     });
   });
 
-  it("exposes build metadata by immutable build key", async () => {
+  it("returns compact build metadata by default", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
+
+    const metadata = await service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "getBuildMetadata",
+      ["build-key"]
+    );
+
+    expect(metadata).toMatchObject({
+      kind: "extension",
+      name: "@workspace-extensions/example",
+      details: { kind: "extension", runtimeAbi: "4", providerContracts: {} },
+    });
+    expect(metadata).not.toHaveProperty("executableModules");
+  });
+
+  it("returns the executable source inventory only when explicitly requested", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getBuildMetadata", [
         "build-key",
+        { includeExecutableModules: true },
       ])
     ).resolves.toMatchObject({
       kind: "extension",
@@ -174,7 +193,7 @@ describe("build service extension diagnostics", () => {
     });
   });
 
-  it("omits executable source inventory from compact metadata reads", async () => {
+  it("accepts an explicit compact metadata read", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({ buildSystem, listUnits: () => [] });
 
