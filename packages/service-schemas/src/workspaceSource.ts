@@ -1358,6 +1358,7 @@ const workspaceSnapshotRepositorySchema = z
     repoPath: z.string(),
     subdir: z.string(),
     snapshot: z.string().regex(/^v1-sha256:[a-f0-9]{64}$/u),
+    contentRoot: z.string().regex(/^state:[a-f0-9]{64}$/u),
     files: z.array(
       z
         .object({

@@ -5,6 +5,7 @@ import {
   compareUtf16CodeUnits,
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
+import { encodeWorktreeTree, treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
 import type { ExactGitSnapshot, ExactSnapshotFile } from "@vibestudio/git";
 import type { SnapshotContentSink } from "@vibestudio/git";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
@@ -24,6 +25,7 @@ export interface RootTemplateRepository {
   repoPath: string;
   subdir: string;
   snapshot: CanonicalSnapshotDigest;
+  contentRoot: `state:${string}`;
   files: ExactSnapshotFile[];
 }
 
@@ -52,6 +54,47 @@ function repositorySnapshot(files: readonly ExactSnapshotFile[]): CanonicalSnaps
   );
 }
 
+function repositoryContentTree(files: readonly ExactSnapshotFile[]) {
+  return encodeWorktreeTree(
+    files.map((file) => ({
+      path: file.path,
+      contentHash: file.contentHash,
+      mode: file.mode === 0o755 ? 0o100755 : 0o100644,
+    }))
+  );
+}
+
+async function publishRepositoryContentTrees(
+  repositories: readonly RootTemplateRepository[],
+  sink: SnapshotContentSink
+): Promise<void> {
+  const pending = repositories[Symbol.iterator]();
+  const publishNext = async (): Promise<void> => {
+    for (let entry = pending.next(); !entry.done; entry = pending.next()) {
+      const repository = entry.value;
+      const encoded = repositoryContentTree(repository.files);
+      if (encoded.stateHash !== repository.contentRoot) {
+        throw new Error(
+          `Root template repository ${repository.repoPath} changed while publishing its content tree`
+        );
+      }
+      // Nodes are child-first and the state pointer is published last. Thus a
+      // visible state object always implies a complete reconstructable tree.
+      for (const node of encoded.nodes) {
+        const stored = await sink.put(new TextEncoder().encode(node.canonicalText));
+        if (stored.digest !== treeHashDigest(node.treeHash)) {
+          throw new Error(`Content sink changed the tree identity for ${repository.repoPath}`);
+        }
+      }
+      const state = await sink.put(new TextEncoder().encode(encoded.stateNode.canonicalText));
+      if (state.digest !== treeHashDigest(encoded.stateHash)) {
+        throw new Error(`Content sink changed the state identity for ${repository.repoPath}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(16, repositories.length) }, () => publishNext()));
+}
+
 /**
  * Split one verified root snapshot into the semantic repositories it contains.
  * Files outside workspace source sections are repository tooling and remain
@@ -67,10 +110,12 @@ export function enumerateRootTemplateRepositories(
       .filter((file) => file.path.startsWith(prefix))
       .map((file) => ({ ...file, path: file.path.slice(prefix.length) }))
       .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+    const contentTree = repositoryContentTree(files);
     repositories.push({
       repoPath: repository.repoPath,
       subdir: repository.repoPath,
       snapshot: repositorySnapshot(files),
+      contentRoot: contentTree.stateHash as `state:${string}`,
       files,
     });
   }
@@ -184,6 +229,8 @@ export class WorkspaceRootTemplateBootstrap {
     }
     meta.files.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
     meta.snapshot = repositorySnapshot(meta.files);
+    meta.contentRoot = repositoryContentTree(meta.files).stateHash as `state:${string}`;
+    await publishRepositoryContentTrees(repositories, this.deps.sink);
     this.acquiredSnapshot = snapshot;
     return {
       pin,

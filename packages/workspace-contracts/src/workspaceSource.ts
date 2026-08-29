@@ -16,6 +16,12 @@ export interface WorkspaceSourceSnapshotRepository {
   repoPath: string;
   subdir: string;
   snapshot: `v1-sha256:${string}`;
+  /**
+   * Exact content-store state for `files`. The bootstrap host publishes this
+   * reconstructable tree before initialization; the semantic authority
+   * independently re-derives the hash before recording it.
+   */
+  contentRoot: `state:${string}`;
   files: readonly {
     path: string;
     contentHash: string;

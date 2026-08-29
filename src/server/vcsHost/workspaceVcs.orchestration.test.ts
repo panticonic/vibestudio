@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
-import { EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
+import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   blobPath,
@@ -386,6 +386,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           repoPath: "panels/news",
           subdir: "panels/news",
           snapshot: subtreeDigest,
+          contentRoot: buildWorktreeManifest([
+            { path: "index.ts", contentHash: templateHash, mode: 0o100644 },
+          ]).stateHash as `state:${string}`,
           files: [
             {
               path: "index.ts",

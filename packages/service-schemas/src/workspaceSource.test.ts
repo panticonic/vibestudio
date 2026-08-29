@@ -105,4 +105,38 @@ describe("GAD runtime schema", () => {
       authority: { principals: ["host", "code"] },
     });
   });
+
+  it("accepts exact bootstrap content roots at the RPC authority boundary", () => {
+    const digest = "a".repeat(64);
+    const input = {
+      commandId: "initialize-1",
+      pin: {
+        url: "https://example.invalid/workspace.git",
+        ref: "refs/heads/main",
+        commit: "commit-1",
+        snapshot: `v1-sha256:${digest}`,
+      },
+      repositories: [
+        {
+          repoPath: "packages/example",
+          subdir: "packages/example",
+          snapshot: `v1-sha256:${digest}`,
+          contentRoot: `state:${digest}`,
+          files: [],
+        },
+      ],
+    };
+
+    expect(
+      gadWireMethods.workspaceSourceInitializeExactSnapshot.args.safeParse([input]).success
+    ).toBe(true);
+    expect(
+      gadWireMethods.workspaceSourceInitializeExactSnapshot.args.safeParse([
+        {
+          ...input,
+          repositories: [{ ...input.repositories[0], contentRoot: "state:not-a-digest" }],
+        },
+      ]).success
+    ).toBe(false);
+  });
 });

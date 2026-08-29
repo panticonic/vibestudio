@@ -1297,6 +1297,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             repoPath: repository.repoPath,
             subdir: repository.subdir,
             snapshot: repository.snapshot,
+            contentRoot: repository.contentRoot,
             files: repository.files.map(({ path: filePath, contentHash, mode }) => ({
               path: filePath,
               contentHash,
