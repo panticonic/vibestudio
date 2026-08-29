@@ -66,6 +66,20 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   }
 }
 
+async function within<T>(promise: Promise<T>, message: string, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-iroh-e2e-"));
   const clients = new Set<ConnectedClient>();
@@ -168,6 +182,11 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
           return new Response(`download:${body ?? ""}`, {
             status: 206,
             headers: { "content-type": "text/plain", "x-iroh-smoke": "native" },
+          });
+        }
+        if (method === "hold") {
+          return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+            status: 200,
           });
         }
         return { method, args, subject: context.caller.subject };
@@ -351,4 +370,42 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     );
     await closeClient(paired);
   }, 30_000);
+
+  it("recycles native stream credit across a concurrent unary burst", async () => {
+    const paired = await pairFresh();
+    const calls = Array.from({ length: 96 }, (_, index) =>
+      paired.rpc.call("main", "demo.echo", [`credit-${index}`])
+    );
+
+    const results = await within(
+      Promise.all(calls),
+      "Iroh unary stream credit was not recycled",
+      5_000
+    );
+
+    expect(results).toHaveLength(96);
+    expect(results[95]).toMatchObject({ args: ["credit-95"] });
+    await closeClient(paired);
+  }, 10_000);
+
+  it("keeps short RPCs available beside the product's long-lived stream budget", async () => {
+    const paired = await pairFresh();
+    const held: Response[] = [];
+    try {
+      for (let index = 0; index < 96; index += 1) {
+        held.push(await paired.rpc.stream("main", "demo.hold", [index]));
+      }
+      const calls = Array.from({ length: 8 }, (_, index) =>
+        paired.rpc.call("main", "demo.echo", [`beside-hold-${index}`])
+      );
+      const results = await within(
+        Promise.all(calls),
+        "Iroh short RPCs were stream-window starved",
+        2_000
+      );
+      expect(results).toHaveLength(8);
+    } finally {
+      await closeClient(paired);
+    }
+  }, 10_000);
 });

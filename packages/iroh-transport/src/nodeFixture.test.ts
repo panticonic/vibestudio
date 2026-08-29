@@ -5,6 +5,7 @@ import { loadIrohNodeBinding, resolveIrohNodeBinding } from "./nodeBinding.js";
 import {
   bindNodeEndpoint,
   configureNodeConnection,
+  IROH_MAX_CONCURRENT_BI_STREAMS,
   VIBESTUDIO_IROH_ALPN,
   VIBESTUDIO_IROH_ALPN_TEXT,
 } from "./nodeEndpoint.js";
@@ -61,7 +62,7 @@ async function connectPair(
   return { serverConnection, clientConnection };
 }
 
-describe("Iroh Node Phase 0 fixture", () => {
+describe("Iroh Node transport fixture", () => {
   const endpoints = new Set<Endpoint>();
   const connections = new Set<Connection>();
 
@@ -78,6 +79,10 @@ describe("Iroh Node Phase 0 fixture", () => {
     connections.clear();
     await Promise.all([...endpoints].map((endpoint) => endpoint.close().catch(() => undefined)));
     endpoints.clear();
+  });
+
+  it("derives transport headroom above the complete application fan-out", () => {
+    expect(IROH_MAX_CONCURRENT_BI_STREAMS).toBe(32_768n);
   });
 
   it("binds fixed identities with explicit minimal config and completes a verified handshake", async () => {

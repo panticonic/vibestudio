@@ -1,8 +1,10 @@
 import {
   decodeJsonFrame,
   IROH_WIRE_VERSION,
+  MAX_ACTIVE_REQUESTS_PER_SESSION,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
+  MAX_PENDING_STREAM_ADMISSIONS,
   MAX_STREAM_CHUNK_BYTES,
   readFrame,
   readIrohStreamPreamble,
@@ -292,6 +294,12 @@ class ClientSession implements IrohClientSession {
       requestId &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request")
     ) {
+      if (this.inboundRequests.has(requestId)) {
+        throw new Error(`Duplicate Iroh inbound request id ${requestId}`);
+      }
+      if (this.inboundRequests.size >= MAX_ACTIVE_REQUESTS_PER_SESSION) {
+        throw new Error(`Iroh session ${this.sid} exceeded its active request bound`);
+      }
       this.inboundRequests.set(requestId, { stream, settled: false });
     } else {
       await stream.send.finish().catch(() => undefined);
@@ -698,20 +706,31 @@ class ClientPipe implements IrohClientPipe {
   }
 
   private async acceptStreams(): Promise<void> {
+    let pendingAdmissions = 0;
     while (this.statusValue !== "disconnected") {
       const stream = await this.connection.acceptBi();
+      if (pendingAdmissions >= MAX_PENDING_STREAM_ADMISSIONS) {
+        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        continue;
+      }
+      pendingAdmissions += 1;
       // QUIC streams are independent. Never wait for one peer-opened stream's
       // preamble or envelope in the admission loop: a stalled stream would
       // otherwise head-of-line block every later server event despite QUIC's
-      // multiplexing. The connection's negotiated bidirectional-stream limit
-      // bounds the number of concurrent handlers.
-      void this.acceptStream(stream).catch(() => {
-        // A peer-created request stream is an isolation boundary. Reject only
-        // this malformed or stalled stream; the control stream and unrelated
-        // sessions remain healthy.
-        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-      });
+      // multiplexing. Only incomplete bounded headers occupy the explicit
+      // admission budget; retained response streams do not.
+      void this.acceptStream(stream)
+        .catch(() => {
+          // A peer-created request stream is an isolation boundary. Reject only
+          // this malformed or stalled stream; the control stream and unrelated
+          // sessions remain healthy.
+          void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+          void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        })
+        .finally(() => {
+          pendingAdmissions -= 1;
+        });
     }
   }
 

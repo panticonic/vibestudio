@@ -439,6 +439,35 @@ method that understands the resource, not by an unbounded transport buffer.
 Concurrent-stream limits are set from the measured per-connection session and
 request concurrency in WP1, not left at a binding default.
 
+### Post-cutover stream-admission correction (2026-08-29)
+
+The first cutover accidentally shipped the Phase 0 fixture value of 64 as the
+physical connection's bidirectional-stream window. That confused two different
+bounds. Long-lived event/CDP responses legitimately retain QUIC streams, so an
+ordinary desktop could consume that provisional window; later panel assets and
+short RPCs then blocked in `openBi()` and never reached the server. Increasing
+the value only until the observed startup passed would preserve the design
+error.
+
+The corrected contract separates the layers:
+
+- each physical connection admits at most 64 logical sessions;
+- each logical session retains at most 256 active requests, a memory-abuse
+  boundary deliberately above the desktop's complete expected fan-out;
+- at most 128 streams per connection may remain in bounded-header admission at
+  once; a successfully parsed request immediately leaves that budget even when
+  its response is a long-lived watch;
+- the native QUIC window is twice the complete application fan-out
+  (`2 * 64 * 256 = 32768`), leaving control, cancellation, handoff, and stream
+  retirement headroom. It is transport capacity, not a scheduler or the DoS
+  boundary.
+
+The native regression opens 96 retained streaming responses on one real QUIC
+connection and proves that a concurrent burst of short RPCs still completes.
+It failed with the escaped Phase 0 limit and passes with the separated bounds.
+No shared mux, second connection, priority lane, or compatibility path is
+introduced.
+
 ### Scheduling and fairness
 
 Do not port the WebRTC 8:4:1 scheduler. QUIC provides independent streams and
@@ -449,8 +478,9 @@ flow control. Product-level priority remains at the work issuer:
 - cancellation stops obsolete work at its source and resets its QUIC stream.
 
 Only use a native QUIC stream-priority API if the same supported behavior is
-proven in Node, Swift, and Kotlin. Otherwise remove transport `trafficClass`
-from the wire. A platform-specific priority path would recreate divergent
+proven in Node, Swift, and Kotlin. The current release set does not expose that
+portable contract, so `trafficClass` remains producer-local and is absent from
+the Iroh wire. A platform-specific priority path would recreate divergent
 semantics and is rejected.
 
 ## Logical sessions and recovery

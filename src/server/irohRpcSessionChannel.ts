@@ -1,5 +1,6 @@
 import {
   IROH_WIRE_VERSION,
+  MAX_ACTIVE_REQUESTS_PER_SESSION,
   MAX_ENVELOPE_FRAME_BYTES,
   readFrame,
   writeFrame,
@@ -148,6 +149,12 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       typeof requestId === "string" &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request")
     ) {
+      if (this.requests.has(requestId)) {
+        throw new Error(`Duplicate Iroh inbound request id ${requestId}`);
+      }
+      if (this.requests.size >= MAX_ACTIVE_REQUESTS_PER_SESSION) {
+        throw new Error(`Iroh session ${this.options.sid} exceeded its active request bound`);
+      }
       this.requests.set(requestId, {
         stream,
         streaming: envelope.message.type === "stream-request",

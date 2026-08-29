@@ -7,6 +7,25 @@ export const MAX_STREAM_CHUNK_BYTES = 256 * 1024;
 export const MAX_SESSION_ID_BYTES = 128;
 export const MAX_REQUEST_ID_BYTES = 128;
 
+/**
+ * Per-connection work that is still parsing its bounded preamble and envelope.
+ * Completed admission no longer occupies this budget, even when the response
+ * is a long-lived watch. This is the memory/slowloris bound; the QUIC stream
+ * window is deliberately a separate transport-headroom concern.
+ */
+export const MAX_PENDING_STREAM_ADMISSIONS = 128;
+
+/** Logical-session fan-out carried by one authenticated physical connection. */
+export const MAX_LOGICAL_SESSIONS_PER_CONNECTION = 64;
+
+/**
+ * One logical session cannot retain an unbounded set of request streams. The
+ * bound is intentionally above the desktop's entire expected request fan-out;
+ * it protects memory from a retained-stream flood rather than scheduling
+ * ordinary work.
+ */
+export const MAX_ACTIVE_REQUESTS_PER_SESSION = 256;
+
 export type IrohStreamKind = "control" | "envelope" | "stream";
 
 export type IrohStreamPreamble =

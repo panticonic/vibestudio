@@ -48,6 +48,8 @@ import { FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   IROH_WIRE_VERSION,
+  MAX_LOGICAL_SESSIONS_PER_CONNECTION,
+  MAX_PENDING_STREAM_ADMISSIONS,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
   readFrame,
@@ -4584,7 +4586,6 @@ export class RpcServer {
    * its panels + shell — dozens at most — so this is far above any real need; a
    * re-open of an already-tracked sid is never blocked.
    */
-  private static readonly MAX_SESSIONS_PER_PIPE = 64;
   private static readonly IROH_PREAUTH_TIMEOUT_MS = 10_000;
   private static readonly IROH_STREAM_ADMISSION_TIMEOUT_MS = 10_000;
 
@@ -4972,7 +4973,7 @@ export class RpcServer {
         );
         switch (frame.t) {
           case IROH_SESSION_OPEN: {
-            if (!sessions.has(frame.sid) && sessions.size >= RpcServer.MAX_SESSIONS_PER_PIPE) {
+            if (!sessions.has(frame.sid) && sessions.size >= MAX_LOGICAL_SESSIONS_PER_CONNECTION) {
               await writeControl({
                 t: IROH_SESSION_OPEN_RESULT,
                 sid: frame.sid,
@@ -5068,22 +5069,33 @@ export class RpcServer {
       }
     };
     const streamLoop = async (): Promise<void> => {
+      let pendingAdmissions = 0;
       while (!stopped) {
         const stream = await connection.acceptBi();
-        // Reading one stream's bounded preamble/envelope must not block
-        // admission of independent later streams. Native QUIC configuration
-        // caps peer-opened bidirectional streams at the measured product limit,
-        // so this task fan-out remains bounded without a second scheduler.
-        void handleStream(stream).catch((error) => {
-          // QUIC request streams are independent failure domains. A bad or
-          // partial stream is reset without discarding healthy logical
-          // sessions on the physical connection.
+        if (pendingAdmissions >= MAX_PENDING_STREAM_ADMISSIONS) {
           void stream.recv.stop(0x200n).catch(() => undefined);
           void stream.send.reset(0x200n).catch(() => undefined);
-          log.warn("Rejected Iroh RPC stream", {
-            cause: error instanceof Error ? error.message : String(error),
+          continue;
+        }
+        pendingAdmissions += 1;
+        // Reading one stream's bounded preamble/envelope must not block
+        // admission of independent later streams. This counter bounds only
+        // incomplete header work; a long-lived response leaves admission as
+        // soon as its envelope reaches the bounded logical session.
+        void handleStream(stream)
+          .catch((error) => {
+            // QUIC request streams are independent failure domains. A bad or
+            // partial stream is reset without discarding healthy logical
+            // sessions on the physical connection.
+            void stream.recv.stop(0x200n).catch(() => undefined);
+            void stream.send.reset(0x200n).catch(() => undefined);
+            log.warn("Rejected Iroh RPC stream", {
+              cause: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .finally(() => {
+            pendingAdmissions -= 1;
           });
-        });
       }
     };
 
