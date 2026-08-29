@@ -172,4 +172,32 @@ describe("evaluated-run authority ceiling", () => {
     );
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("does not let an asynchronous authority observer gate the authorized operation", async () => {
+    const configured = setup({
+      mode: "adaptive",
+      approvals: "prompt",
+      granted: false,
+    });
+    let release!: () => void;
+    const blockedObservation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const observer = vi.fn(
+      (_event: { kind: "authority-requested" | "authority-decided" }) => blockedObservation
+    );
+    configured.dispatcher.setAuthorityObserver(observer);
+
+    await expect(
+      configured.dispatcher.dispatch(configured.context, "manifestTest", "write", [])
+    ).resolves.toBe("written");
+    expect(observer.mock.calls.map(([observed]) => observed.kind)).toEqual([
+      "authority-requested",
+      "authority-decided",
+      "authority-decided",
+    ]);
+
+    release();
+    await blockedObservation;
+  });
 });

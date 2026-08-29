@@ -778,7 +778,15 @@ export class ServiceDispatcher {
     this.openReviewFor = lookup;
   }
 
-  private async observeAuthority(
+  /**
+   * Publish authority lifecycle telemetry without putting the observer on the
+   * authority decision path. An observer may need to write into the runtime
+   * whose outbound service call is currently being authorized; awaiting that
+   * re-entrant write creates a dependency cycle (runtime -> dispatcher ->
+   * runtime). The observer owns ordering and lifecycle for any asynchronous
+   * delivery it starts.
+   */
+  private observeAuthority(
     context: AuthorizationContext,
     kind: "authority-requested" | "authority-decided",
     payload: {
@@ -789,10 +797,22 @@ export class ServiceDispatcher {
       acquisitionId?: string;
       snapshotDigest?: string;
     }
-  ): Promise<void> {
+  ): void {
     if (!context.executionSession || !this.authorityObserver) return;
     try {
-      await this.authorityObserver({ executionSession: context.executionSession, kind, payload });
+      const observation = this.authorityObserver({
+        executionSession: context.executionSession,
+        kind,
+        payload,
+      });
+      if (observation) {
+        void observation.catch((error) => {
+          console.warn(
+            "[ServiceDispatcher] authority event observer failed:",
+            error instanceof Error ? error.message : error
+          );
+        });
+      }
     } catch (error) {
       console.warn(
         "[ServiceDispatcher] authority event observer failed:",
@@ -1668,7 +1688,7 @@ export class ServiceDispatcher {
           ceilingDigest !== attachedHost.authorityCeilingDigest ||
           !covered
         ) {
-          await this.observeAuthority(resolved.context, "authority-decided", {
+          this.observeAuthority(resolved.context, "authority-decided", {
             capability,
             resourceKey,
             tier: reviewedTier,
@@ -1723,7 +1743,7 @@ export class ServiceDispatcher {
             scopeCovers(scope.resource, resourceKey)
         )
       ) {
-        await this.observeAuthority(resolved.context, "authority-decided", {
+        this.observeAuthority(resolved.context, "authority-decided", {
           capability,
           resourceKey,
           tier: reviewedTier,
@@ -1775,7 +1795,7 @@ export class ServiceDispatcher {
       const decision = evaluated;
       if (decision.allowed) {
         if (reviewedTier !== "open") {
-          await this.observeAuthority(resolved.context, "authority-decided", {
+          this.observeAuthority(resolved.context, "authority-decided", {
             capability,
             resourceKey,
             tier: reviewedTier,
@@ -1903,7 +1923,7 @@ export class ServiceDispatcher {
         // coordinator mint its exact invocation-bound grant; ordinary runs
         // still fail here without ever presenting a human approval.
         if (runManifest?.approvals === "pregranted-only" && !resolved.context.testPolicy) {
-          await this.observeAuthority(resolved.context, "authority-decided", {
+          this.observeAuthority(resolved.context, "authority-decided", {
             capability,
             resourceKey,
             tier,
@@ -1946,7 +1966,7 @@ export class ServiceDispatcher {
           (ctx.authorityAcquisition === "wait" ||
             resolved.context.authorizingOrigin.kind !== "code")
         ) {
-          await this.observeAuthority(resolved.context, "authority-requested", {
+          this.observeAuthority(resolved.context, "authority-requested", {
             capability,
             resourceKey,
             tier,
@@ -1958,7 +1978,7 @@ export class ServiceDispatcher {
             resolved.context.authorizingOrigin.principal
           );
           const outcome = await this.authorityAcquirer.acquire(acquisitionInput, ctx.signal);
-          await this.observeAuthority(resolved.context, "authority-decided", {
+          this.observeAuthority(resolved.context, "authority-decided", {
             capability,
             resourceKey,
             tier,
@@ -1988,7 +2008,7 @@ export class ServiceDispatcher {
           }
         } else if (this.authorityAcquirer) {
           presented = this.authorityAcquirer.request(acquisitionInput);
-          await this.observeAuthority(resolved.context, "authority-requested", {
+          this.observeAuthority(resolved.context, "authority-requested", {
             capability,
             resourceKey,
             tier,

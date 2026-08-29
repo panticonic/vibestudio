@@ -3477,6 +3477,7 @@ async function main() {
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
   let closeEvalKernelLeases: (() => Promise<void>) | null = null;
   let closeActiveEvalRuns: ((deadlineMs?: number) => Promise<void>) | null = null;
+  let closeEvalAuthorityEvents: (() => Promise<void>) | null = null;
   {
     const { createEvalService } = await import("./services/evalService.js");
     let evalDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
@@ -3550,28 +3551,25 @@ async function main() {
             return roots;
           },
         });
+        const { EvalAuthorityEventJournal } =
+          await import("./services/evalAuthorityEventJournal.js");
+        const authorityEvents = new EvalAuthorityEventJournal(doDispatch);
+        closeEvalAuthorityEvents = () => authorityEvents.close();
         dispatcher.setAuthorityObserver(({ executionSession, kind, payload }) => {
           const prefix = "do:vibestudio/internal:EvalDO:";
           const executor = executionSession.executor;
           if (executor.kind !== "eval" || !executor.runtimeId.startsWith(prefix)) return;
-          return doDispatch
-            .dispatch(
-              {
-                source: "vibestudio/internal",
-                className: "EvalDO",
-                objectKey: executor.runtimeId.slice(prefix.length),
-              },
-              "appendAuthorityEvent",
-              executor.evalRunId,
-              kind,
-              {
-                ...payload,
-                callerId: executor.runtimeId,
-                taskRef: executionSession.taskRef,
-                taskAuthority: executionSession.taskAuthority,
-              }
-            )
-            .then(() => undefined);
+          authorityEvents.append({
+            objectKey: executor.runtimeId.slice(prefix.length),
+            runId: executor.evalRunId,
+            kind,
+            payload: {
+              ...payload,
+              callerId: executor.runtimeId,
+              taskRef: executionSession.taskRef,
+              taskAuthority: executionSession.taskAuthority,
+            },
+          });
         });
         evalDefinition = createEvalService({
           doDispatch,
@@ -7238,6 +7236,10 @@ async function main() {
     );
     await closeActiveEvalRuns?.(evalDrainBudgetMs).catch((err) =>
       console.warn("[Server] active eval shutdown drain failed:", err)
+    );
+
+    await closeEvalAuthorityEvents?.().catch((err) =>
+      console.warn("[Server] eval authority event journal shutdown failed:", err)
     );
 
     await closeEvalKernelLeases?.().catch((err) =>
