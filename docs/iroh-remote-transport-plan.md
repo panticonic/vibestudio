@@ -86,9 +86,12 @@ React Native WebRTC module. It does not merely rename them.
    peer's Endpoint ID; that includes the server's 0.5-RTT window, which would
    otherwise write to a peer whose identity is not yet proven. Application
    authentication then happens over the verified connection.
-6. **Bound every input.** Control frames, pre-auth connections, concurrent
-   streams, headers, request bodies, response bodies, queues, timeouts, and
-   diagnostic retention all have explicit limits.
+6. **Bound allocation and ownership, not legitimate transfer size.** Control
+   frames, pre-auth work, concurrent admissions, retained requests, queues,
+   timeouts, and diagnostic retention have explicit limits. Payload transfer
+   uses bounded working chunks and QUIC backpressure. A total-body ceiling
+   exists only when the RPC method understands and owns that resource; the
+   transport does not impose an arbitrary one.
 7. **Direct versus relayed is observable.** Relay use is expected behavior, but
    never invisible behavior. Connection diagnostics and metrics state the
    active path, relay, path changes, RTT, close cause, and reconnect outcome.
@@ -409,33 +412,34 @@ interface RpcStreamHeader {
 }
 ```
 
-If present, raw request-body bytes follow on the send half. The receiver writes
-a bounded response head followed by raw response-body bytes on the reverse
-half, then finishes it. End of stream is the body terminator. Errors use a
-bounded response head or QUIC application error code; cancellation maps to
-`reset`/`stop`. There are no application stream IDs, DATA/END frames, bulk mux,
-base64 wire data, or shared-channel drain thresholds.
+If present, raw request-body bytes follow on the send half. Streaming RPCs use a
+bounded response head followed by raw response-body bytes on the reverse half.
+Unary results are FIN-delimited JSON payloads on that reverse half: reads and
+writes use bounded working chunks, but there is no transport-wide total-size
+ceiling. End of stream is the payload terminator. Errors use the same unary
+payload, a bounded streaming response head, or a QUIC application error code;
+cancellation maps to `reset`/`stop`. There are no application stream IDs,
+DATA/END frames, bulk mux, base64 wire data, or shared-channel drain thresholds.
 
 One shape covers every request:
 
-- a unary RPC is the degenerate case: header with `hasBody: false`, response
-  head, finish. A QUIC stream is cheap, so this costs a stream rather than a
-  slot in a shared ordered queue, and a large unary response can never stall an
-  unrelated session;
+- a unary RPC is the degenerate case: a bounded request header with
+  `hasBody: false`, a FIN-delimited result, and no fixed result ceiling. A QUIC
+  stream is cheap, so this costs a stream rather than a slot in a shared ordered
+  queue, and a large unary response can never stall an unrelated session;
 - an upload carries a request body; a finite response stream carries a response
   body; a duplex RPC carries both;
 - an event watch is an RPC whose response body stays open. Its stream is the
   watch: per-watch ordering is the stream's ordering, and cancelling the watch
   is `reset`/`stop` on that stream;
 - server-initiated direct delivery (`emitToCaller` and `emitToConnection`) uses
-  one server-opened event stream per logical session, matching the one direct
-  event session `RpcServer` already registers per `callerId` + `connectionId`.
-  Ordering is per session, which is the only ordering that delivery contract
-  requires.
+  an independent server-opened message stream. Its preamble is bounded; its
+  envelope is FIN-delimited, so a large message cannot inherit the request
+  header's allocation ceiling or block another session.
 
 Response-body idle deadlines remain application semantics. Long-lived watches
 opt out explicitly as they do now. Total-body limits remain owned by the RPC
-method that understands the resource, not by an unbounded transport buffer.
+method that understands the resource, not by the transport.
 Concurrent-stream limits are set from the measured per-connection session and
 request concurrency in WP1, not left at a binding default.
 
@@ -467,6 +471,26 @@ connection and proves that a concurrent burst of short RPCs still completes.
 It failed with the escaped Phase 0 limit and passes with the separated bounds.
 No shared mux, second connection, priority lane, or compatibility path is
 introduced.
+
+### Post-cutover payload-boundary correction (2026-08-29)
+
+The first cutover also reused the 8 MiB request-header allocation bound for
+unary results and server messages. A legitimate 19,378,028-byte chat bootstrap
+response therefore reset its request stream; the adapter then compounded that
+local failure by closing the entire logical panel session. Raising the number
+would only move the defect to the next large result.
+
+Wire version 5 separates those jobs. Peer-opened request headers remain bounded
+and are rejected before allocation. Unary results and server-opened messages
+are written in 256 KiB working chunks and terminated by QUIC FIN, with no fixed
+total-size ceiling. The receiver reads incrementally under QUIC flow control and
+assembles only the result its caller requested. A failed stream is request-local
+and never closes its logical session. Large-result observations name the RPC
+operation and byte count without logging the payload or rejecting it.
+
+The native regression returns a 20 MiB unary result over real local Iroh while
+an independent short RPC completes on another QUIC stream. This is both the
+former ceiling regression and the head-of-line independence proof.
 
 ### Scheduling and fairness
 
@@ -821,8 +845,9 @@ uses the provisional release set. As of 2026-08-28 it proves on local Linux:
 - explicit endpoint construction with fixed secrets, the exact
   `vibestudio-rpc/4` ALPN, no default n0 relay/discovery preset, and full
   handshake peer-ID verification;
-- one bidirectional stream per request, bounded big-endian framing, rejection
-  before allocation for an oversized declaration, stream reset/stop, and
+- one bidirectional stream per request, bounded big-endian control/request-head
+  framing, FIN-delimited result payloads, rejection before allocation for an
+  oversized header declaration, stream reset/stop, and
   progress on an unrelated stream while another stream is stalled;
 - executable ordered-relay vectors for one sequential attempt, one overall
   deadline, and a nondurable last-success hint;

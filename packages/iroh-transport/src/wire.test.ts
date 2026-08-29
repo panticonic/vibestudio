@@ -13,6 +13,7 @@ describe("Iroh wire preamble", () => {
   it.each([
     { k: "control", v: IROH_WIRE_VERSION } as const,
     { k: "envelope", sid: "shell", v: IROH_WIRE_VERSION } as const,
+    { k: "message", sid: "panel", v: IROH_WIRE_VERSION } as const,
     {
       body: true,
       k: "stream",

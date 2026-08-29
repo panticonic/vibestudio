@@ -42,8 +42,11 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       })
     );
     const entityCache = new EntityCache();
+    const largeResult = `large:${"x".repeat(20 * 1024 * 1024)}`;
     const dispatcher = {
-      dispatch: vi.fn(async (_context, _service, _method, args: unknown[]) => args[0]),
+      dispatch: vi.fn(async (_context, _service, method, args: unknown[]) =>
+        method === "large" ? largeResult : args[0]
+      ),
       assertAuthority: vi.fn().mockResolvedValue(undefined),
       getPolicy: vi.fn(() => ({ allowed: ["shell"] })),
       getMethodPolicy: vi.fn(() => undefined),
@@ -102,6 +105,18 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     const result = rpc.call("main", "test.echo", ["through-iroh"]);
     await vi.waitFor(() => expect(dispatcher.dispatch).toHaveBeenCalled(), { timeout: 2_000 });
     await expect(result).resolves.toBe("through-iroh");
+
+    // Unary results use the QUIC stream's FIN as their payload boundary. A
+    // large result therefore retains QUIC backpressure without inheriting the
+    // old 8 MiB metadata-frame ceiling, and it cannot head-of-line block an
+    // independent request on another stream.
+    const [receivedLarge, concurrentEcho] = await Promise.all([
+      rpc.call<string>("main", "test.large", []),
+      rpc.call<string>("main", "test.echo", ["concurrent"]),
+    ]);
+    expect(receivedLarge).toHaveLength(largeResult.length);
+    expect(receivedLarge.startsWith("large:")).toBe(true);
+    expect(concurrentEcho).toBe("concurrent");
     expect(redeemPairingCredential).toHaveBeenCalledWith(
       token,
       expect.objectContaining({

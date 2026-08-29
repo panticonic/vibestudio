@@ -2,7 +2,9 @@ import {
   IROH_WIRE_VERSION,
   MAX_ACTIVE_REQUESTS_PER_SESSION,
   MAX_ENVELOPE_FRAME_BYTES,
-  readFrame,
+  MAX_STREAM_CHUNK_BYTES,
+  readToEnd,
+  writeChunked,
   writeFrame,
   writeIrohStreamPreamble,
   type IrohPhysicalBiStream,
@@ -33,8 +35,23 @@ const STREAM_CANCEL_CODE = 0x202n;
 interface RequestRoute {
   stream: IrohPhysicalBiStream;
   streaming: boolean;
+  method: string;
   settled: boolean;
   headSent: boolean;
+}
+
+function envelopeOperation(envelope: RpcEnvelope): string {
+  switch (envelope.message.type) {
+    case "request":
+    case "stream-request":
+      return envelope.message.method;
+    case "event":
+      return `event:${envelope.message.event}`;
+    case "response":
+      return `response:${envelope.message.requestId}`;
+    default:
+      return envelope.message.type;
+  }
 }
 
 export interface IrohRpcSessionChannelOptions {
@@ -105,7 +122,6 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      this.remoteClosed(1011, "Iroh outbound failure");
     });
   }
 
@@ -158,6 +174,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       this.requests.set(requestId, {
         stream,
         streaming: envelope.message.type === "stream-request",
+        method: envelope.message.method,
         settled: false,
         headSent: false,
       });
@@ -309,30 +326,34 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     if (typeof requestId === "string" && envelope.message.type === "response") {
       const route = this.requests.get(requestId);
       if (route && !route.settled) {
+        const encoded = new TextEncoder().encode(JSON.stringify(envelope));
+        if (encoded.byteLength > MAX_ENVELOPE_FRAME_BYTES) {
+          this.options.log?.(
+            `Streaming large unary response for ${route.method}: ${encoded.byteLength} bytes`
+          );
+        }
         route.settled = true;
         this.requests.delete(requestId);
         this.inboundBodies.delete(requestId);
-        await writeFrame(
-          route.stream.send,
-          new TextEncoder().encode(JSON.stringify(envelope)),
-          MAX_ENVELOPE_FRAME_BYTES
-        );
+        await writeChunked(route.stream.send, encoded, MAX_STREAM_CHUNK_BYTES);
         await route.stream.send.finish();
         return;
       }
     }
 
+    const encoded = new TextEncoder().encode(JSON.stringify(envelope));
+    if (encoded.byteLength > MAX_ENVELOPE_FRAME_BYTES) {
+      this.options.log?.(
+        `Streaming large ${envelope.message.type} message for ${envelopeOperation(envelope)}: ${encoded.byteLength} bytes`
+      );
+    }
     const stream = await this.options.connection.openBi();
     await writeIrohStreamPreamble(stream.send, {
-      k: "envelope",
+      k: "message",
       sid: this.options.sid,
       v: IROH_WIRE_VERSION,
     });
-    await writeFrame(
-      stream.send,
-      new TextEncoder().encode(JSON.stringify(envelope)),
-      MAX_ENVELOPE_FRAME_BYTES
-    );
+    await writeChunked(stream.send, encoded, MAX_STREAM_CHUNK_BYTES);
     await stream.send.finish();
 
     if (
@@ -352,7 +373,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
   private async readOutboundResponse(stream: IrohPhysicalBiStream): Promise<void> {
     const envelope = JSON.parse(
       new TextDecoder("utf-8", { fatal: true }).decode(
-        await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
+        await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES)
       )
     ) as RpcEnvelope;
     this.deliver({ type: "ws:rpc", envelope });

@@ -5030,6 +5030,9 @@ export class RpcServer {
         if (streamPreamble.k === "control") {
           throw new Error("Duplicate Iroh control stream");
         }
+        if (streamPreamble.k === "message") {
+          throw new Error("Client-opened Iroh message streams are not valid");
+        }
         const session = sessions.get(streamPreamble.sid);
         if (!session) {
           await Promise.all([

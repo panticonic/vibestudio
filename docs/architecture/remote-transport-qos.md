@@ -8,11 +8,15 @@ RPC request has its own bidirectional QUIC stream, so control messages, user
 interactions, uploads, and immutable artifact transfers are independently
 flow-controlled by QUIC.
 
-The only long-lived transport stream is the bounded logical-session control
-stream. Unary envelopes have strict frame limits. Streaming responses use a
-bounded metadata head and raw body bytes; uploads apply bounded chunk reads and
-propagate cancellation with QUIC reset/stop. Per-request application limits
-remain authoritative even though transport flow control is native.
+The logical-session control stream and retained request streams (event watches,
+CDP, and other subscriptions) may be long-lived. Peer-opened request metadata
+has a strict frame limit so admission cannot force an unbounded allocation.
+Unary results and server messages use the QUIC send-stream FIN as their payload
+boundary: they are transferred in bounded working chunks with native
+backpressure and no transport-wide total-size ceiling. Streaming responses use
+a bounded metadata head and raw body bytes; uploads apply bounded chunk reads
+and propagate cancellation with QUIC reset/stop. A method may own a semantic
+limit for its resource, but the transport does not invent one.
 
 ## Panel artifact delivery
 
@@ -27,10 +31,11 @@ moves no artifact bytes over Iroh.
 
 The client reports the selected Iroh path (`direct` or `relay`), selected remote
 address, and RTT when the binding exposes them. Reconnect generation, relay
-attempts, recovery result, close source/code, open stream counts, and bounded
-byte totals belong to the transport record. Logs abbreviate Endpoint IDs and
-never contain endpoint secrets, refresh tokens, pairing codes, invite URLs, or
-RPC bodies.
+attempts, recovery result, close source/code, open stream counts, and byte
+high-water observations belong to the transport record. Large-message logs name
+the RPC operation and encoded byte count without rejecting it. Logs abbreviate
+Endpoint IDs and never contain endpoint secrets, refresh tokens, pairing codes,
+invite URLs, or RPC bodies.
 
 ## Verification surface
 

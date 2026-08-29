@@ -8,6 +8,8 @@ import {
   MAX_STREAM_CHUNK_BYTES,
   readFrame,
   readIrohStreamPreamble,
+  readToEnd,
+  writeChunked,
   writeFrame,
   writeIrohStreamPreamble,
   type IrohPhysicalBiStream,
@@ -374,10 +376,10 @@ class ClientSession implements IrohClientSession {
   ): Promise<void> {
     if (inbound.settled) throw new Error("Iroh inbound RPC stream already settled");
     inbound.settled = true;
-    await writeFrame(
+    await writeChunked(
       inbound.stream.send,
       new TextEncoder().encode(JSON.stringify(envelope)),
-      MAX_ENVELOPE_FRAME_BYTES
+      MAX_STREAM_CHUNK_BYTES
     );
     await inbound.stream.send.finish();
   }
@@ -516,7 +518,7 @@ class ClientSession implements IrohClientSession {
     requestId: string | null
   ): Promise<void> {
     try {
-      const bytes = await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES);
+      const bytes = await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES);
       const value = decodeJsonFrame(bytes);
       assertEnvelope(value);
       this.emit(value);
@@ -750,6 +752,13 @@ class ClientPipe implements IrohClientPipe {
         await stream.send.reset(IROH_PROTOCOL_CLOSE_CODE);
         return;
       }
+      if (preamble.k === "message") {
+        void this.acceptMessage(session, stream).catch(() => {
+          void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+          void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        });
+        return;
+      }
       const value = decodeJsonFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
       assertEnvelope(value);
       await session.acceptEnvelope(stream, value);
@@ -771,6 +780,12 @@ class ClientPipe implements IrohClientPipe {
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  private async acceptMessage(session: ClientSession, stream: IrohPhysicalBiStream): Promise<void> {
+    const value = decodeJsonFrame(await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES));
+    assertEnvelope(value);
+    await session.acceptEnvelope(stream, value);
   }
 
   private failPipe(error: Error): void {

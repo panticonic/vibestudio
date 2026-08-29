@@ -1,6 +1,6 @@
 import { readFrame, writeFrame, type FrameReceiveStream, type FrameSendStream } from "./framing.js";
 
-export const IROH_WIRE_VERSION = 4 as const;
+export const IROH_WIRE_VERSION = 5 as const;
 export const MAX_CONTROL_FRAME_BYTES = 64 * 1024;
 export const MAX_ENVELOPE_FRAME_BYTES = 8 * 1024 * 1024;
 export const MAX_STREAM_CHUNK_BYTES = 256 * 1024;
@@ -26,11 +26,12 @@ export const MAX_LOGICAL_SESSIONS_PER_CONNECTION = 64;
  */
 export const MAX_ACTIVE_REQUESTS_PER_SESSION = 256;
 
-export type IrohStreamKind = "control" | "envelope" | "stream";
+export type IrohStreamKind = "control" | "envelope" | "message" | "stream";
 
 export type IrohStreamPreamble =
   | { k: "control"; v: typeof IROH_WIRE_VERSION }
   | { k: "envelope"; sid: string; v: typeof IROH_WIRE_VERSION }
+  | { k: "message"; sid: string; v: typeof IROH_WIRE_VERSION }
   | {
       body: boolean;
       k: "stream";
@@ -67,8 +68,9 @@ export function encodeIrohStreamPreamble(preamble: IrohStreamPreamble): Uint8Arr
     case "control":
       return encoder.encode(JSON.stringify({ k: "control", v: IROH_WIRE_VERSION }));
     case "envelope":
+    case "message":
       return encoder.encode(
-        JSON.stringify({ k: "envelope", sid: preamble.sid, v: IROH_WIRE_VERSION })
+        JSON.stringify({ k: preamble.k, sid: preamble.sid, v: IROH_WIRE_VERSION })
       );
     case "stream":
       return encoder.encode(
@@ -107,8 +109,9 @@ export function assertIrohStreamPreamble(value: unknown): asserts value is IrohS
       if (!exactKeys(record, ["k", "v"])) throw new Error("Invalid control-stream preamble");
       return;
     case "envelope":
+    case "message":
       if (!exactKeys(record, ["k", "sid", "v"])) {
-        throw new Error("Invalid envelope-stream preamble");
+        throw new Error(`Invalid ${record["k"]}-stream preamble`);
       }
       assertBoundedId(record["sid"], "Iroh session ID", MAX_SESSION_ID_BYTES);
       return;

@@ -2,8 +2,10 @@ import {
   IROH_WIRE_VERSION,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
+  MAX_STREAM_CHUNK_BYTES,
   readFrame,
   readIrohStreamPreamble,
+  writeChunked,
   writeFrame,
   writeIrohStreamPreamble,
 } from "@vibestudio/iroh-transport";
@@ -63,6 +65,7 @@ describe("Iroh RPC client over real local QUIC", () => {
 
     const server = new NodePhysicalConnection(serverNative);
     const client = new NodePhysicalConnection(clientNative);
+    const serverMessagePayload = `independent:${"x".repeat(9 * 1024 * 1024)}`;
     const serverTask = (async () => {
       const control = await server.acceptBi();
       expect(await readIrohStreamPreamble(control.recv)).toEqual({
@@ -111,11 +114,11 @@ describe("Iroh RPC client over real local QUIC", () => {
       await stalled.send.writeAll([0, 0, 0, 16]);
       const eventStream = await server.openBi();
       await writeIrohStreamPreamble(eventStream.send, {
-        k: "envelope",
+        k: "message",
         sid: "shell",
         v: IROH_WIRE_VERSION,
       });
-      await writeFrame(
+      await writeChunked(
         eventStream.send,
         new TextEncoder().encode(
           JSON.stringify({
@@ -123,10 +126,15 @@ describe("Iroh RPC client over real local QUIC", () => {
             target: "shell:device",
             delivery: { caller: { callerId: "main", callerKind: "shell" } },
             provenance: [],
-            message: { type: "event", fromId: "main", event: "ready", payload: "independent" },
+            message: {
+              type: "event",
+              fromId: "main",
+              event: "ready",
+              payload: serverMessagePayload,
+            },
           } satisfies RpcEnvelope)
         ),
-        MAX_ENVELOPE_FRAME_BYTES
+        MAX_STREAM_CHUNK_BYTES
       );
       await eventStream.send.finish();
 
@@ -148,10 +156,10 @@ describe("Iroh RPC client over real local QUIC", () => {
         provenance: [],
         message: { type: "response", requestId: request.requestId, result: request.args[0] },
       };
-      await writeFrame(
+      await writeChunked(
         requestStream.send,
         new TextEncoder().encode(JSON.stringify(response)),
-        MAX_ENVELOPE_FRAME_BYTES
+        MAX_STREAM_CHUNK_BYTES
       );
       await requestStream.send.finish();
       await Promise.all([
@@ -184,9 +192,11 @@ describe("Iroh RPC client over real local QUIC", () => {
       transport: session,
     });
     await expect(rpc.call("main", "echo", ["hello"])).resolves.toBe("hello");
-    await expect(independentEvent).resolves.toMatchObject({
-      message: { type: "event", event: "ready", payload: "independent" },
-    });
+    const receivedEvent = await independentEvent;
+    expect(receivedEvent.message).toMatchObject({ type: "event", event: "ready" });
+    expect((receivedEvent.message as { payload: string }).payload).toHaveLength(
+      serverMessagePayload.length
+    );
     await serverTask;
     await pipe.close();
   });
