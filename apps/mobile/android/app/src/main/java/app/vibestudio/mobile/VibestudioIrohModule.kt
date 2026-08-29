@@ -156,7 +156,11 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     }
 
     private fun connectionResult(connection: Connection) = Arguments.createMap().apply {
-        connection.setMaxConcurrentBiStreams(64u)
+        // QUIC replenishes MAX_STREAMS as streams close; this is a finite
+        // simultaneous-flow-control window, not a product request limit. Keep
+        // Android aligned with the Node and iOS endpoints so approval, panel,
+        // RPC, and asset streams cannot serialize behind an arbitrary mobile cap.
+        connection.setMaxConcurrentBiStreams(32_768u)
         connection.setMaxConcurrentUniStreams(0u)
         val handle = UUID.randomUUID().toString()
         connections[handle] = connection

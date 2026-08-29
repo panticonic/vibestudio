@@ -97,17 +97,6 @@ const MOBILE_BOOTSTRAP_RETRY_MS = 1_000;
 const MOBILE_BUNDLE_TRANSFER_RETRY_MS = 1_500;
 const MOBILE_BUNDLE_RECONNECT_WAIT_MS = 30_000;
 const MOBILE_BUNDLE_TRANSFER_TIMEOUT_MS = 5 * 60_000;
-// A bounded response window is application-level backpressure across React
-// Native's native-to-JS event bridge. QUIC can report its own queue drained
-// before JS has consumed the corresponding events; limiting each RPC response
-// prevents one long artifact stream from flooding that final hop.
-// Keep the application window below the one-MiB native/JS delivery boundary,
-// rather than landing exactly on it. A physical RN data channel repeatedly
-// delivered an exact one-MiB range 20 bytes short (one mux header per 256-KiB
-// transport segment); the integrity guard recovered, but retries must be an
-// exceptional recovery path. 512 KiB keeps peak base64 allocation modest
-// (~683 KiB) and costs only one additional range round trip for today's bundle.
-const BUNDLE_RANGE_WINDOW_BYTES = 512 * 1024;
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_CODES = (() => {
   const codes = new Uint8Array(64);
@@ -264,7 +253,7 @@ async function waitForMobileBootstrap(
   }
 }
 
-async function streamArtifactToNative(
+export async function streamArtifactToNative(
   rpc: BundleDeliveryRpc,
   nativeHost: NativeBundleHost,
   descriptor: Record<string, unknown>,
@@ -273,68 +262,76 @@ async function streamArtifactToNative(
   transfer: { offset: number }
 ): Promise<boolean> {
   const expectedOffset = transfer.offset;
-  let totalLength: number | null = null;
-  for (;;) {
-    const windowStartedAt = Date.now();
-    const rangeEnd = transfer.offset + BUNDLE_RANGE_WINDOW_BYTES - 1;
-    const headers = {
-      ...((descriptor["headers"] as Record<string, string> | undefined) ?? {}),
-      [RESUMABLE_GZIP_HEADER]: "1",
-      Range: `bytes=${transfer.offset}-${rangeEnd}`,
-    };
-    const decoded = await rpc.streamReadable("main", "gateway.fetch", [
-      { ...descriptor, gzip: true, headers },
-    ]);
-    if (decoded.status !== 206) {
-      const bytes = await drainStream(decoded.body);
-      throw new Error(
-        `bundle artifact fetch failed (${decoded.status}): ` +
-          new TextDecoder().decode(bytes).slice(0, 300)
-      );
-    }
-    const gzipped = decoded.headers.some(
-      (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
+  const requestStartedAt = Date.now();
+  const headers = {
+    ...((descriptor["headers"] as Record<string, string> | undefined) ?? {}),
+    [RESUMABLE_GZIP_HEADER]: "1",
+    // One open-ended response lets QUIC apply continuous stream backpressure
+    // instead of paying an application round trip for every fixed-size range.
+    // If the connection drops, the last native-acknowledged byte remains the
+    // exact offset for the next open-ended request.
+    Range: `bytes=${transfer.offset}-`,
+  };
+  const decoded = await rpc.streamReadable("main", "gateway.fetch", [
+    { ...descriptor, gzip: true, headers },
+  ]);
+  if (decoded.status !== 206) {
+    const bytes = await drainStream(decoded.body);
+    throw new Error(
+      `bundle artifact fetch failed (${decoded.status}): ` +
+        new TextDecoder().decode(bytes).slice(0, 300)
     );
-    if (!gzipped) throw new Error("bundle artifact server did not honor resumable gzip transfer");
-    const contentRange = decoded.headers.find((h) => h[0].toLowerCase() === "content-range")?.[1];
-    const match = contentRange ? /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(contentRange) : null;
-    const rangeStart = Number(match?.[1]);
-    const declaredEnd = Number(match?.[2]);
-    const declaredTotal = Number(match?.[3]);
-    if (
-      rangeStart !== transfer.offset ||
-      !Number.isSafeInteger(declaredEnd) ||
-      !Number.isSafeInteger(declaredTotal) ||
-      declaredEnd < rangeStart ||
-      declaredEnd >= declaredTotal ||
-      (totalLength !== null && declaredTotal !== totalLength)
-    ) {
-      throw new Error("bundle artifact response declared an invalid byte range");
+  }
+  const gzipped = decoded.headers.some(
+    (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
+  );
+  if (!gzipped) throw new Error("bundle artifact server did not honor resumable gzip transfer");
+  const contentRange = decoded.headers.find((h) => h[0].toLowerCase() === "content-range")?.[1];
+  const match = contentRange ? /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(contentRange) : null;
+  const rangeStart = Number(match?.[1]);
+  const declaredEnd = Number(match?.[2]);
+  const declaredTotal = Number(match?.[3]);
+  if (
+    rangeStart !== transfer.offset ||
+    !Number.isSafeInteger(declaredEnd) ||
+    !Number.isSafeInteger(declaredTotal) ||
+    declaredEnd !== declaredTotal - 1 ||
+    declaredEnd < rangeStart
+  ) {
+    throw new Error("bundle artifact response declared an invalid byte range");
+  }
+
+  const reader = decoded.body.getReader();
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value?.length) continue;
+    if (transfer.offset + value.length > declaredTotal) {
+      throw new Error("bundle artifact response exceeded its declared byte range");
     }
-    const window = await drainStream(decoded.body);
-    const declaredLength = declaredEnd - rangeStart + 1;
-    if (window.length !== declaredLength) {
-      const error = new Error(
-        `bundle artifact range was incomplete: expected ${declaredLength} bytes, received ${window.length}`
-      ) as Error & { code: string };
-      error.code = "BUNDLE_RANGE_INCOMPLETE";
-      throw error;
-    }
-    totalLength = declaredTotal;
     await nativeHost.appendBundleChunk(
-      uint8ToBase64(window),
+      uint8ToBase64(value),
       buildKey,
       artifactPath,
       transfer.offset === 0
     );
-    transfer.offset += window.length;
-    console.info(
-      `[mobile-bundle] received ${window.length} bytes at offset ${rangeStart} in ` +
-        `${Date.now() - windowStartedAt}ms (${transfer.offset}/${totalLength})`
-    );
-    if (transfer.offset === totalLength) break;
+    transfer.offset += value.length;
+    received += value.length;
+  }
+  const declaredLength = declaredEnd - rangeStart + 1;
+  if (received !== declaredLength) {
+    const error = new Error(
+      `bundle artifact range was incomplete: expected ${declaredLength} bytes, received ${received}`
+    ) as Error & { code: string };
+    error.code = "BUNDLE_RANGE_INCOMPLETE";
+    throw error;
   }
   if (transfer.offset === expectedOffset) throw new Error("bundle artifact stream was empty");
+  console.info(
+    `[mobile-bundle] streamed ${received} bytes at offset ${rangeStart} in ` +
+      `${Date.now() - requestStartedAt}ms (${transfer.offset}/${declaredTotal})`
+  );
   return true;
 }
 

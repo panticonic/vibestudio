@@ -83,7 +83,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
         addresses: []
       )
       let connection = try await endpoint.connect(addr: address, alpn: try self.data(alpnBase64))
-      return self.connectionResult(connection)
+      return try self.connectionResult(connection)
     }
   }
 
@@ -95,7 +95,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
       guard let incoming = await endpoint.acceptNext() else { return nil }
       let accepting = try await incoming.accept()
       let connection = try await accepting.connect()
-      return self.connectionResult(connection)
+      return try self.connectionResult(connection)
     }
   }
 
@@ -212,7 +212,12 @@ final class VibestudioIroh: NSObject, RCTBridgeModule {
     }
   }
 
-  private func connectionResult(_ connection: Connection) -> [String: String] {
+  private func connectionResult(_ connection: Connection) throws -> [String: String] {
+    // QUIC replenishes MAX_STREAMS as streams close; this is a finite
+    // simultaneous-flow-control window, not a product request limit. Keep the
+    // native clients aligned with the Node transport.
+    try connection.setMaxConcurrentBiStreams(count: 32_768)
+    try connection.setMaxConcurrentUniStreams(count: 0)
     let handle = putConnection(connection)
     return ["connectionHandle": handle, "peerEndpointId": connection.remoteId().description]
   }

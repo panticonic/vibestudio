@@ -83,6 +83,7 @@ export function behaviorsOf(
 export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPart {
   const { unit } = input;
   const kind = unit.unitKind as InstallPartKind;
+  const icon = unit.icon?.trim();
   const surfaces = surfacesOf(unit);
   const { notableRows, everydayRows } = installReviewRows({
     requests: unit.authority?.requests ?? [],
@@ -104,7 +105,11 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     surfaces,
     name: unit.unitName,
     ...(unit.displayName?.trim() ? { displayName: unit.displayName.trim() } : {}),
-    ...(unit.icon?.trim() ? { icon: unit.icon.trim() } : {}),
+    // A trust decision must not fan out into one remote asset fetch per part.
+    // Relative artwork remains available in ordinary catalog/navigation UI;
+    // install review uses its trusted kind glyph. Inline semantic icons need no
+    // network request and remain safe to carry in the approval snapshot.
+    ...(icon && !icon.startsWith("./") ? { icon } : {}),
     title: installReviewPartTitle(unit.source.repo),
     purpose: unit.purpose ?? "",
     repoPath: unit.source.repo,

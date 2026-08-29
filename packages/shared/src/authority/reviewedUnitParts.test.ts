@@ -37,4 +37,26 @@ describe("install-review part names", () => {
   it("rejects a missing repo identity instead of falling back to package machinery", () => {
     expect(() => installReviewPartTitle("")).toThrow("canonical repo path");
   });
+
+  it("does not turn a trust review into a fan-out of relative icon requests", () => {
+    const relative = unit("workers/mail", "@workspace-workers/mail", "Mail");
+    relative.icon = "./assets/icon.svg";
+    const semantic = unit("workers/chat", "@workspace-workers/chat", "Chat");
+    semantic.icon = "💬";
+
+    expect(
+      reviewedUnitPart({
+        unit: relative,
+        identityKey: "workers/mail@ev-1",
+        origin: hostBuildOrigin("1.0.0"),
+      }).icon
+    ).toBeUndefined();
+    expect(
+      reviewedUnitPart({
+        unit: semantic,
+        identityKey: "workers/chat@ev-1",
+        origin: hostBuildOrigin("1.0.0"),
+      }).icon
+    ).toBe("💬");
+  });
 });
