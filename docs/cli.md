@@ -249,8 +249,8 @@ device pairing remain intact; clients obtain fresh workspace reaches through
 the hub after reinstall. Workspace source directories are always left intact.
 
 `remote doctor` verifies the pinned `@number0/iroh` native binding, the selected
-32-byte endpoint key and mode `0600`, the explicit canonical HTTPS relay set,
-and an ALPN/path probe when paired reach is available. It checks the stable hub
+32-byte endpoint key and mode `0600`, the shipped public or overridden canonical
+HTTPS relay set, and an ALPN/path probe when paired reach is available. It checks the stable hub
 control identity by default; `--workspace` explicitly selects one child
 identity. Server-only checks are skipped, not failed, on a client-only host.
 

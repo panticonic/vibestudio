@@ -88,7 +88,7 @@ describe("remote-doctor", () => {
     expect(inspectRetiredTransportDependencies(emptyResolver)).toMatchObject({ ok: false });
   });
 
-  it("requires an explicit canonical HTTPS relay set", async () => {
+  it("accepts an explicit canonical HTTPS relay set", async () => {
     const result = await runDoctor(
       { ...parseArgs([]), relayUrls: ["https://relay.example/"] },
       { require: () => fakeBinding, unitPath: "/nonexistent/unit.service", credential: null }
@@ -105,13 +105,22 @@ describe("remote-doctor", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("fails absent or noncanonical relay configuration", async () => {
-    const absent = await runDoctor(parseArgs([]), {
+  it("uses the shipped public relay topology when no override or paired reach exists", async () => {
+    const defaults = await runDoctor(parseArgs([]), {
       require: () => fakeBinding,
       unitPath: "/nonexistent/unit.service",
       credential: null,
     });
-    expect(absent.ok).toBe(false);
+    expect(defaults.ok).toBe(true);
+    expect(
+      defaults.checks.find((entry: { name: string }) => entry.name === "relay-config")
+    ).toMatchObject({
+      ok: true,
+      message: "2 canonical HTTPS relay(s) from shipped public default",
+    });
+  });
+
+  it("fails a noncanonical relay override", async () => {
     const malformed = await runDoctor(
       { ...parseArgs([]), relayUrls: ["http://relay.example/"] },
       { require: () => fakeBinding, unitPath: "/nonexistent/unit.service", credential: null }

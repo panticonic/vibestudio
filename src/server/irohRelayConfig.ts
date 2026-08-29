@@ -1,9 +1,6 @@
 import { IROH_REACH_VERSION, assertIrohReach, type IrohReach } from "@vibestudio/iroh-transport";
-
-export const DEFAULT_IROH_RELAYS = [
-  "https://use1-1.relay.n0.iroh.link/",
-  "https://euc1-1.relay.n0.iroh.link/",
-] as const;
+export { DEFAULT_IROH_RELAYS } from "../../scripts/cli/lib/iroh-relays.mjs";
+import { DEFAULT_IROH_RELAYS } from "../../scripts/cli/lib/iroh-relays.mjs";
 
 export function resolveIrohRelayUrls(raw: string | undefined): string[] {
   const relays = raw === undefined ? [...DEFAULT_IROH_RELAYS] : raw.split(",");

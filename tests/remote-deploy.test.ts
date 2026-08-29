@@ -9,8 +9,8 @@ afterEach(() => vi.restoreAllMocks());
 describe("remote-deploy CLI", () => {
   it("uses the production relay set unless explicit canonical relays are supplied", () => {
     expect(parseArgs(["host"]).relayUrls).toEqual([
-      "https://relay.vibestudio.app/",
-      "https://relay-eu.vibestudio.app/",
+      "https://use1-1.relay.n0.iroh.link/",
+      "https://euc1-1.relay.n0.iroh.link/",
     ]);
     expect(
       parseArgs([

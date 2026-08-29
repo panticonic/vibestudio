@@ -65,6 +65,7 @@ describe("npm CLI packaging", () => {
       "scripts/cli/lib/smoke-remote-server.mjs",
       "scripts/cli/lib/connect-grammar.generated.mjs",
       "scripts/cli/lib/config-paths.mjs",
+      "scripts/cli/lib/iroh-relays.mjs",
       "scripts/cli/lib/mobile-native-android.mjs",
     ]) {
       const target = path.join(root, relative);

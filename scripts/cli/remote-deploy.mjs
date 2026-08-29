@@ -6,12 +6,12 @@ import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { printConnectBanner } from "./lib/connect-banner.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import { DEFAULT_IROH_RELAYS } from "./lib/iroh-relays.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 const SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 const MANAGED_READY_FILE_RELATIVE = ".config/vibestudio/server-auth/hub-ready.json";
-const DEFAULT_RELAY_URLS = ["https://relay.vibestudio.app/", "https://relay-eu.vibestudio.app/"];
 const nodeEngineMatch = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(pkg.engines?.node ?? "");
 if (!nodeEngineMatch) {
   throw new Error("package.json engines.node must be an exact >=major.minor.patch requirement");
@@ -26,7 +26,7 @@ export function parseArgs(argv) {
       verb: "deploy",
       target: null,
       artifact: null,
-      relayUrls: [...DEFAULT_RELAY_URLS],
+      relayUrls: [...DEFAULT_IROH_RELAYS],
       port: "3030",
       purge: false,
       help: true,
@@ -68,7 +68,7 @@ export function parseArgs(argv) {
     else if (arg === "--help") options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
-  if (options.relayUrls.length === 0) options.relayUrls = [...DEFAULT_RELAY_URLS];
+  if (options.relayUrls.length === 0) options.relayUrls = [...DEFAULT_IROH_RELAYS];
   if (
     options.relayUrls.length > 8 ||
     new Set(options.relayUrls).size !== options.relayUrls.length

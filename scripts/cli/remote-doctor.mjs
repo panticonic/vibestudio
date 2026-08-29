@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { cliCredentialPath, hubIdentityPath, workspaceIdentityPath } from "./lib/config-paths.mjs";
+import { DEFAULT_IROH_RELAYS } from "./lib/iroh-relays.mjs";
 
 const require = createRequire(import.meta.url);
 const UNIT_NAME = "vibestudio-server.service";
@@ -275,13 +276,20 @@ export async function runDoctor(options, deps = {}) {
       ? options.relayUrls
       : (credential?.controlPairing?.relays ??
         process.env.VIBESTUDIO_IROH_RELAYS?.split(",") ??
-        []);
+        DEFAULT_IROH_RELAYS);
+  const relaySource = options.relayUrls.length
+    ? "command line"
+    : credential?.controlPairing?.relays
+      ? "paired reach"
+      : process.env.VIBESTUDIO_IROH_RELAYS
+        ? "environment"
+        : "shipped public default";
   checks.push(
     check(
       validateRelays(relays),
       "relay-config",
-      `${relays.length} explicit HTTPS relay(s); n0 preset disabled`,
-      "no canonical explicit Iroh relay set is configured"
+      `${relays.length} canonical HTTPS relay(s) from ${relaySource}`,
+      `the ${relaySource} relay set is not canonical HTTPS`
     )
   );
   checks.push(await probePairedReach(credential, deps.require ?? require));
@@ -296,7 +304,7 @@ Usage: vibestudio remote doctor [--workspace <name> | --identity <endpoint.key>]
                                 [--relay-url <https-url>...] [--json]
 
 Checks the pinned Iroh native binding, durable endpoint identities and permissions,
-explicit relay set with n0 presets disabled, retired dependency absence, and one
+the shipped public or explicitly configured relay set, retired dependency absence, and one
 bounded peer-authenticated ALPN/path probe when this host has a paired credential.`);
 }
 
