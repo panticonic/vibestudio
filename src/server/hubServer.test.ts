@@ -31,6 +31,7 @@ import {
   revokeHubUser,
   restoreRoutedWorkspaceRuntimes,
   isHubControlHttpPath,
+  selectWorkspaceCreationRootTemplate,
   selectBootstrapWorkspace,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
@@ -96,6 +97,57 @@ describe("hub bootstrap workspace selection", () => {
     expect(
       selectBootstrapWorkspace({ bootstrapWorkspace: "dogfood" }, [{ name: "dogfood" }])
     ).toEqual({ name: "dogfood", lifecycle: "existing" });
+  });
+});
+
+describe("hub workspace creation template selection", () => {
+  const developmentPin = {
+    url: "git+https://example.test/development-base.git",
+    ref: "refs/heads/main",
+    commit: "a".repeat(40),
+    snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+  };
+
+  it("records the development Base selected for this hub boot", () => {
+    expect(
+      selectWorkspaceCreationRootTemplate({
+        appRoot: "/unused",
+        environment: {
+          NODE_ENV: "development",
+          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+        },
+      })
+    ).toEqual(developmentPin);
+  });
+
+  it("accepts an explicit template matching the selected development Base", () => {
+    expect(
+      selectWorkspaceCreationRootTemplate({
+        appRoot: "/unused",
+        requested: developmentPin,
+        environment: {
+          NODE_ENV: "development",
+          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+        },
+      })
+    ).toEqual(developmentPin);
+  });
+
+  it("rejects a conflicting explicit template before registering the workspace", () => {
+    expect(() =>
+      selectWorkspaceCreationRootTemplate({
+        appRoot: "/unused",
+        requested: {
+          ...developmentPin,
+          commit: "c".repeat(40),
+          snapshot: `v1-sha256:${"d".repeat(64)}` as const,
+        },
+        environment: {
+          NODE_ENV: "development",
+          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+        },
+      })
+    ).toThrow(/does not match the selected development Base/);
   });
 });
 

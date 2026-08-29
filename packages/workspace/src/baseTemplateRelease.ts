@@ -21,6 +21,19 @@ export interface BaseTemplateReleaseArtifact {
 
 export type ParsedBaseTemplateRelease = BaseTemplateReleaseArtifact;
 
+export function sameWorkspaceTemplatePin(
+  left: WorkspaceTemplatePin,
+  right: WorkspaceTemplatePin
+): boolean {
+  return (
+    left.url === right.url &&
+    left.ref === right.ref &&
+    left.commit === right.commit &&
+    left.snapshot === right.snapshot &&
+    left.credential === right.credential
+  );
+}
+
 export function parseBaseTemplateReleaseArtifact(value: unknown): ParsedBaseTemplateRelease {
   return BaseTemplateReleaseArtifactSchema.parse(value) as BaseTemplateReleaseArtifact;
 }

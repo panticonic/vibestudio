@@ -65,6 +65,7 @@ import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInsta
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
+import { sameWorkspaceTemplatePin } from "@vibestudio/workspace/baseTemplateRelease";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
@@ -131,16 +132,6 @@ function developmentRootTemplateSelection(): {
     checkout,
     writeback,
   };
-}
-
-function sameRootTemplatePin(left: WorkspaceTemplatePin, right: WorkspaceTemplatePin): boolean {
-  return (
-    left.url === right.url &&
-    left.ref === right.ref &&
-    left.commit === right.commit &&
-    left.snapshot === right.snapshot &&
-    left.credential === right.credential
-  );
 }
 
 // =============================================================================
@@ -476,7 +467,7 @@ async function main() {
   if (
     creationIntent &&
     developmentRootTemplate &&
-    !sameRootTemplatePin(creationIntent.rootTemplate, developmentRootTemplate.pin)
+    !sameWorkspaceTemplatePin(creationIntent.rootTemplate, developmentRootTemplate.pin)
   ) {
     throw new Error("Workspace creation intent does not match the selected development Base");
   }
@@ -1508,7 +1499,7 @@ async function main() {
       put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
     },
     acquire: async (pin) => {
-      if (developmentRootTemplate && sameRootTemplatePin(developmentRootTemplate.pin, pin)) {
+      if (developmentRootTemplate && sameWorkspaceTemplatePin(developmentRootTemplate.pin, pin)) {
         return seedRootTemplateSnapshotFromCheckout({
           statePath,
           checkout: developmentRootTemplate.checkout,

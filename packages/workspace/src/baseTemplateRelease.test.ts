@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   parseBaseTemplateReleaseArtifact,
   readWorkspaceCreationTemplate,
+  sameWorkspaceTemplatePin,
 } from "./baseTemplateRelease.js";
 
 const pin = {
   url: "git+https://example.test/base.git",
   ref: "refs/heads/main",
   commit: "a".repeat(40),
-  snapshot: `v1-sha256:${"b".repeat(64)}`,
+  snapshot: `v1-sha256:${"b".repeat(64)}` as const,
 };
 
 describe("Base release pointer", () => {
@@ -43,5 +44,11 @@ describe("Base release pointer", () => {
         VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(pin),
       })
     ).toThrow(/only select workspace creation in development mode/);
+  });
+
+  it("compares every exact coordinate, including the credential requirement", () => {
+    expect(sameWorkspaceTemplatePin(pin, { ...pin })).toBe(true);
+    expect(sameWorkspaceTemplatePin(pin, { ...pin, commit: "c".repeat(40) })).toBe(false);
+    expect(sameWorkspaceTemplatePin(pin, { ...pin, credential: "github" })).toBe(false);
   });
 });

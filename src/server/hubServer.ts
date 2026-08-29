@@ -12,12 +12,15 @@ import {
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
 import {
-  readBaseTemplateRelease,
   readWorkspaceCreationTemplate,
+  sameWorkspaceTemplatePin,
 } from "@vibestudio/workspace/baseTemplateRelease";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import type { WorkspaceCreationDescriptor } from "@vibestudio/workspace-contracts/types";
+import type {
+  WorkspaceCreationDescriptor,
+  WorkspaceTemplatePin,
+} from "@vibestudio/workspace-contracts/types";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { readWorkspaceHostLaunchRecord } from "@vibestudio/workspace/hostLaunchRecord";
@@ -376,8 +379,21 @@ function requireWorkspaceName(state: HubRuntimeState, workspaceId: string): stri
   return entry.name;
 }
 
-function currentCreationRootTemplate(appRoot: string) {
-  return readWorkspaceCreationTemplate(appRoot);
+export function selectWorkspaceCreationRootTemplate(input: {
+  appRoot: string;
+  requested?: WorkspaceTemplatePin;
+  environment?: NodeJS.ProcessEnv;
+}): WorkspaceTemplatePin {
+  const environment = input.environment ?? process.env;
+  if (!input.requested) return readWorkspaceCreationTemplate(input.appRoot, environment);
+
+  if (environment["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim()) {
+    const developmentRoot = readWorkspaceCreationTemplate(input.appRoot, environment);
+    if (!sameWorkspaceTemplatePin(input.requested, developmentRoot)) {
+      throw new Error("Requested workspace template does not match the selected development Base");
+    }
+  }
+  return input.requested;
 }
 
 /**
@@ -1355,7 +1371,10 @@ async function executeHubControl(
     const rootTemplate = opts["rootTemplate"]
       ? WorkspaceTemplatePinSchema.parse(opts["rootTemplate"])
       : undefined;
-    const selectedRoot = rootTemplate ?? readBaseTemplateRelease(state.appRoot).baseTemplate;
+    const selectedRoot = selectWorkspaceCreationRootTemplate({
+      appRoot: state.appRoot,
+      ...(rootTemplate ? { requested: rootTemplate } : {}),
+    });
     const entry = state.centralData.addWorkspaceCreation(name, selectedRoot);
     try {
       if (subject.role !== "root") {
@@ -1396,7 +1415,7 @@ async function executeHubControl(
     const entry = state.centralData.addEphemeralWorkspace(
       EPHEMERAL_DEV_WORKSPACE_NAME,
       state.serverBootId,
-      currentCreationRootTemplate(state.appRoot)
+      selectWorkspaceCreationRootTemplate({ appRoot: state.appRoot })
     );
     respond({
       workspaceId: entry.workspaceId,
@@ -2934,10 +2953,13 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     centralData.addEphemeralWorkspace(
       bootstrapWorkspace,
       serverBootId,
-      currentCreationRootTemplate(appRoot)
+      selectWorkspaceCreationRootTemplate({ appRoot })
     );
   } else if (bootstrap.lifecycle === "register") {
-    centralData.addWorkspaceCreation(bootstrapWorkspace, currentCreationRootTemplate(appRoot));
+    centralData.addWorkspaceCreation(
+      bootstrapWorkspace,
+      selectWorkspaceCreationRootTemplate({ appRoot })
+    );
   }
   const bootstrapWorkspaceId = centralData.getWorkspaceIdByName(bootstrapWorkspace);
   if (!bootstrapWorkspaceId) {
