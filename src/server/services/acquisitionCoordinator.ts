@@ -1391,7 +1391,12 @@ function decisionsForOrigin(
     ];
   }
   if (input.snapshot.callerPrincipal.startsWith("code:")) {
-    return ["version", ...(input.snapshot.taskAuthority ? (["task"] as const) : []), "deny"];
+    return [
+      "once",
+      ...(input.snapshot.taskAuthority ? (["task"] as const) : []),
+      "version",
+      "deny",
+    ];
   }
   // Gated interactive acquisition is defined for session and installed-code
   // subjects. User/host principals reach these operations through their
@@ -1441,7 +1446,7 @@ function isAuthorityAcquisitionDecision(
 function acceptedInstallReviewDecision(
   allowed: readonly AuthorityAcquisitionDecision[]
 ): AuthorityAcquisitionDecision {
-  if (allowed.includes("once")) return "once";
   if (allowed.includes("version")) return "version";
+  if (allowed.includes("once")) return "once";
   throw new Error("Accepted install review has no compatible authority decision");
 }

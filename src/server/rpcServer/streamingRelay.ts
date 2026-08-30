@@ -62,10 +62,10 @@ export interface StreamingRelayDeps {
     caller: VerifiedCaller,
     extras: StreamContextExtras
   ): ServiceContext;
-  resolveCausalParent(
+  resolveCausalInvocation(
     caller: VerifiedCaller,
     request: Pick<RpcStreamRequest, "causalParent" | "parentRequestId">
-  ): Promise<RpcCausalParent | undefined>;
+  ): Promise<{ caller: VerifiedCaller; parent: RpcCausalParent | undefined }>;
   relayTargetStream(
     caller: VerifiedCaller,
     envelope: RpcEnvelope,
@@ -170,7 +170,9 @@ export class StreamingRelay {
     }
     let causalParent: RpcCausalParent | undefined;
     try {
-      causalParent = await this.deps.resolveCausalParent(verifiedCaller, request);
+      const causal = await this.deps.resolveCausalInvocation(verifiedCaller, request);
+      verifiedCaller = causal.caller;
+      causalParent = causal.parent;
     } catch (error) {
       writeJson(res, 403, {
         error: error instanceof Error ? error.message : String(error),
@@ -329,7 +331,9 @@ export class StreamingRelay {
     }
     let causalParent: RpcCausalParent | undefined;
     try {
-      causalParent = await this.deps.resolveCausalParent(invocationCaller, request);
+      const causal = await this.deps.resolveCausalInvocation(invocationCaller, request);
+      invocationCaller = causal.caller;
+      causalParent = causal.parent;
     } catch (error) {
       await emitFrame({
         kind: "error",

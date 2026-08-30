@@ -329,7 +329,7 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
-  it("offers installed code only a digest-bound version decision", async () => {
+  it("offers installed code invocation-only or digest-bound decisions", async () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-")),
     });
@@ -360,7 +360,7 @@ describe("AcquisitionCoordinator", () => {
     });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedDecisions: ["version", "deny"],
+        allowedDecisions: ["once", "version", "deny"],
         title: "Use the local service",
         description: "Requests permission to use the local service.",
       })
@@ -621,12 +621,15 @@ describe("AcquisitionCoordinator", () => {
       },
       renderedAction: "use the taskflow store",
       resource: { kind: "exact", key: snap.resourceKey },
-      presentation: reviewedPresentation(),
+      presentation: {
+        ...reviewedPresentation(),
+        allowedDecisions: ["once", "task", "session", "deny"],
+      },
     });
 
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedDecisions: expect.arrayContaining(["version", "task", "deny"]),
+        allowedDecisions: ["once", "task", "deny"],
       })
     );
     expect(grantStore.grantsForSubjects([snap.taskAuthority], snap.capability)).toHaveLength(1);

@@ -249,9 +249,7 @@ function jwtWithPayload(payload: Record<string, unknown>): string {
   );
 }
 
-function approvingQueue(
-  decision: "once" | "session" | "agent" | "version" | "deny" = "version"
-) {
+function approvingQueue(decision: "once" | "session" | "agent" | "version" | "deny" = "version") {
   return {
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
@@ -793,8 +791,8 @@ describe("credentialService", () => {
     );
   });
 
-  it("attributes credential consent to a verified agent binding outside model execution", async () => {
-    const approvalQueue = approvingQueue("agent");
+  it("attributes resident agent credential consent to its exact installed version", async () => {
+    const approvalQueue = approvingQueue("version");
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
       approvalQueue: approvalQueue as never,
@@ -826,7 +824,7 @@ describe("credentialService", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedDecisions: ["once", "session", "agent", "deny"],
+        allowedDecisions: ["once", "session", "version", "deny"],
       })
     );
   });
@@ -1820,11 +1818,11 @@ describe("credentialService", () => {
     );
   });
 
-  it("agent-owned connect preapproves use and opens OAuth through its panel handoff", async () => {
+  it("resident-agent connect preapproves use for the exact installed version", async () => {
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
-    const approvalQueue = approvingQueue("agent");
+    const approvalQueue = approvingQueue("version");
     const agentId = "do:workers/agent-worker:AiChatWorker:agent-1";
     const caller = createVerifiedCaller(
       agentId,
@@ -1857,33 +1855,29 @@ describe("credentialService", () => {
       )
     );
 
-    const pending = service.handler(
-      { caller },
-      "connect",
-      [
-        {
-          spec: {
-            flow: {
-              type: "oauth2-auth-code-pkce",
-              authorizeUrl: "https://auth.example.test/oauth/authorize",
-              tokenUrl: "https://auth.example.test/oauth/token",
-              clientId: "client-1",
-            },
-            credential: {
-              label: "Example OAuth",
-              audience: [{ url: "https://api.example.test/", match: "origin" }],
-              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
-            },
-            browser: "external",
-            redirect: { type: "loopback" },
+    const pending = service.handler({ caller }, "connect", [
+      {
+        spec: {
+          flow: {
+            type: "oauth2-auth-code-pkce",
+            authorizeUrl: "https://auth.example.test/oauth/authorize",
+            tokenUrl: "https://auth.example.test/oauth/token",
+            clientId: "client-1",
           },
-          handoffTarget: {
-            callerId: "panel-test",
-            callerKind: "panel",
+          credential: {
+            label: "Example OAuth",
+            audience: [{ url: "https://api.example.test/", match: "origin" }],
+            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
           },
+          browser: "external",
+          redirect: { type: "loopback" },
         },
-      ]
-    ) as Promise<StoredCredentialSummary>;
+        handoffTarget: {
+          callerId: "panel-test",
+          callerKind: "panel",
+        },
+      },
+    ]) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() =>
       expect(eventService.emitToConnection).toHaveBeenCalledWith(
@@ -1908,13 +1902,14 @@ describe("credentialService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         callerId: agentId,
-        allowedDecisions: ["session", "agent", "deny"],
+        allowedDecisions: ["session", "version", "deny"],
       })
     );
     expect((await store.loadUrlBound(completed.id))?.grants).toContainEqual(
       expect.objectContaining({
-        scope: "agent",
-        agentId,
+        scope: "version",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "agent-version-1",
         action: "use",
       })
     );

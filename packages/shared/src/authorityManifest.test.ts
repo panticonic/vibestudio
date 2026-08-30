@@ -180,4 +180,25 @@ describe("unit authority manifest", () => {
       })
     ).toThrow(/may offer only once/);
   });
+
+  it("requires every capability to retain an invocation-only consent option", () => {
+    expect(() =>
+      parseUnitAuthorityManifest({
+        requests: [],
+        provides: [
+          {
+            name: "repository.publish",
+            title: "Publish repository",
+            action: "publish this repository",
+            tier: "gated",
+            sensitivity: "write",
+            resourceType: "repository",
+            presentation: { domain: "sharing", verb: "act" },
+            notability: "headline",
+            grantScopes: ["session"],
+          },
+        ],
+      })
+    ).toThrow(/must include "once"/);
+  });
 });

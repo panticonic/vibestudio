@@ -957,7 +957,8 @@ async function main() {
   const { AgentExecutionSessionRegistry } =
     await import("./services/agentExecutionSessionRegistry.js");
   const agentExecutionSessions = new AgentExecutionSessionRegistry();
-  const { TaskAuthorityRegistry } = await import("./services/taskAuthorityRegistry.js");
+  const { TaskAuthorityRegistry, taskAuthorityPrincipal } =
+    await import("./services/taskAuthorityRegistry.js");
   const taskAuthorities = new TaskAuthorityRegistry({
     executionIsActive: (runtimeId, authority) =>
       agentExecutionSessions.resolve(runtimeId)?.taskAuthority === authority,
@@ -4947,6 +4948,14 @@ async function main() {
             initiatingUser:
               user && user.revokedAt === undefined
                 ? { userId: user.id, handle: user.handle }
+                : null,
+            taskAuthority:
+              user && user.revokedAt === undefined && fact.taskRef && fact.active
+                ? taskAuthorityPrincipal({
+                    workspaceId,
+                    ownerUser: `user:${user.id}`,
+                    taskRef: fact.taskRef,
+                  })
                 : null,
           };
         },

@@ -218,7 +218,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       resourceType: "workspace.notes",
       presentation: { domain: "files", verb: "act" },
       notability: "headline",
-      grantScopes: ["session"],
+      grantScopes: ["once", "session"],
     } satisfies UserlandCapabilityDefinition;
     const buildSystem = {
       listBuildUnitIdentities: vi.fn(async (ref?: string) =>

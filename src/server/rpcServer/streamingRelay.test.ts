@@ -53,7 +53,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       createSessionContext: () => {
         throw new Error("WebSocket context was not expected");
       },
-      resolveCausalParent: async () => undefined,
+      resolveCausalInvocation: async (resolved) => ({ caller: resolved, parent: undefined }),
       relayTargetStream: async () => {
         throw new Error("Target relay was not expected");
       },
@@ -117,6 +117,10 @@ describe("StreamingRelay HTTP response ownership", () => {
         nonce: "exact-live-eval-session",
       } as import("@vibestudio/rpc").ExecutionAdmissionFact,
     };
+    const causallyAttributed = {
+      ...evaluated,
+      taskAuthority: "task:streaming-turn" as const,
+    };
     const assertAuthority = vi.fn(async () => undefined);
     const forwardProxyFetchStream = vi.fn(
       async (
@@ -143,7 +147,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       createSessionContext: () => {
         throw new Error("WebSocket context was not expected");
       },
-      resolveCausalParent: async () => undefined,
+      resolveCausalInvocation: async () => ({ caller: causallyAttributed, parent: undefined }),
       relayTargetStream: async () => {
         throw new Error("Target relay was not expected");
       },
@@ -177,13 +181,13 @@ describe("StreamingRelay HTTP response ownership", () => {
     await response.arrayBuffer();
 
     expect(assertAuthority).toHaveBeenCalledWith(
-      expect.objectContaining({ caller: evaluated }),
+      expect.objectContaining({ caller: causallyAttributed }),
       "credentials",
       "proxyFetch",
       [{ url: "https://example.com", method: "GET" }]
     );
     expect(forwardProxyFetchStream).toHaveBeenCalledWith(
-      expect.objectContaining({ caller: evaluated }),
+      expect.objectContaining({ caller: causallyAttributed }),
       expect.any(Function),
       expect.any(AbortSignal)
     );

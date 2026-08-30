@@ -407,6 +407,8 @@ interface ResolvedCausalInvocation {
   parent: RpcCausalParent;
   /** Host-resolved turn author. This is attribution, never the authorizing principal. */
   initiatingUser: UserSubject | null;
+  /** Stable task facet derived from the exact host-verified trajectory turn. */
+  taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal | null;
 }
 
 function relayCallOptions(meta?: RelayCallMeta): RpcCallOptions | undefined {
@@ -802,9 +804,10 @@ export class RpcServer {
        * canonical trajectory projection. Causal parents fail closed when this
        * dependency is absent, rejects, or reports that the node does not exist.
        */
-      resolveExactCausalInvocation?: (
-        parent: RpcCausalParent
-      ) => Promise<{ initiatingUser: UserSubject | null } | null>;
+      resolveExactCausalInvocation?: (parent: RpcCausalParent) => Promise<{
+        initiatingUser: UserSubject | null;
+        taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
+      } | null>;
       /**
        * Host-level relay boundary composed with RpcServer's invariant transport
        * protections. Direct service dispatch to `main` never reaches this
@@ -898,7 +901,13 @@ export class RpcServer {
         ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
-      resolveCausalParent: (caller, request) => this.resolveCausalParent(caller, request),
+      resolveCausalInvocation: async (caller, request) => {
+        const causal = await this.resolveCausalInvocation(caller, request);
+        return {
+          caller: this.callerWithCausalAttribution(caller, causal),
+          parent: causal?.parent,
+        };
+      },
       createSessionContext: (client, request, caller, extras) =>
         this.serviceContextForRpcMessage(client, request, extras, caller),
       relayTargetStream: (caller, envelope, request, causalParent, signal) =>
@@ -1224,13 +1233,6 @@ export class RpcServer {
     return ctx;
   }
 
-  private async resolveCausalParent(
-    caller: VerifiedCaller,
-    message: Pick<RpcRequest, "causalParent" | "parentRequestId">
-  ): Promise<RpcCausalParent | undefined> {
-    return (await this.resolveCausalInvocation(caller, message))?.parent;
-  }
-
   private async resolveCausalInvocation(
     caller: VerifiedCaller,
     message: Pick<RpcRequest, "causalParent" | "parentRequestId">
@@ -1281,7 +1283,10 @@ export class RpcServer {
     if (!resolver) {
       throw createRelayError("Exact causal invocation verification is unavailable", "EACCES");
     }
-    let resolved: { initiatingUser: UserSubject | null } | null;
+    let resolved: {
+      initiatingUser: UserSubject | null;
+      taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
+    } | null;
     try {
       resolved = await resolver(causalParent);
     } catch (error) {
@@ -1296,7 +1301,11 @@ export class RpcServer {
         "EACCES"
       );
     }
-    return { parent: causalParent, initiatingUser: resolved.initiatingUser };
+    return {
+      parent: causalParent,
+      initiatingUser: resolved.initiatingUser,
+      taskAuthority: resolved.taskAuthority ?? null,
+    };
   }
 
   private callerWithCausalAttribution(
@@ -1304,7 +1313,12 @@ export class RpcServer {
     causal: ResolvedCausalInvocation | undefined
   ): VerifiedCaller {
     if (!causal) return caller;
-    return causal.initiatingUser ? { ...caller, subject: causal.initiatingUser } : caller;
+    const taskAuthority = caller.executionSession?.taskAuthority ?? caller.taskAuthority;
+    return {
+      ...caller,
+      ...(causal.initiatingUser ? { subject: causal.initiatingUser } : {}),
+      ...(!taskAuthority && causal.taskAuthority ? { taskAuthority: causal.taskAuthority } : {}),
+    };
   }
 
   private resolveExtensionParentCaller(
@@ -1335,10 +1349,11 @@ export class RpcServer {
 
   private relayCallerScopeForRpcMessage(
     client: WsClientState,
-    message: Pick<RpcRequest, "parentRequestId">
+    message: Pick<RpcRequest, "parentRequestId">,
+    invocationCaller: VerifiedCaller = client.caller
   ): RelayCallerScope {
     const parent = this.resolveExtensionParentCaller(client, message);
-    const authenticatedCaller = this.withLiveRuntimeRelationships(client.caller);
+    const authenticatedCaller = this.withLiveRuntimeRelationships(invocationCaller);
     return {
       authenticatedCaller,
       authorizingCaller: parent?.authorizingCaller ?? authenticatedCaller,
@@ -2459,13 +2474,16 @@ export class RpcServer {
       return;
     }
 
+    let routedInvocationCaller: VerifiedCaller | undefined;
     if (
       message.type === "request" &&
       (message.causalParent ||
         (client.caller.runtime.kind === "extension" && message.parentRequestId))
     ) {
       try {
-        const causalParent = await this.resolveCausalParent(client.caller, message);
+        const causal = await this.resolveCausalInvocation(client.caller, message);
+        const causalParent = causal?.parent;
+        routedInvocationCaller = this.callerWithCausalAttribution(client.caller, causal);
         if (causalParent && message.causalParent !== causalParent) {
           message = { ...message, causalParent };
           routeEnvelope = { ...routeEnvelope, message };
@@ -2555,7 +2573,11 @@ export class RpcServer {
       // and shell targets fail fast when unreachable.
       if (message.type === "request") {
         const { requestId, method: reqMethod, args: reqArgs } = message;
-        const relayCallerScope = this.relayCallerScopeForRpcMessage(client, message);
+        const relayCallerScope = this.relayCallerScopeForRpcMessage(
+          client,
+          message,
+          routedInvocationCaller
+        );
         this.recordRoutedRequestOrigin(requestId, client);
         void this.relayCall(
           client.caller.runtime.id,
