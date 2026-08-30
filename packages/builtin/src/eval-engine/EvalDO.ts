@@ -1238,14 +1238,24 @@ export class EvalDO extends DurableObjectBase {
     args: RunArgs,
     result: RunResult
   ): Promise<void> {
-    await this.rpc.call(args.resultReceiverRef!, "onEvalComplete", [
-      {
-        runId,
-        agentInvocationId: args.agentInvocationId,
-        result,
-        channelId: args.channelId,
-      },
-    ]);
+    if (!args.executionSessionNonce) {
+      throw new Error(`eval: run ${runId} has no execution session for terminal delivery`);
+    }
+    const options: RpcCallOptions = {};
+    bindExecutionSession(options, args.executionSessionNonce);
+    await this.rpc.call(
+      args.resultReceiverRef!,
+      "onEvalComplete",
+      [
+        {
+          runId,
+          agentInvocationId: args.agentInvocationId,
+          result,
+          channelId: args.channelId,
+        },
+      ],
+      options
+    );
   }
 
   private scheduleResultRedelivery(runId: string, attempt: number): void {

@@ -333,7 +333,7 @@ export const blobstoreMethods = defineServiceMethods({
       z
         .object({
           caseInsensitive: z.boolean().optional(),
-          contextLines: z.number().int().nonnegative().max(10).optional(),
+          contextLines: z.number().int().nonnegative().optional(),
           maxMatches: z.number().int().positive().max(500).optional(),
         })
         .optional(),

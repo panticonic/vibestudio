@@ -1176,6 +1176,28 @@ describe("FsService", () => {
           expect(second.before).toEqual(["line four"]);
         });
 
+        it("accepts useful context ranges while bounding aggregate result lines", async () => {
+          const ctx = makeWorkerCtx("do:src:class:key");
+          registerContext(ctx.caller.runtime.id, "do", "ctx-grep-context-range");
+          const root = path.join(tmpRoot, "ctx-grep-context-range");
+          mkdirSync(root, { recursive: true });
+          writeFileSync(
+            path.join(root, "context.txt"),
+            Array.from({ length: 61 }, (_, index) =>
+              index === 30 ? "needle" : `line ${index + 1}`
+            ).join("\n")
+          );
+          withBackend();
+
+          const result = (await service.handleCall(ctx, "grep", [
+            "needle",
+            { contextLines: 20 },
+          ])) as GrepResult;
+          expect(result.matches[0]?.before).toHaveLength(20);
+          expect(result.matches[0]?.after).toHaveLength(20);
+          expect(result.truncated).toBe(false);
+        });
+
         it("truncates at maxMatches", async () => {
           const ctx = makeWorkerCtx("do:src:class:key");
           registerContext(ctx.caller.runtime.id, "do", "ctx-grep-c");
@@ -1249,7 +1271,7 @@ describe("FsService", () => {
       mkdirSync(path.join(tmpRoot, "ctx-grep-bounds"), { recursive: true });
       await expect(
         service.handleCall(ctx, "grep", ["needle", { contextLines: 1.5 }])
-      ).rejects.toThrow(/integer from 0 to 10/u);
+      ).rejects.toThrow(/non-negative safe integer/u);
       await expect(service.handleCall(ctx, "grep", ["needle", { maxMatches: 0 }])).rejects.toThrow(
         /integer from 1 to 1000/u
       );

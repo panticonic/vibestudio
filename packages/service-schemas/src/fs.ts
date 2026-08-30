@@ -139,9 +139,10 @@ const grepOptionsSchema = z.object({
     .number()
     .int()
     .min(0)
-    .max(10)
     .optional()
-    .describe("Lines of surrounding context before/after each match (0-10)."),
+    .describe(
+      "Requested lines of surrounding context before/after each match. The service bounds total returned search output rather than imposing a tiny per-match ceiling."
+    ),
   maxMatches: z
     .number()
     .int()
@@ -169,7 +170,9 @@ const grepResultSchema = z.object({
     )
     .describe("Matching lines, in file/line order, capped at maxMatches."),
   matchCount: z.number().describe("Number of matches returned (length of `matches`)."),
-  truncated: z.boolean().describe("True if the match limit was hit and results were cut short."),
+  truncated: z
+    .boolean()
+    .describe("True if the match limit or total result-line budget cut the results short."),
 });
 const globOptionsSchema = z.object({
   path: z
