@@ -372,8 +372,17 @@ async function grepBlob(
   } catch (err) {
     throw new Error(`Invalid regex: ${(err as Error).message}`);
   }
-  const context = Math.max(0, Math.min(opts.contextLines ?? 0, 10));
-  const maxMatches = Math.max(1, Math.min(opts.maxMatches ?? 50, 500));
+  const requestedContext = opts.contextLines ?? 0;
+  if (!Number.isSafeInteger(requestedContext) || requestedContext < 0) {
+    throw new RangeError("grep contextLines must be a non-negative safe integer");
+  }
+  const requestedMaxMatches = Math.max(1, Math.min(opts.maxMatches ?? 50, 500));
+  const maxResultLines = 10_000;
+  const context = Math.min(requestedContext, Math.floor((maxResultLines - 1) / 2));
+  const maxMatches = Math.min(
+    requestedMaxMatches,
+    Math.max(1, Math.floor(maxResultLines / (2 * context + 1)))
+  );
   const matches: GrepMatch[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (matches.length >= maxMatches) break;

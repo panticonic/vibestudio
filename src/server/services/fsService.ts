@@ -1123,7 +1123,8 @@ const INTERNAL_PROJECTION_ENTRIES = new Set([".gad"]);
 
 const GREP_DEFAULT_MAX_MATCHES = 200;
 const GREP_HARD_MAX_MATCHES = 1000;
-const GREP_MAX_CONTEXT_LINES = 10;
+/** Bounds search response construction independently of the requested context per match. */
+const GREP_MAX_RESULT_LINES = 10_000;
 
 export interface GrepOptions {
   /** Directory (or single file) to search, relative to the context root. */
@@ -1131,7 +1132,7 @@ export interface GrepOptions {
   /** Glob filter for candidate files (gitignore-style; basename match when slash-free). */
   glob?: string;
   caseInsensitive?: boolean;
-  /** Lines of context before/after each match (clamped to 10). */
+  /** Requested lines of context before/after each match. */
   contextLines?: number;
   /** Stop after this many matches (default 200, hard cap 1000). */
   maxMatches?: number;
@@ -3290,20 +3291,28 @@ export class FsService {
       throw new Error("grep pattern must be a non-empty string");
     }
     const caseInsensitive = opts.caseInsensitive ?? false;
-    const contextLines = opts.contextLines ?? 0;
-    if (
-      !Number.isInteger(contextLines) ||
-      contextLines < 0 ||
-      contextLines > GREP_MAX_CONTEXT_LINES
-    ) {
-      throw new RangeError(
-        `grep contextLines must be an integer from 0 to ${GREP_MAX_CONTEXT_LINES}`
-      );
+    const requestedContextLines = opts.contextLines ?? 0;
+    if (!Number.isSafeInteger(requestedContextLines) || requestedContextLines < 0) {
+      throw new RangeError("grep contextLines must be a non-negative safe integer");
     }
     const maxMatches = opts.maxMatches ?? GREP_DEFAULT_MAX_MATCHES;
     if (!Number.isInteger(maxMatches) || maxMatches < 1 || maxMatches > GREP_HARD_MAX_MATCHES) {
       throw new RangeError(`grep maxMatches must be an integer from 1 to ${GREP_HARD_MAX_MATCHES}`);
     }
+    // Context is useful precisely when callers need to inspect a larger local
+    // region. Bound the aggregate response instead of rejecting that request
+    // at an arbitrary per-match number. One result consumes at most
+    // (2 * context + 1) lines; both dimensions are reduced only as necessary
+    // to keep the complete host-side result within this invariant.
+    const contextLines = Math.min(
+      requestedContextLines,
+      Math.floor((GREP_MAX_RESULT_LINES - 1) / 2)
+    );
+    const boundedMaxMatches = Math.min(
+      maxMatches,
+      Math.max(1, Math.floor(GREP_MAX_RESULT_LINES / (2 * contextLines + 1)))
+    );
+    const contextTruncated = contextLines !== requestedContextLines;
     const searchRoot = await resolveFsFilePath(scope, opts.path ?? "/");
     try {
       await fs.stat(searchRoot);
@@ -3323,7 +3332,7 @@ export class FsService {
       searchRoot,
       pattern,
       { caseInsensitive, glob: opts.glob, includeIgnored: opts.includeIgnored === true },
-      maxMatches,
+      boundedMaxMatches,
       contextLines,
       signal
     );
@@ -3338,7 +3347,7 @@ export class FsService {
       };
     });
 
-    return { matches, matchCount: matches.length, truncated };
+    return { matches, matchCount: matches.length, truncated: truncated || contextTruncated };
   }
 
   /**
