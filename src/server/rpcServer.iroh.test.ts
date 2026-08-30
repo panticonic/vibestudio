@@ -89,7 +89,7 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
       server.attachIrohConnection(new NodePhysicalConnection(serverNative)),
       pipe.ready(),
     ]);
-    const session = pipe.openSession({ sid: "shell", getToken: () => token });
+    const session = pipe.openSession({ getToken: () => token });
     const rpc = createRpcClient({
       selfId: "electron-main",
       callerKind: "shell",

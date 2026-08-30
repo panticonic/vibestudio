@@ -189,7 +189,6 @@ export async function createIrohServerClient(
   >();
   const mainConnectionId = args.connectionId ?? randomUUID();
   const mainSession = transport.openSession({
-    sid: mainConnectionId,
     connectionId: mainConnectionId,
     getToken: args.getShellToken,
     clientPlatform: "desktop",

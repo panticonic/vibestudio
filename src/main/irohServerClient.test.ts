@@ -19,8 +19,6 @@ const reach: IrohReach = {
 };
 
 class FakeSession implements IrohClientSession {
-  readonly sid = "shell";
-
   constructor(private readonly closeOrder: string[]) {}
 
   callerId(): string {

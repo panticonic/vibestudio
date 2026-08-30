@@ -227,7 +227,6 @@ export async function establishIrohConnection(
   });
   const connectionId = randomRequestId();
   const session = transport.openSession({
-    sid: connectionId,
     connectionId,
     clientLabel: "Mobile device",
     clientPlatform: "mobile",

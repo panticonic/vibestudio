@@ -12,14 +12,11 @@ const eventEnvelope: RpcEnvelope = {
 };
 
 class FakeSession implements IrohClientSession {
-  readonly sid: string;
   readonly sent: RpcEnvelope[] = [];
   private readonly messages = new Set<(envelope: RpcEnvelope) => void>();
   private readonly statuses = new Set<(status: RpcConnectionStatus) => void>();
 
-  constructor(readonly options: IrohClientSessionOptions) {
-    this.sid = options.sid ?? "missing-sid";
-  }
+  constructor(readonly options: IrohClientSessionOptions) {}
 
   callerId(): string | null {
     return "shell:device";
@@ -117,7 +114,33 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
-  it("redials proactively and reopens every desired logical session with the same sid", async () => {
+  it("preserves an arbitrarily long routing ID without exposing it as session identity", async () => {
+    const first = new FakePipe();
+    const second = new FakePipe();
+    const dial = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial,
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const connectionId = `default-cdp-${"nested-panel/".repeat(32)}`;
+    const session = owner.openSession({ connectionId, getToken: () => "credential" });
+
+    await session.ready?.();
+    expect(first.sessions[0]?.options.connectionId).toBe(connectionId);
+    expect(first.sessions[0]?.options).not.toHaveProperty("sid");
+
+    first.disconnect();
+    await eventually(() => expect(second.sessions).toHaveLength(1));
+    expect(second.sessions[0]?.options.connectionId).toBe(connectionId);
+    expect(second.sessions[0]?.options).not.toHaveProperty("sid");
+    await owner.close();
+  });
+
+  it("redials proactively and reopens every desired logical session", async () => {
     const first = new FakePipe();
     const second = new FakePipe();
     const dial = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
@@ -130,14 +153,14 @@ describe("reconnecting Iroh client", () => {
       maxRetryDelayMs: 1,
       random: () => 0,
     });
-    const session = owner.openSession({ sid: "workspace:alpha", getToken: () => "credential" });
+    const session = owner.openSession({ getToken: () => "credential" });
     const reconnect = vi.fn();
     owner.onReconnectProgress(reconnect);
     const received: RpcEnvelope[] = [];
     session.onMessage((envelope) => received.push(envelope));
 
     await session.ready?.();
-    expect(first.sessions.map((candidate) => candidate.sid)).toEqual(["workspace:alpha"]);
+    expect(first.sessions).toHaveLength(1);
     first.sessions[0]?.emit(eventEnvelope);
     expect(received).toEqual([eventEnvelope]);
 
@@ -147,7 +170,7 @@ describe("reconnecting Iroh client", () => {
     expect(reconnect).toHaveBeenCalledWith(
       expect.objectContaining({ attempt: 1, phase: "scheduled", nextRetryInMs: 0 })
     );
-    expect(second.sessions[0]?.sid).toBe("workspace:alpha");
+    expect(second.sessions).toHaveLength(1);
     second.sessions[0]?.emit(eventEnvelope);
     expect(received).toEqual([eventEnvelope, eventEnvelope]);
 
@@ -167,10 +190,7 @@ describe("reconnecting Iroh client", () => {
       maxRetryDelayMs: 1,
       random: () => 0,
     });
-    const session = owner.openSession({
-      sid: "workspace:generation",
-      getToken: () => "credential",
-    });
+    const session = owner.openSession({ getToken: () => "credential" });
     const progress = vi.fn();
     owner.onReconnectProgress(progress);
     await session.ready?.();
@@ -189,7 +209,7 @@ describe("reconnecting Iroh client", () => {
         nextRetryInMs: 0,
       })
     );
-    expect(second.sessions[0]?.sid).toBe("workspace:generation");
+    expect(second.sessions).toHaveLength(1);
     await owner.close();
   });
 
@@ -208,7 +228,7 @@ describe("reconnecting Iroh client", () => {
       maxRetryDelayMs: 1,
       random: () => 0,
     });
-    const session = owner.openSession({ sid: "workspace:available", getToken: () => "credential" });
+    const session = owner.openSession({ getToken: () => "credential" });
     await session.ready?.();
 
     first.disconnect();
@@ -241,17 +261,16 @@ describe("reconnecting Iroh client", () => {
       random: () => 0,
     });
     const revoked = owner.openSession({
-      sid: "shell",
       getToken: () => "revoked",
       onTerminalClose: terminal,
     });
-    const live = owner.openSession({ sid: "workspace", getToken: () => "live" });
+    const live = owner.openSession({ getToken: () => "live" });
     await Promise.all([revoked.ready?.(), live.ready?.()]);
-    first.sessions.find((session) => session.sid === "shell")?.terminate();
+    first.sessions[0]?.terminate();
     first.disconnect();
 
     await eventually(() => expect(second.sessions).toHaveLength(1));
-    expect(second.sessions[0]?.sid).toBe("workspace");
+    expect(await second.sessions[0]?.options.getToken()).toBe("live");
     await expect(revoked.ready?.()).rejects.toThrow("terminal");
     expect(terminal).toHaveBeenCalledOnce();
     await owner.close();
@@ -267,16 +286,14 @@ describe("reconnecting Iroh client", () => {
       closeEndpoint: vi.fn().mockResolvedValue(undefined),
       suspendEndpoint,
     });
-    const session = owner.openSession({ sid: "mobile", getToken: () => "credential" });
+    const session = owner.openSession({ getToken: () => "credential" });
     await session.ready?.();
 
     await owner.suspend();
     expect(suspendEndpoint).toHaveBeenCalledOnce();
     expect(owner.status()).toBe("disconnected");
     await owner.resume();
-    await eventually(() =>
-      expect(second.sessions.map((candidate) => candidate.sid)).toEqual(["mobile"])
-    );
+    await eventually(() => expect(second.sessions).toHaveLength(1));
     expect(owner.peerEndpointId).toBe("server-endpoint");
     await owner.close();
   });

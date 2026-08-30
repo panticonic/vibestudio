@@ -103,7 +103,7 @@ class SerializedControlWriter {
 }
 
 export interface IrohClientSessionOptions {
-  sid?: string;
+  /** Application routing identity presented during authentication. */
   connectionId?: string;
   clientSessionId?: string;
   clientLabel?: string;
@@ -116,7 +116,6 @@ export interface IrohClientSessionOptions {
 }
 
 export interface IrohClientSession extends EnvelopeRpcTransport {
-  readonly sid: string;
   callerId(): string | null;
   isClosed(): boolean;
   close(): Promise<void>;
@@ -144,7 +143,8 @@ interface InboundRequest {
 }
 
 class ClientSession implements IrohClientSession {
-  readonly sid: string;
+  /** Internal wire identity; intentionally absent from the public session API. */
+  readonly sid = randomId();
   private readonly listeners = new Set<(envelope: RpcEnvelope) => void>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
   private readonly inboundRequests = new Map<string, InboundRequest>();
@@ -157,9 +157,7 @@ class ClientSession implements IrohClientSession {
   constructor(
     private readonly pipe: ClientPipe,
     private readonly options: IrohClientSessionOptions
-  ) {
-    this.sid = options.sid ?? options.connectionId ?? randomId();
-  }
+  ) {}
 
   callerId(): string | null {
     return this.authenticatedCallerId;

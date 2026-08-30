@@ -135,7 +135,6 @@ export class IrohRpcClient {
     });
     const connectionId = this.options.connectionId ?? randomUUID();
     const session = pipe.openSession({
-      sid: connectionId,
       connectionId,
       clientLabel: this.options.clientLabel,
       clientPlatform: this.options.clientPlatform,

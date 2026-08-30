@@ -49,7 +49,7 @@ function workspaceServerUnavailableError(): Error & { code: string; errorKind: "
 }
 
 class ReconnectingSession implements IrohClientSession {
-  readonly sid: string;
+  private readonly logicalId = crypto.randomUUID();
   private inner: IrohClientSession | null = null;
   private activation: Promise<IrohClientSession> | null = null;
   private generation = 0;
@@ -62,9 +62,7 @@ class ReconnectingSession implements IrohClientSession {
   constructor(
     private readonly owner: ReconnectingPipe,
     private readonly options: IrohClientSessionOptions
-  ) {
-    this.sid = options.sid ?? options.connectionId ?? crypto.randomUUID();
-  }
+  ) {}
 
   callerId(): string | null {
     return this.authenticatedCallerId;
@@ -141,8 +139,9 @@ class ReconnectingSession implements IrohClientSession {
   }
 
   activate(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
-    if (this.closed) return Promise.reject(new Error(`Iroh session ${this.sid} is closed`));
-    if (this.terminal) return Promise.reject(new Error(`Iroh session ${this.sid} is terminal`));
+    if (this.closed) return Promise.reject(new Error(`Iroh session ${this.logicalId} is closed`));
+    if (this.terminal)
+      return Promise.reject(new Error(`Iroh session ${this.logicalId} is terminal`));
     if (this.inner && this.generation === generation) return Promise.resolve(this.inner);
     if (this.activation && this.generation === generation) return this.activation;
     this.generation = generation;
@@ -157,8 +156,8 @@ class ReconnectingSession implements IrohClientSession {
   }
 
   private async ensureInner(): Promise<IrohClientSession> {
-    if (this.closed) throw new Error(`Iroh session ${this.sid} is closed`);
-    if (this.terminal) throw new Error(`Iroh session ${this.sid} is terminal`);
+    if (this.closed) throw new Error(`Iroh session ${this.logicalId} is closed`);
+    if (this.terminal) throw new Error(`Iroh session ${this.logicalId} is terminal`);
     const { pipe, generation } = await this.owner.ensureConnected();
     return this.activate(pipe, generation);
   }
@@ -171,8 +170,9 @@ class ReconnectingSession implements IrohClientSession {
    * during the outage.
    */
   private requireAvailableInner(): Promise<IrohClientSession> {
-    if (this.closed) return Promise.reject(new Error(`Iroh session ${this.sid} is closed`));
-    if (this.terminal) return Promise.reject(new Error(`Iroh session ${this.sid} is terminal`));
+    if (this.closed) return Promise.reject(new Error(`Iroh session ${this.logicalId} is closed`));
+    if (this.terminal)
+      return Promise.reject(new Error(`Iroh session ${this.logicalId} is terminal`));
     if (this.authenticatedCallerId !== null && this.owner.status() !== "connected") {
       return Promise.reject(workspaceServerUnavailableError());
     }
@@ -186,7 +186,6 @@ class ReconnectingSession implements IrohClientSession {
     let terminalError: Error | null = null;
     const inner = pipe.openSession({
       ...this.options,
-      sid: this.sid,
       onTerminalClose: (error) => {
         terminalError = error;
         this.terminal = true;
@@ -202,7 +201,9 @@ class ReconnectingSession implements IrohClientSession {
     if (terminalError) throw terminalError;
     if (this.closed || this.generation !== generation || this.owner.generation() !== generation) {
       await inner.close().catch(() => undefined);
-      throw new Error(`Iroh session ${this.sid} opened on a stale connection generation`);
+      throw new Error(
+        `Iroh session ${this.logicalId} opened on a stale connection generation`
+      );
     }
     this.inner = inner;
     this.authenticatedCallerId = inner.callerId();
@@ -305,9 +306,6 @@ class ReconnectingPipe implements IrohClientPipe {
 
   openSession(options: IrohClientSessionOptions): IrohClientSession {
     const session = new ReconnectingSession(this, options);
-    if ([...this.sessions].some((candidate) => candidate.sid === session.sid)) {
-      throw new Error(`Iroh session ${session.sid} already exists`);
-    }
     this.sessions.add(session);
     return session;
   }

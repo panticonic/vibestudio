@@ -1364,18 +1364,18 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now())
     );
     console.log(`[desktop-smoke] Chat experience ready: ${chatExperience}`);
-    const projectedTitle = await verifyNativePageTitleProjection(
-      electronApp,
-      renderedPanel.panel.id,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
-    console.log(`[desktop-smoke] Native page title projected: ${projectedTitle}`);
     const panelIds = new Set((await getPanelTree(electronApp)).map((panel) => panel.id));
     const newPanel = await createAndWaitForNewPanel(
       electronApp,
       panelIds,
       Math.max(1_000, deadlineMs - Date.now())
     );
+    const projectedTitle = await verifyNativePageTitleProjection(
+      electronApp,
+      newPanel.panel.id,
+      Math.max(1_000, deadlineMs - Date.now())
+    );
+    console.log(`[desktop-smoke] Native page title projected: ${projectedTitle}`);
     await verifySettingsEvent(electronApp, Math.max(1_000, deadlineMs - Date.now()));
     await assertCleanDesktopDiagnostics(electronApp);
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);

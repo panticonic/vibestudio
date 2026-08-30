@@ -65,6 +65,7 @@ describe("Iroh RPC client over real local QUIC", () => {
 
     const server = new NodePhysicalConnection(serverNative);
     const client = new NodePhysicalConnection(clientNative);
+    const connectionId = `default-cdp-${"nested-panel/".repeat(32)}`;
     const serverMessagePayload = `independent:${"x".repeat(9 * 1024 * 1024)}`;
     const serverTask = (async () => {
       const control = await server.acceptBi();
@@ -93,12 +94,15 @@ describe("Iroh RPC client over real local QUIC", () => {
       const open = decodeIrohSessionControlFrame(
         await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
       );
-      expect(open).toMatchObject({ t: IROH_SESSION_OPEN, sid: "shell", token: "token" });
+      expect(open).toMatchObject({ t: IROH_SESSION_OPEN, token: "token", connectionId });
+      if (open.t !== IROH_SESSION_OPEN) throw new Error("expected session open");
+      expect(open.sid).not.toBe(connectionId);
+      expect(new TextEncoder().encode(open.sid).byteLength).toBeLessThanOrEqual(128);
       await writeFrame(
         control.send,
         encodeIrohSessionControlFrame({
           t: IROH_SESSION_OPEN_RESULT,
-          sid: "shell",
+          sid: open.sid,
           success: true,
           callerId: "shell:device",
           callerKind: "shell",
@@ -120,7 +124,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const eventStream = await server.openBi();
       await writeIrohStreamPreamble(eventStream.send, {
         k: "message",
-        sid: "shell",
+        sid: open.sid,
         v: IROH_WIRE_VERSION,
       });
       await writeChunked(
@@ -147,7 +151,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const clientEventStream = await server.acceptBi();
       expect(await readIrohStreamPreamble(clientEventStream.recv)).toEqual({
         k: "envelope",
-        sid: "shell",
+        sid: open.sid,
         v: IROH_WIRE_VERSION,
       });
       const clientEvent = JSON.parse(
@@ -159,7 +163,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const requestStream = await server.acceptBi();
       expect(await readIrohStreamPreamble(requestStream.recv)).toEqual({
         k: "envelope",
-        sid: "shell",
+        sid: open.sid,
         v: IROH_WIRE_VERSION,
       });
       const requestEnvelope = JSON.parse(
@@ -204,7 +208,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     const unsubscribeDiagnostics = pipe.onDiagnosticsChange((snapshot) => {
       if (snapshot) diagnostics.push(snapshot);
     });
-    const session = pipe.openSession({ sid: "shell", getToken: () => "token" });
+    const session = pipe.openSession({ connectionId, getToken: () => "token" });
     const independentEvent = new Promise<RpcEnvelope>((resolve) => {
       session.onMessage((envelope) => {
         if (envelope.message.type === "event" && envelope.message.event === "ready") {
@@ -305,7 +309,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       expect(await readIrohStreamPreamble(requestStream.recv)).toMatchObject({
         body: true,
         k: "stream",
-        sid: "shell",
+        sid: open.sid,
       });
       const requestEnvelope = JSON.parse(
         new TextDecoder().decode(await readFrame(requestStream.recv, MAX_ENVELOPE_FRAME_BYTES))
@@ -340,7 +344,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       expect(await readIrohStreamPreamble(bodyless.recv)).toMatchObject({
         body: false,
         k: "stream",
-        sid: "shell",
+        sid: open.sid,
       });
       const bodylessEnvelope = JSON.parse(
         new TextDecoder().decode(await readFrame(bodyless.recv, MAX_ENVELOPE_FRAME_BYTES))
@@ -368,7 +372,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     })();
 
     const pipe = createIrohClientPipe(client);
-    const session = pipe.openSession({ sid: "shell", getToken: () => "token" });
+    const session = pipe.openSession({ getToken: () => "token" });
     const rpc = createRpcClient({
       selfId: "shell:device",
       callerKind: "shell",
