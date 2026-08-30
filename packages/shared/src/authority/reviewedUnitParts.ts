@@ -105,11 +105,10 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     surfaces,
     name: unit.unitName,
     ...(unit.displayName?.trim() ? { displayName: unit.displayName.trim() } : {}),
-    // A trust decision must not fan out into one remote asset fetch per part.
-    // Relative artwork remains available in ordinary catalog/navigation UI;
-    // install review uses its trusted kind glyph. Inline semantic icons need no
-    // network request and remain safe to carry in the approval snapshot.
-    ...(icon && !icon.startsWith("./") ? { icon } : {}),
+    // Identity is part of what the user reviews. Preserve both semantic icons
+    // and unit-relative artwork in the immutable approval snapshot; the shared
+    // icon renderer controls when relative assets are fetched.
+    ...(icon ? { icon } : {}),
     title: installReviewPartTitle(unit.source.repo),
     purpose: unit.purpose ?? "",
     repoPath: unit.source.repo,

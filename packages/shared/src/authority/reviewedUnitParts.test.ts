@@ -38,7 +38,7 @@ describe("install-review part names", () => {
     expect(() => installReviewPartTitle("")).toThrow("canonical repo path");
   });
 
-  it("does not turn a trust review into a fan-out of relative icon requests", () => {
+  it("preserves custom identity for every install-review icon form", () => {
     const relative = unit("workers/mail", "@workspace-workers/mail", "Mail");
     relative.icon = "./assets/icon.svg";
     const semantic = unit("workers/chat", "@workspace-workers/chat", "Chat");
@@ -50,7 +50,7 @@ describe("install-review part names", () => {
         identityKey: "workers/mail@ev-1",
         origin: hostBuildOrigin("1.0.0"),
       }).icon
-    ).toBeUndefined();
+    ).toBe("./assets/icon.svg");
     expect(
       reviewedUnitPart({
         unit: semantic,
