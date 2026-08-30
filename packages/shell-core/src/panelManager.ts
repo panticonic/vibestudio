@@ -363,6 +363,10 @@ export class PanelManager {
     opts?: CreatePanelOptions,
     clients?: PanelOperationClients
   ): Promise<CreatePanelResult> {
+    // The registry is a bounded projection. Keep an addressed parent resident
+    // while its child is committed so the same durable tree fact is projected
+    // locally instead of flattening children into synthetic roots.
+    if (opts?.parentId) await this.requireStoredPanel(opts.parentId);
     const workspaceState = clients?.workspaceState ?? this.workspaceState;
     const runtime = clients?.runtime ?? this.runtime;
     const { relativePath, absolutePath } = resolveSource(source, this.workspacePath);
@@ -469,7 +473,9 @@ export class PanelManager {
       history: { entries: [snapshot], index: 0 },
       artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
     };
-    this.registry.addPanel(panel, null, { addAsRoot: true });
+    this.registry.addPanel(panel, opts?.parentId ?? null, {
+      addAsRoot: opts?.parentId == null && (opts?.addAsRoot ?? true),
+    });
     this.touchRuntimePanel(slotId);
 
     return {
@@ -527,6 +533,7 @@ export class PanelManager {
     },
     clients?: PanelOperationClients
   ): Promise<CreatePanelResult & { url: string }> {
+    if (parentId) await this.requireStoredPanel(parentId);
     const workspaceState = clients?.workspaceState ?? this.workspaceState;
     const runtime = clients?.runtime ?? this.runtime;
     if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
@@ -618,7 +625,9 @@ export class PanelManager {
       history: { entries: [snapshot], index: 0 },
       artifacts: { buildState: "ready", htmlPath: url },
     };
-    this.registry.addPanel(panel, null, { addAsRoot: true });
+    this.registry.addPanel(panel, parentId, {
+      addAsRoot: parentId == null && (opts?.addAsRoot ?? true),
+    });
     this.touchRuntimePanel(slotId);
     return {
       panelId: slotId,
@@ -1082,22 +1091,34 @@ export class PanelManager {
   }
 
   async getPanelInit(slotId: PanelSlotId): Promise<unknown> {
-    // Bootstrap is also the rehydration boundary for an existing renderer.
-    // Always refresh the addressed slot from durable state here so a reload
-    // cannot resurrect an older local projection (for example, a terminal
-    // layout saved just before the renderer was restarted).
-    const panel = await this.requireStoredPanel(slotId, true);
-    const storedSlot = await this.workspaceState.getSlot(slotId);
-    const parentId = storedSlot?.parent_slot_id ?? null;
+    // Runtime activation publishes one committed panel incarnation into the
+    // registry before a host is allowed to navigate its view. Bootstrap must
+    // consume that exact projection. Re-reading the durable slot, entity and
+    // source here duplicated materialization work, could pair a view with a
+    // later incarnation than its lease, and coupled every reload to unrelated
+    // semantic/VCS work.
+    const panel = await this.requireStoredPanel(slotId);
+    const rawEntityId = panel.runtimeEntityId;
+    if (!rawEntityId) {
+      throw new Error(`Panel ${slotId} has no committed runtime entity`);
+    }
+    const entityId = asPanelEntityId(rawEntityId);
+    this.currentEntityBySlot.set(slotId, entityId);
+
+    const parentId = this.registry.findParentId(slotId) as PanelSlotId | null;
+    const parent = parentId ? this.registry.getPanel(parentId) : null;
     const parentEntityId = parentId
-      ? (this.currentEntityBySlot.get(parentId) ??
-        (await this.resolveCurrentEntityIdForSlot(parentId)))
+      ? parent?.runtimeEntityId
+        ? asPanelEntityId(parent.runtimeEntityId)
+        : null
       : null;
-    // The grant is bound to the panel's current ENTITY id (panel:<historyEntryKey>),
-    // not the slotId — that's what `connectionGrants` validates against the
-    // entity cache, and what the panel uses as its RPC `caller.runtime.id`.
-    const entityId =
-      this.currentEntityBySlot.get(slotId) ?? (await this.resolveCurrentEntityIdForSlot(slotId));
+    if (parentId && !parentEntityId) {
+      throw new Error(`Parent panel ${parentId} has no committed runtime entity`);
+    }
+
+    // The grant is the only server operation bootstrap still requires. It is
+    // bound to this already-committed ENTITY id (not the tree slot), which is
+    // what connectionGrants validates and what the panel authenticates as.
     const token = this.grantConnectionImpl
       ? (await this.grantConnectionImpl(entityId)).token
       : (this.serverInfo.gatewayConfig.token ?? "");
@@ -1106,7 +1127,7 @@ export class PanelManager {
       entityId,
       slotId,
       contextId: getPanelContextId(panel),
-      effectiveVersion: (await this.getCurrentEntitySource(slotId))?.effectiveVersion ?? null,
+      effectiveVersion: panel.effectiveVersion ?? null,
       buildKey: panel.buildKey ?? null,
       parentId,
       parentEntityId,

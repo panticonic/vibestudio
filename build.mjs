@@ -380,6 +380,26 @@ const workspaceRpcCatalogWorkerElectronConfig = {
   banner: undefined,
 };
 
+const immutableTreeWorkerConfig = {
+  entryPoints: ["src/server/buildV2/immutableTreeWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.standalone.immutableTree}`,
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+  banner: { js: NODE_ESM_COMPAT_BANNER },
+};
+
+const immutableTreeWorkerElectronConfig = {
+  ...immutableTreeWorkerConfig,
+  format: "cjs",
+  outfile: `dist/${SERVER_WORKER_ENTRIES.electron.immutableTree}`,
+  banner: undefined,
+};
+
 const sqliteIntegrityWorkerConfig = {
   entryPoints: ["src/server/storage/sqliteIntegrityWorker.ts"],
   bundle: true,
@@ -754,6 +774,9 @@ async function build() {
         "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
           SERVER_WORKER_ENTRIES.electron.workspaceRpcCatalog
         ),
+        "globalThis.__VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__": JSON.stringify(
+          SERVER_WORKER_ENTRIES.electron.immutableTree
+        ),
         "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
           SERVER_WORKER_ENTRIES.electron.sqliteIntegrity
         ),
@@ -776,6 +799,9 @@ async function build() {
         "globalThis.__VIBESTUDIO_RPC_CATALOG_WORKER_ENTRY__": JSON.stringify(
           SERVER_WORKER_ENTRIES.standalone.workspaceRpcCatalog
         ),
+        "globalThis.__VIBESTUDIO_IMMUTABLE_TREE_WORKER_ENTRY__": JSON.stringify(
+          SERVER_WORKER_ENTRIES.standalone.immutableTree
+        ),
         "globalThis.__VIBESTUDIO_SQLITE_INTEGRITY_WORKER_ENTRY__": JSON.stringify(
           SERVER_WORKER_ENTRIES.standalone.sqliteIntegrity
         ),
@@ -793,6 +819,8 @@ async function build() {
       buildHostArtifact(typecheckWorkerConfig),
       buildHostArtifact(workspaceRpcCatalogWorkerElectronConfig),
       buildHostArtifact(workspaceRpcCatalogWorkerConfig),
+      buildHostArtifact(immutableTreeWorkerElectronConfig),
+      buildHostArtifact(immutableTreeWorkerConfig),
       buildHostArtifact(sqliteIntegrityWorkerElectronConfig),
       buildHostArtifact(sqliteIntegrityWorkerConfig),
       buildHostArtifact(dependencyContentMaintenanceConfig),

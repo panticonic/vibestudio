@@ -18,6 +18,7 @@ import {
   unitWorkspaceLogRecord,
   unitWorkspaceStatus,
   type UnitDeclaration,
+  type UnitApprovalCoordinator,
   type UnitBuildIdentity,
   type UnitGraphNode,
   type UnitRegistryEntryBase,
@@ -527,6 +528,7 @@ describe("UnitHost", () => {
       active?: boolean;
       extraNode?: TestNode;
       applyTrusted?: (node: TestNode) => Promise<void>;
+      approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
       isAdmitted?: (repoPath: string, effectiveVersion: string) => boolean;
       /** Stands in for the durable activation-trust file. */
       approvalStore?: {
@@ -621,6 +623,9 @@ describe("UnitHost", () => {
         prompted.push(entries);
         return "accepted";
       },
+      ...(opts.approvalCoordinator
+        ? { approvalCoordinator: opts.approvalCoordinator }
+        : {}),
       onApprovalDenied: (items) => {
         denied.push(...items.map((item) => item.node.name));
       },
@@ -639,6 +644,31 @@ describe("UnitHost", () => {
 
     expect(applied).toEqual(["@workspace-extensions/a"]);
     expect(prompted).toEqual([[{ name: node.name, ref: "main" }]]);
+  });
+
+  it("publishes accepted coordinated units as building before their apply slot runs", async () => {
+    let releaseApply!: () => void;
+    const applyBlocked = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    let approve!: () => Promise<void>;
+    const coordinator: UnitApprovalCoordinator<TestApproval> = {
+      enqueue: async (request) => {
+        approve = async () => request.applyApproved();
+      },
+    };
+    const { host, registry, node } = makeHarness({
+      approvalCoordinator: coordinator,
+      applyTrusted: () => applyBlocked,
+    });
+
+    await host.reconcileDeclared([{ source: node.relativePath, ref: "main" }]);
+    expect(registry.get(node.name)).toMatchObject({ status: "pending-approval" });
+
+    const applying = approve();
+    expect(registry.get(node.name)).toMatchObject({ status: "building" });
+    releaseApply();
+    await applying;
   });
 
   it("retains a top-level reconciliation failure after staged waiters are released", async () => {

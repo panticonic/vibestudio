@@ -56,6 +56,11 @@ vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("./dependencyContentMaintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dependencyContentMaintenance.js")>()),
+  scheduleDependencyContentMaintenance: vi.fn(),
+}));
+
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import {
   collectTransitiveDependencyOverrides,
@@ -63,6 +68,7 @@ import {
   collectExternalDependencyClosure,
   dependencyPatchesForExternalRoots,
   acquireExternalDeps,
+  ensureExtensionRuntimeDeps,
   mergeExternalDependencySpecs,
   resolveHostDependencyProjection,
   type ExternalDependencyPatch,
@@ -72,6 +78,7 @@ import {
   deduplicateDependencyContent,
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
+import { scheduleDependencyContentMaintenance } from "./dependencyContentMaintenance.js";
 
 async function ensureExternalDeps(
   deps: Record<string, string>,
@@ -116,6 +123,29 @@ function writePackage(root: string, name: string, version: string): void {
   fs.mkdirSync(packageRoot, { recursive: true });
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name, version }));
 }
+
+describe("extension runtime dependency publication", () => {
+  it("publishes an immutable tree and defers physical content sharing off the critical path", async () => {
+    vi.mocked(scheduleDependencyContentMaintenance).mockClear();
+    const borrowed = await ensureExtensionRuntimeDeps(process.cwd(), {
+      "extension-runtime-background-test": "1.0.0",
+    });
+    try {
+      expect(scheduleDependencyContentMaintenance).toHaveBeenCalledWith(
+        path.dirname(borrowed.nodeModulesDir),
+        process.cwd()
+      );
+      const manifest = path.join(
+        borrowed.nodeModulesDir,
+        "extension-runtime-background-test",
+        "package.json"
+      );
+      expect(fs.statSync(manifest).mode & 0o222).toBe(0);
+    } finally {
+      borrowed.release();
+    }
+  });
+});
 
 describe("resolveHostDependencyProjection", () => {
   it("reuses explicitly supplied host packages only within their declared ranges", () => {

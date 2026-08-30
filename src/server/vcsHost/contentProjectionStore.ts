@@ -56,6 +56,7 @@ function safeWorktreeJoin(dir: string, relPath: string): string {
 const SIDECAR_DIR = ".gad";
 const SIDECAR_FILE = "CHECKOUT.json";
 const FILE_INGEST_CONCURRENCY = 8;
+const FILE_MATERIALIZATION_CONCURRENCY = 16;
 
 async function mapConcurrent<T, R>(
   values: readonly T[],
@@ -483,50 +484,68 @@ export class ContentProjectionStore {
       }
     }
 
-    for (const file of target) {
-      const relPath = file.path;
-      const absPath = safeWorktreeJoin(dir, relPath);
-      const executable = file.mode === 33261;
-      const source = blobPath(this.deps.blobsDir, file.content_hash);
+    // Establish the target directory topology once, breadth-first. The old
+    // per-file path walked every ancestor and repeated recursive mkdir for
+    // every sibling, multiplying filesystem round trips by tree depth. A
+    // canonical content tree cannot contain both a file and its descendant,
+    // so each unique directory can be prepared exactly once before file
+    // installation begins. Non-directory and symlink blockers are removed at
+    // the directory boundary rather than discovered independently by every
+    // child.
+    await this.prepareTargetDirectories(dir, target);
 
-      if (useSidecar && !opts.clean) {
-        // Sidecar reuse: trust an on-disk file whose tracked (hash, mode) match
-        // and whose (size, mtime) still match what we recorded.
-        const prev = sidecar.files[relPath];
-        let reusable = false;
-        if (prev && prev.contentHash === file.content_hash && prev.mode === file.mode) {
-          try {
-            const stat = await fsp.stat(absPath);
-            reusable = stat.size === prev.size && stat.mtimeMs === prev.mtimeMs;
-          } catch {
-            reusable = false;
+    // Every target path is independent once stale entries are gone. Performing
+    // four filesystem round trips per file serially made a 2k-file context
+    // projection take minutes and allowed unrelated RPC/build work to starve in
+    // the same server process. Keep concurrency bounded for disk fairness while
+    // allowing the filesystem to pipeline mkdir/reflink/stat operations.
+    const materialized = await mapConcurrent(
+      target,
+      FILE_MATERIALIZATION_CONCURRENCY,
+      async (file): Promise<{ path: string; entry: SidecarEntry | null; unchanged: boolean }> => {
+        const relPath = file.path;
+        const absPath = safeWorktreeJoin(dir, relPath);
+        const executable = file.mode === 33261;
+        const source = blobPath(this.deps.blobsDir, file.content_hash);
+
+        if (useSidecar && !opts.clean) {
+          // Sidecar reuse: trust an on-disk file whose tracked (hash, mode) match
+          // and whose (size, mtime) still match what we recorded.
+          const prev = sidecar.files[relPath];
+          let reusable = false;
+          if (prev && prev.contentHash === file.content_hash && prev.mode === file.mode) {
+            try {
+              const stat = await fsp.stat(absPath);
+              reusable = stat.size === prev.size && stat.mtimeMs === prev.mtimeMs;
+            } catch {
+              reusable = false;
+            }
+          }
+          if (reusable && prev) {
+            return { path: relPath, entry: prev, unchanged: true };
           }
         }
-        if (reusable && prev) {
-          entries[relPath] = prev;
-          unchanged += 1;
-          continue;
-        }
-      }
 
-      // An ancestor path component may currently exist on disk as a
-      // non-directory (a now-stale file at a path that must become a directory,
-      // whether sidecar-tracked or untracked/external) — remove it so the
-      // recursive mkdir below can create the directory chain.
-      await this.clearNonDirAncestors(dir, relPath);
-      await fsp.mkdir(path.dirname(absPath), { recursive: true });
-      await this.writeMaterializedFile(source, absPath, { executable });
-      written += 1;
+        await this.writeMaterializedFile(source, absPath, { executable });
 
-      if (useSidecar) {
+        if (!useSidecar) return { path: relPath, entry: null, unchanged: false };
         const stat = await fsp.stat(absPath);
-        entries[relPath] = {
-          contentHash: file.content_hash,
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-          mode: file.mode,
+        return {
+          path: relPath,
+          entry: {
+            contentHash: file.content_hash,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            mode: file.mode,
+          },
+          unchanged: false,
         };
       }
+    );
+    for (const file of materialized) {
+      if (file.entry) entries[file.path] = file.entry;
+      if (file.unchanged) unchanged += 1;
+      else written += 1;
     }
 
     if (opts.clean) {
@@ -545,7 +564,10 @@ export class ContentProjectionStore {
     }
 
     if (useSidecar) {
-      await this.pruneEmptyDirs(dir);
+      // A fresh projection has no stale paths and therefore cannot have empty
+      // directories to prune. Avoid recursively re-reading the entire tree on
+      // that critical path; pruning is only needed after an actual deletion.
+      if (deleted > 0) await this.pruneEmptyDirs(dir);
       await this.writeSidecar(dir, {
         version: 2,
         stateHash: opts.stateHash ?? sidecar.stateHash,
@@ -632,23 +654,40 @@ export class ContentProjectionStore {
     }
   }
 
-  /** Remove the first ancestor directory component of `relPath` that exists on
-   *  disk as a non-directory, so a file→directory transition can materialize. */
-  private async clearNonDirAncestors(dir: string, relPath: string): Promise<void> {
-    const parts = relPath.split("/");
-    let cur = dir;
-    for (let i = 0; i < parts.length - 1; i++) {
-      cur = path.join(cur, parts[i] ?? "");
-      let stat: fs.Stats;
-      try {
-        stat = await fsp.lstat(cur);
-      } catch {
-        return; // ancestor doesn't exist yet — recursive mkdir will create it
+  /** Prepare each unique target directory once. Parents are completed before
+   * children, while independent directories at one depth are pipelined. */
+  private async prepareTargetDirectories(
+    dir: string,
+    target: readonly TargetFile[]
+  ): Promise<void> {
+    const byDepth = new Map<number, Set<string>>();
+    for (const file of target) {
+      const parts = file.path.split("/");
+      for (let depth = 1; depth < parts.length; depth += 1) {
+        const relDir = parts.slice(0, depth).join("/");
+        const level = byDepth.get(depth) ?? new Set<string>();
+        level.add(relDir);
+        byDepth.set(depth, level);
       }
-      if (!stat.isDirectory()) {
-        await fsp.rm(cur, { force: true, recursive: true });
-        return; // deeper components lived under this now-removed entry
-      }
+    }
+    const depths = [...byDepth.keys()].sort((left, right) => left - right);
+    for (const depth of depths) {
+      await mapConcurrent(
+        [...(byDepth.get(depth) ?? [])],
+        FILE_MATERIALIZATION_CONCURRENCY,
+        async (relDir) => {
+          const absDir = safeWorktreeJoin(dir, relDir);
+          try {
+            const stat = await fsp.lstat(absDir);
+            if (stat.isDirectory()) return;
+            await fsp.rm(absDir, { force: true, recursive: true });
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+          }
+          await fsp.mkdir(absDir);
+        }
+      );
     }
   }
 
@@ -670,14 +709,22 @@ export class ContentProjectionStore {
       path.dirname(absPath),
       `.${path.basename(absPath)}.${process.pid}.${randomUUID()}.tmp`
     );
-    await fsp.rm(tmp, { force: true });
-    await fsp.copyFile(source, tmp, fs.constants.COPYFILE_FICLONE);
-    await fsp.chmod(tmp, opts.executable ? 0o755 : 0o644);
-    // The target may exist as a directory (dir→file transition) — rename onto a
-    // directory fails (EISDIR/ENOTEMPTY), so clear it first. (rename atomically
-    // replaces a pre-existing regular file, so no rm needed in that case.)
-    await fsp.rm(absPath, { force: true, recursive: true }).catch(() => {});
-    await fsp.rename(tmp, absPath);
+    try {
+      await fsp.copyFile(source, tmp, fs.constants.COPYFILE_FICLONE);
+      await fsp.chmod(tmp, opts.executable ? 0o755 : 0o644);
+      try {
+        // rename atomically replaces a regular file. Only pay for recursive
+        // removal when a real directory occupies a file target.
+        await fsp.rename(tmp, absPath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EISDIR" && code !== "ENOTEMPTY" && code !== "EEXIST") throw error;
+        await fsp.rm(absPath, { force: true, recursive: true });
+        await fsp.rename(tmp, absPath);
+      }
+    } finally {
+      await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    }
   }
 
   private async pruneEmptyDirs(dir: string): Promise<void> {

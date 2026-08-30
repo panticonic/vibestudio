@@ -1060,6 +1060,13 @@ export class UnitHost<
             ...(batchKey ? { batchKey } : {}),
             ...(origins ? { origins } : {}),
             applyApproved: async () => {
+              // Acceptance is the state transition from "waiting for a human"
+              // to "work is in flight". Publish it for the whole accepted
+              // batch before any member waits for an apply/build slot. Demand
+              // paths use `building` to join that exact activation; leaving
+              // queued members as `pending-approval` makes them fail as absent
+              // even though the user has already accepted them.
+              this.markAcceptedItemsBuilding(groupItems);
               await this.applyTrustedInGroups(groupItems, maxConcurrentApplies);
             },
             applyDenied: () => this.opts.onApprovalDenied(groupItems),
@@ -1074,7 +1081,23 @@ export class UnitHost<
       this.opts.onApprovalDenied(items);
       return;
     }
+    this.markAcceptedItemsBuilding(items);
     await this.applyTrustedInGroups(items, maxConcurrentApplies);
+  }
+
+  private markAcceptedItemsBuilding(
+    items: Array<ResolvedUnitDeclaration<Decl, Node>>
+  ): void {
+    for (const { node, decl } of items) {
+      if (this.opts.registry.has(node.name)) {
+        this.opts.registry.patch(node.name, {
+          status: "building",
+          lastError: null,
+        } as Partial<Entry>);
+      } else {
+        this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
+      }
+    }
   }
 
   private async applyTrustedInGroups(

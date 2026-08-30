@@ -169,7 +169,8 @@ export class ContextMaterializer {
       }
 
       const contextDir = this.deps.disk.contextDir(command.contextId);
-      if (!prior || command.mode !== "patch") {
+      const resetManagedSources = !prior || command.mode !== "patch";
+      if (resetManagedSources) {
         await fsp.mkdir(contextDir, { recursive: true });
         // Replace only the managed source namespaces. Context-local scratch
         // data lives beside them and is not part of semantic projection.
@@ -225,7 +226,11 @@ export class ContextMaterializer {
           contextId: command.contextId,
           repoPath: repository.repoPath,
           stateHash: repository.contentRoot,
-          clean: true,
+          // initialize/replace just removed every managed source namespace, so
+          // this destination is already exact and a post-write full-tree scan
+          // cannot discover anything. Patch and idempotent-repair paths retain
+          // existing bytes and still request the authoritative clean pass.
+          clean: !resetManagedSources,
         });
       }
 

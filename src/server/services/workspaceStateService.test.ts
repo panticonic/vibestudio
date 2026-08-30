@@ -168,7 +168,7 @@ describe("workspaceStateService — topology authority", () => {
     ]);
   });
 
-  it("keeps addressed panel detail independent of build-owned decoration", async () => {
+  it("keeps addressed panel detail independent of cold Base-owned decoration", async () => {
     const detail = {
       revision: 1,
       slot: { slot_id: "panel:chat" },
@@ -189,11 +189,11 @@ describe("workspaceStateService — topology authority", () => {
       svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
     ).resolves.toEqual({
       ...detail,
-      slot: { ...detail.slot, current_entity_title: "Chat" },
+      slot: { ...detail.slot, current_entity_title: "panels/chat" },
     });
   });
 
-  it("composes Base-owned titles and product kind into bounded tree rows", async () => {
+  it("renders bounded tree rows immediately while Base-owned titles warm", async () => {
     const page = {
       revision: 1,
       group: { kind: "roots" as const, ownerUserId: null },
@@ -221,11 +221,11 @@ describe("workspaceStateService — topology authority", () => {
       ])
     ).resolves.toEqual({
       ...page,
-      nodes: [{ ...page.nodes[0], title: "Chat", kind: "workspace" }],
+      nodes: [{ ...page.nodes[0], title: "panels/chat", kind: "workspace" }],
     });
   });
 
-  it("composes titles and strict current placement without awaiting decoration", async () => {
+  it("composes strict placement without awaiting title decoration", async () => {
     const page = {
       revision: 1,
       group: { kind: "roots" as const, ownerUserId: null },
@@ -258,11 +258,42 @@ describe("workspaceStateService — topology authority", () => {
     ).resolves.toMatchObject({
       nodes: [
         {
-          title: "Agentic Chat",
+          title: "panels/chat",
           ref: "ctx:chat",
           placement: { disposition: "side", preferredWidth: 420 },
         },
       ],
+    });
+  });
+
+  it("does not let an unavailable presentation projection block topology reads", async () => {
+    const page = {
+      revision: 1,
+      group: { kind: "roots" as const, ownerUserId: null },
+      nodes: [
+        {
+          slotId: "panel:chat",
+          parentSlotId: null,
+          ownerUserId: null,
+          source: "panels/chat",
+          createdAt: 1,
+          childCount: 0,
+        },
+      ],
+      nextCursor: null,
+    };
+    const never = new Promise<never>(() => undefined);
+    const { svc } = makeService({
+      dispatchReturns: { panelTreePage: page },
+      presentationDispatch: async (method) => (method === "titlesForSlots" ? never : undefined),
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toMatchObject({
+      nodes: [{ slotId: "panel:chat", title: "panels/chat" }],
     });
   });
 
@@ -535,6 +566,66 @@ describe("workspaceStateService — slot-state change hook", () => {
       previousEntityId: null,
       currentEntityId: input.initialEntry.entityId,
       presentation: "awaiting-execution",
+      desiredExecution: {
+        source: input.initialEntry.source,
+        key: input.initialEntry.entryKey,
+        contextId: input.initialEntry.contextId,
+        stateArgs: {},
+      },
+    });
+  });
+
+  it("does not let a cold presentation bind delay durable execution handoff", async () => {
+    const onSlotStateChanged = vi.fn();
+    const never = new Promise<never>(() => undefined);
+    const { svc } = makeService({
+      onSlotStateChanged,
+      dispatchReturns: {
+        panelTreePage: {
+          revision: 1,
+          group: { kind: "roots", ownerUserId: null },
+          nodes: [
+            {
+              slotId: "panel:tree/news",
+              parentSlotId: null,
+              ownerUserId: null,
+              source: "panels/news",
+              createdAt: 1,
+              childCount: 0,
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+      presentationDispatch: async (method) => (method === "bindSlot" ? never : undefined),
+    });
+    const input = {
+      slotId: "panel:tree/news",
+      parentSlotId: null,
+      title: "Daily News",
+      initialEntry: {
+        entryKey: "nav-news",
+        entityId: "panel:nav-news",
+        source: "panels/news",
+        contextId: "ctx-news",
+      },
+    };
+
+    await expect(svc.handler(makeCtx() as never, "slot.create", [input])).resolves.toBeUndefined();
+    expect(onSlotStateChanged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "current-entity",
+        currentEntityId: "panel:nav-news",
+        presentation: "awaiting-execution",
+      })
+    );
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toMatchObject({
+      nodes: [{ slotId: "panel:tree/news", title: "Daily News" }],
     });
   });
 

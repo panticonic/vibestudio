@@ -169,6 +169,22 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       });
       if (body) this.inboundBodies.set(requestId, body);
       if (!body) void this.watchCancellation(requestId, envelope.message.type, stream);
+    } else {
+      // A one-way envelope still owns both halves of a bidirectional QUIC
+      // stream. The bounded envelope reader intentionally stops at the frame
+      // boundary, so consume the sender's trailing FIN as well as closing the
+      // unused response half. A stream is not retired (and its peer credit is
+      // not replenished) until both halves reach a terminal state.
+      void Promise.all([
+        readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES),
+        stream.send.finish(),
+      ]).catch((error) => {
+        this.options.log?.(
+          `Iroh one-way ${envelopeOperation(envelope)} stream close failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
     }
     this.deliver(
       envelope.target === "main" || envelope.target === "server"
@@ -349,13 +365,24 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     await writeChunked(stream.send, encoded, MAX_STREAM_CHUNK_BYTES);
     await stream.send.finish();
 
-    if (
+    const expectsResponse =
       typeof requestId === "string" &&
-      (envelope.message.type === "request" || envelope.message.type === "stream-request")
-    ) {
+      (envelope.message.type === "request" || envelope.message.type === "stream-request");
+    if (expectsResponse) {
       void this.readOutboundResponse(stream).catch((error) =>
         this.options.log?.(
           `Iroh server-originated request ${requestId} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      );
+    } else {
+      // The client closes its unused send half when it accepts this one-way
+      // message. Consume that FIN so the native QUIC implementation can retire
+      // the full bidirectional stream and replenish peer stream credit.
+      void readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES).catch((error) =>
+        this.options.log?.(
+          `Iroh one-way ${envelopeOperation(envelope)} request-half drain failed: ${
             error instanceof Error ? error.message : String(error)
           }`
         )
@@ -377,8 +404,16 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     type: RpcMessage["type"],
     stream: IrohPhysicalBiStream
   ): Promise<void> {
-    const reset = await stream.recv.receivedReset().catch(() => null);
-    if (reset === null || !this.requests.has(requestId)) return;
+    // The bounded envelope reader intentionally stops before the request FIN.
+    // Consume to EOF so a successful call actually retires its receive half.
+    // A RESET_STREAM rejects this drain and is the in-order cancellation signal
+    // for the already-admitted request on this exact QUIC stream.
+    try {
+      await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES);
+      return;
+    } catch {
+      if (!this.requests.has(requestId)) return;
+    }
     this.requests.delete(requestId);
     this.inboundBodies.delete(requestId);
     this.deliver({

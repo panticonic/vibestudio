@@ -812,7 +812,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       className: spec.kind === "do" ? spec.className : undefined,
       key: spec.key,
     });
-    const existing = await store.resolveRecord(canonicalId);
+    const existing = await store.resolveCurrentRecord(canonicalId);
     if (!existing || existing.kind !== spec.kind) {
       throw new Error(`Unknown reserved entity ${canonicalId}`);
     }
@@ -927,7 +927,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // promise; otherwise a caller that knows the reservation id can join the
     // owner's in-flight activation without ever passing the ownership gate in
     // activateReservedEntityOnce.
-    const reserved = await store.resolveRecord(canonicalId);
+    const reserved = await store.resolveCurrentRecord(canonicalId);
     if (!reserved || reserved.kind !== spec.kind) {
       throw new Error(`Unknown reserved entity ${canonicalId}`);
     }

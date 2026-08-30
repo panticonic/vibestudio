@@ -179,6 +179,19 @@ export class WorkspaceEntityStore {
     return this.dispatch<EntityRecord | null>("entityResolve", canonicalId);
   }
 
+  /**
+   * Resolve a live or preparing record from the structurally mirrored cache,
+   * falling back to durable history only when this process has no current row.
+   * Runtime activation uses this boundary so an already committed reservation
+   * does not queue a redundant WorkspaceDO read before user-visible work.
+   */
+  async resolveCurrentRecord(canonicalId: string): Promise<EntityRecord | null> {
+    const cached = this.deps.entityCache.resolve(canonicalId);
+    return cached && cached.status !== "retired"
+      ? cached
+      : this.dispatch<EntityRecord | null>("entityResolve", canonicalId);
+  }
+
   /** Resolve the active durable identity, repairing a lost hot-cache mirror. */
   async resolveActiveRecord(canonicalId: string): Promise<EntityRecord | null> {
     const cached = this.deps.entityCache.resolveActive(canonicalId);

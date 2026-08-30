@@ -109,6 +109,93 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     ).resolves.toEqual(packageConfig);
   });
 
+  it("materializes disjoint immutable build trees without a state-wide lock", async () => {
+    const { blobsDir, vcs, deps } = await harness();
+    const [leftWrite, rightWrite] = await Promise.all([
+      putBytes(blobsDir, Buffer.from("export const left = true;\n")),
+      putBytes(blobsDir, Buffer.from("export const right = true;\n")),
+    ]);
+    const state = await mirrorWorktreeTree(blobsDir, [
+      {
+        path: "packages/left/index.ts",
+        contentHash: leftWrite.digest,
+        mode: 0o100644,
+      },
+      {
+        path: "packages/right/index.ts",
+        contentHash: rightWrite.digest,
+        mode: 0o100644,
+      },
+    ]);
+    const instrumented = vcs as unknown as {
+      ensureBuildTreeMaterialized(
+        stateHash: string,
+        relativePath: string,
+        treeHash: string,
+        destination: string
+      ): Promise<void>;
+    };
+    const materialize = instrumented.ensureBuildTreeMaterialized.bind(vcs);
+    let active = 0;
+    let maximumActive = 0;
+    instrumented.ensureBuildTreeMaterialized = async (...args) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      try {
+        await materialize(...args);
+      } finally {
+        active -= 1;
+      }
+    };
+
+    await Promise.all([
+      vcs.materializeForBuild(
+        [{ relativePath: "packages/left" } as never],
+        state.stateHash,
+        deps.workspaceRoot
+      ),
+      vcs.materializeForBuild(
+        [{ relativePath: "packages/right" } as never],
+        state.stateHash,
+        deps.workspaceRoot
+      ),
+    ]);
+
+    expect(maximumActive).toBe(2);
+  });
+
+  it("repairs missing entries even when an exact build receipt exists", async () => {
+    const { blobsDir, vcs, deps } = await harness();
+    const [rootWrite, sourceWrite] = await Promise.all([
+      putBytes(blobsDir, Buffer.from('{"compilerOptions":{"strict":true}}')),
+      putBytes(blobsDir, Buffer.from("export const value = true;\n")),
+    ]);
+    const state = await mirrorWorktreeTree(blobsDir, [
+      { path: "tsconfig.json", contentHash: rootWrite.digest, mode: 0o100644 },
+      {
+        path: "packages/lib/index.ts",
+        contentHash: sourceWrite.digest,
+        mode: 0o100644,
+      },
+    ]);
+    const unit = [{ relativePath: "packages/lib" } as never];
+    const first = await vcs.materializeForBuild(unit, state.stateHash, deps.workspaceRoot);
+    await Promise.all([
+      fsp.rm(path.join(first.sourceRoot, "packages/lib"), { recursive: true, force: true }),
+      fsp.rm(path.join(first.sourceRoot, "tsconfig.json"), { force: true }),
+    ]);
+
+    const repaired = await vcs.materializeForBuild(unit, state.stateHash, deps.workspaceRoot);
+
+    await expect(
+      fsp.readFile(path.join(repaired.sourceRoot, "packages/lib/index.ts"))
+    ).resolves.toEqual(Buffer.from("export const value = true;\n"));
+    await expect(fsp.readFile(path.join(repaired.sourceRoot, "tsconfig.json"))).resolves.toEqual(
+      Buffer.from('{"compilerOptions":{"strict":true}}')
+    );
+  });
+
   it("reads channel provenance through the GAD log API, outside semantic VCS dispatch", async () => {
     const { vcs } = await harness();
     const call = vi.fn(async () => ({ contentClass: "external" as const }));

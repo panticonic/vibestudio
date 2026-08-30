@@ -105,6 +105,8 @@
     "test:headless-panel-integration": "NODE_ENV=development node scripts/ensure-host-build.mjs && VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION=1 vitest run tests/headless-panel.integration.test.ts",
     "test:iroh": "vitest run packages/iroh-transport/src packages/mobile-iroh/src packages/rpc/src/protocol/irohSession.test.ts packages/rpc/src/transports/irohClient.test.ts packages/rpc/src/transports/reconnectingIrohClient.test.ts src/server/irohIngress.test.ts src/server/rpcServer.iroh.test.ts",
     "test:iroh-e2e": "pnpm build:infrastructure && VIBESTUDIO_RUN_IROH_E2E=1 vitest run tests/iroh-remote.e2e.test.ts tests/iroh-electron-native.e2e.test.ts",
+    "test:iroh-desktop-e2e": "NODE_ENV=development node scripts/ensure-host-build.mjs && xvfb-run -a node scripts/desktop-pairing-smoke.mjs",
+    "test:iroh-mobile-e2e": "NODE_ENV=development node scripts/ensure-host-build.mjs && node scripts/cli/mobile-smoke.mjs --platform android",
     "test:remote-transport": "pnpm test:iroh && pnpm test:iroh-e2e && vitest run tests/remote-doctor.test.ts tests/remote-deploy.test.ts tests/remote-rotate-endpoint.test.ts tests/pair-server.behavior.test.ts",
     "test:terminal-app-smoke": "NODE_ENV=development node scripts/ensure-host-build.mjs && node --import tsx scripts/terminal-app-smoke.mjs",
     "test:watch": "vitest",

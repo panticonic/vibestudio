@@ -133,6 +133,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   };
   private readonly runtime: PanelPresentationController;
   private readonly externalDocumentCommitBySlot = new Map<string, Promise<void>>();
+  private readonly panelMetadataByRef = new Map<
+    string,
+    { icon?: string; iconVersion?: string; iconState?: string } | null
+  >();
+  private readonly panelMetadataFlights = new Map<string, Promise<void>>();
   private readonly restorePolicy: PanelRestorePolicy;
 
   constructor(deps: PanelOrchestratorDeps) {
@@ -643,6 +648,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     const config = await this.shellCore.getPanelInit(asPanelSlotId(callerId));
     const lease = this.runtime.getConnection(callerId);
     if (!lease || !config || typeof config !== "object") return config;
+    const entityId = (config as { entityId?: unknown }).entityId;
+    if (entityId !== lease.runtimeEntityId) {
+      throw new Error(
+        `Panel ${callerId} bootstrap incarnation ${String(entityId)} does not match ` +
+          `its runtime lease ${lease.runtimeEntityId}`
+      );
+    }
     return {
       ...(config as Record<string, unknown>),
       connectionId: lease.connectionId,
@@ -1320,17 +1332,73 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     const snapshot = getCurrentSnapshot(panel);
     if (browserUrlFromPanelSource(snapshot.source) !== null) return panel;
     const ref = getPanelRef(panel) ?? `ctx:${snapshot.contextId}`;
-    const metadata = (await this.serverClient.call("build", "getPanelMetadata", [
-      snapshot.source,
-      ref,
-    ])) as { icon?: string; iconVersion?: string; iconState?: string } | null | undefined;
-    if (!metadata) return panel;
-    return {
-      ...panel,
-      icon: metadata.icon,
-      iconVersion: metadata.iconVersion,
-      iconState: metadata.iconState,
-    };
+    this.refreshPanelMetadata(panel.id, snapshot.source, ref);
+    return panel;
+  }
+
+  private refreshPanelMetadata(panelId: string, source: string, ref: string): void {
+    const key = `${source}\u0000${ref}`;
+    const cached = this.panelMetadataByRef.get(key);
+    if (cached !== undefined || this.panelMetadataByRef.has(key)) {
+      if (cached) this.applyPanelMetadata(panelId, source, ref, cached);
+      return;
+    }
+    if (this.panelMetadataFlights.has(key)) return;
+
+    const flight = this.serverClient
+      .call("build", "getPanelMetadata", [source, ref])
+      .then((value) => {
+        const metadata = (value ?? null) as {
+          icon?: string;
+          iconVersion?: string;
+          iconState?: string;
+        } | null;
+        this.panelMetadataByRef.set(key, metadata);
+        if (!metadata) return;
+        // One manifest identity can decorate multiple slots. Apply the shared
+        // result to every currently projected panel with that exact identity;
+        // no caller needs to repeat the lookup to populate its own copy.
+        for (const candidate of this.registry.getRootPanels()) {
+          this.applyPanelMetadataTree(candidate, source, ref, metadata);
+        }
+      })
+      .catch((error: unknown) => {
+        log.warn(
+          `Failed to refresh panel metadata for ${source}@${ref}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      })
+      .finally(() => {
+        if (this.panelMetadataFlights.get(key) === flight) {
+          this.panelMetadataFlights.delete(key);
+        }
+      });
+    this.panelMetadataFlights.set(key, flight);
+  }
+
+  private applyPanelMetadataTree(
+    panel: Panel,
+    source: string,
+    ref: string,
+    metadata: { icon?: string; iconVersion?: string; iconState?: string }
+  ): void {
+    this.applyPanelMetadata(panel.id, source, ref, metadata);
+    for (const child of panel.children) this.applyPanelMetadataTree(child, source, ref, metadata);
+  }
+
+  private applyPanelMetadata(
+    panelId: string,
+    source: string,
+    ref: string,
+    metadata: { icon?: string; iconVersion?: string; iconState?: string }
+  ): void {
+    const current = this.registry.getPanel(panelId);
+    if (!current) return;
+    const snapshot = getCurrentSnapshot(current);
+    const currentRef = getPanelRef(current) ?? `ctx:${snapshot.contextId}`;
+    if (snapshot.source !== source || currentRef !== ref) return;
+    this.registry.updateIconDecoration(panelId, metadata);
   }
 
   async applyPanelExecutionActivated(

@@ -242,7 +242,13 @@ export function createWorkspaceConfigMainWriter(deps: {
 
   const withFreshContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
     const contextId = `system:workspace-config:${randomUUID()}`;
-    await deps.vcs.ensureContext(contextId);
+    // Config mutation is entirely semantic: every read/edit/commit below is
+    // addressed through the content graph, and no operation consumes a
+    // filesystem path. Eagerly projecting the whole workspace here made an
+    // approval click compete with (and delay) unrelated unit builds and Iroh
+    // control traffic. Preserve the exact same isolated VCS authority without
+    // manufacturing a disposable checkout that nobody reads.
+    await deps.vcs.ensureSemanticContext(contextId);
 
     // The context drop is mandatory, but it can't live in a `finally`: a throw
     // there hijacks the control flow leaving the try block (that's what

@@ -135,10 +135,19 @@ describe("PanelView plain panel links", () => {
       "http://127.0.0.1:1234/about/new/",
       "ctx-current"
     );
+    const duplicate = panelView.createViewForPanel(
+      panelId,
+      "http://127.0.0.1:1234/about/new/",
+      "ctx-current"
+    );
     await Promise.resolve();
     webContents.emit("dom-ready");
 
     await expect(creating).resolves.toBeUndefined();
+    await expect(duplicate).resolves.toBeUndefined();
+    expect(viewManager.createView).toHaveBeenCalledTimes(1);
+    expect(viewManager.navigateView).toHaveBeenCalledTimes(1);
+    expect(webContents.listenerCount("did-stop-loading")).toBe(1);
     finishNavigation();
   });
 

@@ -209,6 +209,24 @@ describe("WorkspaceEntityStore", () => {
     expect(calls.map((call) => call.method)).toEqual(["entityResolveActive"]);
   });
 
+  it("resolves a mirrored preparing reservation without another WorkspaceDO read", async () => {
+    const preparing = { ...RECORD, status: "preparing" as const };
+    const { store, entityCache, calls } = makeStore({
+      entityReserve: () => preparing,
+    });
+    await store.reserve({
+      kind: preparing.kind,
+      source: preparing.source,
+      contextId: preparing.contextId,
+      className: "EvalDO",
+      key: preparing.key,
+    });
+
+    await expect(store.resolveCurrentRecord(preparing.id)).resolves.toEqual(preparing);
+    expect(entityCache.resolve(preparing.id)).toEqual(preparing);
+    expect(calls.map((call) => call.method)).toEqual(["entityReserve"]);
+  });
+
   it("retire mirrors the retirement; a null durable result leaves the cache untouched", async () => {
     const { store, entityCache } = makeStore({
       entityActivate: () => RECORD,

@@ -31,7 +31,23 @@ export class PanelExecutionReconciler {
 
   observe(change?: SlotStateChange): void {
     if (change?.kind !== "current-entity" || change.presentation !== "awaiting-execution") return;
-    void this.resume(change.slotId, change.currentEntityId);
+    void this.resume(
+      change.slotId,
+      change.currentEntityId,
+      change.desiredExecution
+        ? {
+            kind: "panel",
+            execution: {
+              surface: "code",
+              source: change.desiredExecution.source,
+              ...(change.desiredExecution.ref ? { ref: change.desiredExecution.ref } : {}),
+            },
+            key: change.desiredExecution.key,
+            contextId: change.desiredExecution.contextId,
+            stateArgs: change.desiredExecution.stateArgs,
+          }
+        : undefined
+    );
   }
 
   async recoverPreparingPanels(): Promise<void> {
@@ -63,13 +79,24 @@ export class PanelExecutionReconciler {
     }
   }
 
-  private resume(slotId: string, entityId: string): Promise<void> {
+  private resume(
+    slotId: string,
+    entityId: string,
+    desiredSpec?: RuntimeCodePanelEntityCreateSpec
+  ): Promise<void> {
     const existing = this.inFlight.get(entityId);
     if (existing) return existing;
+    const startedAt = performance.now();
+    console.info(
+      `[PanelExecution] Activating ${entityId} for ${slotId} (${desiredSpec ? "committed handoff" : "durable recovery"})`
+    );
     let failed = false;
-    const work = this.activateCurrent(slotId, entityId)
+    const work = this.activateCurrent(slotId, entityId, desiredSpec)
       .then(() => {
         this.retryAttempts.delete(entityId);
+        console.info(
+          `[PanelExecution] Activated ${entityId} for ${slotId} in ${Math.round(performance.now() - startedAt)}ms`
+        );
       })
       .catch((error) => {
         failed = true;
@@ -99,7 +126,19 @@ export class PanelExecutionReconciler {
     this.retryTimers.set(entityId, timer);
   }
 
-  private async activateCurrent(slotId: string, entityId: string): Promise<void> {
+  private async activateCurrent(
+    slotId: string,
+    entityId: string,
+    desiredSpec?: RuntimeCodePanelEntityCreateSpec
+  ): Promise<void> {
+    // slot.create has already committed both the reservation and its durable
+    // slot binding before it emits the in-process handoff. That exact intent
+    // can enter execution directly; querying it back first adds no validation
+    // and lets unrelated WorkspaceDO traffic head-of-line block first paint.
+    if (desiredSpec) {
+      await this.deps.activate(desiredSpec);
+      return;
+    }
     const detail = await this.deps.getDetail(slotId);
     if (!detail || detail.slot.current_entity_id !== entityId || detail.entity.id !== entityId)
       return;

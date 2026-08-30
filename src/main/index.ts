@@ -404,6 +404,7 @@ let latestPanelTreeInvalidation: PanelTreeInvalidation | undefined;
 let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
+let activeIpcDispatcher: import("./ipcDispatcher.js").IpcDispatcher | null = null;
 let serverSession: SessionConnection | null = null;
 let activeBrowserSessionPartition: string | null = null;
 const browserEnvironmentReadiness = new BrowserEnvironmentReadiness();
@@ -2352,13 +2353,9 @@ app.on("ready", async () => {
           }
         },
         onTransportDiagnosticsChanged: (remoteTransport) => {
-          const client = serverClientRef;
-          if (!client || !isRemoteSession) return;
-          eventService.emit("server-connection-changed", {
-            status: client.getConnectionStatus(),
-            isRemote: true,
-            remoteHost,
-            ...(remoteTransport ? { remoteTransport } : {}),
+          if (!serverClientRef || !isRemoteSession) return;
+          eventService.emit("remote-transport-diagnostics-changed", {
+            remoteTransport,
           });
         },
         onReconnectProgress: (progress) => {
@@ -2554,6 +2551,7 @@ app.on("ready", async () => {
       getPanelRuntimeConnection: (panelId) => panelOrchestrator?.getPanelRuntimeConnection(panelId),
       authorizeAppServerCall,
     });
+    activeIpcDispatcher = ipcDispatcher;
     forwardPanelProjectionChange = (payload) => {
       ipcDispatcher.sendEventToShell("panel-presentation-changed", payload);
     };
@@ -3504,6 +3502,12 @@ app.on("will-quit", (event) => {
 
   const stopPromises: Promise<void>[] = [];
   let developmentExecutorClose: Promise<void> | null = null;
+
+  if (activeIpcDispatcher) {
+    const ipcDispatcher = activeIpcDispatcher;
+    activeIpcDispatcher = null;
+    stopPromises.push(ipcDispatcher.shutdown());
+  }
 
   if (currentHostDevelopmentExecutor) {
     const executor = currentHostDevelopmentExecutor;

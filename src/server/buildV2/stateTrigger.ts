@@ -424,7 +424,12 @@ export class StateTransitionTrigger extends EventEmitter {
 
       this.emit("build-started", { name, trigger });
       try {
-        await buildUnit(node, ev, graph, this.workspaceRoot, trigger.workspaceStateHash);
+        await buildUnit(node, ev, graph, this.workspaceRoot, trigger.workspaceStateHash, {
+          // Publication warming is optional cache work. It must yield every
+          // build lane needed by a panel, app, worker, or approval the user is
+          // actually waiting for.
+          priority: "speculative",
+        });
         this.emit("build-complete", { name, buildKey, trigger });
         void this.source
           .recordBuild({

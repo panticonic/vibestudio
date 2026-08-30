@@ -37,7 +37,6 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
-import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startPanelAssetFacade } from "../src/node/panelAssets/panelAssetFacade.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
@@ -409,19 +408,18 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     await closeClient(paired);
   }, 30_000);
 
-  it("keeps unrelated façade assets and RPCs live during a build prefetch", async () => {
+  it("deduplicates one prewarmed asset while unrelated assets and RPCs stay live", async () => {
     const paired = await pairFresh();
     const buildKey = "a".repeat(64);
     const entryPath = `/panels/chat/?contextId=remote&buildKey=${buildKey}`;
     const manifestPath = `/__vibestudio/panel-build/${buildKey}/__manifest.json`;
-    const bundlePrefix = `/__vibestudio/panel-build/${buildKey}/__bundle?`;
+    const artifactPath = `/__vibestudio/panel-build/${buildKey}/bundle.js`;
     const artifact = "export const ready = true;";
     const artifactDigest = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(artifact)
     );
     const artifactHash = Buffer.from(artifactDigest).toString("hex");
-    const bundle = Buffer.from(encodeBlobRecord(artifactHash, Buffer.from(artifact)));
     const manifest = JSON.stringify({
       artifacts: [
         {
@@ -432,26 +430,34 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
         },
       ],
     });
-    let releaseBundle!: () => void;
-    const bundleReleased = new Promise<void>((resolve) => {
-      releaseBundle = resolve;
+    let releaseArtifact!: () => void;
+    const artifactReleased = new Promise<void>((resolve) => {
+      releaseArtifact = resolve;
     });
-    let announceBundle!: () => void;
-    const bundleStarted = new Promise<void>((resolve) => {
-      announceBundle = resolve;
+    let announceArtifact!: () => void;
+    const artifactStarted = new Promise<void>((resolve) => {
+      announceArtifact = resolve;
     });
     const requested: string[] = [];
     gatewayHandler = async (args) => {
       const descriptor = args[0] as { path: string };
       requested.push(descriptor.path);
       if (descriptor.path === manifestPath) {
-        return new Response(manifest, { headers: { "content-type": "application/json" } });
+        return new Response(manifest, {
+          headers: {
+            "content-type": "application/json",
+            "cache-control": "public, max-age=31536000, immutable",
+          },
+        });
       }
-      if (descriptor.path.startsWith(bundlePrefix)) {
-        announceBundle();
-        await bundleReleased;
-        return new Response(bundle, {
-          headers: { "content-type": "application/octet-stream" },
+      if (descriptor.path === artifactPath) {
+        announceArtifact();
+        await artifactReleased;
+        return new Response(artifact, {
+          headers: {
+            "content-type": "application/javascript; charset=utf-8",
+            "cache-control": "public, max-age=31536000, immutable",
+          },
         });
       }
       if (descriptor.path.startsWith("/__vibestudio/unit-icon?")) {
@@ -483,7 +489,13 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
       const entry = await fetch(entryUrl);
       expect(entry.status).toBe(200);
       expect(await entry.text()).toContain("chat");
-      await within(bundleStarted, "panel prefetch never started", 2_000);
+      await within(artifactStarted, "per-asset panel prewarm never started", 2_000);
+
+      // A live browser request for the same key joins the prewarm's cache job;
+      // it must not open another Iroh stream while that job is in flight.
+      const demandedArtifact = fetch(`${origin}${artifactPath}`).then((response) =>
+        response.text()
+      );
 
       const iconPaths = [
         "/__vibestudio/unit-icon?source=workers%2Flinked-agent&path=assets%2Ficon.svg",
@@ -508,8 +520,12 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
         )
       ).resolves.toMatchObject({ args: ["beside-prefetch"] });
       expect(requested).toEqual(expect.arrayContaining(iconPaths));
+      expect(requested.filter((value) => value === artifactPath)).toHaveLength(1);
+      expect(requested.some((value) => value.includes("__bundle"))).toBe(false);
+      releaseArtifact();
+      await expect(demandedArtifact).resolves.toBe(artifact);
     } finally {
-      releaseBundle();
+      releaseArtifact();
       gatewayHandler = null;
       await facade.close();
       await closeClient(paired);

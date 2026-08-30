@@ -12,7 +12,7 @@
  * would exceed the RPC envelope limit; a dedicated QUIC stream
  * chunks them.
  *
- * On top of that raw proxy the façade adds three cache layers (plan §6):
+ * On top of that raw proxy the façade adds transport-aware caching (plan §6):
  *  - It requests `gzip: true` (parity with mobile) so multi-MB assets ride the
  *    pipe compressed; the gateway marks the body `x-vibestudio-content-gzip` and the
  *    façade re-derives `Content-Encoding: gzip` so the webview inflates natively
@@ -35,7 +35,6 @@
  */
 
 import * as http from "node:http";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
@@ -50,8 +49,7 @@ import {
   checkPanelGatewayPath,
   panelAssetCacheKey,
 } from "@vibestudio/shared/panel/assetPathPolicy";
-import { createBlobBundleReader } from "@vibestudio/shared/panel/blobBundle";
-import { AssetDiskCache, type FetchedResponse, type VerifiedCacheEntry } from "./assetDiskCache.js";
+import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
 
 /** Minimal streaming seam shared by Electron and headless Node hosts. */
 export interface PanelAssetStreamClient {
@@ -80,11 +78,10 @@ const log = createDevLogger("PanelAssetFacade");
  */
 const ASSET_CONNECT_BACKSTOP_MS = 60_000;
 const ASSET_STALL_BACKSTOP_MS = 30_000;
-const MAX_PREFETCH_MANIFEST_BYTES = 4 * 1024 * 1024;
-const MAX_PREFETCH_TOTAL_BYTES = 128 * 1024 * 1024;
-const SHA256_INTEGRITY = /^sha256-([0-9a-f]{64})$/u;
+const MAX_PREWARM_MANIFEST_BYTES = 4 * 1024 * 1024;
+const SHA256_INTEGRITY = /^sha256-[0-9a-f]{64}$/u;
 
-interface PrefetchManifestResource {
+interface PrewarmManifestResource {
   path: string;
   contentType: string;
   integrity: string;
@@ -92,22 +89,15 @@ interface PrefetchManifestResource {
   version?: string;
 }
 
-interface PrefetchManifest {
-  artifacts: PrefetchManifestResource[];
-  runtimeHelpers?: PrefetchManifestResource[];
+interface PrewarmManifest {
+  artifacts: PrewarmManifestResource[];
+  runtimeHelpers: PrewarmManifestResource[];
 }
 
 interface PinnedEntry {
   buildKey: string;
-  /** Immutable route namespace used by the browser for build artifacts. */
   artifactRoot: string;
-  /** Route namespace used by the panel runtime helpers, when present. */
   sourceRoot: string;
-}
-
-interface PrefetchFlight {
-  entry: PinnedEntry;
-  completion: Promise<void>;
 }
 
 /** Distinguishes a backstop/cancel abort from a generic pipe error (nicer copy). */
@@ -249,20 +239,40 @@ export async function startPanelAssetFacade(
     connectMs: options.connectBackstopMs ?? ASSET_CONNECT_BACKSTOP_MS,
     stallMs: options.stallBackstopMs ?? ASSET_STALL_BACKSTOP_MS,
   };
-  const prefetchFlights = new Map<string, PrefetchFlight>();
-  const prefetchedBuilds = new Set<string>();
-  const prefetchLifetime = new AbortController();
-  const server = http.createServer((req, res) => {
-    void handleRequest(
+  const prewarmLifetime = new AbortController();
+  const prewarmFlights = new Map<string, Promise<void>>();
+  const prewarmAttemptedBuilds = new Set<string>();
+  const ensureBuildPrewarm = (entry: PinnedEntry): void => {
+    if (
+      !cache ||
+      prewarmLifetime.signal.aborted ||
+      prewarmAttemptedBuilds.has(entry.buildKey) ||
+      prewarmFlights.has(entry.buildKey)
+    ) {
+      return;
+    }
+    prewarmAttemptedBuilds.add(entry.buildKey);
+    const flight = prewarmInitialAssets(
       serverClient,
       cache,
-      prefetchFlights,
-      prefetchedBuilds,
-      prefetchLifetime.signal,
       backstops,
-      req,
-      res
-    );
+      entry,
+      prewarmLifetime.signal
+    )
+      .catch((error: unknown) => {
+        if (prewarmLifetime.signal.aborted) return;
+        log.warn(
+          `Initial asset prewarm failed for build ${entry.buildKey}; ` +
+            `demanded assets remain independently available: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+        );
+      })
+      .finally(() => prewarmFlights.delete(entry.buildKey));
+    prewarmFlights.set(entry.buildKey, flight);
+  };
+  const server = http.createServer((req, res) => {
+    void handleRequest(serverClient, cache, ensureBuildPrewarm, backstops, req, res);
   });
 
   const port = await listenWithStablePort(server, portFile);
@@ -270,11 +280,11 @@ export async function startPanelAssetFacade(
   return {
     port,
     close: async () => {
-      prefetchLifetime.abort();
+      prewarmLifetime.abort(new Error("Panel asset facade closed"));
       await new Promise<void>((resolveClose, rejectClose) => {
         server.close((err) => (err ? rejectClose(err) : resolveClose()));
       });
-      await Promise.allSettled([...prefetchFlights.values()].map((flight) => flight.completion));
+      await Promise.allSettled(prewarmFlights.values());
       await cache?.close();
     },
   };
@@ -338,9 +348,7 @@ function writePersistedPort(portFile: string, port: number): void {
 async function handleRequest(
   serverClient: PanelAssetStreamClient,
   cache: AssetDiskCache | null,
-  prefetchFlights: Map<string, PrefetchFlight>,
-  prefetchedBuilds: Set<string>,
-  prefetchLifetime: AbortSignal,
+  ensureBuildPrewarm: (entry: PinnedEntry) => void,
   backstops: ResolvedBackstops,
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -372,46 +380,8 @@ async function handleRequest(
     return;
   }
   const gatewayPath = decision.target;
-
   const pinnedEntry = parsePinnedEntry(gatewayPath);
-  if (
-    cache &&
-    pinnedEntry &&
-    !prefetchedBuilds.has(pinnedEntry.buildKey) &&
-    !prefetchFlights.has(pinnedEntry.buildKey)
-  ) {
-    const flight = prefetchInitialPanelAssets(
-      serverClient,
-      cache,
-      backstops,
-      pinnedEntry,
-      prefetchLifetime
-    )
-      .then(() => {
-        prefetchedBuilds.add(pinnedEntry.buildKey);
-      })
-      .catch((error: unknown) => {
-        if (prefetchLifetime.aborted) return;
-        log.warn(
-          `Initial asset prefetch failed for build ${pinnedEntry.buildKey}; ` +
-            `individual immutable requests remain available: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-        );
-      })
-      .finally(() => prefetchFlights.delete(pinnedEntry.buildKey));
-    prefetchFlights.set(pinnedEntry.buildKey, { entry: pinnedEntry, completion: flight });
-  }
-
-  // Build-owned subresources requested while the entry document is parsing
-  // join the one build flight. This replaces dozens of independent RPC round
-  // trips without coupling unrelated shared assets to a panel prefetch.
-  const prefetchFlight = prefetchFlightForRequest(
-    gatewayPath,
-    req.headers.referer,
-    prefetchFlights
-  );
-  if (prefetchFlight && !pinnedEntry) await prefetchFlight.completion;
+  if (pinnedEntry) ensureBuildPrewarm(pinnedEntry);
 
   // Worker routes may be panel-reachable through bridge-tunneled gatewayFetch,
   // but they are dynamic surfaces and never belong on this unauthenticated
@@ -444,7 +414,10 @@ async function handleRequest(
           {
             signal: controller.signal,
             headTimeoutMs: backstops.connectMs,
-            trafficClass: pinnedEntry ? "interactive" : "bulk",
+            // Every request here was demanded by a live browser surface. It is
+            // never background work and must not queue behind speculative bulk
+            // transfer. Immutable response and browser caches supply reuse.
+            trafficClass: "interactive",
           }
         ),
       controller,
@@ -528,248 +501,121 @@ function parsePinnedEntry(rawPath: string): PinnedEntry | null {
     : null;
 }
 
-function buildKeyForRequest(rawPath: string, referer: string | undefined): string | null {
-  const direct =
-    rawPath.match(/^\/__vibestudio\/panel-build\/([0-9a-f]{64})\//u)?.[1] ??
-    rawPath.match(/^\/_a\/([0-9a-f]{64})\//u)?.[1];
-  if (direct) return direct;
-  if (!referer) return null;
-  try {
-    const refererUrl = new URL(referer);
-    const value =
-      refererUrl.searchParams.get("buildKey") ??
-      refererUrl.pathname.match(/^\/_a\/([0-9a-f]{64})\//u)?.[1] ??
-      null;
-    return value && /^[0-9a-f]{64}$/u.test(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * A browser Referer identifies the build that caused a request; it does not
- * make every request from that document part of the build. Shell-owned unit
- * icons, fonts, and future shared resources must remain independent of a panel
- * bundle flight. Only the immutable artifact namespace or the panel/app source
- * namespace represented by the flight may join its atomic cache publication.
+ * Fill the same per-path single-flight registry used by live HTTP requests.
+ * There is deliberately no bundle transaction or second publication path:
+ * prewarm and demand race through AssetDiskCache.serve(cacheKey, fetcher), so
+ * exactly one Iroh stream, digest pass, and durable publication owns a key.
+ * Each initial resource has its own stream and completion, allowing QUIC to
+ * interleave them and preventing a slow artifact from becoming a build barrier.
  */
-function prefetchFlightForRequest(
-  rawPath: string,
-  referer: string | undefined,
-  flights: Map<string, PrefetchFlight>
-): PrefetchFlight | undefined {
-  const buildKey = buildKeyForRequest(rawPath, referer);
-  if (!buildKey) return undefined;
-  const flight = flights.get(buildKey);
-  if (!flight) return undefined;
-  const pathname = new URL(rawPath, "http://panel-facade.invalid").pathname;
-  return pathname.startsWith(flight.entry.artifactRoot) ||
-    pathname.startsWith(flight.entry.sourceRoot)
-    ? flight
-    : undefined;
-}
-
-async function prefetchInitialPanelAssets(
+async function prewarmInitialAssets(
   serverClient: PanelAssetStreamClient,
   cache: AssetDiskCache,
   backstops: ResolvedBackstops,
   entry: PinnedEntry,
-  signal: AbortSignal
+  lifetime: AbortSignal
 ): Promise<void> {
   const manifestPath = `${entry.artifactRoot}__manifest.json`;
-  const manifestKey = panelAssetCacheKey(manifestPath, {});
-  let manifestBytes = (await cache.get(manifestKey))?.body;
-  let manifest: PrefetchManifest;
-  if (!manifestBytes) {
-    const response = await fetchPrefetchResponse(
-      serverClient,
-      backstops,
-      manifestPath,
-      "interactive",
-      signal
-    );
-    manifestBytes = await readResponseBytes(response, MAX_PREFETCH_MANIFEST_BYTES);
-    // Validate before publication: an older server can answer the panel SPA
-    // catch-all at an unknown path with HTML and a truncated JSON response must
-    // never become the durable inventory for this build.
-    manifest = parsePrefetchManifest(manifestBytes);
-    const digest = createHash("sha256").update(manifestBytes).digest("hex");
-    await cache.putVerifiedBatch([
-      {
-        cacheKey: manifestKey,
-        bytes: manifestBytes,
-        payloadDigest: digest,
-        gzip: false,
-        contentType: "application/json; charset=utf-8",
-        replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
-      },
-    ]);
-  } else {
-    manifest = parsePrefetchManifest(manifestBytes);
-  }
-  const missingArtifacts: Array<{ index: number; resource: PrefetchManifestResource }> = [];
-  for (const [index, resource] of manifest.artifacts.entries()) {
-    if (!resource.initial || !integrityDigest(resource.integrity)) continue;
-    const cacheKey = panelAssetCacheKey(`${entry.artifactRoot}${resource.path}`, {});
-    if (!(await cache.has(cacheKey))) missingArtifacts.push({ index, resource });
-  }
-  const missingHelpers: Array<{ index: number; resource: PrefetchManifestResource }> = [];
-  for (const [index, resource] of (manifest.runtimeHelpers ?? []).entries()) {
-    if (!resource.initial || !resource.version || !integrityDigest(resource.integrity)) continue;
-    const cacheKey = panelAssetCacheKey(
-      `${entry.sourceRoot}${resource.path}?v=${resource.version}`,
-      {}
-    );
-    if (!(await cache.has(cacheKey))) missingHelpers.push({ index, resource });
-  }
-  if (missingArtifacts.length === 0 && missingHelpers.length === 0) return;
+  const manifestOutcome = await cache.serve(panelAssetCacheKey(manifestPath, {}), () =>
+    fetchPrewarmAsset(serverClient, backstops, manifestPath, false, lifetime)
+  );
+  const manifestBytes =
+    manifestOutcome.kind === "asset"
+      ? manifestOutcome.asset.body
+      : await readBodyWithStallBackstop(
+          manifestOutcome.response.body,
+          manifestPath,
+          backstops.stallMs,
+          MAX_PREWARM_MANIFEST_BYTES
+        );
+  const manifest = parsePrewarmManifest(manifestBytes);
 
-  const query = new URLSearchParams({ enc: "gzip" });
-  if (missingArtifacts.length > 0) {
-    query.set("want", missingArtifacts.map(({ index }) => index).join(","));
-  }
-  if (missingHelpers.length > 0) {
-    query.set("helpers", missingHelpers.map(({ index }) => index).join(","));
-  }
-  const bundlePath = `${entry.artifactRoot}__bundle?${query}`;
-  const response = await fetchPrefetchResponse(serverClient, backstops, bundlePath, "bulk", signal);
-  if (!response.body) throw new Error("panel prefetch bundle has no response body");
+  const paths = [
+    ...manifest.artifacts
+      .filter((resource) => resource.initial)
+      .map((resource) => `${entry.artifactRoot}${resource.path}`),
+    ...manifest.runtimeHelpers
+      .filter((resource) => resource.initial && resource.version)
+      .map((resource) => `${entry.sourceRoot}${resource.path}?v=${resource.version}`),
+  ];
 
-  const expected = new Map<
-    string,
-    Array<{ cacheKey: string; resource: PrefetchManifestResource }>
-  >();
-  const addExpected = (cacheKey: string, resource: PrefetchManifestResource): void => {
-    const digest = integrityDigest(resource.integrity)!;
-    const paths = expected.get(digest) ?? [];
-    paths.push({ cacheKey, resource });
-    expected.set(digest, paths);
-  };
-  for (const { resource } of missingArtifacts) {
-    addExpected(panelAssetCacheKey(`${entry.artifactRoot}${resource.path}`, {}), resource);
-  }
-  for (const { resource } of missingHelpers) {
-    addExpected(
-      panelAssetCacheKey(`${entry.sourceRoot}${resource.path}?v=${resource.version}`, {}),
-      resource
-    );
-  }
-
-  const reader = createBlobBundleReader();
-  const received = new Map<string, { payloadDigest: string; bytes: Uint8Array }>();
-  const bodyReader = response.body.getReader();
-  let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await bodyReader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_PREFETCH_TOTAL_BYTES) {
-      await bodyReader.cancel("panel prefetch exceeded aggregate byte cap");
-      throw new Error(`panel prefetch exceeded ${MAX_PREFETCH_TOTAL_BYTES} bytes`);
-    }
-    for (const record of reader.push(value)) {
-      if (expected.has(record.digest)) {
-        received.set(record.digest, {
-          payloadDigest: record.payloadDigest,
-          bytes: record.bytes,
-        });
+  await Promise.all(
+    paths.map(async (assetPath) => {
+      const outcome = await cache.serve(panelAssetCacheKey(assetPath, {}), () =>
+        fetchPrewarmAsset(serverClient, backstops, assetPath, true, lifetime)
+      );
+      if (outcome.kind === "asset") return;
+      if (outcome.response.status !== 200) {
+        await outcome.response.body?.cancel().catch(() => undefined);
+        throw new Error(`prewarm ${assetPath} was not an HTTP 200 response`);
       }
-    }
-  }
-  reader.end();
-  for (const digest of expected.keys()) {
-    if (!received.has(digest)) throw new Error(`panel prefetch bundle omitted ${digest}`);
-  }
-
-  const entries: VerifiedCacheEntry[] = [];
-  for (const [digest, targets] of expected) {
-    const record = received.get(digest)!;
-    for (const { cacheKey, resource } of targets) {
-      entries.push({
-        cacheKey,
-        bytes: record.bytes,
-        payloadDigest: record.payloadDigest,
-        gzip: record.payloadDigest !== digest,
-        contentType: resource.contentType,
-        replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
-      });
-    }
-  }
-  await cache.putVerifiedBatch(entries);
+      await readBodyWithStallBackstop(
+        outcome.response.body,
+        assetPath,
+        backstops.stallMs,
+        Number.POSITIVE_INFINITY,
+        false
+      );
+    })
+  );
 }
 
-async function fetchPrefetchResponse(
+async function fetchPrewarmAsset(
   serverClient: PanelAssetStreamClient,
   backstops: ResolvedBackstops,
-  path: string,
-  trafficClass: "interactive" | "bulk",
-  signal: AbortSignal
-): Promise<Response> {
+  assetPath: string,
+  gzip: boolean,
+  lifetime: AbortSignal
+): Promise<FetchedResponse> {
   const controller = new AbortController();
-  let released = false;
-  const releaseLifetime = (): void => {
-    if (released) return;
-    released = true;
-    signal.removeEventListener("abort", abort);
-  };
-  const abort = () => controller.abort(signal.reason);
-  signal.addEventListener("abort", abort, { once: true });
-  if (signal.aborted) abort();
-  let response: Response;
+  const abort = (): void => controller.abort(lifetime.reason);
+  lifetime.addEventListener("abort", abort, { once: true });
+  if (lifetime.aborted) abort();
   try {
-    response = await withConnectBackstop(
+    const response = await withConnectBackstop(
       () =>
         serverClient.stream(
           "gateway",
           "fetch",
-          [{ path, method: "GET", headers: {}, gzip: false }],
+          [{ path: assetPath, method: "GET", headers: {}, gzip }],
           {
             signal: controller.signal,
             headTimeoutMs: backstops.connectMs,
-            trafficClass,
+            // Initial assets directly contribute to first paint. They are not
+            // bulk maintenance traffic; QUIC should interleave them with demand.
+            trafficClass: "interactive",
           }
         ),
       controller,
-      path,
+      assetPath,
       backstops.connectMs
     );
-  } catch (error) {
-    releaseLifetime();
-    throw error;
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`prewarm ${assetPath} returned HTTP ${response.status}`);
+    }
+    return normalizeResponse(bindBodyToLifetime(response, lifetime));
+  } finally {
+    lifetime.removeEventListener("abort", abort);
   }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    releaseLifetime();
-    throw new Error(`panel prefetch ${path} returned HTTP ${response.status}`);
-  }
-  return bindResponseToPrefetchLifetime(response, controller.signal, releaseLifetime);
 }
 
-/** Keep façade shutdown attached until the response body—not merely its HEAD—settles. */
-function bindResponseToPrefetchLifetime(
-  response: Response,
-  signal: AbortSignal,
-  releaseLifetime: () => void
-): Response {
-  if (!response.body) {
-    releaseLifetime();
-    return response;
-  }
+function bindBodyToLifetime(response: Response, lifetime: AbortSignal): Response {
+  if (!response.body) return response;
   const reader = response.body.getReader();
   let settled = false;
   const settle = (): void => {
     if (settled) return;
     settled = true;
-    signal.removeEventListener("abort", abort);
-    releaseLifetime();
+    lifetime.removeEventListener("abort", abort);
     reader.releaseLock();
   };
   const abort = (): void => {
-    void reader.cancel(signal.reason).then(settle, settle);
+    void reader.cancel(lifetime.reason).then(settle, settle);
   };
-  signal.addEventListener("abort", abort, { once: true });
-  if (signal.aborted) abort();
-
+  lifetime.addEventListener("abort", abort, { once: true });
+  if (lifetime.aborted) abort();
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
@@ -793,63 +639,85 @@ function bindResponseToPrefetchLifetime(
       }
     },
   });
-  const wrapped = new Response(body, {
+  return new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
   });
-  if (response.url) {
-    Object.defineProperty(wrapped, "url", { value: response.url, configurable: true });
-  }
-  return wrapped;
 }
 
-async function readResponseBytes(response: Response, maxBytes: number): Promise<Buffer> {
-  if (!response.body) return Buffer.alloc(0);
+async function readBodyWithStallBackstop(
+  body: ReadableStream<Uint8Array> | null,
+  assetPath: string,
+  stallMs: number,
+  maxBytes = Number.POSITIVE_INFINITY,
+  retainBytes = true
+): Promise<Buffer> {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  const reader = response.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel("response exceeded byte cap");
-      throw new Error(`response exceeded ${maxBytes} bytes`);
+  try {
+    for (;;) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stalled = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new AssetBackstopError(`prewarm stream stalled for ${assetPath}`)),
+          stallMs
+        );
+      });
+      let next: ReadableStreamReadResult<Uint8Array>;
+      try {
+        next = await Promise.race([reader.read(), stalled]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(`prewarm response exceeded ${maxBytes} bytes for ${assetPath}`);
+      }
+      if (retainBytes) chunks.push(next.value);
     }
-    chunks.push(value);
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
-  return Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    total
-  );
+  return retainBytes
+    ? Buffer.concat(
+        chunks.map((chunk) => Buffer.from(chunk)),
+        total
+      )
+    : Buffer.alloc(0);
 }
 
-function parsePrefetchManifest(bytes: Uint8Array): PrefetchManifest {
+function parsePrewarmManifest(bytes: Uint8Array): PrewarmManifest {
   const parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown;
-  if (!parsed || typeof parsed !== "object")
-    throw new Error("panel prefetch manifest is not an object");
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("panel prewarm manifest is not an object");
+  }
   const candidate = parsed as { artifacts?: unknown; runtimeHelpers?: unknown };
-  if (!Array.isArray(candidate.artifacts))
-    throw new Error("panel prefetch manifest has no artifact list");
-  const parseResources = (value: unknown, label: string): PrefetchManifestResource[] => {
-    if (!Array.isArray(value)) throw new Error(`panel prefetch manifest ${label} is not an array`);
+  const parseResources = (value: unknown, label: string): PrewarmManifestResource[] => {
+    if (!Array.isArray(value)) throw new Error(`panel prewarm manifest ${label} is not an array`);
     return value.map((item) => {
-      if (!item || typeof item !== "object")
-        throw new Error(`panel prefetch ${label} entry is invalid`);
-      const resource = item as Partial<PrefetchManifestResource>;
+      if (!item || typeof item !== "object") {
+        throw new Error(`panel prewarm ${label} entry is invalid`);
+      }
+      const resource = item as Partial<PrewarmManifestResource>;
       if (
         typeof resource.path !== "string" ||
         resource.path.startsWith("/") ||
         resource.path.includes("..") ||
         typeof resource.contentType !== "string" ||
         typeof resource.integrity !== "string" ||
-        !integrityDigest(resource.integrity) ||
+        !SHA256_INTEGRITY.test(resource.integrity) ||
         (resource.version !== undefined && !/^[0-9a-f]{64}$/u.test(resource.version))
       ) {
-        throw new Error(`panel prefetch ${label} entry is malformed`);
+        throw new Error(`panel prewarm ${label} entry is malformed`);
       }
-      return resource as PrefetchManifestResource;
+      return resource as PrewarmManifestResource;
     });
   };
   return {
@@ -859,10 +727,6 @@ function parsePrefetchManifest(bytes: Uint8Array): PrefetchManifest {
         ? []
         : parseResources(candidate.runtimeHelpers, "runtimeHelpers"),
   };
-}
-
-function integrityDigest(integrity: string): string | null {
-  return integrity.match(SHA256_INTEGRITY)?.[1] ?? null;
 }
 
 function escapeHtml(value: string): string {

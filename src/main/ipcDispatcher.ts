@@ -153,6 +153,7 @@ export interface IpcDispatcherDeps {
 
 export class IpcDispatcher {
   private deps: IpcDispatcherDeps;
+  private shuttingDown = false;
   private readonly appMessageBridges = new Map<string, () => void>();
   /** One relay session per panel principal (callerId = panel view id). */
   private readonly panelSessions = new Map<string, Promise<PanelSessionEntry>>();
@@ -180,6 +181,12 @@ export class IpcDispatcher {
     this.deps = deps;
 
     ipcMain.on("vibestudio:rpc:send", (event, envelope: RpcEnvelope) => {
+      // Window teardown removes view ownership before Chromium has destroyed
+      // every renderer. Late renderer messages are expected during that small
+      // interval; dropping them lets destruction reject the renderer-side
+      // promises once, instead of feeding retry loops with synthetic
+      // "unresolved sender" responses and flooding shutdown logs.
+      if (this.shuttingDown) return;
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller) {
         console.warn(
@@ -264,15 +271,51 @@ export class IpcDispatcher {
       return relay.pushBodyChunk(msg);
     });
     ipcMain.on("vibestudio:rpc:stream-abort", (event, opId: unknown) => {
+      if (this.shuttingDown) return;
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller || caller.callerKind !== "panel") return;
       this.panelStreamRelays.get(caller.callerId)?.abort(String(opId));
     });
     ipcMain.on("vibestudio:rpc:stream-ack", (event, payload: { opId?: unknown; seq?: unknown }) => {
+      if (this.shuttingDown) return;
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller || caller.callerKind !== "panel") return;
       this.panelStreamRelays.get(caller.callerId)?.ack(String(payload?.opId), Number(payload?.seq));
     });
+  }
+
+  /**
+   * Stop accepting renderer work before views and the shared Iroh session are
+   * dismantled. This is a lifecycle barrier, not just log suppression: every
+   * owned stream, panel session, and app event subscription is released while
+   * its backing transport still exists.
+   */
+  async shutdown(): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+
+    for (const unsubscribe of this.appMessageBridges.values()) unsubscribe();
+    this.appMessageBridges.clear();
+
+    for (const active of this.activeIpcStreams.values()) {
+      active.abort.abort();
+      void active.reader?.cancel().catch(() => undefined);
+    }
+    this.activeIpcStreams.clear();
+
+    for (const relay of this.panelStreamRelays.values()) {
+      relay.destroy("desktop app shutting down");
+    }
+    this.panelStreamRelays.clear();
+
+    const sessions = [...this.panelSessions.values()];
+    this.panelSessions.clear();
+    await Promise.allSettled(
+      sessions.map(async (entry) => {
+        const resolved = await entry;
+        await resolved.session.close();
+      })
+    );
   }
 
   private requirePanelCaller(

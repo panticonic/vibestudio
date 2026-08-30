@@ -95,6 +95,7 @@ import { createPanelBundleReport, startupModuleOutputs } from "./panelBundleRepo
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
+import { ImmutableTreeWorkerClient } from "./immutableTreeWorkerClient.js";
 export { generatePanelEntry } from "./panelEntryProtocol.js";
 
 /**
@@ -117,6 +118,7 @@ let _appNodeModules: string[] = [];
 let _appRoot = "";
 let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
 let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
+let _immutableTreeWorker: ImmutableTreeWorkerClient | null = null;
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
   return createRequire(path.join(nodeModulesRoot, "__vibestudio_host_resolver.cjs"));
@@ -148,14 +150,18 @@ export function initBuilder(appNodeModules: string | string[], appRoot: string):
   _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
   void _workspaceRpcCatalogWorker?.close();
   _workspaceRpcCatalogWorker = new WorkspaceRpcCatalogWorkerClient(_appRoot);
+  void _immutableTreeWorker?.close();
+  _immutableTreeWorker = new ImmutableTreeWorkerClient(_appRoot);
 }
 
 export async function closeBuilder(): Promise<void> {
   const worker = _libraryLoweringWorker;
   const catalogWorker = _workspaceRpcCatalogWorker;
+  const immutableTreeWorker = _immutableTreeWorker;
   _libraryLoweringWorker = null;
   _workspaceRpcCatalogWorker = null;
-  await Promise.all([worker?.close(), catalogWorker?.close()]);
+  _immutableTreeWorker = null;
+  await Promise.all([worker?.close(), catalogWorker?.close(), immutableTreeWorker?.close()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -4027,10 +4033,6 @@ async function buildExtension(
       runtimeDependencyPatches
     );
     try {
-      if (runtimeDeps.nodeModulesDir) {
-        await materializeExtensionRuntimeDeps(outdir, runtimeDeps.nodeModulesDir, node.name);
-      }
-
       const bundlePath = path.join(outdir, "bundle.js");
       const bundle = fs.readFileSync(bundlePath, "utf-8");
       const extensionArtifacts = bundleArtifacts(bundle);
@@ -4074,6 +4076,7 @@ async function buildExtension(
       };
       await smokeTestExtensionBuild(smokeResult, node, {
         dependencyDiagnostics,
+        runtimeNodeModulesDir: runtimeDeps.nodeModulesDir,
       });
 
       const result = await storeSimpleBuild(
@@ -4119,11 +4122,20 @@ async function smokeTestExtensionBuild(
   node: GraphNode,
   details: {
     dependencyDiagnostics: ExtensionDependencyDiagnostics;
+    runtimeNodeModulesDir: string;
   }
 ): Promise<void> {
   const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-smoke-"));
   const smokeScript = path.join(smokeDir, "smoke.mjs");
+  const runtimeLink = path.join(result.dir, "node_modules");
   try {
+    if (details.runtimeNodeModulesDir) {
+      await fs.promises.symlink(
+        details.runtimeNodeModulesDir,
+        runtimeLink,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+    }
     fs.writeFileSync(
       smokeScript,
       generateExtensionSmokeScript(
@@ -4170,6 +4182,9 @@ async function smokeTestExtensionBuild(
     }
     throw smokeError;
   } finally {
+    if (details.runtimeNodeModulesDir) {
+      await fs.promises.rm(runtimeLink, { recursive: true, force: true }).catch(() => undefined);
+    }
     await fs.promises.rm(smokeDir, { recursive: true, force: true });
   }
 }
@@ -4343,40 +4358,15 @@ async function materializeExtensionRuntimeDeps(
   const link = path.join(buildDir, "node_modules");
   try {
     await fs.promises.rm(link, { recursive: true, force: true });
-    await materializeImmutableTree(nodeModulesDir, link);
+    const worker = _immutableTreeWorker;
+    if (!worker) throw new Error("builder is not initialized");
+    await worker.materialize(nodeModulesDir, link);
   } catch (err) {
     throw new Error(
       `Failed to materialize extension runtime dependencies for ${extensionName}: ${
         err instanceof Error ? err.message : String(err)
       }`
     );
-  }
-}
-
-async function materializeImmutableTree(source: string, target: string): Promise<void> {
-  const stat = await fs.promises.lstat(source);
-  if (stat.isSymbolicLink()) {
-    await fs.promises.symlink(await fs.promises.readlink(source), target);
-    return;
-  }
-  if (stat.isDirectory()) {
-    await fs.promises.mkdir(target, { recursive: true, mode: stat.mode });
-    for (const child of await fs.promises.readdir(source)) {
-      await materializeImmutableTree(path.join(source, child), path.join(target, child));
-    }
-    return;
-  }
-  if (!stat.isFile()) throw new Error(`Unsupported runtime dependency entry: ${source}`);
-  await fs.promises.mkdir(path.dirname(target), { recursive: true });
-  try {
-    await fs.promises.link(source, target);
-  } catch (error) {
-    if (
-      !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes((error as NodeJS.ErrnoException).code ?? "")
-    ) {
-      throw error;
-    }
-    await fs.promises.copyFile(source, target, fs.constants.COPYFILE_FICLONE);
   }
 }
 

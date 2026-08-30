@@ -101,6 +101,10 @@ describe("RpcServer Iroh ingress over real local QUIC", () => {
     // not block admission and dispatch of an independent later RPC stream.
     const stalled = await clientConnection.openBi();
     await stalled.send.writeAll(new Uint8Array([0, 0, 0, 16]));
+    // Admission has byte/frame bounds and QUIC has a finite replenishing stream
+    // window. A wall-clock lease added a second, harmful scheduling policy:
+    // cold-start JS work could reset an otherwise valid independent stream.
+    await new Promise((resolve) => setTimeout(resolve, 10_250));
 
     const result = rpc.call("main", "test.echo", ["through-iroh"]);
     await vi.waitFor(() => expect(dispatcher.dispatch).toHaveBeenCalled(), { timeout: 2_000 });

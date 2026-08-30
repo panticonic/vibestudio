@@ -3,6 +3,7 @@ const workerStemByRole = Object.freeze({
   libraryLowering: "library-lowering-worker",
   typecheck: "typecheck-worker",
   workspaceRpcCatalog: "workspace-rpc-catalog-worker",
+  immutableTree: "immutable-tree-worker",
   sqliteIntegrity: "sqlite-integrity-worker",
 });
 

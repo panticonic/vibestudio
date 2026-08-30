@@ -134,6 +134,10 @@ export class PanelView implements PanelViewLike {
     string,
     { cleanup: () => void; destroyedHandler: () => void }
   >();
+  private readonly panelViewFlights = new Map<
+    string,
+    { documentKey: string; promise: Promise<void> }
+  >();
   private linkInterceptionHandlers = new Map<
     string,
     (event: Electron.Event, url: string) => void
@@ -288,6 +292,34 @@ export class PanelView implements PanelViewLike {
   }
 
   async createViewForPanel(panelId: string, url: string, contextId?: string): Promise<void> {
+    const documentKey = `${
+      this.panelRegistry.getPanel(panelId)?.runtimeEntityId ?? ""
+    }\u0000${url}`;
+    const existing = this.panelViewFlights.get(panelId);
+    if (existing) {
+      if (existing.documentKey === documentKey) return existing.promise;
+      // A replacement incarnation cannot navigate the same native slot until
+      // the prior creation transaction has either committed or failed. Join
+      // that owner, then re-evaluate the live view once—never create a parallel
+      // listener/navigation stack for the same slot.
+      await existing.promise.catch(() => undefined);
+      return this.createViewForPanel(panelId, url, contextId);
+    }
+
+    const promise = this.createOrNavigatePanelView(panelId, url, contextId).finally(() => {
+      if (this.panelViewFlights.get(panelId)?.promise === promise) {
+        this.panelViewFlights.delete(panelId);
+      }
+    });
+    this.panelViewFlights.set(panelId, { documentKey, promise });
+    return promise;
+  }
+
+  private async createOrNavigatePanelView(
+    panelId: string,
+    url: string,
+    contextId?: string
+  ): Promise<void> {
     const panel = this.panelRegistry.getPanel(panelId) as
       | import("@vibestudio/shared/types").Panel
       | undefined;

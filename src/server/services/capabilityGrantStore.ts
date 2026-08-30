@@ -152,9 +152,16 @@ export class CapabilityGrantStore {
     now = Date.now()
   ): AuthorityGrant[] {
     if (subjects.length === 0) return [];
-    this.suspendIdleAgentGrants(now);
+    const uniqueSubjects = [...new Set(subjects)];
+    // Idle expiry belongs to standing agent authority. Host, user, code, and
+    // session authorization cannot observe an agent-scoped grant, so sweeping
+    // the entire agent-grant table on those very hot paths is both irrelevant
+    // and harmful. An agent lookup still performs expiry before reading.
+    if (uniqueSubjects.some((subject) => subject.startsWith("agent:"))) {
+      this.suspendIdleAgentGrants(now);
+    }
     const found: AuthorityGrant[] = [];
-    for (const chunk of chunks([...new Set(subjects)], 300)) {
+    for (const chunk of chunks(uniqueSubjects, 300)) {
       const placeholders = chunk.map(() => "?").join(",");
       const rows = this.db
         .prepare(
@@ -218,9 +225,17 @@ export class CapabilityGrantStore {
 
   suspendIdleAgentGrants(now = Date.now(), idleMs = 90 * 24 * 60 * 60 * 1_000): number {
     const cutoff = now - idleMs;
-    const candidates = this.listAgentAuthorityGrants().filter(
-      (grant) => grant.suspendedAt === undefined && (grant.lastUsedAt ?? grant.createdAt) <= cutoff
-    );
+    const candidates = (
+      this.db
+        .prepare(
+          `SELECT * FROM authority_grants
+           WHERE scope = 'agent' AND revoked_at IS NULL AND consumed_at IS NULL
+             AND suspended_at IS NULL
+             AND COALESCE(last_used_at, created_at) <= ?
+           ORDER BY created_at DESC, id DESC`
+        )
+        .all(cutoff) as GrantRow[]
+    ).map(rowToGrant);
     const changed = Number(
       this.db
         .prepare(

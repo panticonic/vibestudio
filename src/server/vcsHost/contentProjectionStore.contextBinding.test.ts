@@ -81,6 +81,46 @@ describe("context binding is invisible to the VCS scan", () => {
     expect(files.at(-1)?.path).toBe("file-1000.txt");
   });
 
+  it("pipelines independent context files instead of serializing whole-workspace projection", async () => {
+    const blobsDir = path.join(root, "blobs");
+    const digest = (await putBytes(blobsDir, Buffer.from("shared body", "utf8"))).digest;
+    const tree = await putTree(
+      blobsDir,
+      Array.from({ length: 32 }, (_, index) => ({
+        name: `file-${String(index).padStart(2, "0")}.txt`,
+        kind: "file" as const,
+        contentHash: digest,
+        mode: 33188,
+      })),
+      { root: true }
+    );
+    const instrumented = store as unknown as {
+      writeMaterializedFile(
+        source: string,
+        target: string,
+        options: { executable: boolean }
+      ): Promise<void>;
+    };
+    const write = instrumented.writeMaterializedFile.bind(store);
+    let active = 0;
+    let maximumActive = 0;
+    instrumented.writeMaterializedFile = async (source, target, options) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      try {
+        await write(source, target, options);
+      } finally {
+        active -= 1;
+      }
+    };
+
+    await expect(
+      store.materializeState(tree.stateHash!, path.join(root, "parallel-context"), { clean: true })
+    ).resolves.toMatchObject({ written: 32 });
+    expect(maximumActive).toBeGreaterThan(1);
+  });
+
   it("reports unsafe source names instead of silently omitting them", async () => {
     if (process.platform === "win32") return;
     const dir = path.join(root, "unsafe");

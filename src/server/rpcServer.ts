@@ -48,7 +48,6 @@ import { FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   IROH_WIRE_VERSION,
-  MAX_PENDING_STREAM_ADMISSIONS,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
   readFrame,
@@ -4579,7 +4578,6 @@ export class RpcServer {
   private static readonly WS_BACKPRESSURE_HARD_LIMIT = 128 * 1024 * 1024;
 
   private static readonly IROH_PREAUTH_TIMEOUT_MS = 10_000;
-  private static readonly IROH_STREAM_ADMISSION_TIMEOUT_MS = 10_000;
 
   private sendToSession(ws: RpcSessionChannel, msg: WsServerMessage): void {
     if (ws.readyState !== ws.OPEN) return;
@@ -5010,81 +5008,51 @@ export class RpcServer {
       connection.close(0x200n, new TextEncoder().encode(reason));
     };
     const handleStream = async (stream: IrohPhysicalBiStream): Promise<void> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const admission = (async (): Promise<void> => {
-        const streamPreamble = await readIrohStreamPreamble(stream.recv);
-        if (streamPreamble.k === "control") {
-          throw new Error("Duplicate Iroh control stream");
-        }
-        if (streamPreamble.k === "message") {
-          throw new Error("Client-opened Iroh message streams are not valid");
-        }
-        const session = sessions.get(streamPreamble.sid);
-        if (!session) {
-          await Promise.all([
-            stream.recv.stop(0x201n).catch(() => undefined),
-            stream.send.reset(0x201n).catch(() => undefined),
-            refuseUnknownSession(streamPreamble.sid),
-          ]);
-          return;
-        }
-        const envelope = JSON.parse(
-          new TextDecoder("utf-8", { fatal: true }).decode(
-            await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
-          )
-        ) as RpcEnvelope;
-        const body =
-          streamPreamble.k === "stream" && streamPreamble.body
-            ? irohReceiveStreamBody(stream.recv)
-            : undefined;
-        session.deliverEnvelope(envelope, stream, body);
-      })();
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          void stream.recv.stop(0x200n).catch(() => undefined);
-          void stream.send.reset(0x200n).catch(() => undefined);
-          reject(
-            new Error(
-              `Iroh peer stream did not provide a complete header within ${RpcServer.IROH_STREAM_ADMISSION_TIMEOUT_MS}ms`
-            )
-          );
-        }, RpcServer.IROH_STREAM_ADMISSION_TIMEOUT_MS);
-        timer.unref();
-      });
-      try {
-        await Promise.race([admission, timeout]);
-      } finally {
-        if (timer) clearTimeout(timer);
+      const streamPreamble = await readIrohStreamPreamble(stream.recv);
+      if (streamPreamble.k === "control") {
+        throw new Error("Duplicate Iroh control stream");
       }
+      if (streamPreamble.k === "message") {
+        throw new Error("Client-opened Iroh message streams are not valid");
+      }
+      const session = sessions.get(streamPreamble.sid);
+      if (!session) {
+        await Promise.all([
+          stream.recv.stop(0x201n).catch(() => undefined),
+          stream.send.reset(0x201n).catch(() => undefined),
+          refuseUnknownSession(streamPreamble.sid),
+        ]);
+        return;
+      }
+      const envelope = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES)
+        )
+      ) as RpcEnvelope;
+      const body =
+        streamPreamble.k === "stream" && streamPreamble.body
+          ? irohReceiveStreamBody(stream.recv)
+          : undefined;
+      session.deliverEnvelope(envelope, stream, body);
     };
     const streamLoop = async (): Promise<void> => {
-      let pendingAdmissions = 0;
       while (!stopped) {
         const stream = await connection.acceptBi();
-        if (pendingAdmissions >= MAX_PENDING_STREAM_ADMISSIONS) {
+        // Reading one stream's bounded preamble/envelope must not block
+        // admission of independent later streams. The replenishing native
+        // stream window is the finite resource boundary; a second pending-
+        // header ceiling would reject valid startup work merely because an
+        // unrelated stream is waiting on a busy JS scheduler.
+        void handleStream(stream).catch((error) => {
+          // QUIC request streams are independent failure domains. A bad or
+          // partial stream is reset without discarding healthy logical
+          // sessions on the physical connection.
           void stream.recv.stop(0x200n).catch(() => undefined);
           void stream.send.reset(0x200n).catch(() => undefined);
-          continue;
-        }
-        pendingAdmissions += 1;
-        // Reading one stream's bounded preamble/envelope must not block
-        // admission of independent later streams. This counter bounds only
-        // incomplete header work; a long-lived response leaves admission as
-        // soon as its envelope reaches the bounded logical session.
-        void handleStream(stream)
-          .catch((error) => {
-            // QUIC request streams are independent failure domains. A bad or
-            // partial stream is reset without discarding healthy logical
-            // sessions on the physical connection.
-            void stream.recv.stop(0x200n).catch(() => undefined);
-            void stream.send.reset(0x200n).catch(() => undefined);
-            log.warn("Rejected Iroh RPC stream", {
-              cause: error instanceof Error ? error.message : String(error),
-            });
-          })
-          .finally(() => {
-            pendingAdmissions -= 1;
+          log.warn("Rejected Iroh RPC stream", {
+            cause: error instanceof Error ? error.message : String(error),
           });
+        });
       }
     };
 

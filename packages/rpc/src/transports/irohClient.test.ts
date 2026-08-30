@@ -112,6 +112,11 @@ describe("Iroh RPC client over real local QUIC", () => {
       // stream admitted on the same QUIC connection.
       const stalled = await server.openBi();
       await stalled.send.writeAll(new Uint8Array([0, 0, 0, 16]));
+      // A busy cold-start scheduler can legitimately delay the JS writer for
+      // longer than the former ten-second admission lease. The stalled stream
+      // remains independently flow-controlled; elapsed wall time must not turn
+      // it into a reset or affect the later event stream.
+      await new Promise((resolve) => setTimeout(resolve, 10_250));
       const eventStream = await server.openBi();
       await writeIrohStreamPreamble(eventStream.send, {
         k: "message",
@@ -137,6 +142,19 @@ describe("Iroh RPC client over real local QUIC", () => {
         MAX_STREAM_CHUNK_BYTES
       );
       await eventStream.send.finish();
+      expect(await eventStream.recv.read(1)).toHaveLength(0);
+
+      const clientEventStream = await server.acceptBi();
+      expect(await readIrohStreamPreamble(clientEventStream.recv)).toEqual({
+        k: "envelope",
+        sid: "shell",
+        v: IROH_WIRE_VERSION,
+      });
+      const clientEvent = JSON.parse(
+        new TextDecoder().decode(await readFrame(clientEventStream.recv, MAX_ENVELOPE_FRAME_BYTES))
+      ) as RpcEnvelope;
+      expect(clientEvent.message).toMatchObject({ type: "event", event: "client-ready" });
+      await clientEventStream.send.finish();
 
       const requestStream = await server.acceptBi();
       expect(await readIrohStreamPreamble(requestStream.recv)).toEqual({
@@ -149,6 +167,10 @@ describe("Iroh RPC client over real local QUIC", () => {
       ) as RpcEnvelope;
       const request = requestEnvelope.message as RpcRequest;
       expect(request).toMatchObject({ type: "request", method: "echo", args: ["hello"] });
+      // Unary request bytes end with the envelope. The request half must be
+      // cleanly closed before the response is produced so completed calls do
+      // not retain QUIC stream credit under concurrent polling.
+      expect(await requestStream.recv.read(1)).toHaveLength(0);
       const response: RpcEnvelope = {
         from: "main",
         target: request.fromId,
@@ -194,6 +216,18 @@ describe("Iroh RPC client over real local QUIC", () => {
       selfId: "shell:device",
       callerKind: "shell",
       transport: session,
+    });
+    await session.send({
+      from: "shell:device",
+      target: "main",
+      delivery: { caller: { callerId: "shell:device", callerKind: "shell" } },
+      provenance: [],
+      message: {
+        type: "event",
+        fromId: "shell:device",
+        event: "client-ready",
+        payload: null,
+      },
     });
     await expect(rpc.call("main", "echo", ["hello"])).resolves.toBe("hello");
     await Promise.resolve();
@@ -301,6 +335,36 @@ describe("Iroh RPC client over real local QUIC", () => {
       );
       await requestStream.send.writeAll(responseBody);
       await requestStream.send.finish();
+
+      const bodyless = await server.acceptBi();
+      expect(await readIrohStreamPreamble(bodyless.recv)).toMatchObject({
+        body: false,
+        k: "stream",
+        sid: "shell",
+      });
+      const bodylessEnvelope = JSON.parse(
+        new TextDecoder().decode(await readFrame(bodyless.recv, MAX_ENVELOPE_FRAME_BYTES))
+      ) as RpcEnvelope;
+      expect(bodylessEnvelope.message).toMatchObject({
+        type: "stream-request",
+        method: "download-only",
+      });
+      // The upload half is complete before response consumption. A caller that
+      // trusts Content-Length is not required to pull one extra EOF chunk just
+      // to release native QUIC stream credit.
+      expect(await bodyless.recv.read(1)).toHaveLength(0);
+      await writeFrame(
+        bodyless.send,
+        encodeIrohStreamResponseHead({
+          status: 200,
+          statusText: "OK",
+          headerPairs: [["content-length", "5"]],
+          finalUrl: "https://example.test/download",
+        }),
+        MAX_ENVELOPE_FRAME_BYTES
+      );
+      await bodyless.send.writeAll(new TextEncoder().encode("hello"));
+      await bodyless.send.finish();
     })();
 
     const pipe = createIrohClientPipe(client);
@@ -323,6 +387,11 @@ describe("Iroh RPC client over real local QUIC", () => {
     expect(response.status).toBe(201);
     expect(response.url).toBe("https://example.test/result");
     expect(await response.text()).toBe("response-body");
+    const download = await rpc.stream("main", "download-only", []);
+    const reader = download.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe("hello");
+    reader.releaseLock();
     await serverTask;
     await pipe.close();
   });

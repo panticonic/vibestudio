@@ -146,6 +146,29 @@ describe("IpcDispatcher", () => {
     ipcInvokeHandlers.clear();
   });
 
+  it("stops renderer admission before view ownership is dismantled", async () => {
+    const wc = makeWebContents(91);
+    const resolve = vi.fn(() => null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { ipcDispatcher } = makeDispatcher({ resolve });
+
+    await ipcDispatcher.shutdown();
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: wc } as never,
+      rpcEnvelope("shell", "shell", {
+        type: "request",
+        requestId: "late-shutdown-request",
+        fromId: "shell",
+        method: "workspace.getInfo",
+        args: [],
+      } satisfies RpcMessage) as never
+    );
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(wc.send).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("relays an addressed server event directly to the shell RPC client", () => {
     const shellWc = makeWebContents(9);
     const { ipcDispatcher } = makeDispatcher({

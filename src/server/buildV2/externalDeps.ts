@@ -1238,7 +1238,13 @@ export async function ensureExtensionRuntimeDeps(
     appRoot,
     overrides,
     patches: validatedPatches,
-    contentDeduplication: "blocking",
+    // Runtime publication requires an immutable dependency tree, not immediate
+    // physical byte sharing. Hashing and relinking every installed payload in
+    // the workspace server can monopolize its event loop for tens of seconds,
+    // stalling unrelated panel and Iroh RPC work. The background mode makes
+    // the tree immutable before publication and hands content deduplication to
+    // the detached maintenance process after the first-use critical path.
+    contentDeduplication: "background",
   });
 }
 

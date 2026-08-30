@@ -368,9 +368,7 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return;
   const cacheRoot = path.dirname(sharedDir);
-  const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
   if (fs.existsSync(path.join(sharedDir, "metadata.json"))) {
-    lease.release();
     return;
   }
 
@@ -390,17 +388,49 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
     } catch (cleanupError) {
       warnCleanupFailure(tmpDir, cleanupError);
     }
-    console.warn(
-      `[buildStore] Failed to publish shared build ${key}: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw error;
   } finally {
-    lease.release();
     void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
       console.warn(
         `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
       );
     });
   }
+}
+
+// Shared builds are a reconstruction cache, not part of the durability commit
+// for a workspace-owned build. Publish each exact immutable tree once in the
+// background. The temporary-tree + atomic-rename protocol makes publication
+// safe against both concurrent publishers and the cache collector without a
+// writer lease: temporary trees are excluded from collection and a published
+// tree may be collected immediately without affecting its workspace owner.
+const sharedBuildPublicationTasks = new Map<string, Promise<void>>();
+const completedSharedBuildPublications = new Set<string>();
+
+function scheduleSharedBuildPublication(key: string, sourceDir: string): void {
+  const sharedDir = getSharedBuildDir(key);
+  if (!sharedDir) return;
+  const publicationId = path.resolve(sharedDir);
+  if (
+    completedSharedBuildPublications.has(publicationId) ||
+    sharedBuildPublicationTasks.has(publicationId)
+  ) {
+    return;
+  }
+  const task = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(() => publishSharedBuild(key, sourceDir))
+    .then(() => {
+      completedSharedBuildPublications.add(publicationId);
+    })
+    .finally(() => {
+      sharedBuildPublicationTasks.delete(publicationId);
+    });
+  sharedBuildPublicationTasks.set(publicationId, task);
+  void task.catch((error) => {
+    console.warn(
+      `[buildStore] Shared build publication failed for ${key}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  });
 }
 
 function readArtifactContent(dir: string, entry: BuildArtifactManifestEntry): string {
@@ -747,6 +777,29 @@ function readBuildDir(
 }
 
 const reportedSharedBuildHits = new Set<string>();
+const verifiedLocalBuilds = new Map<string, BuildResult>();
+
+function localBuildCacheId(dir: string): string {
+  return path.resolve(dir);
+}
+
+function rememberVerifiedLocalBuild(build: BuildResult): BuildResult {
+  verifiedLocalBuilds.set(localBuildCacheId(build.dir), build);
+  return build;
+}
+
+function forgetVerifiedLocalBuild(dir: string): void {
+  verifiedLocalBuilds.delete(localBuildCacheId(dir));
+}
+
+function readVerifiedLocalBuild(key: string): BuildResult | null {
+  const dir = getBuildDir(key);
+  const cacheId = localBuildCacheId(dir);
+  const cached = verifiedLocalBuilds.get(cacheId);
+  if (cached) return cached;
+  const build = readBuildDir(dir, key);
+  return build ? rememberVerifiedLocalBuild(build) : null;
+}
 
 /**
  * Verify one workspace-owned build without publishing it to, or materializing
@@ -754,14 +807,14 @@ const reportedSharedBuildHits = new Set<string>();
  * snapshots must not turn a read into new local ownership.
  */
 export function peekLocal(key: string): BuildResult | null {
-  return readBuildDir(getBuildDir(key), key);
+  return readVerifiedLocalBuild(key);
 }
 
 export function get(key: string): BuildResult | null {
   const localDir = getBuildDir(key);
-  const local = readBuildDir(localDir, key);
+  const local = readVerifiedLocalBuild(key);
   if (local) {
-    void publishSharedBuild(key, localDir);
+    scheduleSharedBuildPublication(key, localDir);
     return local;
   }
   return null;
@@ -775,6 +828,10 @@ export async function getOrHydrate(key: string): Promise<BuildResult | null> {
 
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return null;
+  // A build committed by this process may still be finishing its optional
+  // shared publication. Hydration is the only consumer that needs to wait for
+  // that work; ordinary build completion and local lookup remain independent.
+  await sharedBuildPublicationTasks.get(path.resolve(sharedDir));
   const cacheRoot = path.dirname(sharedDir);
   const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
   try {
@@ -843,6 +900,7 @@ export async function getOrHydrate(key: string): Promise<BuildResult | null> {
       }
     }
     const materialized = readBuildDir(localDir, key);
+    if (materialized) rememberVerifiedLocalBuild(materialized);
     if (materialized && !reportedSharedBuildHits.has(key)) {
       reportedSharedBuildHits.add(key);
       console.info(
@@ -966,11 +1024,15 @@ export async function rebindSourceState(
       throw error;
     }
   }
-  return {
+  const rebound = {
     ...build,
     sourceStateHash,
     metadata,
   };
+  if (path.resolve(build.dir) === path.resolve(localDir)) {
+    rememberVerifiedLocalBuild(rebound);
+  }
+  return rebound;
 }
 
 /**
@@ -1011,6 +1073,7 @@ export async function discardBootstrapBuilds(
       `${entry.name}.bootstrap.${crypto.randomBytes(8).toString("hex")}`
     );
     await fs.promises.mkdir(trashDir, { recursive: true, mode: 0o700 });
+    forgetVerifiedLocalBuild(buildDir);
     await fs.promises.rename(buildDir, trashPath);
     await fs.promises.rm(trashPath, { recursive: true, force: true });
     discarded += 1;
@@ -1205,7 +1268,7 @@ export async function put(
     artifacts: entries.map((entry) => ({ ...manifestForEntry(entry), content: entry.content })),
   };
   clearRetiredBuildKey(key);
-  await publishSharedBuild(key, dir);
+  scheduleSharedBuildPublication(key, dir);
   return stored;
 }
 
@@ -1438,6 +1501,7 @@ export async function collectRetention(input: {
     const trashDir = path.join(trashRoot, matches[0]!);
     if (protectedKeys.has(key)) {
       try {
+        forgetVerifiedLocalBuild(getBuildDir(key));
         fs.renameSync(trashDir, getBuildDir(key));
         stored.add(key);
         byKey.delete(key);
@@ -1503,7 +1567,10 @@ export async function collectRetention(input: {
       // Synchronous rename is the deletion commit point. A publication
       // reservation cannot interleave inside this critical section.
       const committed =
-        input.commitArtifactDeletion?.(key, () => fs.renameSync(sourceDir, trashDir)) ?? false;
+        input.commitArtifactDeletion?.(key, () => {
+          forgetVerifiedLocalBuild(sourceDir);
+          fs.renameSync(sourceDir, trashDir);
+        }) ?? false;
       if (!committed) {
         result.retainedForGrace += 1;
         continue;

@@ -740,7 +740,7 @@ async function main() {
     resolveEntity: (id) =>
       ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
-      ).resolveRecord(id),
+      ).resolveActiveRecord(id),
     restoreExactExecution: async (record) => {
       const manager = workerdManagerForGateway;
       if (!manager) {

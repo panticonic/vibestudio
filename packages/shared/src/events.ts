@@ -13,7 +13,12 @@ import type { PanelTreeInvalidation } from "./panel/treeIndex.js";
 import type { CallerKind } from "./principalKinds.js";
 import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
-import type { Panel, PanelPlacementHint, PanelRecoverySnapshot } from "./types.js";
+import type {
+  Panel,
+  PanelPlacementHint,
+  PanelRecoverySnapshot,
+  RemoteTransportDiagnostics,
+} from "./types.js";
 
 import type { CommandAgentMode, SettingsSection } from "./shellSurface.js";
 
@@ -83,6 +88,7 @@ export type EventName =
   | "notification:action"
   | "user-notifications-changed"
   | "server-connection-changed"
+  | "remote-transport-diagnostics-changed"
   | "server-health"
   | "shell-approval:pending-changed"
   | "eval:run-event"
@@ -412,6 +418,15 @@ export interface EventPayloads {
       reason: string;
     };
   };
+  /**
+   * Volatile Iroh path/counter telemetry. This is intentionally separate from
+   * `server-connection-changed`: request-count changes are not connection
+   * transitions, and treating them as such creates feedback loops in consumers
+   * that reconcile server state after a real reconnect.
+   */
+  "remote-transport-diagnostics-changed": {
+    remoteTransport: RemoteTransportDiagnostics | null;
+  };
   "server-health": {
     /** Server version string from /healthz response body. */
     version?: string;
@@ -532,6 +547,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "notification:action",
   "user-notifications-changed",
   "server-connection-changed",
+  "remote-transport-diagnostics-changed",
   "server-health",
   "shell-approval:pending-changed",
   "eval:run-event",

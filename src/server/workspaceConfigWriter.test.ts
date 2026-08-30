@@ -129,10 +129,10 @@ describe("workspaceConfigWriter", () => {
       effectId: "effect:publish",
       appliedAt: "2026-07-15T12:00:00.000Z",
     }));
-    const ensureContext = vi.fn(async (_contextId: string) => mainState);
+    const ensureSemanticContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
       withProtectedMainMutation,
-      ensureContext,
+      ensureSemanticContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall,
@@ -152,7 +152,7 @@ describe("workspaceConfigWriter", () => {
 
     expect(result).toMatchObject({ changed: true, nextConfig: { defaultRepo: "panels/new" } });
     expect(result.nextConfig.id).toBe(WORKSPACE_ID);
-    const contextId = vi.mocked(vcs.ensureContext).mock.calls[0]?.[0];
+    const contextId = vi.mocked(vcs.ensureSemanticContext).mock.calls[0]?.[0];
     expect(contextId).toMatch(/^system:workspace-config:/);
     expect(vcs.dropContext).toHaveBeenCalledWith(contextId);
     expect(semanticCausalCall.mock.calls.map(([method]) => method)).toEqual([
@@ -203,10 +203,10 @@ describe("workspaceConfigWriter", () => {
       effectId: "effect:publish",
       appliedAt: "2026-07-15T12:00:00.000Z",
     }));
-    const ensureContext = vi.fn(async () => mainState);
+    const ensureSemanticContext = vi.fn(async () => mainState);
     const vcs = {
       withProtectedMainMutation,
-      ensureContext,
+      ensureSemanticContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall,
@@ -232,7 +232,7 @@ describe("workspaceConfigWriter", () => {
       })
     ).resolves.toMatchObject({ changed: true });
 
-    expect(vcs.ensureContext).not.toHaveBeenCalled();
+    expect(vcs.ensureSemanticContext).not.toHaveBeenCalled();
     expect(vcs.dropContext).not.toHaveBeenCalled();
     expect(
       semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
@@ -258,7 +258,7 @@ describe("workspaceConfigWriter", () => {
     }));
     const vcs = {
       withProtectedMainMutation,
-      ensureContext: vi.fn(async () => mainState),
+      ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall,
@@ -285,7 +285,7 @@ describe("workspaceConfigWriter", () => {
       })
     ).resolves.toMatchObject({ changed: true });
 
-    expect(vcs.ensureContext).not.toHaveBeenCalled();
+    expect(vcs.ensureSemanticContext).not.toHaveBeenCalled();
     expect(vcs.dropContext).not.toHaveBeenCalled();
     expect(
       semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
@@ -309,10 +309,10 @@ describe("workspaceConfigWriter", () => {
       mainRelation: "at",
       workingCounts: { applications: 1, workUnits: 1, changes: 1 },
     }));
-    const ensureContext = vi.fn(async (_contextId: string) => mainState);
+    const ensureSemanticContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
       withProtectedMainMutation,
-      ensureContext,
+      ensureSemanticContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall: vi.fn(),
@@ -337,9 +337,9 @@ describe("workspaceConfigWriter", () => {
         summary: "change default repo",
       })
     ).resolves.toMatchObject({ changed: true });
-    expect(vcs.ensureContext).toHaveBeenCalledOnce();
+    expect(vcs.ensureSemanticContext).toHaveBeenCalledOnce();
     expect(vcs.dropContext).toHaveBeenCalledOnce();
-    const isolatedContextId = ensureContext.mock.calls[0]?.[0];
+    const isolatedContextId = ensureSemanticContext.mock.calls[0]?.[0];
     expect(isolatedContextId).toMatch(/^system:workspace-config:/u);
     expect(
       semanticCausalCall.mock.calls.find(
@@ -359,7 +359,7 @@ describe("workspaceConfigWriter", () => {
     const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const vcs = {
       withProtectedMainMutation,
-      ensureContext: vi.fn(async () => mainState),
+      ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall: vi.fn(),
@@ -391,7 +391,7 @@ describe("workspaceConfigWriter", () => {
     const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const vcs = {
       withProtectedMainMutation,
-      ensureContext: vi.fn(async () => mainState),
+      ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => {
         throw cleanupFailure;
       }),
@@ -470,7 +470,7 @@ describe("workspaceConfigWriter", () => {
     const semanticCausalCall = configReader(initialYaml);
     const vcs = {
       withProtectedMainMutation,
-      ensureContext: vi.fn(async () => mainState),
+      ensureSemanticContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall: vi.fn(),

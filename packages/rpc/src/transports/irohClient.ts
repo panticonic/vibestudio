@@ -3,7 +3,6 @@ import {
   IROH_WIRE_VERSION,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
-  MAX_PENDING_STREAM_ADMISSIONS,
   MAX_STREAM_CHUNK_BYTES,
   readFrame,
   readIrohStreamPreamble,
@@ -51,7 +50,6 @@ import type {
 const IROH_PROTOCOL_CLOSE_CODE = 0x200n;
 const IROH_SESSION_CLOSE_CODE = 0x201n;
 const IROH_CANCEL_CODE = 0x202n;
-const IROH_STREAM_ADMISSION_TIMEOUT_MS = 10_000;
 
 function randomId(): string {
   return (
@@ -227,10 +225,12 @@ class ClientSession implements IrohClientSession {
       new TextEncoder().encode(JSON.stringify(envelope)),
       MAX_ENVELOPE_FRAME_BYTES
     );
-    const expectsResponse =
-      requestId !== null &&
-      (envelope.message.type === "request" || envelope.message.type === "stream-request");
-    if (!expectsResponse) await stream.send.finish();
+    const cancellable = signal !== undefined && requestId !== null;
+    // A request without caller cancellation has no bytes after its bounded
+    // envelope. Close that half immediately. Cancellable requests retain it
+    // only until their response settles so RESET_STREAM cannot be reordered on
+    // a second QUIC stream ahead of the request it cancels.
+    if (!cancellable) await stream.send.finish();
 
     if (
       requestId &&
@@ -247,7 +247,7 @@ class ClientSession implements IrohClientSession {
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
     void this.readResponses(stream, requestId).finally(() => {
-      if (expectsResponse) void stream.send.finish().catch(() => undefined);
+      if (cancellable) void stream.send.finish().catch(() => undefined);
       signal?.removeEventListener("abort", abort);
       if (requestId && this.outboundRequests.delete(requestId)) this.pipe.diagnosticsChanged();
     });
@@ -483,7 +483,6 @@ class ClientSession implements IrohClientSession {
       signal?.removeEventListener("abort", onAbort);
       this.outboundRequests.delete(request.requestId);
       this.pipe.diagnosticsChanged();
-      if (!body) void stream.send.finish().catch(() => undefined);
     });
     return {
       status: head.status,
@@ -499,7 +498,15 @@ class ClientSession implements IrohClientSession {
     body: ReadableStream<Uint8Array> | null | undefined,
     cancel: (reason?: unknown) => void
   ): Promise<void> {
-    if (!body) return;
+    // There is no upload after the request envelope. Close this half now—not
+    // when the response consumer happens to pull EOF. HTTP consumers may stop
+    // after Content-Length bytes without an extra EOF read; coupling closure to
+    // that read leaked otherwise successful asset streams and exhausted QUIC
+    // stream credit during cold panel loads.
+    if (!body) {
+      await stream.send.finish();
+      return;
+    }
     const reader = body.getReader();
     try {
       while (true) {
@@ -749,78 +756,48 @@ class ClientPipe implements IrohClientPipe {
   }
 
   private async acceptStreams(): Promise<void> {
-    let pendingAdmissions = 0;
     while (this.statusValue !== "disconnected") {
       const stream = await this.connection.acceptBi();
-      if (pendingAdmissions >= MAX_PENDING_STREAM_ADMISSIONS) {
-        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        continue;
-      }
-      pendingAdmissions += 1;
       // QUIC streams are independent. Never wait for one peer-opened stream's
       // preamble or envelope in the admission loop: a stalled stream would
       // otherwise head-of-line block every later server event despite QUIC's
-      // multiplexing. Only incomplete bounded headers occupy the explicit
-      // admission budget; retained response streams do not.
-      void this.acceptStream(stream)
-        .catch(() => {
-          // A peer-created request stream is an isolation boundary. Reject only
-          // this malformed or stalled stream; the control stream and unrelated
-          // sessions remain healthy.
-          void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-          void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        })
-        .finally(() => {
-          pendingAdmissions -= 1;
-        });
+      // multiplexing. The native replenishing MAX_STREAMS window is the one
+      // finite resource boundary; rejecting a later valid stream because an
+      // unrelated header is slow recreates head-of-line blocking above QUIC.
+      void this.acceptStream(stream).catch(() => {
+        // A peer-created request stream is an isolation boundary. Reject only
+        // this malformed stream; the control stream and unrelated
+        // sessions remain healthy.
+        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+      });
     }
   }
 
   private async acceptStream(stream: IrohPhysicalBiStream): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const admission = (async (): Promise<void> => {
-      const preamble = await readIrohStreamPreamble(stream.recv);
-      if (preamble.k === "control") throw new Error("Duplicate Iroh control stream");
-      const session = this.sessions.get(preamble.sid);
-      if (!session) {
-        await stream.recv.stop(IROH_SESSION_CLOSE_CODE);
-        await stream.send.reset(IROH_SESSION_CLOSE_CODE);
-        return;
-      }
-      if (preamble.k === "stream") {
-        await stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE);
-        await stream.send.reset(IROH_PROTOCOL_CLOSE_CODE);
-        return;
-      }
-      if (preamble.k === "message") {
-        void this.acceptMessage(session, stream).catch(() => {
-          void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-          void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        });
-        return;
-      }
-      const value = decodeJsonFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
-      assertEnvelope(value);
-      await session.acceptEnvelope(stream, value);
-    })();
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
+    const preamble = await readIrohStreamPreamble(stream.recv);
+    if (preamble.k === "control") throw new Error("Duplicate Iroh control stream");
+    const session = this.sessions.get(preamble.sid);
+    if (!session) {
+      await stream.recv.stop(IROH_SESSION_CLOSE_CODE);
+      await stream.send.reset(IROH_SESSION_CLOSE_CODE);
+      return;
+    }
+    if (preamble.k === "stream") {
+      await stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE);
+      await stream.send.reset(IROH_PROTOCOL_CLOSE_CODE);
+      return;
+    }
+    if (preamble.k === "message") {
+      void this.acceptMessage(session, stream).catch(() => {
         void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
         void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        reject(
-          new Error(
-            `Iroh peer stream did not provide a complete header within ${IROH_STREAM_ADMISSION_TIMEOUT_MS}ms`
-          )
-        );
-      }, IROH_STREAM_ADMISSION_TIMEOUT_MS);
-      (timer as unknown as { unref?: () => void }).unref?.();
-    });
-    try {
-      await Promise.race([admission, timeout]);
-    } finally {
-      if (timer) clearTimeout(timer);
+      });
+      return;
     }
+    const value = decodeJsonFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
+    assertEnvelope(value);
+    await session.acceptEnvelope(stream, value);
   }
 
   private async acceptMessage(session: ClientSession, stream: IrohPhysicalBiStream): Promise<void> {

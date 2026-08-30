@@ -1174,6 +1174,9 @@ describe("PanelManager", () => {
       isRoot: true,
       addAsRoot: true,
     });
+    const getPanelDetail = vi.spyOn(mem.workspaceState, "getPanelDetail");
+    const getSlot = vi.spyOn(mem.workspaceState, "getSlot");
+    const resolveEntity = vi.spyOn(mem.workspaceState, "resolveEntity");
 
     const init = (await manager.getPanelInit(created.panelId)) as {
       gatewayConfig: { serverUrl: string; token: string };
@@ -1185,6 +1188,9 @@ describe("PanelManager", () => {
       serverUrl: "https://vibestudio.example.com",
       token: `rpc-${currentEntityId}`,
     });
+    expect(getPanelDetail).not.toHaveBeenCalled();
+    expect(getSlot).not.toHaveBeenCalled();
+    expect(resolveEntity).not.toHaveBeenCalled();
   });
 
   it("includes both parent slot and parent entity ids in child bootstrap config", async () => {

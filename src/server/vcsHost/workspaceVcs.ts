@@ -278,6 +278,8 @@ type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-
 type SemanticEffect = WorkspaceSourceSemanticEffect;
 type SemanticDispatchResult = WorkspaceSourceSemanticDispatchResult;
 
+const VERIFIED_BUILD_TREE_LIMIT = 10_000;
+
 export type ContentFile = WorkspaceStateFile;
 
 export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
@@ -304,6 +306,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   /** Exact materialization receipt verified during this host generation. An
    * absent entry (including after restart) requires one disk integrity scan. */
   private readonly verifiedProjectionStates = new Map<string, string>();
+  /**
+   * Exact immutable build-source entries established during this host
+   * generation. Build roots are private derived data and never editable;
+   * repeatedly walking the same local-package closure made unrelated extension
+   * builds dominate cold panel startup. Missing entries are always
+   * re-projected, and process restart forgets every receipt so disk state is
+   * verified again.
+   */
+  private readonly verifiedBuildTrees = new Map<string, string>();
   private ensureFreshInFlight: Promise<{ stateHash: string }> | null = null;
 
   constructor(private readonly deps: WorkspaceVcsDeps) {
@@ -1732,58 +1743,103 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const stateHash = await this.resolveStateReference(stateRef);
     const key = crypto.createHash("sha256").update(stateHash).digest("hex").slice(0, 24);
     const sourceRoot = path.join(this.deps.buildSourcesRoot, key);
-    await this.locked(`build:${key}`, async () => {
-      await this.contentProjection.ensureStateMirrored(stateHash);
-      // Partial unit projections retain workspace-root files because build
-      // configuration is allowed to inherit or consult them. Directories stay
-      // selective, so this preserves the small projection without guessing a
-      // special list of tsconfig/package-manager filenames.
+    await this.contentProjection.ensureStateMirrored(stateHash);
+
+    // Workspace-root files are shared build configuration. Their tiny common
+    // publication is the only state-wide critical section: disjoint unit trees
+    // must never wait behind one another merely because they come from the same
+    // immutable workspace snapshot.
+    await this.locked(`build-root:${key}`, async () => {
       const rootEntries = await readTreeDirectory(this.deps.blobsDir, stateHash);
-      if (!rootEntries) {
-        throw new Error(`build source root is missing at ${stateHash}`);
-      }
+      if (!rootEntries) throw new Error(`build source root is missing at ${stateHash}`);
       await fsp.mkdir(sourceRoot, { recursive: true });
-      for (const entry of rootEntries) {
-        if (entry.kind !== "file") continue;
-        const bytes = await getBytes(this.deps.blobsDir, entry.contentHash);
-        if (!bytes) {
-          throw new Error(`build support file ${entry.name} content is missing at ${stateHash}`);
-        }
-        const target = path.join(sourceRoot, entry.name);
-        const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-        try {
-          await fsp.writeFile(temporary, bytes, { mode: entry.mode & 0o777 });
-          await fsp.rename(temporary, target);
-        } catch (error) {
-          await fsp.rm(temporary, { force: true }).catch(() => undefined);
-          throw error;
-        }
-      }
-      for (const unit of units) {
-        const resolved = await resolveTreePath(this.deps.blobsDir, stateHash, unit.relativePath);
-        if (!resolved) continue;
-        if (resolved.kind !== "dir") {
-          throw new Error(`build unit ${unit.relativePath} is not a directory at ${stateHash}`);
-        }
-        await materializeTree(
-          this.deps.blobsDir,
-          resolved.treeHash,
-          path.join(sourceRoot, ...unit.relativePath.split("/"))
-        );
-      }
-      const sharedTypes = await resolveTreePath(this.deps.blobsDir, stateHash, "types");
-      if (sharedTypes) {
-        if (sharedTypes.kind !== "dir") {
-          throw new Error(`build support types is not a directory at ${stateHash}`);
-        }
-        await materializeTree(
-          this.deps.blobsDir,
-          sharedTypes.treeHash,
-          path.join(sourceRoot, "types")
-        );
-      }
+      await Promise.all(
+        rootEntries
+          .filter((entry) => entry.kind === "file")
+          .map((entry) => this.ensureBuildSupportFile(stateHash, sourceRoot, entry))
+      );
     });
+
+    // A build closure can repeat a package and concurrent builds can ask for
+    // the same package. Coalesce by exact tree, while allowing unrelated trees
+    // to project concurrently. The destination paths are disjoint, so no
+    // broader lock protects a real invariant.
+    const requestedPaths = new Set(units.map((unit) => unit.relativePath));
+    requestedPaths.add("types");
+    await Promise.all(
+      [...requestedPaths].map(async (relativePath) => {
+        const resolved = await resolveTreePath(this.deps.blobsDir, stateHash, relativePath);
+        if (!resolved) return;
+        if (resolved.kind !== "dir") {
+          const label =
+            relativePath === "types" ? "build support types" : `build unit ${relativePath}`;
+          throw new Error(`${label} is not a directory at ${stateHash}`);
+        }
+        await this.locked(`build-tree:${key}:${relativePath}`, () =>
+          this.ensureBuildTreeMaterialized(
+            stateHash,
+            relativePath,
+            resolved.treeHash,
+            path.join(sourceRoot, ...relativePath.split("/"))
+          )
+        );
+      })
+    );
     return { sourceRoot };
+  }
+
+  private async ensureBuildSupportFile(
+    stateHash: string,
+    sourceRoot: string,
+    entry: Extract<
+      NonNullable<Awaited<ReturnType<typeof readTreeDirectory>>>[number],
+      { kind: "file" }
+    >
+  ): Promise<void> {
+    const target = path.join(sourceRoot, entry.name);
+    const receiptKey = `${stateHash}\0/${entry.name}`;
+    const identity = `${entry.contentHash}:${entry.mode}`;
+    if (this.verifiedBuildTrees.get(receiptKey) === identity) {
+      const stat = await fsp.lstat(target).catch(() => null);
+      if (stat?.isFile()) return;
+      this.verifiedBuildTrees.delete(receiptKey);
+    }
+    const bytes = await getBytes(this.deps.blobsDir, entry.contentHash);
+    if (!bytes) {
+      throw new Error(`build support file ${entry.name} content is missing at ${stateHash}`);
+    }
+    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(temporary, bytes, { mode: entry.mode & 0o777 });
+      await fsp.rename(temporary, target);
+    } catch (error) {
+      await fsp.rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    this.rememberVerifiedBuildEntry(receiptKey, identity);
+  }
+
+  private async ensureBuildTreeMaterialized(
+    stateHash: string,
+    relativePath: string,
+    treeHash: string,
+    destination: string
+  ): Promise<void> {
+    const receiptKey = `${stateHash}\0${relativePath}`;
+    if (this.verifiedBuildTrees.get(receiptKey) === treeHash) {
+      const stat = await fsp.lstat(destination).catch(() => null);
+      if (stat?.isDirectory()) return;
+      this.verifiedBuildTrees.delete(receiptKey);
+    }
+    await materializeTree(this.deps.blobsDir, treeHash, destination);
+    this.rememberVerifiedBuildEntry(receiptKey, treeHash);
+  }
+
+  private rememberVerifiedBuildEntry(receiptKey: string, identity: string): void {
+    if (this.verifiedBuildTrees.size >= VERIFIED_BUILD_TREE_LIMIT) {
+      this.verifiedBuildTrees.delete(this.verifiedBuildTrees.keys().next().value!);
+    }
+    this.verifiedBuildTrees.set(receiptKey, identity);
   }
 
   private async materializeStateForGraphDiscovery(stateHash: string): Promise<string> {

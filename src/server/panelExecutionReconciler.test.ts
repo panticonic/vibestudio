@@ -54,14 +54,15 @@ const activeHandle = {
 function harness() {
   const activate = vi.fn(async () => activeHandle);
   const onError = vi.fn();
+  const getDetail = vi.fn(async () => detail);
   const reconciler = new PanelExecutionReconciler({
-    getDetail: vi.fn(async () => detail),
+    getDetail,
     resolveSlotByEntity: vi.fn(async () => detail.slot.slot_id),
     listPreparingPanels: vi.fn(async () => [entity]),
     activate,
     onError,
   });
-  return { reconciler, activate, onError };
+  return { reconciler, activate, onError, getDetail };
 }
 
 describe("PanelExecutionReconciler", () => {
@@ -73,6 +74,13 @@ describe("PanelExecutionReconciler", () => {
       previousEntityId: null,
       currentEntityId: entity.id,
       presentation: "awaiting-execution",
+      desiredExecution: {
+        source: entity.source.repoPath,
+        key: entity.key,
+        contextId: entity.contextId,
+        stateArgs: { mode: "inspect" },
+        ref: "main",
+      },
     });
     await vi.waitFor(() => expect(activate).toHaveBeenCalledTimes(1));
     expect(activate).toHaveBeenCalledWith({
@@ -82,6 +90,27 @@ describe("PanelExecutionReconciler", () => {
       contextId: entity.contextId,
       stateArgs: { mode: "inspect" },
     });
+  });
+
+  it("does not reread durable slot state on the committed execution handoff", async () => {
+    const { reconciler, activate, getDetail } = harness();
+
+    reconciler.observe({
+      kind: "current-entity",
+      slotId: detail.slot.slot_id,
+      previousEntityId: null,
+      currentEntityId: entity.id,
+      presentation: "awaiting-execution",
+      desiredExecution: {
+        source: entity.source.repoPath,
+        key: entity.key,
+        contextId: entity.contextId,
+        stateArgs: { mode: "inspect" },
+      },
+    });
+
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledOnce());
+    expect(getDetail).not.toHaveBeenCalled();
   });
 
   it("recovers preparing panel reservations on startup", async () => {

@@ -46,6 +46,20 @@ export type SlotStateChange =
       previousEntityId: string | null;
       currentEntityId: string;
       presentation: "awaiting-execution" | "executable";
+      /**
+       * Exact durable execution intent committed by this mutation. Keeping the
+       * in-process handoff alongside the invalidation lets the execution owner
+       * start immediately without reading the same WorkspaceDO rows back
+       * through a contended control-plane queue. Recovery remains level-
+       * triggered from durable state when no handoff is available.
+       */
+      desiredExecution?: {
+        source: string;
+        key: string;
+        contextId: string;
+        stateArgs: unknown;
+        ref?: string;
+      };
     }
   | { kind: "tree" }
   | { kind: "closed"; slotIds: string[] };
@@ -132,12 +146,65 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     result.placement = placement;
     return result;
   };
-  const titlesForSlots = (slotIds: string[]) =>
-    slotIds.length === 0
-      ? Promise.resolve({} as Record<string, string>)
-      : (deps.presentationDispatch("titlesForSlots", [slotIds]) as Promise<Record<string, string>>);
+  // Titles and search metadata are a Base-owned projection of durable slot
+  // state. They must never become a prerequisite for reading topology or
+  // starting an execution. Keep the most recent projection in-process, seed it
+  // from mutations that already carry a title, and repair cache misses in the
+  // background. A cold/missing projection renders the source as its honest
+  // fallback and invalidates the tree once the richer title arrives.
+  const titleCache = new Map<string, string>();
+  const titleRefreshes = new Map<string, Promise<void>>();
+  const reportProjectionFailure = (operation: string, error: unknown) => {
+    console.warn(
+      `[workspace-state] Presentation projection ${operation} failed; durable slot state remains authoritative: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  };
+  const observeTitle = (slotId: string, title: unknown): boolean => {
+    if (typeof title !== "string" || title.trim().length === 0) return false;
+    const normalized = title.trim();
+    if (titleCache.get(slotId) === normalized) return false;
+    titleCache.set(slotId, normalized);
+    return true;
+  };
+  const refreshTitles = (slotIds: string[]): void => {
+    const missing = [...new Set(slotIds)].filter(
+      (slotId) => !titleCache.has(slotId) && !titleRefreshes.has(slotId)
+    );
+    if (missing.length === 0) return;
+    const refresh = (
+      deps.presentationDispatch("titlesForSlots", [missing]) as Promise<Record<string, string>>
+    )
+      .then((titles) => {
+        let changed = false;
+        for (const slotId of missing) changed = observeTitle(slotId, titles[slotId]) || changed;
+        if (changed) deps.onSlotStateChanged?.({ kind: "tree" });
+      })
+      .catch((error) => reportProjectionFailure("title refresh", error))
+      .finally(() => {
+        for (const slotId of missing) {
+          if (titleRefreshes.get(slotId) === refresh) titleRefreshes.delete(slotId);
+        }
+      });
+    for (const slotId of missing) titleRefreshes.set(slotId, refresh);
+  };
+  const cachedTitlesForSlots = (slotIds: string[]): Record<string, string> => {
+    refreshTitles(slotIds);
+    return Object.fromEntries(
+      slotIds.flatMap((slotId) => {
+        const title = titleCache.get(slotId);
+        return title ? [[slotId, title] as const] : [];
+      })
+    );
+  };
+  const project = (operation: string, method: string, args: unknown[]): void => {
+    void deps
+      .presentationDispatch(method, args)
+      .catch((error) => reportProjectionFailure(operation, error));
+  };
   const presentNodes = async (nodes: RawTreeNode[]): Promise<PanelTreeNode[]> => {
-    const titles = await titlesForSlots(nodes.map((node) => node.slotId));
+    const titles = cachedTitlesForSlots(nodes.map((node) => node.slotId));
     return nodes.map(({ options, ...node }) => {
       const parsedOptions = presentationOptions(options);
       return {
@@ -165,7 +232,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     detail: WorkspacePanelDetail | null
   ): Promise<WorkspacePanelDetail | null> => {
     if (!detail) return null;
-    const titles = await titlesForSlots([detail.slot.slot_id]);
+    const titles = cachedTitlesForSlots([detail.slot.slot_id]);
     return {
       ...detail,
       slot: {
@@ -321,14 +388,10 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         await dispatch<undefined>("slotCreate", [
           { ...slotInput, ...(ownerUserId ? { ownerUserId } : {}) },
         ]);
-        if (input.initialEntry) {
-          await deps.presentationDispatch("bindSlot", [
-            input.slotId,
-            input.initialEntry.entityId,
-            input.initialEntry.source,
-            title ?? null,
-          ]);
-        }
+        if (input.title) observeTitle(input.slotId, input.title);
+        // The reservation and slot binding above are the durable execution
+        // fact. Publish it before touching the optional presentation index so
+        // a cold Base DO can never hold first paint or runtime activation.
         deps.onSlotStateChanged?.(
           input.initialEntry
             ? {
@@ -339,9 +402,31 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
                 presentation: String(input.initialEntry.source).startsWith("browser:")
                   ? "executable"
                   : "awaiting-execution",
+                ...(!String(input.initialEntry.source).startsWith("browser:")
+                  ? {
+                      desiredExecution: {
+                        source: input.initialEntry.source,
+                        key: input.initialEntry.entryKey,
+                        contextId: input.initialEntry.contextId,
+                        stateArgs: input.initialEntry.stateArgs ?? {},
+                        ...(typeof input.initialEntry.options?.ref === "string" &&
+                        input.initialEntry.options.ref.length > 0
+                          ? { ref: input.initialEntry.options.ref }
+                          : {}),
+                      },
+                    }
+                  : {}),
               }
             : { kind: "tree" }
         );
+        if (input.initialEntry) {
+          project("slot bind", "bindSlot", [
+            input.slotId,
+            input.initialEntry.entityId,
+            input.initialEntry.source,
+            title ?? null,
+          ]);
+        }
       },
       "slot.commitPreparedNavigation": async (_ctx, [input]) => {
         // As on `slot.create`, `title` is presentation and travels with the
@@ -354,14 +439,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [
           input.slotId,
         ]);
-        if (detail) {
-          await deps.presentationDispatch("bindSlot", [
-            input.slotId,
-            detail.entity.id,
-            detail.currentHistory.source,
-            title ?? null,
-          ]);
-        }
+        if (input.title) observeTitle(input.slotId, input.title);
         deps.onSlotStateChanged?.({
           kind: "current-entity",
           slotId: input.slotId,
@@ -369,6 +447,14 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           currentEntityId: result.currentEntityId,
           presentation: "executable",
         });
+        if (detail) {
+          project("navigation bind", "bindSlot", [
+            input.slotId,
+            detail.entity.id,
+            detail.currentHistory.source,
+            title ?? null,
+          ]);
+        }
         return result;
       },
       "slot.updateCurrentStateArgs": async (_ctx, [slotId, stateArgs]) => {
@@ -395,7 +481,10 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           removed.push(...page.items.map((item) => item.slotId));
           cursor = page.nextCursor ?? undefined;
         } while (cursor);
-        if (removed.length > 0) await deps.presentationDispatch("removeSlots", [removed]);
+        if (removed.length > 0) {
+          for (const slotId of removed) titleCache.delete(slotId);
+          project("closed-slot removal", "removeSlots", [removed]);
+        }
         deps.onSlotStateChanged?.({ kind: "closed", slotIds: removed });
         return result;
       },
@@ -407,7 +496,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           [ownerUserId]
         );
         if (result.closedIds.length > 0) {
-          await deps.presentationDispatch("removeSlots", [result.closedIds]);
+          for (const slotId of result.closedIds) titleCache.delete(slotId);
+          project("closed-slot removal", "removeSlots", [result.closedIds]);
         }
         deps.onSlotStateChanged?.({ kind: "closed", slotIds: result.closedIds });
         return result;
@@ -427,7 +517,12 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         const explicit = (await deps.presentationDispatch("isEntityTitleExplicit", [
           entityId,
         ])) as boolean;
-        const titles = explicit ? await titlesForSlots([input.id]) : {};
+        const titles = explicit
+          ? ((await deps.presentationDispatch("titlesForSlots", [[input.id]])) as Record<
+              string,
+              string
+            >)
+          : {};
         await deps.presentationDispatch("indexPanel", [
           {
             ...input,
@@ -450,6 +545,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           if (explicit) return entityId;
         }
         await deps.presentationDispatch("updatePanelTitle", [slotId, entityId, title, options]);
+        observeTitle(slotId, title);
         deps.onSlotStateChanged?.({ kind: "tree" });
         return entityId;
       },

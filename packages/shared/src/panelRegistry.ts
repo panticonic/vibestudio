@@ -456,6 +456,32 @@ export class PanelRegistry implements PanelRelationshipProvider {
   }
 
   /**
+   * Apply derived manifest decoration to the local presentation projection.
+   * Decoration is not durable panel state: it is keyed by the immutable source
+   * reference and can be recomputed. Keeping this update in the registry makes
+   * every presentation consumer observe the same cached result.
+   */
+  updateIconDecoration(
+    panelId: string,
+    decoration: Pick<Panel, "icon" | "iconVersion" | "iconState">
+  ): boolean {
+    const panel = this.panels.get(panelId);
+    if (!panel) return false;
+    if (
+      panel.icon === decoration.icon &&
+      panel.iconVersion === decoration.iconVersion &&
+      panel.iconState === decoration.iconState
+    ) {
+      return false;
+    }
+    panel.icon = decoration.icon;
+    panel.iconVersion = decoration.iconVersion;
+    panel.iconState = decoration.iconState;
+    this.notifyPanelTreeUpdate(panelId);
+    return true;
+  }
+
+  /**
    * Update the focused panel in local memory.
    */
   updateSelectedPath(focusedPanelId: string): string[] {

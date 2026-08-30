@@ -3,12 +3,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
-import { createHash } from "node:crypto";
-import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import type { PanelAssetStreamClient } from "./panelAssetFacade.js";
 
 type GatewayStream = (service: string, method: string, args: unknown[]) => Promise<Response>;
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(error: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 /** Minimal stream client stub — the façade only ever touches `.stream`. */
 function fakeServerClient(stream: GatewayStream): PanelAssetStreamClient {
@@ -195,6 +207,19 @@ describe("panel asset façade backstops (offline / stalled server)", () => {
 });
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
+const BUILD_KEY = "b".repeat(64);
+
+function initialManifest(paths: string[]): string {
+  return JSON.stringify({
+    artifacts: paths.map((resourcePath) => ({
+      path: resourcePath,
+      contentType: "text/javascript; charset=utf-8",
+      integrity: `sha256-${"a".repeat(64)}`,
+      initial: true,
+    })),
+    runtimeHelpers: [],
+  });
+}
 
 describe("panel asset façade content cache", () => {
   it("serves immutable assets from disk on the second request (zero pipe fetch)", async () => {
@@ -225,19 +250,13 @@ describe("panel asset façade content cache", () => {
   it("shares one immutable entry across runtime context ids for the same build", async () => {
     const buildKey = "a".repeat(64);
     const body = "<!doctype html><script src='./bundle.js'></script>";
-    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
-      const descriptor = (args as [CapturedDescriptor])[0];
-      if (descriptor.path.includes("/__manifest.json")) {
-        return new Response(JSON.stringify({ artifacts: [], runtimeHelpers: [] }), {
+    const stream = vi.fn<GatewayStream>(
+      async () =>
+        new Response(body, {
           status: 200,
-          headers: { "content-type": "application/json", "cache-control": IMMUTABLE },
-        });
-      }
-      return new Response(body, {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": IMMUTABLE },
-      });
-    });
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": IMMUTABLE },
+        })
+    );
     const facade = await startPanelAssetFacade(fakeServerClient(stream), {
       stateDir: tempStateDir(),
     });
@@ -249,55 +268,72 @@ describe("panel asset façade content cache", () => {
         `${root}?contextId=panel-two&ref=state%3Anew&buildKey=${buildKey}`
       );
       expect(await second.text()).toBe(body);
-      // One entry request plus one immutable inventory; the second context hits
-      // both durable cache entries and opens no pipe stream.
-      expect(stream).toHaveBeenCalledTimes(2);
+      // Context identity is not part of an immutable build entry's cache key.
+      const entryCalls = stream.mock.calls.filter((call) => {
+        const descriptor = (call[2] as unknown as [CapturedDescriptor])[0];
+        return descriptor.path.startsWith("/panels/chat/");
+      });
+      expect(entryCalls).toHaveLength(1);
     } finally {
       await facade.close();
     }
   });
 
-  it("prefetches initial build artifacts and runtime helpers in one atomic bundle", async () => {
-    const buildKey = "d".repeat(64);
-    const helperVersion = "e".repeat(64);
-    const artifact = "export const boot = true;".repeat(100);
-    const helper = "globalThis.__helperReady = true;".repeat(60);
-    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
-    const helperDigest = createHash("sha256").update(helper).digest("hex");
-    const bundle = Buffer.concat([
-      Buffer.from(encodeBlobRecord(artifactDigest, Buffer.from(artifact))),
-      Buffer.from(encodeBlobRecord(helperDigest, Buffer.from(helper))),
-    ]);
-    const manifest = JSON.stringify({
-      artifacts: [
-        {
-          path: "bundle.js",
-          contentType: "application/javascript; charset=utf-8",
-          integrity: `sha256-${artifactDigest}`,
-          initial: true,
-        },
-      ],
-      runtimeHelpers: [
-        {
-          path: "__loader.js",
-          version: helperVersion,
-          contentType: "application/javascript; charset=utf-8",
-          integrity: `sha256-${helperDigest}`,
-          initial: true,
-        },
-      ],
-    });
-    const seen: string[] = [];
+  it("dispatches demanded assets independently without speculative bundle barriers", async () => {
+    const releaseFirst = deferred<void>();
+    const observed: string[] = [];
     const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
       const descriptor = (args as [CapturedDescriptor])[0];
-      seen.push(descriptor.path);
-      if (descriptor.path.endsWith("/__manifest.json")) {
-        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      observed.push(descriptor.path);
+      if (descriptor.path.endsWith("first.js")) await releaseFirst.promise;
+      return new Response(descriptor.path, {
+        status: 200,
+        headers: { "content-type": "text/javascript", "cache-control": IMMUTABLE },
+      });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    try {
+      const origin = `http://127.0.0.1:${facade.port}`;
+      const first = fetch(`${origin}/__vibestudio/panel-build/${"b".repeat(64)}/first.js`);
+      await vi.waitFor(() => expect(observed).toHaveLength(1));
+      const second = await fetch(`${origin}/__vibestudio/panel-build/${"b".repeat(64)}/second.js`);
+      expect(await second.text()).toContain("second.js");
+      expect(observed).toEqual([
+        `/__vibestudio/panel-build/${"b".repeat(64)}/first.js`,
+        `/__vibestudio/panel-build/${"b".repeat(64)}/second.js`,
+      ]);
+      expect(observed.some((value) => value.includes("__bundle"))).toBe(false);
+      releaseFirst.resolve(undefined);
+      await (await first).text();
+    } finally {
+      releaseFirst.resolve(undefined);
+      await facade.close();
+    }
+  });
+
+  it("coalesces prewarm-first and demanded transfer into one per-asset job", async () => {
+    const releaseAsset = deferred<void>();
+    const assetStarted = deferred<void>();
+    const assetPath = `/__vibestudio/panel-build/${BUILD_KEY}/shared.js`;
+    const observed: string[] = [];
+    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
+      const descriptor = (args as [CapturedDescriptor])[0];
+      observed.push(descriptor.path);
+      if (descriptor.path.endsWith("__manifest.json")) {
+        return new Response(initialManifest(["shared.js"]), {
+          headers: { "content-type": "application/json", "cache-control": IMMUTABLE },
+        });
       }
-      if (descriptor.path.includes("/__bundle?")) {
-        return new Response(bundle, { headers: { "content-type": "application/octet-stream" } });
+      if (descriptor.path === assetPath) {
+        assetStarted.resolve(undefined);
+        await releaseAsset.promise;
+        return new Response("shared asset", {
+          headers: { "content-type": "text/javascript", "cache-control": IMMUTABLE },
+        });
       }
-      return new Response("<!doctype html>", {
+      return new Response("<html>entry</html>", {
         headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
       });
     });
@@ -306,49 +342,43 @@ describe("panel asset façade content cache", () => {
     });
     try {
       const origin = `http://127.0.0.1:${facade.port}`;
-      expect(
-        await (await fetch(`${origin}/panels/chat/?contextId=one&buildKey=${buildKey}`)).text()
-      ).toBe("<!doctype html>");
-      expect(
-        await (await fetch(`${origin}/__vibestudio/panel-build/${buildKey}/bundle.js`)).text()
-      ).toBe(artifact);
-      expect(
-        await (await fetch(`${origin}/panels/chat/__loader.js?v=${helperVersion}`)).text()
-      ).toBe(helper);
-      expect(seen.filter((value) => value.includes("/__bundle?"))).toHaveLength(1);
-      expect(seen).not.toContain(`/__vibestudio/panel-build/${buildKey}/bundle.js`);
-      expect(seen).not.toContain(`/panels/chat/__loader.js?v=${helperVersion}`);
+      await (
+        await fetch(`${origin}/panels/chat/?contextId=panel-one&buildKey=${BUILD_KEY}`)
+      ).text();
+      await assetStarted.promise;
+      const demanded = fetch(`${origin}${assetPath}`).then((response) => response.text());
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(observed.filter((value) => value === assetPath)).toHaveLength(1);
+      releaseAsset.resolve(undefined);
+      await expect(demanded).resolves.toBe("shared asset");
+      expect(observed.some((value) => value.includes("__bundle"))).toBe(false);
     } finally {
+      releaseAsset.resolve(undefined);
       await facade.close();
     }
   });
 
-  it("prefetches a content-addressed desktop app before its import waterfall begins", async () => {
-    const buildKey = "f".repeat(64);
-    const artifact = "export const shellReady = true;".repeat(100);
-    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
-    const manifest = JSON.stringify({
-      artifacts: [
-        {
-          path: "bundle.js",
-          contentType: "application/javascript; charset=utf-8",
-          integrity: `sha256-${artifactDigest}`,
-          initial: true,
-        },
-      ],
-    });
-    const bundle = Buffer.from(encodeBlobRecord(artifactDigest, Buffer.from(artifact)));
-    const seen: string[] = [];
+  it("coalesces demand-first and subsequent prewarm into one per-asset job", async () => {
+    const releaseAsset = deferred<void>();
+    const assetStarted = deferred<void>();
+    const assetPath = `/__vibestudio/panel-build/${BUILD_KEY}/shared.js`;
+    const observed: string[] = [];
     const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
       const descriptor = (args as [CapturedDescriptor])[0];
-      seen.push(descriptor.path);
-      if (descriptor.path.endsWith("/__manifest.json")) {
-        return new Response(manifest, { headers: { "content-type": "application/json" } });
+      observed.push(descriptor.path);
+      if (descriptor.path.endsWith("__manifest.json")) {
+        return new Response(initialManifest(["shared.js"]), {
+          headers: { "content-type": "application/json", "cache-control": IMMUTABLE },
+        });
       }
-      if (descriptor.path.includes("/__bundle?")) {
-        return new Response(bundle, { headers: { "content-type": "application/octet-stream" } });
+      if (descriptor.path === assetPath) {
+        assetStarted.resolve(undefined);
+        await releaseAsset.promise;
+        return new Response("shared asset", {
+          headers: { "content-type": "text/javascript", "cache-control": IMMUTABLE },
+        });
       }
-      return new Response("<!doctype html>", {
+      return new Response("<html>entry</html>", {
         headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
       });
     });
@@ -357,128 +387,21 @@ describe("panel asset façade content cache", () => {
     });
     try {
       const origin = `http://127.0.0.1:${facade.port}`;
-      expect(await (await fetch(`${origin}/_a/${buildKey}/index.html`)).text()).toBe(
-        "<!doctype html>"
+      const demanded = fetch(`${origin}${assetPath}`).then((response) => response.text());
+      await assetStarted.promise;
+      await (
+        await fetch(`${origin}/panels/chat/?contextId=panel-one&buildKey=${BUILD_KEY}`)
+      ).text();
+      await vi.waitFor(() =>
+        expect(observed.some((value) => value.endsWith("__manifest.json"))).toBe(true)
       );
-      expect(await (await fetch(`${origin}/_a/${buildKey}/bundle.js`)).text()).toBe(artifact);
-      expect(seen.filter((value) => value.includes("/__bundle?"))).toHaveLength(1);
-      expect(seen).not.toContain(`/_a/${buildKey}/bundle.js`);
+      expect(observed.filter((value) => value === assetPath)).toHaveLength(1);
+      releaseAsset.resolve(undefined);
+      await expect(demanded).resolves.toBe("shared asset");
     } finally {
+      releaseAsset.resolve(undefined);
       await facade.close();
     }
-  });
-
-  it("never enrolls unrelated unit icons in a panel build prefetch", async () => {
-    const buildKey = "e".repeat(64);
-    const artifact = "export const panelReady = true;";
-    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
-    const manifest = JSON.stringify({
-      artifacts: [
-        {
-          path: "bundle.js",
-          contentType: "application/javascript; charset=utf-8",
-          integrity: `sha256-${artifactDigest}`,
-          initial: true,
-        },
-      ],
-    });
-    const bundle = Buffer.from(encodeBlobRecord(artifactDigest, Buffer.from(artifact)));
-    let releaseBundle!: () => void;
-    const bundleReleased = new Promise<void>((resolve) => {
-      releaseBundle = resolve;
-    });
-    let announceBundle!: () => void;
-    const bundleStarted = new Promise<void>((resolve) => {
-      announceBundle = resolve;
-    });
-    const seen: string[] = [];
-    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
-      const descriptor = (args as [CapturedDescriptor])[0];
-      seen.push(descriptor.path);
-      if (descriptor.path.endsWith("/__manifest.json")) {
-        return new Response(manifest, { headers: { "content-type": "application/json" } });
-      }
-      if (descriptor.path.includes("/__bundle?")) {
-        announceBundle();
-        await bundleReleased;
-        return new Response(bundle, { headers: { "content-type": "application/octet-stream" } });
-      }
-      if (descriptor.path.startsWith("/__vibestudio/unit-icon?")) {
-        return new Response("<svg/>", { headers: { "content-type": "image/svg+xml" } });
-      }
-      return new Response("<!doctype html>", {
-        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
-      });
-    });
-    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
-      stateDir: tempStateDir(),
-    });
-    const origin = `http://127.0.0.1:${facade.port}`;
-    const entryUrl = `${origin}/panels/chat/?contextId=one&buildKey=${buildKey}`;
-    const iconPath = "/__vibestudio/unit-icon?source=workers%2Fagent-worker&path=assets%2Ficon.svg";
-    try {
-      await (await fetch(entryUrl)).text();
-      await bundleStarted;
-      const iconResponse = fetch(`${origin}${iconPath}`, { headers: { referer: entryUrl } });
-      await vi.waitFor(() => expect(seen).toContain(iconPath));
-      expect(await (await iconResponse).text()).toBe("<svg/>");
-    } finally {
-      releaseBundle();
-      await facade.close();
-    }
-  });
-
-  it("cancels a stalled prefetch body when the façade closes", async () => {
-    const buildKey = "d".repeat(64);
-    const artifact = "export const eventuallyReady = true;";
-    const artifactDigest = createHash("sha256").update(artifact).digest("hex");
-    const manifest = JSON.stringify({
-      artifacts: [
-        {
-          path: "bundle.js",
-          contentType: "application/javascript; charset=utf-8",
-          integrity: `sha256-${artifactDigest}`,
-          initial: true,
-        },
-      ],
-    });
-    let announceBundle!: () => void;
-    const bundleStarted = new Promise<void>((resolve) => {
-      announceBundle = resolve;
-    });
-    let bodyCancelled = false;
-    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
-      const descriptor = (args as [CapturedDescriptor])[0];
-      if (descriptor.path.endsWith("/__manifest.json")) {
-        return new Response(manifest, { headers: { "content-type": "application/json" } });
-      }
-      if (descriptor.path.includes("/__bundle?")) {
-        announceBundle();
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array([1, 2, 3]));
-            },
-            cancel() {
-              bodyCancelled = true;
-            },
-          }),
-          { headers: { "content-type": "application/octet-stream" } }
-        );
-      }
-      return new Response("<!doctype html>", {
-        headers: { "content-type": "text/html", "cache-control": IMMUTABLE },
-      });
-    });
-    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
-      stateDir: tempStateDir(),
-    });
-    const origin = `http://127.0.0.1:${facade.port}`;
-    await (await fetch(`${origin}/panels/chat/?contextId=one&buildKey=${buildKey}`)).text();
-    await bundleStarted;
-
-    await expect(facade.close()).resolves.toBeUndefined();
-    expect(bodyCancelled).toBe(true);
   });
 
   it("reuses an immutable representation across credential rotation", async () => {
