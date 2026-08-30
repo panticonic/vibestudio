@@ -527,6 +527,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       setup = createTestSetup({
         resolveExactCausalInvocation: vi.fn(async () => ({
           initiatingUser: { userId: "usr_initiator", handle: "initiator" },
+          taskAuthority: "task:trajectory-turn" as const,
         })),
       });
       setup.server.initHandlers();
@@ -564,6 +565,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         caller: {
           runtime: { id: "agent:one", kind: "agent" },
           subject: { userId: "usr_initiator", handle: "initiator" },
+          taskAuthority: "task:trajectory-turn",
         },
         authorization: { authorizingOrigin: { kind: "user" } },
         causalParent,
@@ -1562,14 +1564,25 @@ describe("RpcServer HTTP POST /rpc", () => {
         "worker"
       );
       const entityCache = new EntityCache();
+      const agentBinding = {
+        entityId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        contextId: "context:agent-1",
+        channelId: "channel:agent-1",
+      };
       entityCache._onActivate(
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
           "hash-1",
-          ["credentials.proxyFetch"]
+          ["credentials.proxyFetch"],
+          agentBinding
         )
       );
+      const causalParent = {
+        kind: "trajectory-invocation" as const,
+        ...channelTrajectoryFor(agentBinding.channelId),
+        invocationId: "invocation:streaming-fetch",
+      };
       const stubEgress = {
         forwardProxyFetchStream: vi.fn(
           async (
@@ -1595,6 +1608,10 @@ describe("RpcServer HTTP POST /rpc", () => {
         dispatcher,
         egressProxy: stubEgress,
         entityCache,
+        resolveExactCausalInvocation: async () => ({
+          initiatingUser: { userId: "usr_initiator", handle: "initiator" },
+          taskAuthority: "task:streaming-turn",
+        }),
         ensureUserlandDoReady: async () => undefined,
       });
       server.initHandlers();
@@ -1617,6 +1634,7 @@ describe("RpcServer HTTP POST /rpc", () => {
               targetId: "main",
               method: "credentials.proxyFetch",
               args: [{ url: "https://example.com/", method: "GET" }],
+              causalParent,
             })
           ),
         });
@@ -1624,7 +1642,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         await res.arrayBuffer();
         expect(stubEgress.forwardProxyFetchStream).toHaveBeenCalledWith(
           expect.objectContaining({
-            caller: {
+            caller: expect.objectContaining({
               runtime: {
                 id: "do:workers/agent-worker:AiChatWorker:agent-1",
                 kind: "do",
@@ -1645,7 +1663,9 @@ describe("RpcServer HTTP POST /rpc", () => {
                 ],
               },
               codeApproved: true,
-            },
+              subject: { userId: "usr_initiator", handle: "initiator" },
+              taskAuthority: "task:streaming-turn",
+            }),
           }),
           expect.any(Function),
           expect.any(AbortSignal)

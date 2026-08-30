@@ -162,7 +162,12 @@ export interface WorkspaceSemanticPort {
       log_id?: unknown;
       head?: unknown;
       invocation_id?: unknown;
+      turn_id?: unknown;
       initiating_user_id?: unknown;
+      status?: unknown;
+      terminal_outcome?: unknown;
+      started_events?: unknown;
+      terminal_events?: unknown;
     }>;
   }>;
 }
@@ -238,6 +243,13 @@ export function createWorkspaceSourceProviderV1(
 
 export interface ExactCausalInvocationFact {
   initiatingUserId: string | null;
+  taskRef: string | null;
+  active: boolean;
+}
+
+/** Complete branch-local coordinate for one trajectory turn. */
+export function trajectoryTurnTaskRef(parent: RpcCausalParent, turnId: string): string {
+  return JSON.stringify([parent.logId, parent.head, turnId]);
 }
 
 export async function resolveExactCausalInvocation(
@@ -257,7 +269,14 @@ export async function resolveExactCausalInvocation(
       row.invocation_id === parent.invocationId
   );
   if (!row) return null;
+  const turnId = typeof row.turn_id === "string" && row.turn_id.length > 0 ? row.turn_id : null;
   return {
+    taskRef: turnId ? trajectoryTurnTaskRef(parent, turnId) : null,
+    active:
+      row.status === "started" &&
+      row.terminal_outcome == null &&
+      row.started_events === 1 &&
+      row.terminal_events === 0,
     initiatingUserId:
       typeof row.initiating_user_id === "string" && row.initiating_user_id.length > 0
         ? row.initiating_user_id

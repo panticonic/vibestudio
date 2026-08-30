@@ -339,6 +339,9 @@ export function parseUserlandCapabilities(
     ) {
       throw new Error(`${entryLabel}.grantScopes contains an invalid or duplicate scope`);
     }
+    if (!grantScopes.includes("once")) {
+      throw new Error(`${entryLabel}.grantScopes must include "once"`);
+    }
     if (
       (tier === "critical" || sensitivity === "destructive") &&
       grantScopes.some((scope) => scope !== "once")

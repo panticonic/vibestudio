@@ -256,14 +256,32 @@ type TestRpcServer = {
     method?: string
   ): { ok: boolean; reason?: string };
   sendToSession(ws: unknown, msg: unknown): void;
-  resolveCausalParent(
+  resolveCausalInvocation(
     caller: ReturnType<typeof createVerifiedCaller>,
     message: {
       causalParent?: import("@vibestudio/rpc").RpcCausalParent;
       parentRequestId?: string;
     }
-  ): Promise<import("@vibestudio/rpc").RpcCausalParent | undefined>;
+  ): Promise<
+    | {
+        parent: import("@vibestudio/rpc").RpcCausalParent;
+        initiatingUser: import("@vibestudio/identity/types").UserSubject | null;
+        taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal | null;
+      }
+    | undefined
+  >;
 };
+
+async function resolveCausalParent(
+  server: RpcServer,
+  caller: ReturnType<typeof createVerifiedCaller>,
+  message: {
+    causalParent?: import("@vibestudio/rpc").RpcCausalParent;
+    parentRequestId?: string;
+  }
+): Promise<import("@vibestudio/rpc").RpcCausalParent | undefined> {
+  return (await testServer(server).resolveCausalInvocation(caller, message))?.parent;
+}
 
 function testServer(server: RpcServer): TestRpcServer {
   return server as unknown as TestRpcServer;
@@ -1997,6 +2015,54 @@ describe("RpcServer relay behavior", () => {
     expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("streamed");
   });
 
+  it("authorizes a routed unary DO call with its verified causal task", async () => {
+    const resolveExactCausalInvocation = vi.fn(async () => ({
+      initiatingUser: { userId: "usr_initiator", handle: "initiator" },
+      taskAuthority: "task:routed-turn" as const,
+    }));
+    const { server } = createServer({ resolveExactCausalInvocation });
+    const relayToDO = vi.spyOn(testServer(server), "relayToDO").mockResolvedValue({ ok: true });
+    const binding = {
+      entityId: "entity:agent",
+      contextId: "context:agent",
+      channelId: "channel:agent",
+    };
+    const client = createClient();
+    client.caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
+    const causalParent = {
+      kind: "trajectory-invocation" as const,
+      ...channelTrajectoryFor(binding.channelId),
+      invocationId: "invocation:routed-tool",
+    };
+
+    await handleRoute(server, client, "do:workers/example:Example:one", {
+      type: "request",
+      requestId: "routed-causal-task",
+      fromId: client.caller.runtime.id,
+      method: "example.write",
+      args: [],
+      causalParent,
+    });
+
+    expect(relayToDO).toHaveBeenCalledWith(
+      client.caller.runtime.id,
+      client.caller.runtime.kind,
+      "do:workers/example:Example:one",
+      "example.write",
+      [],
+      expect.objectContaining({ causalParent }),
+      expect.objectContaining({
+        authenticatedCaller: expect.objectContaining({
+          subject: { userId: "usr_initiator", handle: "initiator" },
+          taskAuthority: "task:routed-turn",
+        }),
+        authorizingCaller: expect.objectContaining({
+          taskAuthority: "task:routed-turn",
+        }),
+      })
+    );
+  });
+
   it("retains the admission-bound sealed panel identity for a routed DO stream", async () => {
     const capabilityGrantStore = createTestGrantStore();
     // What admitting this panel would have minted: one version-bound grant per
@@ -3628,11 +3694,11 @@ describe("RpcServer caller identity", () => {
       invocationId: "invocation:tool",
     };
 
-    await expect(testServer(server).resolveCausalParent(caller, { causalParent })).resolves.toEqual(
+    await expect(resolveCausalParent(server, caller, { causalParent })).resolves.toEqual(
       causalParent
     );
     await expect(
-      testServer(server).resolveCausalParent(caller, {
+      resolveCausalParent(server, caller, {
         causalParent: {
           ...causalParent,
           ...channelTrajectoryFor("channel:sibling"),
@@ -3640,7 +3706,7 @@ describe("RpcServer caller identity", () => {
       })
     ).rejects.toThrow(/does not match/);
     await expect(
-      testServer(server).resolveCausalParent(createVerifiedCaller("worker:one", "worker"), {
+      resolveCausalParent(server, createVerifiedCaller("worker:one", "worker"), {
         causalParent,
       })
     ).rejects.toThrow(/host-bound agent trajectory/);
@@ -3657,7 +3723,7 @@ describe("RpcServer caller identity", () => {
       })
     );
     await expect(
-      testServer(server).resolveCausalParent(createVerifiedCaller(vesselId, "do"), {
+      resolveCausalParent(server, createVerifiedCaller(vesselId, "do"), {
         causalParent,
       })
     ).resolves.toEqual(causalParent);
@@ -3678,13 +3744,13 @@ describe("RpcServer caller identity", () => {
       invocationId: "invocation:missing",
     };
     const unavailable = createServer({ resolveExactCausalInvocation: undefined }).server;
-    await expect(
-      testServer(unavailable).resolveCausalParent(caller, { causalParent })
-    ).rejects.toThrow(/verification is unavailable/);
+    await expect(resolveCausalParent(unavailable, caller, { causalParent })).rejects.toThrow(
+      /verification is unavailable/
+    );
 
     const resolveExactCausalInvocation = vi.fn(async () => null);
     const missing = createServer({ resolveExactCausalInvocation }).server;
-    await expect(testServer(missing).resolveCausalParent(caller, { causalParent })).rejects.toThrow(
+    await expect(resolveCausalParent(missing, caller, { causalParent })).rejects.toThrow(
       /does not exist/
     );
     expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
@@ -4234,15 +4300,22 @@ describe("RpcServer caller identity", () => {
       head: "main",
       invocationId: "invocation:tool-1",
     };
+    const authorizingCaller = {
+      ...createVerifiedCaller("do:agents/AgentDO:agent-1", "do"),
+      taskAuthority: "task:trajectory-turn" as const,
+    };
     const resolveExtensionInvocation = vi.fn(() => ({
       caller: {
         callerId: "do:agents/AgentDO:agent-1",
         callerKind: "do" as const,
       },
-      authorizingCaller: createVerifiedCaller("do:agents/AgentDO:agent-1", "do"),
+      authorizingCaller,
       causalParent,
     }));
-    const resolveExactCausalInvocation = vi.fn(async () => ({ initiatingUser: null }));
+    const resolveExactCausalInvocation = vi.fn(async () => ({
+      initiatingUser: null,
+      taskAuthority: "task:trajectory-turn" as const,
+    }));
     const { server } = createServer({
       resolveExtensionInvocation,
       resolveExactCausalInvocation,
@@ -4269,7 +4342,11 @@ describe("RpcServer caller identity", () => {
     expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toMatchObject({
-      caller: { runtime: { id: "@workspace-extensions/tools", kind: "extension" } },
+      caller: {
+        runtime: { id: "@workspace-extensions/tools", kind: "extension" },
+        taskAuthority: "task:trajectory-turn",
+      },
+      authorizingCaller,
       causalParent,
     });
   });
