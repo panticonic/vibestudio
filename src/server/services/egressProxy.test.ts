@@ -2726,8 +2726,7 @@ describe("EgressProxy", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("honors an agent-scoped connection grant for direct agent egress", async () => {
-    const agentId = "do:workers/agent-worker:AiChatWorker:conversation-1";
+  it("shares a resident-agent connection grant across chats on the same installed version", async () => {
     const credential = createCredential({
       grants: [
         {
@@ -2735,10 +2734,11 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: "https://api.example.test/v1",
           action: "use",
-          scope: "agent",
-          agentId,
+          scope: "version",
+          repoPath: "workers/agent-worker",
+          effectiveVersion: "agent-version-1",
           grantedAt: 1,
-          grantedBy: "agent",
+          grantedBy: "version",
         },
       ],
     });
@@ -2748,29 +2748,32 @@ describe("EgressProxy", () => {
       "fetch",
       vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
     );
-    const caller = createVerifiedCaller(
-      agentId,
-      "do",
-      {
-        callerId: agentId,
-        callerKind: "do",
-        repoPath: "workers/agent-worker",
-        effectiveVersion: "agent-version-1",
-        executionDigest: "a".repeat(64),
-        requested: [],
-      },
-      { entityId: agentId, contextId: "ctx-agent", channelId: "conversation-1" }
-    );
+    for (const conversation of ["conversation-1", "conversation-2"]) {
+      const agentId = `do:workers/agent-worker:AiChatWorker:${conversation}`;
+      const caller = createVerifiedCaller(
+        agentId,
+        "do",
+        {
+          callerId: agentId,
+          callerKind: "do",
+          repoPath: "workers/agent-worker",
+          effectiveVersion: "agent-version-1",
+          executionDigest: "a".repeat(64),
+          requested: [],
+        },
+        { entityId: agentId, contextId: `ctx-${conversation}`, channelId: conversation }
+      );
 
-    await proxy.forwardProxyFetch({
-      caller,
-      credentialId: "cred-1",
-      url: "https://api.example.test/v1/items",
-      method: "GET",
-    });
+      await proxy.forwardProxyFetch({
+        caller,
+        credentialId: "cred-1",
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
+    }
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("keys session grants to the concrete caller identity", async () => {
