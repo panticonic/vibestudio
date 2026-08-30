@@ -56,6 +56,7 @@ import {
   onShellSurface,
   onConnectLinkError,
   peekPendingConnectLink,
+  peekPendingConnectLinkError,
   registerProtocol,
 } from "./protocolHandler.js";
 import { BrowserEnvironmentReadiness } from "./services/browserEnvironmentReadiness.js";
@@ -1502,6 +1503,7 @@ type BootstrapConnectionState = {
    */
   pendingPairLink: string | null;
   pendingPairConfirmed: boolean;
+  pairingLinkError: string | null;
   startupError: { message: string; detail?: string; logPath?: string } | null;
   serverLogPath: string | null;
   startupProgress: StartupConnectionProgress | null;
@@ -1534,6 +1536,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
   // chooser can auto-pair. Peeked (non-draining) so a getState poll is idempotent.
   const pending = peekPendingConnectLink();
   const pendingPairLink = pending ? createConnectDeepLink(pending) : null;
+  const pairingLinkError = peekPendingConnectLinkError();
   // Only the chooser reads localWorkspaces. The renderer polls getState every 500ms
   // while "starting", so computing the workspace scan on every tick is pure waste —
   // the poll only watches for the mode flip. Compute the heavy fields only when shown.
@@ -1546,6 +1549,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
       isDev: isDev(),
       pendingPairLink,
       pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
+      pairingLinkError,
       startupError: bootstrapStartupError,
       serverLogPath:
         bootstrapConnectionKind === "local" && startupMode.kind === "local"
@@ -1566,6 +1570,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
     isDev: isDev(),
     pendingPairLink,
     pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
+    pairingLinkError,
     startupError: bootstrapStartupError,
     serverLogPath:
       bootstrapConnectionKind === "local" && startupMode.kind === "local"
@@ -1700,6 +1705,10 @@ function installBootstrapConnectionHandlers(): void {
     if (parsed.kind === "error") {
       return { ok: false, error: "invalid-url", message: parsed.reason };
     }
+    // A valid replacement supersedes any launch-time malformed/expired link.
+    // Clear the buffered failure at the same authority boundary that accepts
+    // the replacement, so a later chooser can never resurrect stale advice.
+    getPendingConnectLinkError();
     // The bootstrap chooser is the owner of a launch-time deep link.  It peeks
     // at that link while rendering the confirmation card, so accepting the
     // card must consume the buffered intent before the hosted shell mounts.
@@ -1783,13 +1792,15 @@ app.on("ready", async () => {
     if (IS_HEADLESS_HOST) return;
     log.warn(`[pairing] Ignored an invalid pairing link: ${reason}`);
     applicationWindow.showAndFocus();
+    pushBootstrapConnectionState();
     if (Notification.isSupported()) {
       new Notification({ title: "Couldn't open that pairing link", body: reason }).show();
     }
   };
   onConnectLinkError(surfaceConnectLinkError);
-  // Drain any error buffered before this listener registered (launch-time click).
-  const bufferedLinkError = getPendingConnectLinkError();
+  // Notify for any error buffered before this listener registered (launch-time
+  // click), but leave it buffered for the bootstrap recovery UI.
+  const bufferedLinkError = peekPendingConnectLinkError();
   if (bufferedLinkError) surfaceConnectLinkError(bufferedLinkError);
   // Sleep/wake + screen-unlock recovery: a Iroh pipe can be dead while the
   // transport still reports "connected" for up to ~45s after the machine wakes.

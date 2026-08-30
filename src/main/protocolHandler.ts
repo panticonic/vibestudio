@@ -102,6 +102,15 @@ export function getPendingConnectLinkError(): string | null {
   return error;
 }
 
+/**
+ * Observe a launch-time link failure without consuming it. The bootstrap
+ * renderer owns the visible recovery state; OS notifications are only a
+ * secondary signal and must not drain the reason before that UI can render.
+ */
+export function peekPendingConnectLinkError(): string | null {
+  return pendingError;
+}
+
 export function onConnectLinkError(listener: (reason: string) => void): () => void {
   errorListeners.add(listener);
   return () => errorListeners.delete(listener);

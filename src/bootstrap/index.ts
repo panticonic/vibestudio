@@ -50,6 +50,7 @@ type BootstrapConnectionState = {
   /** The vibestudio://connect deep link the app was opened with (auto-pair). */
   pendingPairLink?: string | null;
   pendingPairConfirmed?: boolean;
+  pairingLinkError?: string | null;
   startupError?: { message: string; detail?: string; logPath?: string } | null;
   serverLogPath?: string | null;
   startupProgress?: StartupConnectionProgress | null;
@@ -445,6 +446,9 @@ function isBootstrapConnectionState(value: unknown): value is BootstrapConnectio
     (value["connectionKind"] === "local" ||
       value["connectionKind"] === "remote" ||
       value["connectionKind"] === null) &&
+    (value["pairingLinkError"] === undefined ||
+      value["pairingLinkError"] === null ||
+      typeof value["pairingLinkError"] === "string") &&
     (value["startupProgress"] === undefined ||
       value["startupProgress"] === null ||
       isStartupConnectionProgress(value["startupProgress"]))
@@ -468,6 +472,29 @@ function setConnectionHeader(): void {
     "Choose a server or workspace",
     "Pair with an existing server, reconnect to a saved server, or launch a local workspace."
   );
+}
+
+function setPairingLinkFailureHeader(reason: string): void {
+  bootstrapMain?.setAttribute("data-bootstrap-mode", "connection");
+  setHeader("Pairing link", "This pairing link can’t be used", reason, "error");
+}
+
+function appendPairingLinkFailure(parent: HTMLElement): void {
+  const status = document.createElement("div");
+  status.className = "connection-error";
+  status.setAttribute("role", "alert");
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = "Request a fresh pairing link";
+
+  const detail = document.createElement("div");
+  detail.className = "meta";
+  detail.textContent =
+    "Pairing links expire and can be used only once. Generate a new link on the server or ask a paired administrator, then paste it below.";
+
+  status.append(title, detail);
+  parent.append(status);
 }
 
 function connectionButton(
@@ -730,9 +757,12 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
 function renderConnectionChooser(state: BootstrapConnectionState): void {
   connectionHandoff = null;
   connectionState = state;
-  setConnectionHeader();
+  const pairingLinkError = state.pairingLinkError?.trim() || null;
+  if (pairingLinkError) setPairingLinkFailureHeader(pairingLinkError);
+  else setConnectionHeader();
   approvalsContainer.className = "connection-grid";
   approvalsContainer.replaceChildren();
+  if (pairingLinkError) appendPairingLinkFailure(approvalsContainer);
   appendConnectionStatus(approvalsContainer);
   if (state.pendingPairLink && state.pendingPairConfirmed && !autoPairTriggered) {
     autoPairTriggered = true;

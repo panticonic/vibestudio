@@ -125,7 +125,11 @@ describe("protocolHandler", () => {
     expect(errorListener.mock.calls[0]?.[0]).toMatch(
       /not a Vibestudio pair URL|unsupported pairing protocol/i
     );
-    // Buffered too, then drained once.
+    // Buffered too. Notifications and bootstrap-state reads may observe the
+    // failure without stealing it from the visible recovery UI.
+    expect(mod.peekPendingConnectLinkError()).toMatch(/not a Vibestudio pair URL|fresh link/i);
+    expect(mod.peekPendingConnectLinkError()).toMatch(/not a Vibestudio pair URL|fresh link/i);
+    // The owner can still consume it once a replacement link is accepted.
     expect(mod.getPendingConnectLinkError()).toMatch(/not a Vibestudio pair URL|fresh link/i);
     expect(mod.getPendingConnectLinkError()).toBeNull();
     // A failed parse must NOT leave a pending (dial-able) link.
@@ -140,6 +144,20 @@ describe("protocolHandler", () => {
     mod.enqueueConnectLink(link);
     expect(mod.getPendingConnectLinkError()).toBeNull();
     expect(mod.getPendingConnectLink()?.endpointId).toBe("aa".repeat(32));
+  });
+
+  it("keeps an expired launch invite available to the bootstrap recovery UI", async () => {
+    const mod = await import("./protocolHandler.js");
+    const expiredLink = createConnectDeepLink({
+      ...pair("D".repeat(32)),
+      exp: Date.now() - 1,
+    });
+
+    mod.enqueueConnectLink(expiredLink);
+
+    expect(mod.getPendingConnectLink()).toBeNull();
+    expect(mod.peekPendingConnectLinkError()).toMatch(/expired/i);
+    expect(mod.peekPendingConnectLinkError()).toMatch(/expired/i);
   });
 
   it("registers packaged and development protocol handlers", async () => {
