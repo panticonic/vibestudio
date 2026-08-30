@@ -1036,26 +1036,30 @@ async function waitForChatExperienceReady(app, panelId, timeoutMs) {
 }
 
 async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
+  const replacementTitle = `Desktop title projection ${randomUUID().slice(0, 8)}`;
   const expectedTitle = await evaluateElectron(
     app,
-    async (_electron, id) => {
+    async (_electron, { id, title }) => {
       const testApi = globalThis.__testApi;
       if (!testApi) throw new Error("Desktop test API is not available");
-      return testApi.executePanelScript(id, "document.title");
+      return testApi.executePanelScript(
+        id,
+        `document.title = ${JSON.stringify(title)}; document.title`
+      );
     },
-    panelId,
-    "reading the native panel document title"
+    { id: panelId, title: replacementTitle },
+    "changing the native panel document title"
   );
   if (typeof expectedTitle !== "string" || expectedTitle.trim().length === 0) {
     throw new Error(`Native panel did not expose a document title: ${JSON.stringify(expectedTitle)}`);
   }
 
   const deadline = Date.now() + Math.min(timeoutMs, 30_000);
-  let latestChromeText = "";
+  let latestChrome = { treeTitle: "", breadcrumbTitle: "" };
   while (Date.now() < deadline) {
-    latestChromeText = await evaluateElectron(
+    latestChrome = await evaluateElectron(
       app,
-      async ({ webContents }) => {
+      async ({ webContents }, id) => {
         const shell = webContents
           .getAllWebContents()
           .find(
@@ -1064,20 +1068,40 @@ async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
               contents.getTitle() === "@workspace-apps/shell" &&
               !contents.getURL().includes("#overlaySurface=")
           );
-        if (!shell) return "";
-        return shell.executeJavaScript("document.body?.innerText ?? ''", true);
+        if (!shell) return { treeTitle: "", breadcrumbTitle: "" };
+        return shell.executeJavaScript(
+          `(() => {
+            const panelId = ${JSON.stringify(id)};
+            const treeRow = [...document.querySelectorAll('[data-panel-tree-row="true"]')]
+              .find((element) => element.getAttribute('data-panel-id') === panelId);
+            const breadcrumb = [...document.querySelectorAll('[data-breadcrumb-id]')]
+              .find((element) => element.getAttribute('data-breadcrumb-id') === panelId);
+            return {
+              treeTitle: treeRow?.textContent?.trim() ?? '',
+              breadcrumbTitle: breadcrumb?.textContent?.trim() ?? '',
+            };
+          })()`,
+          true
+        );
       },
-      undefined,
+      panelId,
       "reading hosted shell title chrome"
     );
-    if (latestChromeText.includes(expectedTitle)) return expectedTitle;
+    if (
+      latestChrome.treeTitle.includes(expectedTitle) &&
+      latestChrome.breadcrumbTitle.includes(expectedTitle)
+    ) {
+      return expectedTitle;
+    }
     await sleep(100);
   }
   throw new Error(
-    `Native page title did not reach hosted shell panel-tree and breadcrumb chrome: ${JSON.stringify({
-      expectedTitle,
-      latestChromeText: latestChromeText.slice(0, 1_000),
-    })}`
+    `Native page title did not reach hosted shell panel-tree and breadcrumb chrome: ${JSON.stringify(
+      {
+        expectedTitle,
+        ...latestChrome,
+      }
+    )}`
   );
 }
 

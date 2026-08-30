@@ -556,8 +556,17 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           ])) as boolean;
           if (explicit) return entityId;
         }
-        await deps.presentationDispatch("updatePanelTitle", [slotId, entityId, title, options]);
-        if (observeTitle(slotId, title)) deps.onPresentationChanged?.([slotId]);
+        const normalizedTitle = typeof title === "string" && title.trim() ? title.trim() : null;
+        await deps.presentationDispatch("updatePanelTitle", [
+          slotId,
+          entityId,
+          normalizedTitle,
+          options,
+        ]);
+        const titleChanged = normalizedTitle
+          ? observeTitle(slotId, normalizedTitle)
+          : titleCache.delete(slotId);
+        if (titleChanged) deps.onPresentationChanged?.([slotId]);
         return entityId;
       },
       "panel.incrementAccess": async (_ctx, [slotId]) => {

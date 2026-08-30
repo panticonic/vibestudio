@@ -884,10 +884,10 @@ export const workspaceStateMethods = defineServiceMethods({
     },
     args: z.tuple([
       z.string(),
-      z.string(),
+      z.string().nullable(),
       z.object({ explicit: z.boolean().optional() }).strict().optional(),
     ]),
-    description: "Update the searchable title for a panel entity.",
+    description: "Update or clear the searchable title for a panel entity.",
     authority: contextBoundaryAuthority({
       service: "workspace-state",
       method: "panel.updateTitle",
