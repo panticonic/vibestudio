@@ -1716,6 +1716,22 @@ describe("WorkerdManager", () => {
         (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd()
       ).rejects.toThrow("WorkerdManager is shutting down");
     });
+
+    it("publishes the generation-closing edge before shutting down workerd", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const closing = vi.fn();
+      mgr.onGenerationClosing(closing);
+
+      await mgr.shutdown();
+
+      expect(closing).toHaveBeenCalledOnce();
+      expect(closing).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "shutdown", generation: mgr.getBootGeneration() + 1 })
+      );
+      const process = vi.mocked(spawn).mock.results.at(-1)?.value;
+      expect(process.kill).toHaveBeenCalledWith("SIGKILL");
+    });
   });
 
   describe("router generation", () => {

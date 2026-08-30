@@ -18,6 +18,7 @@ describe("npm CLI packaging", () => {
       "dist/library-lowering-worker.mjs",
       "dist/typecheck-worker.mjs",
       "dist/workspace-rpc-catalog-worker.mjs",
+      "dist/immutable-tree-worker.mjs",
       "dist/sqlite-integrity-worker.mjs",
       "dist/internal-do.bundle.mjs",
       "dist/sql-wasm.wasm",

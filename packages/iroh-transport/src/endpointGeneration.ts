@@ -66,9 +66,11 @@ export class EndpointGenerationOwner<
   private endpoint: Endpoint | null = null;
   private generation = 0;
   private closed = false;
-  private operationTail: Promise<void> = Promise.resolve();
   private bindingPromise: Promise<Endpoint> | null = null;
+  private replacementPromise: Promise<void> | null = null;
+  private readonly activeDials = new Set<Promise<unknown>>();
   private lastSuccessfulRelay: string | null = null;
+  private readonly successfulRelayByPeer = new Map<string, string>();
   private readonly generationListeners = new Set<(snapshot: EndpointGenerationSnapshot) => void>();
   private readonly invalidationListeners = new Set<
     (invalidation: EndpointGenerationInvalidation) => void
@@ -98,11 +100,9 @@ export class EndpointGenerationOwner<
   }
 
   dial(options: EndpointGenerationDialOptions): Promise<EndpointGenerationDialResult<Connection>> {
-    const operation = this.operationTail.then(() => this.dialExclusive(options));
-    this.operationTail = operation.then(
-      () => undefined,
-      () => undefined
-    );
+    const operation = this.dialConcurrent(options);
+    this.activeDials.add(operation);
+    void operation.finally(() => this.activeDials.delete(operation)).catch(() => undefined);
     return operation;
   }
 
@@ -112,10 +112,11 @@ export class EndpointGenerationOwner<
     const endpoint = this.endpoint;
     this.endpoint = null;
     await endpoint?.close();
-    await this.operationTail;
+    await Promise.allSettled([...this.activeDials]);
+    await this.replacementPromise?.catch(() => undefined);
   }
 
-  private async dialExclusive(
+  private async dialConcurrent(
     options: EndpointGenerationDialOptions
   ): Promise<EndpointGenerationDialResult<Connection>> {
     if (this.closed) throw new Error("Iroh endpoint-generation owner is closed");
@@ -129,9 +130,12 @@ export class EndpointGenerationOwner<
     const preferredRelay =
       explicitPreferredRelay && options.reach.relays.includes(explicitPreferredRelay)
         ? explicitPreferredRelay
-        : this.lastSuccessfulRelay && options.reach.relays.includes(this.lastSuccessfulRelay)
-          ? this.lastSuccessfulRelay
-          : undefined;
+        : this.successfulRelayByPeer.get(options.reach.endpointId) &&
+            options.reach.relays.includes(this.successfulRelayByPeer.get(options.reach.endpointId)!)
+          ? this.successfulRelayByPeer.get(options.reach.endpointId)!
+          : this.lastSuccessfulRelay && options.reach.relays.includes(this.lastSuccessfulRelay)
+            ? this.lastSuccessfulRelay
+            : undefined;
     const relays = orderedRelays(options.reach, preferredRelay);
     for (let index = 0; index < relays.length; index += 1) {
       const elapsed = Date.now() - startedAt;
@@ -156,6 +160,15 @@ export class EndpointGenerationOwner<
         // down the first reach while doing so. This is only a dial-order hint;
         // each reach remains authoritative and the hint is ignored when absent.
         this.lastSuccessfulRelay = relayUrl;
+        this.successfulRelayByPeer.delete(options.reach.endpointId);
+        this.successfulRelayByPeer.set(options.reach.endpointId, relayUrl);
+        // This is diagnostic/hint state, never product state. The very large
+        // ceiling only prevents a hostile process from retaining arbitrary
+        // peer identifiers forever; normal installations never approach it.
+        if (this.successfulRelayByPeer.size > 16_384) {
+          const oldest = this.successfulRelayByPeer.keys().next().value as string | undefined;
+          if (oldest) this.successfulRelayByPeer.delete(oldest);
+        }
         return {
           connection,
           relayUrl,
@@ -219,6 +232,27 @@ export class EndpointGenerationOwner<
       await attempt.catch(() => undefined);
       return;
     }
+    if (this.replacementPromise) {
+      await Promise.all([this.replacementPromise, attempt.catch(() => undefined)]);
+      return;
+    }
+    const replacement = this.replaceGenerationExclusive(endpoint, attempt);
+    this.replacementPromise = replacement;
+    try {
+      await replacement;
+    } finally {
+      if (this.replacementPromise === replacement) this.replacementPromise = null;
+    }
+  }
+
+  private async replaceGenerationExclusive(
+    endpoint: Endpoint,
+    attempt: Promise<Connection>
+  ): Promise<void> {
+    if (endpoint !== this.endpoint) {
+      await attempt.catch(() => undefined);
+      return;
+    }
     const invalidation = {
       endpointId: endpoint.endpointId,
       generation: this.generation,
@@ -232,10 +266,11 @@ export class EndpointGenerationOwner<
         connection.close(0x100n, new TextEncoder().encode("cancelled endpoint generation")),
       () => undefined
     );
-    if (!this.closed) await this.ensureEndpoint();
   }
 
   private async ensureEndpoint(): Promise<Endpoint> {
+    if (this.closed) throw new Error("Iroh endpoint-generation owner is closed");
+    if (this.replacementPromise) await this.replacementPromise;
     if (this.closed) throw new Error("Iroh endpoint-generation owner is closed");
     if (this.endpoint) return this.endpoint;
     if (this.bindingPromise) return this.bindingPromise;

@@ -76,9 +76,12 @@ const log = createDevLogger("PanelAssetFacade");
  *    duration. A multi-MB bundle over slow TURN keeps arming the timer on every
  *    chunk, so only a genuine no-progress stall trips it.
  */
-const ASSET_CONNECT_BACKSTOP_MS = 60_000;
-const ASSET_STALL_BACKSTOP_MS = 30_000;
-const MAX_PREWARM_MANIFEST_BYTES = 4 * 1024 * 1024;
+const ASSET_CONNECT_BACKSTOP_MS = 10 * 60_000;
+const ASSET_STALL_BACKSTOP_MS = 5 * 60_000;
+// A build manifest is normally kilobytes. This is only a catastrophic
+// allocation boundary for corrupt or hostile input, deliberately far outside
+// normal operation and aligned with mobile.
+const CATASTROPHIC_PREWARM_MANIFEST_BYTES = 64 * 1024 * 1024;
 const SHA256_INTEGRITY = /^sha256-[0-9a-f]{64}$/u;
 
 interface PrewarmManifestResource {
@@ -241,17 +244,16 @@ export async function startPanelAssetFacade(
   };
   const prewarmLifetime = new AbortController();
   const prewarmFlights = new Map<string, Promise<void>>();
-  const prewarmAttemptedBuilds = new Set<string>();
+  const prewarmCompletedBuilds = new Map<string, true>();
   const ensureBuildPrewarm = (entry: PinnedEntry): void => {
     if (
       !cache ||
       prewarmLifetime.signal.aborted ||
-      prewarmAttemptedBuilds.has(entry.buildKey) ||
+      prewarmCompletedBuilds.has(entry.buildKey) ||
       prewarmFlights.has(entry.buildKey)
     ) {
       return;
     }
-    prewarmAttemptedBuilds.add(entry.buildKey);
     const flight = prewarmInitialAssets(
       serverClient,
       cache,
@@ -267,6 +269,14 @@ export async function startPanelAssetFacade(
               error instanceof Error ? error.message : String(error)
             }`
         );
+      })
+      .then(() => {
+        prewarmCompletedBuilds.delete(entry.buildKey);
+        prewarmCompletedBuilds.set(entry.buildKey, true);
+        if (prewarmCompletedBuilds.size > 4_096) {
+          const oldest = prewarmCompletedBuilds.keys().next().value as string | undefined;
+          if (oldest) prewarmCompletedBuilds.delete(oldest);
+        }
       })
       .finally(() => prewarmFlights.delete(entry.buildKey));
     prewarmFlights.set(entry.buildKey, flight);
@@ -436,7 +446,9 @@ async function handleRequest(
           asset.status,
           buildResponseHeaders(asset.contentType, asset.gzip, asset.replayHeaders)
         );
-        res.end(asset.body);
+        fs.createReadStream(asset.bodyPath)
+          .once("error", (error) => res.destroy(error))
+          .pipe(res);
         return;
       }
       writePassthrough(reqPath, res, outcome.response, controller, backstops.stallMs);
@@ -520,15 +532,22 @@ async function prewarmInitialAssets(
   const manifestOutcome = await cache.serve(panelAssetCacheKey(manifestPath, {}), () =>
     fetchPrewarmAsset(serverClient, backstops, manifestPath, false, lifetime)
   );
-  const manifestBytes =
-    manifestOutcome.kind === "asset"
-      ? manifestOutcome.asset.body
-      : await readBodyWithStallBackstop(
-          manifestOutcome.response.body,
-          manifestPath,
-          backstops.stallMs,
-          MAX_PREWARM_MANIFEST_BYTES
-        );
+  let manifestBytes: Uint8Array;
+  if (manifestOutcome.kind === "asset") {
+    if (manifestOutcome.asset.size > CATASTROPHIC_PREWARM_MANIFEST_BYTES) {
+      throw new Error(
+        `panel prewarm manifest exceeded catastrophic ${CATASTROPHIC_PREWARM_MANIFEST_BYTES}-byte boundary`
+      );
+    }
+    manifestBytes = await fs.promises.readFile(manifestOutcome.asset.bodyPath);
+  } else {
+    manifestBytes = await readBodyWithStallBackstop(
+      manifestOutcome.response.body,
+      manifestPath,
+      backstops.stallMs,
+      CATASTROPHIC_PREWARM_MANIFEST_BYTES
+    );
+  }
   const manifest = parsePrewarmManifest(manifestBytes);
 
   const paths = [

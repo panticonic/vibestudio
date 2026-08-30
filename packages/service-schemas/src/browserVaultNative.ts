@@ -1,8 +1,4 @@
-import {
-  defineServiceMethods,
-  type MethodSchema,
-  type ServiceMethodSchemas,
-} from "@vibestudio/shared/typedServiceClient";
+import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import { browserVaultMethods } from "./browserData.js";
 
 const nativeTier = {
@@ -12,6 +8,22 @@ const nativeTier = {
   family: "browserVaultNative.trusted-shell",
   rationale:
     "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
+};
+
+type BrowserVaultNativeMethod<D extends MethodSchema> = Omit<
+  D,
+  "tier" | "authority" | "access" | "agentFacing"
+> & {
+  tier: typeof nativeTier;
+  authority: { principals: ["host", "user"] };
+  access: D["access"];
+  agentFacing: false;
+};
+
+type BrowserVaultNativeMethodSchemas = {
+  [K in keyof typeof browserVaultMethods]: BrowserVaultNativeMethod<
+    (typeof browserVaultMethods)[K]
+  >;
 };
 
 /**
@@ -33,5 +45,5 @@ export const browserVaultNativeMethods = defineServiceMethods(
         agentFacing: false,
       } satisfies MethodSchema,
     ])
-  ) as ServiceMethodSchemas
+  ) as unknown as BrowserVaultNativeMethodSchemas
 );

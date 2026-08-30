@@ -21,6 +21,14 @@ export interface CanonicalSqliteOpenOptions {
   description: string;
   /** Read-only owners validate current state but can never initialize it. */
   readOnly?: boolean;
+  /** Explicit, transactional migrations for schemas that actually shipped. */
+  migrations?: readonly CanonicalSqliteMigration[];
+}
+
+export interface CanonicalSqliteMigration {
+  fromVersion: number;
+  toVersion: number;
+  migrate(db: DatabaseSync): void;
 }
 
 export type CanonicalSqliteOpenResult =
@@ -236,9 +244,29 @@ export function openCanonicalSqliteDatabase(
       return { kind: "initialized", version: schema.version };
     }
 
-    const actualVersion = readSqliteUserVersion(db);
+    let actualVersion = readSqliteUserVersion(db);
     if (actualVersion !== schema.version) {
-      throw unsupportedVersionError(options.description, actualVersion, schema.version);
+      const visited = new Set<number>();
+      while (actualVersion !== schema.version) {
+        if (visited.has(actualVersion)) {
+          throw new Error(`Migration cycle in ${options.description} at version ${actualVersion}`);
+        }
+        visited.add(actualVersion);
+        const migration = options.migrations?.find(
+          (candidate) => candidate.fromVersion === actualVersion
+        );
+        if (
+          !migration ||
+          !Number.isSafeInteger(migration.toVersion) ||
+          migration.toVersion <= actualVersion ||
+          migration.toVersion > schema.version
+        ) {
+          throw unsupportedVersionError(options.description, actualVersion, schema.version);
+        }
+        migration.migrate(db);
+        actualVersion = migration.toVersion;
+        db.exec(`PRAGMA user_version = ${actualVersion}`);
+      }
     }
     assertCanonicalSqliteSchema(db, schema, options.description);
     db.exec("COMMIT");

@@ -1,5 +1,6 @@
 import {
   IROH_WIRE_VERSION,
+  IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING,
   MAX_ENVELOPE_FRAME_BYTES,
   MAX_STREAM_CHUNK_BYTES,
   readToEnd,
@@ -9,7 +10,7 @@ import {
   type IrohPhysicalBiStream,
   type IrohPhysicalConnection,
 } from "@vibestudio/iroh-transport";
-import { type RpcEnvelope, type RpcMessage } from "@vibestudio/rpc";
+import { responseEnvelopeFor, type RpcEnvelope, type RpcMessage } from "@vibestudio/rpc";
 import { encodeIrohStreamResponseHead } from "@vibestudio/rpc/protocol/irohStreamResponse";
 import {
   IROH_SESSION_CLOSED,
@@ -160,6 +161,9 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       if (this.requests.has(requestId)) {
         throw new Error(`Duplicate Iroh inbound request id ${requestId}`);
       }
+      if (this.requests.size >= IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING) {
+        throw new Error("Catastrophic Iroh active-request ceiling exceeded");
+      }
       this.requests.set(requestId, {
         stream,
         streaming: envelope.message.type === "stream-request",
@@ -301,8 +305,10 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
         );
         return;
       case "ws:rpc":
+        await this.sendEnvelope(message.envelope, false);
+        return;
       case "ws:routed":
-        await this.sendEnvelope(message.envelope);
+        await this.sendEnvelope(message.envelope, true);
         return;
       case "ws:routed-response-error":
         await this.sendEnvelope({
@@ -330,7 +336,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     }
   }
 
-  private async sendEnvelope(envelope: RpcEnvelope): Promise<void> {
+  private async sendEnvelope(envelope: RpcEnvelope, routed = false): Promise<void> {
     const requestId = "requestId" in envelope.message ? envelope.message.requestId : undefined;
     if (typeof requestId === "string" && envelope.message.type === "response") {
       const route = this.requests.get(requestId);
@@ -369,13 +375,45 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       typeof requestId === "string" &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request");
     if (expectsResponse) {
-      void this.readOutboundResponse(stream).catch((error) =>
+      void this.readOutboundResponse(stream, routed).catch((error) => {
         this.options.log?.(
           `Iroh server-originated request ${requestId} failed: ${
             error instanceof Error ? error.message : String(error)
           }`
-        )
-      );
+        );
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const response =
+          envelope.message.type === "stream-request"
+            ? {
+                type: "stream-frame" as const,
+                requestId,
+                fromId: envelope.target,
+                frameType: 0x04,
+                payload: JSON.stringify({
+                  status: 502,
+                  message: errorMessage,
+                  code: "CONNECTION_LOST",
+                  errorKind: "transport",
+                }),
+              }
+            : {
+                type: "response" as const,
+                requestId,
+                error: errorMessage,
+                errorKind: "transport" as const,
+                errorCode: "CONNECTION_LOST",
+              };
+        const failedEnvelope = responseEnvelopeFor(
+          envelope,
+          { callerId: envelope.target, callerKind: "unknown" },
+          response
+        );
+        this.deliver(
+          routed
+            ? { type: "ws:route", envelope: failedEnvelope }
+            : { type: "ws:rpc", envelope: failedEnvelope }
+        );
+      });
     } else {
       // The client closes its unused send half when it accepts this one-way
       // message. Consume that FIN so the native QUIC implementation can retire
@@ -390,13 +428,13 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     }
   }
 
-  private async readOutboundResponse(stream: IrohPhysicalBiStream): Promise<void> {
+  private async readOutboundResponse(stream: IrohPhysicalBiStream, routed: boolean): Promise<void> {
     const envelope = JSON.parse(
       new TextDecoder("utf-8", { fatal: true }).decode(
         await readToEnd(stream.recv, MAX_STREAM_CHUNK_BYTES)
       )
     ) as RpcEnvelope;
-    this.deliver({ type: "ws:rpc", envelope });
+    this.deliver(routed ? { type: "ws:route", envelope } : { type: "ws:rpc", envelope });
   }
 
   private async watchCancellation(

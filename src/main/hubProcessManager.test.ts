@@ -695,8 +695,8 @@ describe("HubProcessManager", () => {
     );
 
     expect(terminateOwnedProcessTreeMock).toHaveBeenCalledWith(child.pid, {
-      termTimeoutMs: 12_000,
-      killTimeoutMs: 5_000,
+      termTimeoutMs: 300_000,
+      killTimeoutMs: 30_000,
     });
     expect(centralData.releaseHubProcessLease).toHaveBeenCalledWith(SERVER_BOOT_ID);
     expect(centralData.getHubProcessLease()).toBeNull();

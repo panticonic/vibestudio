@@ -48,6 +48,8 @@ import { FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   IROH_WIRE_VERSION,
+  IROH_CATASTROPHIC_LOGICAL_SESSION_CEILING,
+  IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
   readFrame,
@@ -4967,6 +4969,19 @@ export class RpcServer {
         );
         switch (frame.t) {
           case IROH_SESSION_OPEN: {
+            if (
+              !sessions.has(frame.sid) &&
+              sessions.size >= IROH_CATASTROPHIC_LOGICAL_SESSION_CEILING
+            ) {
+              await writeControl({
+                t: IROH_SESSION_CLOSED,
+                sid: frame.sid,
+                code: 4503,
+                reason: "catastrophic logical-session ceiling exceeded",
+                terminal: true,
+              });
+              break;
+            }
             sessions.get(frame.sid)?.remoteClosed(4000, "superseded by re-open");
             const session = new IrohRpcSessionChannel({
               sid: frame.sid,
@@ -5036,23 +5051,31 @@ export class RpcServer {
       session.deliverEnvelope(envelope, stream, body);
     };
     const streamLoop = async (): Promise<void> => {
+      const pendingHeaders = new Set<Promise<void>>();
       while (!stopped) {
+        if (pendingHeaders.size >= IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING) {
+          await Promise.race(pendingHeaders);
+          continue;
+        }
         const stream = await connection.acceptBi();
         // Reading one stream's bounded preamble/envelope must not block
         // admission of independent later streams. The replenishing native
         // stream window is the finite resource boundary; a second pending-
         // header ceiling would reject valid startup work merely because an
         // unrelated stream is waiting on a busy JS scheduler.
-        void handleStream(stream).catch((error) => {
-          // QUIC request streams are independent failure domains. A bad or
-          // partial stream is reset without discarding healthy logical
-          // sessions on the physical connection.
-          void stream.recv.stop(0x200n).catch(() => undefined);
-          void stream.send.reset(0x200n).catch(() => undefined);
-          log.warn("Rejected Iroh RPC stream", {
-            cause: error instanceof Error ? error.message : String(error),
-          });
-        });
+        const work = handleStream(stream)
+          .catch((error) => {
+            // QUIC request streams are independent failure domains. A bad or
+            // partial stream is reset without discarding healthy logical
+            // sessions on the physical connection.
+            void stream.recv.stop(0x200n).catch(() => undefined);
+            void stream.send.reset(0x200n).catch(() => undefined);
+            log.warn("Rejected Iroh RPC stream", {
+              cause: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .finally(() => pendingHeaders.delete(work));
+        pendingHeaders.add(work);
       }
     };
 

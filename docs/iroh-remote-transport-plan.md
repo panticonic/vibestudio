@@ -254,9 +254,13 @@ This is one credential-binding rule, not a second login channel. It makes a
 copied refresh token insufficient by itself and prevents a local credential
 from being replayed over Iroh. Represent the binding with an unambiguous SQL
 kind plus an Endpoint ID constrained to be present only for `iroh`; do not use a
-nullable Endpoint ID whose absence could mean either local or legacy. Because
-the product is pre-release, change the current schema contract directly rather
-than writing a legacy-device migration. The same endpoint binding must be
+nullable Endpoint ID whose absence could mean either local or legacy. The
+shipped version-11 identity database is migrated transactionally to version 13:
+account, workspace, membership, and device records survive; obsolete signaling
+rooms and outstanding WebRTC pairing links are deleted; and old unbound device
+credentials become local-only. Remote devices pair once through Iroh to acquire
+an Endpoint-ID-bound credential. Unknown versions and non-canonical shapes are
+still rejected without mutation. The same endpoint binding must be
 available to every auth entry point; if any path cannot prove the peer Endpoint
 ID, that path is not remote authentication and must not accept an Iroh-bound
 device credential.
@@ -444,8 +448,10 @@ One shape covers every request:
 Response-body idle deadlines remain application semantics. Long-lived watches
 opt out explicitly as they do now. Total-body limits remain owned by the RPC
 method that understands the resource, not by the transport.
-Concurrent-stream limits are set from the measured per-connection session and
-request concurrency in WP1, not left at a binding default.
+The native concurrent-stream window is a replenishing QUIC flow-control window,
+not an application scheduler. It is set far above measured fan-out. Application
+bookkeeping has only catastrophic containment ceilings, not normal concurrency
+limits.
 
 ### Post-cutover stream-admission correction (2026-08-29)
 
@@ -459,22 +465,24 @@ error.
 
 The corrected contract separates the layers:
 
-- each physical connection admits at most 64 logical sessions;
-- each logical session retains at most 256 active requests, a memory-abuse
-  boundary deliberately above the desktop's complete expected fan-out;
-- at most 128 streams per connection may remain in bounded-header admission at
-  once; a successfully parsed request immediately leaves that budget even when
-  its response is a long-lived watch;
-- the native QUIC window is twice the complete application fan-out
-  (`2 * 64 * 256 = 32768`), leaving control, cancellation, handoff, and stream
-  retirement headroom. It is transport capacity, not a scheduler or the DoS
-  boundary.
+- a physical connection has no product-level logical-session quota; a
+  catastrophic 4,096-session containment boundary prevents a hostile peer from
+  retaining process memory without bound;
+- a logical session has no product scheduler; a catastrophic 16,384-active-
+  request boundary is orders of magnitude above observed desktop/mobile fanout;
+- bounded-header parsing is concurrent and independent. Only at 8,192
+  simultaneous incomplete headers does admission apply backpressure until one
+  resolves; parsed long-lived responses do not occupy that boundary;
+- the native QUIC MAX_STREAMS window remains 32,768 simultaneous bidirectional
+  streams. It replenishes as streams retire and is capacity, not a lifetime
+  request count or priority queue.
 
 The native regression opens 96 retained streaming responses on one real QUIC
 connection and proves that a concurrent burst of short RPCs still completes.
-It failed with the escaped Phase 0 limit and passes with the separated bounds.
-No shared mux, second connection, priority lane, or compatibility path is
-introduced.
+Additional tests cross the former 64-session, 128-header, and 256-request
+thresholds without throttling. It failed with the escaped Phase 0 limit and
+passes with the separated bounds. No shared mux, second connection, priority
+lane, or compatibility path is introduced.
 
 ### Post-cutover payload-boundary correction (2026-08-29)
 
@@ -884,9 +892,8 @@ uses the provisional release set. As of 2026-08-28 it proves on local Linux:
   manifest;
 - absence of an exposed early-data method in the selected JavaScript binding.
 
-The focused transport suite passes 80 tests across 18 files, the complete
-native remote smoke passes 8 tests, and another 16 tests cover the
-deployment/doctor/pairing operational surfaces. The pinned
+The focused transport suite, complete native remote smoke, and
+deployment/doctor/pairing operational surfaces are all executable in CI. The pinned
 stock relay integration command launches and owns `iroh-relay@1.0.2`, registers
 two real endpoints, proves bidirectional traffic traversed the relay, exchanges
 a QUIC stream, and terminates the relay in cleanup. Package TypeScript,
@@ -932,9 +939,10 @@ separate branches/worktrees:
   servers, DataChannel framing/multiplexing/QoS, React Native WebRTC, obsolete
   smoke/deployment scripts and superseded transport documents—over 42,000 lines
   removed rather than retained behind flags or adapters;
-- verification: host and Base semantic type checks, 317 Base mobile tests,
-  lint/format, dependency and native-host contracts, staging/build/import and
-  npm dry-run packaging, and host-plus-Base cutover absence checks are green.
+- verification: host and Base semantic type checks, the complete Base and
+  mobile suites, lint/format, dependency and native-host contracts,
+  staging/build/import and npm dry-run packaging, host-plus-Base cutover absence
+  checks, and real desktop Iroh pairing/panel/recovery smoke are CI-owned.
 
 The managed system-test owner injects the same explicit ordered public relay
 set as the product default and never inherits an unrelated operator override.

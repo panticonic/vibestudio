@@ -59,6 +59,80 @@ describe("identity package schema cut", () => {
     unchanged.close();
   });
 
+  it("transactionally upgrades the shipped v11 schema without losing account state", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-v11-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const identity = new IdentityDb({ path: databasePath, readOnly: false });
+    identity.insertUser({
+      id: "usr_kept",
+      handle: "kept",
+      displayName: "Kept User",
+      role: "member",
+      createdAt: 1,
+    });
+    identity.upsertDevice({
+      deviceId: "old-device",
+      refreshTokenHash: "old-token",
+      transport: { kind: "local" },
+      userId: "usr_kept",
+      label: "Old remote laptop",
+      createdAt: 2,
+    });
+    identity.close();
+
+    const old = new DatabaseSync(databasePath);
+    old.exec(`
+      DROP INDEX devices_by_endpoint;
+      DROP INDEX devices_by_user;
+      ALTER TABLE devices RENAME TO devices_v13;
+      CREATE TABLE devices (
+        device_id TEXT PRIMARY KEY,
+        refresh_token_hash TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        label TEXT NOT NULL,
+        platform TEXT,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at INTEGER
+      );
+      INSERT INTO devices
+      SELECT device_id, refresh_token_hash, user_id, label, platform, created_at, last_used_at, revoked_at
+      FROM devices_v13;
+      DROP TABLE devices_v13;
+      CREATE INDEX devices_by_user ON devices(user_id);
+      CREATE TABLE control_rooms (
+        room TEXT PRIMARY KEY,
+        invite_code_hash TEXT UNIQUE REFERENCES pairing_codes(code) ON DELETE CASCADE,
+        device_id TEXT UNIQUE REFERENCES devices(device_id) ON DELETE CASCADE,
+        invite_expires_at INTEGER,
+        CHECK (
+          (invite_code_hash IS NOT NULL AND device_id IS NULL AND invite_expires_at IS NOT NULL AND invite_expires_at > 0)
+          OR
+          (invite_code_hash IS NULL AND device_id IS NOT NULL AND invite_expires_at IS NULL)
+        )
+      );
+      INSERT INTO control_rooms(room, device_id) VALUES ('old-room', 'old-device');
+      PRAGMA user_version = 11;
+    `);
+    old.close();
+
+    const migrated = new IdentityDb({ path: databasePath, readOnly: false });
+    expect(migrated.getUserByHandle("kept")?.id).toBe("usr_kept");
+    expect(migrated.getDevice("old-device")).toMatchObject({
+      deviceId: "old-device",
+      transport: { kind: "local" },
+      userId: "usr_kept",
+    });
+    migrated.close();
+    const verified = new DatabaseSync(databasePath);
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
+    expect(
+      verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
+    ).toBeUndefined();
+    verified.close();
+  });
+
   it("rejects a missing canonical identity table without recreating it", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-missing-"));
     roots.push(root);
@@ -120,12 +194,20 @@ describe("identity package schema cut", () => {
     central.close();
     const identity = new IdentityDb({ path: databasePath, readOnly: false, now: () => 1_000 });
     identity.insertUser({
-      id: "usr_alice", handle: "alice", displayName: "Alice", role: "member", createdAt: 1,
+      id: "usr_alice",
+      handle: "alice",
+      displayName: "Alice",
+      role: "member",
+      createdAt: 1,
     });
     const codeHash = "a".repeat(64);
     identity.insertPairingInvite({
-      code: codeHash, userId: "usr_alice", workspaceId, intent: "pair-device",
-      createdAt: 1_000, expiresAt: 61_000,
+      code: codeHash,
+      userId: "usr_alice",
+      workspaceId,
+      intent: "pair-device",
+      createdAt: 1_000,
+      expiresAt: 61_000,
     });
     const device = {
       deviceId: `dev_${"d".repeat(24)}`,
@@ -141,10 +223,17 @@ describe("identity package schema cut", () => {
     });
     expect(completed).toMatchObject({ device, workspaceId });
     expect(identity.getPairingCode(codeHash)).toBeNull();
-    expect(identity.getDeviceForEndpoint(device.transport.endpointId)?.deviceId).toBe(device.deviceId);
-    expect(identity.completePairing({ code: codeHash, createDevice: () => {
-      throw new Error("consumed code must not issue twice");
-    } })).toBeNull();
+    expect(identity.getDeviceForEndpoint(device.transport.endpointId)?.deviceId).toBe(
+      device.deviceId
+    );
+    expect(
+      identity.completePairing({
+        code: codeHash,
+        createDevice: () => {
+          throw new Error("consumed code must not issue twice");
+        },
+      })
+    ).toBeNull();
     identity.close();
   });
 
@@ -158,7 +247,11 @@ describe("identity package schema cut", () => {
     const identity = new IdentityDb({ path: databasePath, readOnly: false });
     const codeHash = "d".repeat(64);
     identity.insertPairingInvite({
-      code: codeHash, workspaceId, intent: "root-bootstrap", createdAt: 1, expiresAt: 10,
+      code: codeHash,
+      workspaceId,
+      intent: "root-bootstrap",
+      createdAt: 1,
+      expiresAt: 10,
     });
     expect(identity.deleteExpiredPairingInvites(10)).toEqual([
       { code: codeHash, workspaceId, intent: "root-bootstrap", createdAt: 1, expiresAt: 10 },

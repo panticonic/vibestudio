@@ -12,6 +12,8 @@ jobs:
   quality:
     name: Quality Checks
     runs-on: ubuntu-latest
+    env:
+      VIBESTUDIO_USERLAND_ROOT: ${{ github.workspace }}/vibestudio-workspace-base
     permissions:
       contents: read
 
@@ -19,6 +21,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
+
+      - name: Checkout current Base userland
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: panticonic/vibestudio-workspace-base
+          path: vibestudio-workspace-base
           persist-credentials: false
 
       - name: Install pnpm
@@ -37,6 +46,12 @@ jobs:
       - name: Type-check
         run: pnpm type-check
 
+      - name: Base type-check and complete userland suite
+        run: pnpm test:pair
+
+      - name: Mobile host and Iroh integration suites
+        run: pnpm test:mobile
+
       - name: Host/workspace boundary
         run: pnpm check:host-boundary
 
@@ -54,6 +69,9 @@ jobs:
 
       - name: Install browser test runtime
         run: pnpm exec playwright install --with-deps chromium
+
+      - name: Desktop Iroh pairing, approvals, panels, relaunch, and recovery
+        run: pnpm test:iroh-desktop-e2e
 
       - name: Unit tests
         run: pnpm test

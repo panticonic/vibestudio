@@ -85,6 +85,34 @@ describe("openCanonicalSqliteDatabase", () => {
     db.close();
   });
 
+  it("runs an explicitly declared shipped-schema migration in the validation transaction", () => {
+    const db = memoryDatabase();
+    db.exec("CREATE TABLE old_notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+    db.exec("INSERT INTO old_notes(id, body) VALUES (1, 'kept')");
+    db.exec("PRAGMA user_version = 8");
+
+    expect(
+      openCanonicalSqliteDatabase(db, SCHEMA, {
+        description: "test database",
+        migrations: [
+          {
+            fromVersion: 8,
+            toVersion: 9,
+            migrate(owner) {
+              owner.exec(SCHEMA.objects[0]!.sql);
+              owner.exec("INSERT INTO notes SELECT id, body FROM old_notes");
+              owner.exec("DROP TABLE old_notes");
+              owner.exec("CREATE INDEX notes_by_body ON notes(body)");
+            },
+          },
+        ],
+      })
+    ).toEqual({ kind: "current", version: 9 });
+    expect(db.prepare("SELECT body FROM notes WHERE id = 1").get()).toEqual({ body: "kept" });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+    db.close();
+  });
+
   it("rejects a non-canonical object set at the current version", () => {
     const db = memoryDatabase();
     db.exec(SCHEMA.objects[0]!.sql);

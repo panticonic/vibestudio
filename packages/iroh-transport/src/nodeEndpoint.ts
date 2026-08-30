@@ -13,7 +13,8 @@ export { VIBESTUDIO_IROH_ALPN, VIBESTUDIO_IROH_ALPN_TEXT } from "./alpn.js";
  * 32K simultaneously open request streams preserves the transport headroom
  * already proven by Vibestudio's native fan-out coverage while keeping the
  * advertised resource contract finite. Closed streams continuously replenish
- * the window, and logical sessions and RPC requests retain no product ceiling.
+ * the window. Logical sessions and RPC requests have no product scheduler;
+ * their separate, much higher process-memory ceilings are catastrophic guards.
  */
 export const IROH_CONCURRENT_BI_STREAM_WINDOW = 32_768n;
 

@@ -119,7 +119,9 @@ describe("desktop Iroh process connection supervisor", () => {
       expect.objectContaining({ generation: 2, reason: expect.stringContaining("timed-out dial") }),
     ]);
     expect(invalidations.get(WORKSPACE_ID)).toEqual(invalidations.get(HUB_ID));
-    expect(endpoints).toHaveLength(3);
+    // Both logical clients observe one shared endpoint-generation replacement;
+    // concurrent recovery must not bind duplicate physical endpoints.
+    expect(endpoints).toHaveLength(2);
     await supervisor.close();
   });
 });

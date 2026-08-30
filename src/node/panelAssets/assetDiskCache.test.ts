@@ -71,7 +71,7 @@ describe("AssetDiskCache", () => {
     const second = await cache.serve("/assets/app-abc.js", fetcher);
     expect(second.kind).toBe("asset");
     if (second.kind === "asset") {
-      expect(second.asset.body.toString()).toBe("console.log(1)");
+      expect((await fsp.readFile(second.asset.bodyPath)).toString()).toBe("console.log(1)");
       expect(second.asset.contentType).toBe("text/javascript; charset=utf-8");
     }
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -111,7 +111,8 @@ describe("AssetDiskCache", () => {
         contentType: "application/javascript",
       },
     ]);
-    expect((await cache.get("/good.js"))?.body).toEqual(good);
+    const stored = await cache.get("/good.js");
+    expect(stored && (await fsp.readFile(stored.bodyPath))).toEqual(good);
   });
 
   it("streams the first immutable miss before cache population finishes", async () => {
@@ -145,7 +146,8 @@ describe("AssetDiskCache", () => {
 
     const hit = await cache.serve("/assets/streaming-abc.js", fetcher);
     expect(hit.kind).toBe("asset");
-    if (hit.kind === "asset") expect(hit.asset.body.toString()).toBe("first response");
+    if (hit.kind === "asset")
+      expect((await fsp.readFile(hit.asset.bodyPath)).toString()).toBe("first response");
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 

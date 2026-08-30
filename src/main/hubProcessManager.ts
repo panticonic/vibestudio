@@ -47,7 +47,10 @@ const READY_POLL_INTERVAL_MS = 250;
 const HEALTHZ_TIMEOUT_MS = 1_500;
 const HEALTH_RETRY_ATTEMPTS = 3;
 const HEALTH_RETRY_INTERVAL_MS = 250;
-const STOP_SIGTERM_TIMEOUT_MS = 12_000;
+// Owned-tree termination normally settles from lifecycle completion. These
+// waits exist only to contain a catastrophically wedged process tree.
+const STOP_SIGTERM_TIMEOUT_MS = 5 * 60_000;
+const STOP_SIGKILL_TIMEOUT_MS = 30_000;
 const STOP_RETRY_INTERVAL_MS = 1_000;
 
 /** The detached machine hub owns every local workspace child's captured output. */
@@ -801,7 +804,7 @@ export class HubProcessManager {
     }
     const result = await terminateOwnedProcessTree(pid, {
       termTimeoutMs: STOP_SIGTERM_TIMEOUT_MS,
-      killTimeoutMs: 5_000,
+      killTimeoutMs: STOP_SIGKILL_TIMEOUT_MS,
     });
     if (!result.gone) {
       throw new Error(result.detail ?? `Hub process tree ${pid} survived termination`);
@@ -837,7 +840,7 @@ export class HubProcessManager {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
-    const killDeadline = Date.now() + 5_000;
+    const killDeadline = Date.now() + STOP_SIGKILL_TIMEOUT_MS;
     while (Date.now() < killDeadline) {
       if (!pidAlive(pid)) return;
       await new Promise((resolve) => setTimeout(resolve, 100));

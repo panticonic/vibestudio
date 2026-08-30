@@ -1,6 +1,9 @@
 import {
   decodeJsonFrame,
   IROH_WIRE_VERSION,
+  IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING,
+  IROH_CATASTROPHIC_LOGICAL_SESSION_CEILING,
+  IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ENVELOPE_FRAME_BYTES,
   MAX_STREAM_CHUNK_BYTES,
@@ -196,6 +199,13 @@ class ClientSession implements IrohClientSession {
     await this.ready();
     if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
     const requestId = requestIdOf(envelope);
+    if (
+      requestId &&
+      (envelope.message.type === "request" || envelope.message.type === "stream-request") &&
+      this.activeRequestCount() >= IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING
+    ) {
+      throw new Error("Catastrophic Iroh active-request ceiling exceeded");
+    }
 
     if (
       (envelope.message.type === "request-cancel" || envelope.message.type === "stream-cancel") &&
@@ -414,6 +424,9 @@ class ClientSession implements IrohClientSession {
     if (signal?.aborted) throw new Error("Streaming RPC aborted by caller");
     if (this.outboundRequests.has(request.requestId)) {
       throw new Error(`Streaming RPC request id ${request.requestId} is already active`);
+    }
+    if (this.activeRequestCount() >= IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING) {
+      throw new Error("Catastrophic Iroh active-request ceiling exceeded");
     }
 
     const stream = await this.pipe.connection.openBi();
@@ -661,6 +674,9 @@ class ClientPipe implements IrohClientPipe {
     const session = new ClientSession(this, options);
     if (this.sessions.has(session.sid))
       throw new Error(`Iroh session ${session.sid} already exists`);
+    if (this.sessions.size >= IROH_CATASTROPHIC_LOGICAL_SESSION_CEILING) {
+      throw new Error("Catastrophic Iroh logical-session ceiling exceeded");
+    }
     this.sessions.set(session.sid, session);
     this.diagnosticsChanged();
     return session;
@@ -756,7 +772,12 @@ class ClientPipe implements IrohClientPipe {
   }
 
   private async acceptStreams(): Promise<void> {
+    const pendingHeaders = new Set<Promise<void>>();
     while (this.statusValue !== "disconnected") {
+      if (pendingHeaders.size >= IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING) {
+        await Promise.race(pendingHeaders);
+        continue;
+      }
       const stream = await this.connection.acceptBi();
       // QUIC streams are independent. Never wait for one peer-opened stream's
       // preamble or envelope in the admission loop: a stalled stream would
@@ -764,13 +785,16 @@ class ClientPipe implements IrohClientPipe {
       // multiplexing. The native replenishing MAX_STREAMS window is the one
       // finite resource boundary; rejecting a later valid stream because an
       // unrelated header is slow recreates head-of-line blocking above QUIC.
-      void this.acceptStream(stream).catch(() => {
-        // A peer-created request stream is an isolation boundary. Reject only
-        // this malformed stream; the control stream and unrelated
-        // sessions remain healthy.
-        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-      });
+      const work = this.acceptStream(stream)
+        .catch(() => {
+          // A peer-created request stream is an isolation boundary. Reject only
+          // this malformed stream; the control stream and unrelated
+          // sessions remain healthy.
+          void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+          void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
+        })
+        .finally(() => pendingHeaders.delete(work));
+      pendingHeaders.add(work);
     }
   }
 

@@ -66,6 +66,12 @@ const log = createDevLogger("WorkerdManager");
  *  workerd stores its facet SQLite under `<disk>/<this>/<hostHash>.*`. */
 const UNIVERSAL_DO_UNIQUE_KEY = "vibestudio:universal-do";
 const DEFAULT_WORKERD_STARTUP_READY_TIMEOUT_MS = 15_000;
+// Process signals normally settle immediately. These are catastrophic
+// containment fallbacks, not lifecycle budgets: give workerd ample time to
+// drain durable work before escalating, and ample time for the kernel to reap
+// it before declaring a generation unsafe to replace.
+const DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS = 60_000;
+const DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS = 30_000;
 const WORKERD_STARTUP_OUTPUT_LINES = 40;
 declare const __filename: string | undefined;
 declare const __dirname: string | undefined;
@@ -2658,7 +2664,8 @@ export class WorkerdManager {
         ? `unresponsive-sandbox:${transition.reason}`
         : transition.kind === "stop"
           ? transition.reason
-          : "planned-restart"
+          : "planned-restart",
+      transition.kind === "crash" ? "force" : "graceful"
     );
     this.clearRetiredDynamicIsolatePressure();
 
@@ -2691,7 +2698,7 @@ export class WorkerdManager {
         await this.startWorkerdOnce();
         if (this.shuttingDown) {
           this.pendingBootGeneration = null;
-          await this.stopWorkerd("shutdown-during-restart");
+          await this.stopWorkerd("shutdown-during-restart", "force");
           return;
         }
         this.bootGeneration = nextGeneration;
@@ -2714,7 +2721,7 @@ export class WorkerdManager {
         lastError = err;
         this.pendingBootGeneration = null;
         if (this.shuttingDown) {
-          await this.stopWorkerd("shutdown-during-restart");
+          await this.stopWorkerd("shutdown-during-restart", "force");
           return;
         }
         const detail = this.formatWorkerdStartupError(err);
@@ -2725,7 +2732,7 @@ export class WorkerdManager {
         } else {
           log.warn(`workerd startup attempt ${attempt} failed. ${detail}`);
         }
-        await this.stopWorkerd("startup-retry");
+        await this.stopWorkerd("startup-retry", "force");
       }
     }
 
@@ -3100,7 +3107,10 @@ export class WorkerdManager {
     return errorMessage(err).replace(/\s+/gu, " ").slice(0, 1200);
   }
 
-  private async stopWorkerd(reason = "unspecified"): Promise<void> {
+  private async stopWorkerd(
+    reason = "unspecified",
+    mode: "graceful" | "force" = "graceful"
+  ): Promise<void> {
     const proc = this.process;
     this.process = null;
     try {
@@ -3111,15 +3121,30 @@ export class WorkerdManager {
           )}`
         );
         await destroyWorkerdConnections(`workerd process generation ended: ${reason}`);
-        proc.kill("SIGTERM");
-        // Wait for the process to exit so the port is released before respawn.
-        // `proc.killed` only reports that a signal was *sent*, not that the
-        // process actually died — so track exit observation explicitly.
-        let exited = await this.waitForProcessExitEvent(
-          proc,
-          this.deps.workerdStopTimeoutsMs?.sigtermMs ?? 3000
-        );
-        if (!exited) {
+        let exited = false;
+        if (mode === "force") {
+          // Crash recovery and terminal server shutdown have already revoked
+          // admission and severed every host-owned connection. Workerd's
+          // SIGTERM drain can remain alive forever on durable timers or an
+          // interrupted userland request, so these lifecycle edges terminate
+          // the isolated runtime directly. Its SQLite storage is crash-safe;
+          // durable work resumes from journals on the next server generation.
+          proc.kill("SIGKILL");
+          exited = await this.waitForProcessReaped(
+            proc,
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS
+          );
+        } else {
+          proc.kill("SIGTERM");
+          // Wait for the process to exit so the port is released before respawn.
+          // `proc.killed` only reports that a signal was *sent*, not that the
+          // process actually died — so track exit observation explicitly.
+          exited = await this.waitForProcessExitEvent(
+            proc,
+            this.deps.workerdStopTimeoutsMs?.sigtermMs ?? DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS
+          );
+        }
+        if (!exited && mode === "graceful") {
           // SIGTERM timed out — force reap so the socket can be reclaimed.
           try {
             log.warn(
@@ -3136,7 +3161,7 @@ export class WorkerdManager {
           // reap that actually succeeded.
           exited = await this.waitForProcessReaped(
             proc,
-            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? 5000
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS
           );
         }
         if (!exited) {
@@ -4212,7 +4237,19 @@ export class WorkerdManager {
       if (result.status === "rejected") failures.push(result.reason);
     }
     if (this.activeTransition) await attempt(() => this.activeTransition!.promise);
-    await attempt(() => this.stopWorkerd("shutdown"));
+    if (this.process) {
+      // Shutdown is a generation-closing edge just like replacement and idle
+      // stop. Publish it before touching the process so every in-process owner
+      // drops relay URLs and severs inspector sockets; otherwise workerd's
+      // graceful signal waits forever on connections whose owners have
+      // already left the service graph.
+      await this.emitGenerationClosing({
+        correlationId: crypto.randomUUID(),
+        generation: this.bootGeneration + 1,
+        reason: "shutdown",
+      });
+    }
+    await attempt(() => this.stopWorkerd("shutdown", "force"));
     // Internal-object destruction is a tombstone while the shared process is
     // live. Once shutdown owns a stopped process, collect every tombstone and
     // retain all failures rather than abandoning the rest of the sweep.

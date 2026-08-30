@@ -105,4 +105,40 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
       expect(stream.recv.read).toHaveBeenCalled();
     });
   });
+
+  it("settles a server-originated request when its native stream resets", async () => {
+    const stream = fakeStream();
+    stream.recv.read.mockRejectedValueOnce(new Error("ReadError(Reset(514))"));
+    const connection = {
+      peerEndpointId: "peer",
+      openBi: vi.fn(async () => stream),
+    } as unknown as IrohPhysicalConnection;
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+    });
+    const delivered: unknown[] = [];
+    channel.onMessage((message) => delivered.push(message));
+    const envelope = requestEnvelope("main");
+    envelope.target = "shell:device";
+
+    channel.sendMessage({ type: "ws:rpc", envelope });
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(1));
+    expect(delivered[0]).toMatchObject({
+      type: "ws:rpc",
+      envelope: {
+        from: "shell:device",
+        target: "main",
+        message: {
+          type: "response",
+          requestId: "request-1",
+          errorKind: "transport",
+          errorCode: "CONNECTION_LOST",
+        },
+      },
+    });
+  });
 });

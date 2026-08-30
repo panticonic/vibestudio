@@ -405,23 +405,19 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
 // writer lease: temporary trees are excluded from collection and a published
 // tree may be collected immediately without affecting its workspace owner.
 const sharedBuildPublicationTasks = new Map<string, Promise<void>>();
-const completedSharedBuildPublications = new Set<string>();
 
 function scheduleSharedBuildPublication(key: string, sourceDir: string): void {
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return;
   const publicationId = path.resolve(sharedDir);
   if (
-    completedSharedBuildPublications.has(publicationId) ||
+    fs.existsSync(path.join(sharedDir, "metadata.json")) ||
     sharedBuildPublicationTasks.has(publicationId)
   ) {
     return;
   }
   const task = new Promise<void>((resolve) => setImmediate(resolve))
     .then(() => publishSharedBuild(key, sourceDir))
-    .then(() => {
-      completedSharedBuildPublications.add(publicationId);
-    })
     .finally(() => {
       sharedBuildPublicationTasks.delete(publicationId);
     });

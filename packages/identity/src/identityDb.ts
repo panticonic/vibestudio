@@ -21,7 +21,7 @@ import * as path from "node:path";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import type { User, UserRole } from "./types.js";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import { IDENTITY_DATABASE_SCHEMA } from "./identitySchema.js";
+import { IDENTITY_DATABASE_MIGRATIONS, IDENTITY_DATABASE_SCHEMA } from "./identitySchema.js";
 
 /** A device credential row. Mirrors `DeviceRecord` plus the owning `userId`. */
 export type DeviceTransportBinding = { kind: "local" } | { kind: "iroh"; endpointId: string };
@@ -141,6 +141,7 @@ export class IdentityDb {
       openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_SCHEMA, {
         description: `identity schema in ${options.path}`,
         readOnly: options.readOnly,
+        migrations: IDENTITY_DATABASE_MIGRATIONS,
       });
       if (!options.readOnly) {
         // WAL mutates the file header and is intentionally after validation.

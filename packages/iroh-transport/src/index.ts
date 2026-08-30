@@ -6,4 +6,5 @@ export * from "./pairing.js";
 export * from "./reach.js";
 export * from "./relayDial.js";
 export * from "./releaseSet.js";
+export * from "./resourcePolicy.js";
 export * from "./wire.js";

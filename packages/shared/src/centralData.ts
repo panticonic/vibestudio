@@ -19,7 +19,10 @@ import type {
 } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import { IDENTITY_DATABASE_SCHEMA } from "@vibestudio/identity/identitySchema";
+import {
+  IDENTITY_DATABASE_MIGRATIONS,
+  IDENTITY_DATABASE_SCHEMA,
+} from "@vibestudio/identity/identitySchema";
 
 export interface CentralDataManagerOptions {
   databasePath?: string;
@@ -153,6 +156,7 @@ export class CentralDataManager {
     try {
       openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_SCHEMA, {
         description: `hub-control schema in ${databasePath}`,
+        migrations: IDENTITY_DATABASE_MIGRATIONS,
       });
       // WAL changes the file, so enable it only after an existing DB has passed
       // the exact read-only preflight (or after a new DB was initialized).

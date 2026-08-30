@@ -25,14 +25,18 @@
  * Only responses the façade flags `cacheable` (immutable marker + 200) are
  * persisted; `no-store` HTML entry documents are never cached. Concurrent misses
  * for the same path are single-flighted so two webview requests trigger one pipe
- * fetch. Size-capped (default 1 GiB), LRU by blob mtime, pruned on write.
+ * fetch. The 64 GiB default is catastrophic disk containment rather than an
+ * operating cache target; pruning is LRU by blob mtime and runs on write.
  */
 
 import { createHash, randomUUID } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024; // 1 GiB
+// Catastrophic corruption/hostile-peer containment, not a product asset limit.
+// Ordinary capacity is governed by cache pruning and free disk, while bodies
+// stream to disk and never occupy this many bytes in JS memory.
+const DEFAULT_MAX_BYTES = 64 * 1024 * 1024 * 1024; // 64 GiB
 
 class CachePopulationTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
@@ -61,14 +65,15 @@ export interface FetchedResponse {
   body: ReadableStream<Uint8Array> | null;
 }
 
-/** A fully-buffered asset ready to write to the webview response in one shot. */
+/** A persisted asset ready to stream from disk to the webview. */
 export interface ServedAsset {
   status: number;
   statusText: string;
   gzip: boolean;
   contentType: string;
   replayHeaders: Record<string, string>;
-  body: Buffer;
+  bodyPath: string;
+  size: number;
 }
 
 export interface VerifiedCacheEntry {
@@ -84,7 +89,7 @@ export interface VerifiedCacheEntry {
 }
 
 export type ServeOutcome =
-  /** Served from disk hit or freshly persisted (buffered). */
+  /** Served from a disk hit or freshly persisted stream. */
   | { kind: "asset"; asset: ServedAsset }
   /** Uncacheable upstream — stream `response.body` straight through, do not cache. */
   | { kind: "passthrough"; response: FetchedResponse };
@@ -311,13 +316,14 @@ export class AssetDiskCache {
     }
     const blobPath = path.join(this.blobsDir, entry.digest);
     const metadataPath = path.join(this.metadataDir, `${entry.metadataKey}.json`);
-    let body: Buffer;
     let sidecar: Sidecar;
     try {
-      [body, sidecar] = await Promise.all([
-        fsp.readFile(blobPath),
+      const [stat, loadedSidecar] = await Promise.all([
+        fsp.stat(blobPath),
         fsp.readFile(metadataPath, "utf-8").then((raw) => JSON.parse(raw) as Sidecar),
       ]);
+      sidecar = loadedSidecar;
+      if (stat.size !== sidecar.size) throw new Error("cached asset size mismatch");
     } catch {
       // Blob evicted or sidecar missing → treat as a miss; drop the dangling entry.
       this.index.delete(cacheKey);
@@ -336,7 +342,8 @@ export class AssetDiskCache {
       gzip: sidecar.gzip,
       contentType: sidecar.contentType,
       replayHeaders: sidecar.replayHeaders,
-      body,
+      bodyPath: blobPath,
+      size: sidecar.size,
     };
   }
 
@@ -344,11 +351,10 @@ export class AssetDiskCache {
     cacheKey: string,
     response: FetchedResponse & { body: ReadableStream<Uint8Array> }
   ): Promise<ServedAsset> {
-    const body = await streamToBuffer(response.body, this.maxBytes);
-    const digest = createHash("sha256").update(body).digest("hex");
+    const streamed = await this.writeStreamToContentAddressedBlob(response.body);
+    const { digest, blobPath, size } = streamed;
     const metadataKey = createHash("sha256").update(cacheKey).digest("hex");
 
-    const blobPath = path.join(this.blobsDir, digest);
     const metadataPath = path.join(this.metadataDir, `${metadataKey}.json`);
     const sidecar: Sidecar = {
       status: response.status,
@@ -356,11 +362,9 @@ export class AssetDiskCache {
       gzip: response.gzip,
       contentType: response.contentType,
       replayHeaders: response.replayHeaders,
-      size: body.length,
+      size,
     };
 
-    // Content-addressed: an existing blob with this digest already holds these bytes.
-    await this.writeBlobIfAbsent(blobPath, body);
     await this.writeJsonAtomic(metadataPath, sidecar);
 
     this.index.set(cacheKey, { digest, metadataKey });
@@ -375,8 +379,53 @@ export class AssetDiskCache {
       gzip: response.gzip,
       contentType: response.contentType,
       replayHeaders: response.replayHeaders,
-      body,
+      bodyPath: blobPath,
+      size,
     };
+  }
+
+  private async writeStreamToContentAddressedBlob(
+    stream: ReadableStream<Uint8Array>
+  ): Promise<{ digest: string; blobPath: string; size: number }> {
+    const tmp = path.join(this.blobsDir, `.stream.${process.pid}.${randomUUID()}.tmp`);
+    const reader = stream.getReader();
+    const hash = createHash("sha256");
+    const handle = await fsp.open(tmp, "wx");
+    let size = 0;
+    let closed = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+        size += value.byteLength;
+        if (size > this.maxBytes) {
+          const error = new CachePopulationTooLargeError(this.maxBytes);
+          void reader.cancel(error).catch(() => undefined);
+          throw error;
+        }
+        hash.update(value);
+        await handle.write(value);
+      }
+      await handle.close();
+      closed = true;
+      const digest = hash.digest("hex");
+      const blobPath = path.join(this.blobsDir, digest);
+      try {
+        await fsp.rename(tmp, blobPath);
+      } catch (error) {
+        try {
+          await fsp.access(blobPath);
+        } catch {
+          throw error;
+        }
+      }
+      return { digest, blobPath, size };
+    } finally {
+      reader.releaseLock();
+      if (!closed) await handle.close().catch(() => undefined);
+      await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    }
   }
 
   private enqueueWrite(task: () => Promise<void>): Promise<void> {
@@ -489,31 +538,4 @@ function parseIndexEntry(value: unknown): IndexEntry | null {
     return { digest, metadataKey };
   }
   return null;
-}
-
-async function streamToBuffer(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number
-): Promise<Buffer> {
-  const reader = stream.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.byteLength > 0) {
-        if (total + value.byteLength > maxBytes) {
-          const err = new CachePopulationTooLargeError(maxBytes);
-          void reader.cancel(err).catch(() => {});
-          throw err;
-        }
-        chunks.push(Buffer.from(value));
-        total += value.byteLength;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks);
 }

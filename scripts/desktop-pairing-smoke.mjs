@@ -310,7 +310,7 @@ function waitForSpawn(child, command, args, timeoutMs = 1_000) {
   });
 }
 
-function waitForChildExit(child, timeoutMs = 8_000) {
+function waitForChildExit(child, timeoutMs = 5 * 60_000) {
   if (!child || child.exitCode != null) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, timeoutMs);
@@ -725,11 +725,14 @@ async function waitAndClickHostedShellButton(app, label, timeoutMs) {
     async ({ webContents }, input) => {
       const deadline = Date.now() + input.timeoutMs;
       while (Date.now() < deadline) {
-        const hostedShellUrl = globalThis.__testApi?.getHostViewDebugInfo?.().hostedShellUrl ?? null;
+        const hostedShellUrl =
+          globalThis.__testApi?.getHostViewDebugInfo?.().hostedShellUrl ?? null;
         const contents = hostedShellUrl
           ? webContents
               .getAllWebContents()
-              .find((candidate) => !candidate.isDestroyed() && candidate.getURL() === hostedShellUrl)
+              .find(
+                (candidate) => !candidate.isDestroyed() && candidate.getURL() === hostedShellUrl
+              )
           : null;
         if (contents) {
           const clicked = await contents
@@ -1019,13 +1022,11 @@ async function waitForChatExperienceReady(app, panelId, timeoutMs) {
       "waiting for the chat experience to become ready",
       Math.min(30_000, Math.max(1_000, deadline - Date.now()))
     ).catch((error) => {
-      if (error instanceof Error && error.message.includes("evaluation timed out")) return latestText;
+      if (error instanceof Error && error.message.includes("evaluation timed out"))
+        return latestText;
       throw error;
     });
-    if (
-      latestText &&
-      CHAT_STARTUP_COPY.every((copy) => !latestText.includes(copy))
-    ) {
+    if (latestText && CHAT_STARTUP_COPY.every((copy) => !latestText.includes(copy))) {
       return latestText.slice(0, 500);
     }
     await sleep(250);
@@ -1047,7 +1048,9 @@ async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
     "reading the native panel document title"
   );
   if (typeof expectedTitle !== "string" || expectedTitle.trim().length === 0) {
-    throw new Error(`Native panel did not expose a document title: ${JSON.stringify(expectedTitle)}`);
+    throw new Error(
+      `Native panel did not expose a document title: ${JSON.stringify(expectedTitle)}`
+    );
   }
 
   const deadline = Date.now() + Math.min(timeoutMs, 30_000);
@@ -1074,10 +1077,12 @@ async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
     await sleep(100);
   }
   throw new Error(
-    `Native page title did not reach hosted shell panel-tree and breadcrumb chrome: ${JSON.stringify({
-      expectedTitle,
-      latestChromeText: latestChromeText.slice(0, 1_000),
-    })}`
+    `Native page title did not reach hosted shell panel-tree and breadcrumb chrome: ${JSON.stringify(
+      {
+        expectedTitle,
+        latestChromeText: latestChromeText.slice(0, 1_000),
+      }
+    )}`
   );
 }
 
@@ -1213,7 +1218,7 @@ async function main() {
       } catch {
         // Already gone.
       }
-      await waitForChildExit(child, 2_000);
+      await waitForChildExit(child, 30_000);
     }
     try {
       await fsp.unlink(options.readyFile);

@@ -26,7 +26,7 @@ import {
   type StoredMobileConnection,
   type StoredShellPairing,
 } from "./storedCredential.js";
-import { resumeMobileConnection } from "./resumeConnection.js";
+import { restoreRoutedConnectionPair, resumeMobileConnection } from "./resumeConnection.js";
 
 export type {
   FreshShellPairing,
@@ -315,5 +315,31 @@ export function reconnectMobileSession(
         controlConnection?.endpointPool
       ),
     persist: persistStoredMobileConnection,
+    connectRoutedPair: async (current, onCredentialStored) => {
+      const endpointPool = new MobileEndpointPool(
+        current.endpointIdentityId,
+        current.controlPairing.relays
+      );
+      return restoreRoutedConnectionPair(
+        () =>
+          reconnectViaIroh(
+            current,
+            oauthCallbackMode,
+            undefined,
+            "control",
+            onCredentialStored,
+            endpointPool
+          ),
+        () =>
+          reconnectViaIroh(
+            current,
+            oauthCallbackMode,
+            onRecovery,
+            "workspace",
+            onCredentialStored,
+            endpointPool
+          )
+      );
+    },
   });
 }

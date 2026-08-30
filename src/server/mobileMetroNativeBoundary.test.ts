@@ -79,9 +79,15 @@ describe("mobile Metro native capability boundary", () => {
     expect(() =>
       boundary.guardNativeModuleImport(
         "@react-native-async-storage/async-storage",
-        path.resolve("packages/mobile-iroh/src/connect.ts")
+        path.resolve("packages/mobile-iroh/src/connectLink.ts")
       )
     ).not.toThrow();
+    expect(() =>
+      boundary.guardNativeModuleImport(
+        "@react-native-async-storage/async-storage",
+        path.resolve("packages/mobile-iroh/src/connect.ts")
+      )
+    ).toThrow(/Direct import of native module/u);
   });
 
   it("does not affect normal JavaScript package resolution", () => {

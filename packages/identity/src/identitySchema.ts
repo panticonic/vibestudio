@@ -1,8 +1,9 @@
-import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
+import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 13 is the only accepted schema. Every other shape is rejected.
+ * Version 13 is the only current schema. The explicitly enumerated final
+ * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
 export const IDENTITY_DATABASE_SCHEMA_VERSION = 13;
 
@@ -163,3 +164,52 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
     },
   ],
 };
+
+/**
+ * Version 11 is the final shipped pre-cutover identity schema. Version 12 was never
+ * shipped. Preserve account/workspace state, discard obsolete signaling rooms
+ * and pending links, and make every old unbound device loopback-only. A fresh
+ * Iroh pairing is then required to bind a remote credential to an Endpoint ID.
+ */
+export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 11,
+    toVersion: 13,
+    migrate(db) {
+      db.exec(`
+        DROP TABLE control_rooms;
+        DELETE FROM pairing_codes;
+        DROP INDEX devices_by_user;
+        ALTER TABLE devices RENAME TO devices_v11;
+        CREATE TABLE devices (
+          device_id TEXT PRIMARY KEY,
+          refresh_token_hash TEXT NOT NULL,
+          transport_kind TEXT NOT NULL,
+          endpoint_id TEXT,
+          user_id TEXT NOT NULL REFERENCES users(id),
+          label TEXT NOT NULL,
+          platform TEXT,
+          created_at INTEGER NOT NULL,
+          last_used_at INTEGER,
+          revoked_at INTEGER,
+          CHECK (
+            (transport_kind = 'local' AND endpoint_id IS NULL)
+            OR
+            (transport_kind = 'iroh' AND endpoint_id IS NOT NULL AND length(endpoint_id) = 64 AND endpoint_id = lower(endpoint_id))
+          )
+        );
+        INSERT INTO devices (
+          device_id, refresh_token_hash, transport_kind, endpoint_id, user_id,
+          label, platform, created_at, last_used_at, revoked_at
+        )
+        SELECT
+          device_id, refresh_token_hash, 'local', NULL, user_id,
+          label, platform, created_at, last_used_at, revoked_at
+        FROM devices_v11;
+        DROP TABLE devices_v11;
+        CREATE INDEX devices_by_user ON devices(user_id);
+        CREATE UNIQUE INDEX devices_by_endpoint ON devices(endpoint_id) WHERE endpoint_id IS NOT NULL;
+      `);
+    },
+  },
+];

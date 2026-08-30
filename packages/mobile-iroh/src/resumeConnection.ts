@@ -11,6 +11,35 @@ export interface ResumeMobileConnectionDependencies {
     controlConnection?: IrohConnection
   ): Promise<IrohConnection>;
   persist(connection: StoredMobileConnection): Promise<void>;
+  connectRoutedPair?(
+    stored: Extract<StoredMobileConnection, { phase: "routed" }>,
+    onCredentialStored: (stored: StoredMobileConnection) => void
+  ): Promise<{ control: IrohConnection; workspace: IrohConnection }>;
+}
+
+export async function restoreRoutedConnectionPair<T extends { close(): Promise<void> }>(
+  openControl: () => Promise<T>,
+  openWorkspace: () => Promise<T>
+): Promise<{ control: T; workspace: T }> {
+  // Invoke both before awaiting either. Hub and workspace are independent
+  // logical sessions sharing one endpoint pool; serial dialing only adds a
+  // complete relay handshake to returning-device startup.
+  const attempts = await Promise.allSettled([openControl(), openWorkspace()]);
+  const [controlResult, workspaceResult] = attempts;
+  if (controlResult.status === "fulfilled" && workspaceResult.status === "fulfilled") {
+    return { control: controlResult.value, workspace: workspaceResult.value };
+  }
+
+  const cleanup = await Promise.allSettled(
+    attempts.flatMap((result) => (result.status === "fulfilled" ? [result.value.close()] : []))
+  );
+  throw new AggregateError(
+    [
+      ...attempts.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    ],
+    "Unable to restore the mobile hub and workspace Iroh pair"
+  );
 }
 
 async function closeAfterFailure(
@@ -39,6 +68,10 @@ export async function resumeMobileConnection(
   const updateCurrent = (next: StoredMobileConnection): void => {
     current = next;
   };
+  if (stored.phase === "routed" && dependencies.connectRoutedPair) {
+    const pair = await dependencies.connectRoutedPair(stored, updateCurrent);
+    return composeMobileSession(pair.control, pair.workspace);
+  }
   const control = await dependencies.connect(current, "control", updateCurrent);
   try {
     if (current.phase === "paired") {

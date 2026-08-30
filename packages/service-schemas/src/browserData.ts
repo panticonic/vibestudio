@@ -2,7 +2,6 @@ import { z } from "zod";
 import {
   defineReceiverServiceMethods,
   type MethodSchema,
-  type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
 
 const voidResult = z.void();
@@ -730,7 +729,7 @@ export const browserDataMethods = defineReceiverServiceMethods({
   ),
 });
 
-const BROWSER_VAULT_METHOD_NAMES = new Set([
+const BROWSER_VAULT_METHOD_NAMES = [
   "listPasswordSummaries",
   "listPasswordSummariesPage",
   "getPasswordForSite",
@@ -764,12 +763,33 @@ const BROWSER_VAULT_METHOD_NAMES = new Set([
   "addCookiesBatch",
   "addPasswordsBatch",
   "addFormFillBatch",
-]);
+] as const satisfies readonly (keyof typeof browserDataMethods)[];
 
-function selectBrowserMethods(vault: boolean): ServiceMethodSchemas {
+type BrowserVaultMethodName = (typeof BROWSER_VAULT_METHOD_NAMES)[number];
+type BrowserVaultMethod<K extends BrowserVaultMethodName> = Omit<
+  (typeof browserDataMethods)[K],
+  "authority" | "directEffect" | "agentFacing"
+> & {
+  authority: { principals: ["host"] };
+  directEffect: {
+    kind: "host-capability";
+    capability: string;
+    resource: { kind: "receiver-object" };
+  };
+  agentFacing: false;
+};
+type SelectedBrowserMethods<Vault extends boolean> = Vault extends true
+  ? { [K in BrowserVaultMethodName]: BrowserVaultMethod<K> }
+  : Omit<typeof browserDataMethods, BrowserVaultMethodName>;
+
+const BROWSER_VAULT_METHOD_NAME_SET = new Set<string>(BROWSER_VAULT_METHOD_NAMES);
+
+function selectBrowserMethods<const Vault extends boolean>(
+  vault: Vault
+): SelectedBrowserMethods<Vault> {
   return Object.fromEntries(
     Object.entries(browserDataMethods)
-      .filter(([name]) => BROWSER_VAULT_METHOD_NAMES.has(name) === vault)
+      .filter(([name]) => BROWSER_VAULT_METHOD_NAME_SET.has(name) === vault)
       .map(([name, method]) => [
         name,
         vault
@@ -785,7 +805,7 @@ function selectBrowserMethods(vault: boolean): ServiceMethodSchemas {
             }
           : method,
       ])
-  );
+  ) as SelectedBrowserMethods<Vault>;
 }
 
 /** Host-owned protected credential and cookie effects. */

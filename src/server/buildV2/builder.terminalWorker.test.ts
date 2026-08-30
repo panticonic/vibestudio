@@ -86,6 +86,7 @@ describe("buildUnit terminal worker builds", () => {
         type: "module",
         vibestudio: {
           entry: "worker.ts",
+          sourcemap: true,
           durable: { classes: [{ className: "TerminalMin" }] },
           terminal: { renderer: "ink" },
         },

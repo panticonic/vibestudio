@@ -7190,6 +7190,12 @@ async function main() {
 
   let isShuttingDown = false;
 
+  // Shutdown deadlines are last-resort process containment, not operating
+  // budgets. Normal shutdown is driven by quiescence and completion signals.
+  const catastrophicShutdownTimeoutMs = 5 * 60_000;
+  const catastrophicEvalDrainTimeoutMs = 60_000;
+  const catastrophicLifecyclePrepareTimeoutMs = 60_000;
+
   async function shutdown() {
     if (isShuttingDown) return;
     isShuttingDown = true;
@@ -7204,7 +7210,7 @@ async function main() {
     const forceExit = setTimeout(() => {
       console.warn("[Server] Shutdown timeout — forcing exit");
       process.exit(1);
-    }, 8000);
+    }, catastrophicShutdownTimeoutMs);
 
     cleanupReaper.stop();
 
@@ -7234,11 +7240,11 @@ async function main() {
     // transports. Every EvalDO run is a durable trust unit with its own
     // cancellation cleanup; cancelling it here lets model/tool work, child
     // runtimes, and system-test drivers unwind while the relay is still alive.
-    // Reserve the final two seconds for lifecycle release instead of allowing
-    // an unbounded cleanup to consume the entire process shutdown budget.
-    const evalDrainBudgetMs = Math.max(
-      0,
-      Math.min(4_000, 8_000 - (Date.now() - shutdownStartedAt) - 2_000)
+    // This is a catastrophic guard for a broken cancellation implementation,
+    // not an ordinary cap on durable eval cleanup.
+    const evalDrainBudgetMs = Math.min(
+      catastrophicEvalDrainTimeoutMs,
+      Math.max(0, catastrophicShutdownTimeoutMs - (Date.now() - shutdownStartedAt))
     );
     await closeActiveEvalRuns?.(evalDrainBudgetMs).catch((err) =>
       console.warn("[Server] active eval shutdown drain failed:", err)
@@ -7251,7 +7257,10 @@ async function main() {
     await closeEvalKernelLeases?.().catch((err) =>
       console.warn("[Server] eval kernel lease shutdown failed:", err)
     );
-    const prepareBudgetMs = Math.max(0, Math.min(2000, 8000 - (Date.now() - shutdownStartedAt)));
+    const prepareBudgetMs = Math.min(
+      catastrophicLifecyclePrepareTimeoutMs,
+      Math.max(0, catastrophicShutdownTimeoutMs - (Date.now() - shutdownStartedAt))
+    );
     if (prepareBudgetMs > 0) {
       await lifecycleDriver
         .prepareForShutdown(prepareBudgetMs)

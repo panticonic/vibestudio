@@ -3305,6 +3305,16 @@ export class FsService {
       throw new RangeError(`grep maxMatches must be an integer from 1 to ${GREP_HARD_MAX_MATCHES}`);
     }
     const searchRoot = await resolveFsFilePath(scope, opts.path ?? "/");
+    try {
+      await fs.stat(searchRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const requestedPath = opts.path ?? "/";
+      throw Object.assign(new Error(`grep search path not found: ${requestedPath}`), {
+        code: "ENOENT",
+        path: requestedPath,
+      });
+    }
 
     const rgPath = ripgrepPathOverride === undefined ? bundledRipgrepPath : ripgrepPathOverride;
     if (!rgPath) throw new Error("The bundled ripgrep search engine is unavailable");

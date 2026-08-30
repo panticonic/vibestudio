@@ -797,7 +797,10 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
-const EXTERNAL_DEPS_RECEIPT_VERSION = 3;
+// Version 4 adds complete runtime-dependency topology validation. Version 3
+// proved package identities and peers, but could accept an older flattened
+// tree where an ordinary dependency resolved to an incompatible root package.
+const EXTERNAL_DEPS_RECEIPT_VERSION = 4;
 
 interface PatchedFileReceipt {
   path: string;
@@ -819,6 +822,8 @@ function sha256(value: string | Buffer): string {
 
 interface InstalledPackage {
   version: string;
+  dependencies: Record<string, string>;
+  optionalDependencies: Set<string>;
   peerDependencies: Record<string, string>;
   optionalPeers: Set<string>;
 }
@@ -832,16 +837,62 @@ function resolveInstalledPeer(
   requiredBy: string,
   peerName: string
 ): { location: string; installed: InstalledPackage } | null {
-  const segments = requiredBy.split("/");
-  for (let end = segments.length; end >= 0; end--) {
-    const prefix = segments.slice(0, end).join("/");
-    const location = prefix
-      ? `${prefix.replace(/\/node_modules\/[^/]+$/u, "")}/node_modules/${peerName}`
-      : `node_modules/${peerName}`;
+  let directory = requiredBy;
+  while (directory !== "." && directory !== "/") {
+    const location = `${directory}/node_modules/${peerName}`;
     const match = installed.get(location);
     if (match) return { location, installed: match };
+    directory = path.posix.dirname(directory);
   }
-  return null;
+  const rootLocation = `node_modules/${peerName}`;
+  const rootMatch = installed.get(rootLocation);
+  return rootMatch ? { location: rootLocation, installed: rootMatch } : null;
+}
+
+function dependencyOverrideFor(
+  dependencyName: string,
+  resolvedVersion: string,
+  overrides: Readonly<Record<string, string>>
+): string | undefined {
+  const exact = overrides[dependencyName];
+  if (exact !== undefined) return exact;
+  for (const [selector, version] of Object.entries(overrides)) {
+    const at = selector.lastIndexOf("@");
+    if (at <= 0 || selector.slice(0, at) !== dependencyName) continue;
+    const selectedMajor = majorFromSimpleVersion(selector.slice(at + 1));
+    if (selectedMajor !== null && semver.major(resolvedVersion) === selectedMajor) return version;
+  }
+  return undefined;
+}
+
+function assertInstalledDependenciesSatisfied(
+  installed: Map<string, InstalledPackage>,
+  overrides: Readonly<Record<string, string>>
+): void {
+  for (const [location, record] of installed) {
+    for (const [dependencyName, range] of Object.entries(record.dependencies)) {
+      const resolved = resolveInstalledPeer(installed, location, dependencyName);
+      if (!resolved) {
+        if (record.optionalDependencies.has(dependencyName)) continue;
+        throw new Error(
+          `installed dependency ${location}@${record.version} cannot resolve ${dependencyName}@${range}`
+        );
+      }
+      const effectiveRange =
+        dependencyOverrideFor(dependencyName, resolved.installed.version, overrides) ?? range;
+      const validRange = semver.validRange(effectiveRange);
+      if (
+        validRange === null ||
+        semver.satisfies(resolved.installed.version, validRange, { includePrerelease: true })
+      ) {
+        continue;
+      }
+      throw new Error(
+        `installed dependency ${location}@${record.version} requires ${dependencyName}@${effectiveRange}, ` +
+          `but Node resolution selects ${resolved.location}@${resolved.installed.version}`
+      );
+    }
+  }
 }
 
 /**
@@ -874,11 +925,12 @@ function assertInstalledPeersSatisfied(installed: Map<string, InstalledPackage>)
  * The hidden lock describes the packages npm actually installed (unlike the
  * root lock, which may include platform-skipped optionals). Every registry
  * package must retain its integrity identity and matching package metadata,
- * and every peer range between installed packages must hold.
+ * and every ordinary dependency and peer must resolve coherently.
  */
 async function createExternalDepsReceipt(
   cacheDir: string,
-  patchedFiles: PatchedFileReceipt[]
+  patchedFiles: PatchedFileReceipt[],
+  overrides: Readonly<Record<string, string>>
 ): Promise<ExternalDepsReceipt> {
   const nodeModulesDir = path.join(cacheDir, "node_modules");
   const lockPath = path.join(nodeModulesDir, ".package-lock.json");
@@ -912,6 +964,8 @@ async function createExternalDepsReceipt(
     const packageJsonPath = path.join(packageDir, "package.json");
     const packageJson = JSON.parse(await fs.promises.readFile(packageJsonPath, "utf8")) as {
       version?: unknown;
+      dependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
       peerDependenciesMeta?: Record<string, { optional?: boolean }>;
     };
@@ -920,6 +974,8 @@ async function createExternalDepsReceipt(
     }
     installed.set(location, {
       version: record.version,
+      dependencies: { ...packageJson.dependencies, ...packageJson.optionalDependencies },
+      optionalDependencies: new Set(Object.keys(packageJson.optionalDependencies ?? {})),
       peerDependencies: { ...packageJson.peerDependencies },
       optionalPeers: new Set(
         Object.entries(packageJson.peerDependenciesMeta ?? {})
@@ -929,6 +985,7 @@ async function createExternalDepsReceipt(
     });
   }
   if (packageCount === 0) throw new Error("installed dependency lock is empty");
+  assertInstalledDependenciesSatisfied(installed, overrides);
   assertInstalledPeersSatisfied(installed);
   return {
     version: EXTERNAL_DEPS_RECEIPT_VERSION,
@@ -1368,7 +1425,10 @@ async function ensureDepsInstalledOnce(
     // Validate npm's installed package identities before making the cache
     // visible, then publish the receipt atomically with the directory rename.
     const receiptStartedAt = Date.now();
-    await writeExternalDepsReceipt(tmpDir, await createExternalDepsReceipt(tmpDir, patchedFiles));
+    await writeExternalDepsReceipt(
+      tmpDir,
+      await createExternalDepsReceipt(tmpDir, patchedFiles, options.overrides ?? {})
+    );
     profile.receiptMs = Date.now() - receiptStartedAt;
 
     // A closure owns resolution topology, not another physical copy of every

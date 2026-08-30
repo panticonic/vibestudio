@@ -24,12 +24,17 @@ vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
       dependencies: Record<string, string>;
     };
     const packages: Record<string, Record<string, unknown>> = {};
-    const installPackage = (location: string, name: string, version: string) => {
+    const installPackage = (
+      location: string,
+      name: string,
+      version: string,
+      dependencies: Record<string, string> = {}
+    ) => {
       const packageDir = path.join(cwd, location);
       fs.mkdirSync(packageDir, { recursive: true });
       fs.writeFileSync(
         path.join(packageDir, "package.json"),
-        JSON.stringify({ name, version, exports: { ".": "./index.js" } })
+        JSON.stringify({ name, version, dependencies, exports: { ".": "./index.js" } })
       );
       fs.writeFileSync(path.join(packageDir, "index.js"), "export default true;\n");
       packages[location] = {
@@ -47,6 +52,17 @@ vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
           path.join(location, "node_modules", "transitive-target"),
           "transitive-target",
           "2.0.0"
+        );
+      }
+      if (name === "parent-with-incompatible-root") {
+        fs.writeFileSync(
+          path.join(cwd, location, "package.json"),
+          JSON.stringify({
+            name,
+            version,
+            dependencies: { "versioned-child": "^1.0.0" },
+            exports: { ".": "./index.js" },
+          })
         );
       }
     }
@@ -642,6 +658,19 @@ describe("collectExternalDependencyClosure", () => {
 });
 
 describe("ensureExternalDeps", () => {
+  it("refuses to publish a flattened tree with an incompatible runtime dependency", async () => {
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+
+    await expect(
+      ensureExternalDeps({
+        "parent-with-incompatible-root": "1.0.0",
+        "versioned-child": "2.0.0",
+      })
+    ).rejects.toThrow(
+      /parent-with-incompatible-root@1\.0\.0 requires versioned-child@\^1\.0\.0.*versioned-child@2\.0\.0/u
+    );
+  });
+
   it("applies an exact patch to every matching transitive package occurrence", async () => {
     vi.mocked(runNpmInstall).mockClear();
     fs.rmSync(testExtDepsRoot, { recursive: true, force: true });

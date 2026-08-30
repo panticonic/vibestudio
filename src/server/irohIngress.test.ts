@@ -29,10 +29,15 @@ describe("Iroh server ingress", () => {
   it("admits only after binding and rejects peers before attachment", async () => {
     const allowed = connection("a".repeat(64));
     const denied = connection("b".repeat(64));
-    const queue = [allowed, denied, null];
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    const queue: Array<IrohPhysicalConnection | Promise<IrohPhysicalConnection | null>> = [
+      allowed,
+      denied,
+      waiting.promise,
+    ];
     const endpoint = {
       endpointId: "c".repeat(64),
-      accept: vi.fn(async () => queue.shift() ?? null),
+      accept: vi.fn(async () => await (queue.shift() ?? waiting.promise)),
       close: vi.fn(async () => undefined),
     } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
     const binding = {
@@ -51,8 +56,40 @@ describe("Iroh server ingress", () => {
     expect(attach).toHaveBeenCalledWith(allowed);
     expect(attach).not.toHaveBeenCalledWith(denied);
     expect(denied.close).toHaveBeenCalledWith(0x210n, expect.any(Uint8Array));
+    waiting.resolve(null);
     await ingress.stop();
     expect(endpoint.close).toHaveBeenCalledOnce();
+  });
+
+  it("rebinds after an established accept loop fails while preserving endpoint identity", async () => {
+    const accepted = connection("a".repeat(64));
+    const secondWait = deferred<IrohPhysicalConnection | null>();
+    const first = {
+      endpointId: "c".repeat(64),
+      accept: vi.fn(async () => {
+        throw new Error("transient accept failure");
+      }),
+      close: vi.fn(async () => undefined),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    let secondAccept = 0;
+    const second = {
+      endpointId: first.endpointId,
+      accept: vi.fn(async () => {
+        secondAccept += 1;
+        return secondAccept === 1 ? accepted : await secondWait.promise;
+      }),
+      close: vi.fn(async () => secondWait.resolve(null)),
+    } as unknown as IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const binding = {
+      bind: vi.fn().mockResolvedValueOnce(first).mockResolvedValue(second),
+    } as IrohEndpointBinding<IrohPhysicalConnection, IrohPhysicalEndpoint<IrohPhysicalConnection>>;
+    const attach = vi.fn(async () => undefined);
+    const ingress = startIrohIngress({ binding, admitPeer: () => true, attach });
+    await ingress.ready;
+    await vi.waitFor(() => expect(attach).toHaveBeenCalledWith(accepted));
+    expect(binding.bind).toHaveBeenCalledTimes(2);
+    expect(first.close).toHaveBeenCalledOnce();
+    await ingress.stop();
   });
 
   it("bounds relay discovery and releases an endpoint that cannot become online", async () => {

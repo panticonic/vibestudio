@@ -1264,6 +1264,20 @@ describe("FsService", () => {
       ).rejects.toThrow(/Path traversal/);
     });
 
+    it("reports a missing search root directly instead of an opaque ripgrep failure", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-grep-missing");
+      mkdirSync(path.join(tmpRoot, "ctx-grep-missing"), { recursive: true });
+
+      await expect(
+        service.handleCall(ctx, "grep", ["needle", { path: "/not-present" }])
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+        message: "grep search path not found: /not-present",
+        path: "/not-present",
+      });
+    });
+
     it("works for shell callers with an explicit contextId", async () => {
       mkdirSync(path.join(tmpRoot, "ctx-grep-shell"), { recursive: true });
       writeFileSync(path.join(tmpRoot, "ctx-grep-shell", "f.txt"), "needle\n");

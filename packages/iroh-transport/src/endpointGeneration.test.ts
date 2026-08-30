@@ -99,7 +99,7 @@ describe("endpoint generation owner", () => {
     await owner.close();
   });
 
-  it("single-flights concurrent dial operations", async () => {
+  it("runs healthy concurrent dial operations without artificial serialization", async () => {
     const active: number[] = [];
     let inFlight = 0;
     let maximumInFlight = 0;
@@ -127,8 +127,8 @@ describe("endpoint generation owner", () => {
       owner.dial({ reach, overallDeadlineMs: 1_000, perAttemptDeadlineMs: 500 }),
       owner.dial({ reach, overallDeadlineMs: 1_000, perAttemptDeadlineMs: 500 }),
     ]);
-    expect(active).toEqual([1, 1]);
-    expect(maximumInFlight).toBe(1);
+    expect(active).toEqual([1, 2]);
+    expect(maximumInFlight).toBe(2);
     await owner.close();
   });
 
