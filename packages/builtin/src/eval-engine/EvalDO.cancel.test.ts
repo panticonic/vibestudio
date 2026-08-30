@@ -544,6 +544,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       resultReceiverRef: "do:workers/agent-worker:AiChatWorker:agent-1",
       agentInvocationId: "invocation-1",
       channelId: "channel-1",
+      executionSessionNonce: "session-background-123456",
     });
 
     await vi.waitFor(() => {
@@ -562,8 +563,13 @@ describe("EvalDO cancellation + forced recovery", () => {
           channelId: "channel-1",
           result: expect.objectContaining({ success: true, returnValue: 7 }),
         }),
-      ]
+      ],
+      expect.any(Object)
     );
+    const deliveryCalls = call.mock.calls as unknown as Array<
+      [string, string, unknown[], RpcCallOptions]
+    >;
+    expect(executionSessionNonceFor(deliveryCalls[0]?.[3])).toBe("session-background-123456");
   });
 
   it("durably retains verified workspace import executions until disposal", async () => {
@@ -2839,11 +2845,17 @@ describe("EvalDO cancellation + forced recovery", () => {
       resultReceiverRef: receiver,
       agentInvocationId: "invocation-redeliver",
       channelId: "channel-1",
+      executionSessionNonce: "session-redeliver-123456",
     });
     await vi.waitFor(() => {
       expect(instance.getRun("redeliver-run")).toMatchObject({ status: "done" });
       expect(call.mock.calls.filter(([, method]) => method === "onEvalComplete")).toHaveLength(1);
     });
+    const deliveryCalls = call.mock.calls as unknown as Array<
+      [string, string, unknown[], RpcCallOptions]
+    >;
+    const firstDelivery = deliveryCalls.find(([, method]) => method === "onEvalComplete");
+    expect(executionSessionNonceFor(firstDelivery?.[3])).toBe("session-redeliver-123456");
     // The failed push durably queued one redelivery entry.
     await vi.waitFor(() => {
       expect(redeliveryState(sql)).toEqual({ "redeliver-run": 1 });
@@ -2874,6 +2886,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       resultReceiverRef: receiver,
       agentInvocationId: "invocation-exhaust",
       channelId: "channel-1",
+      executionSessionNonce: "session-exhaust-123456",
     });
     await vi.waitFor(() => expect(redeliveryState(sql)).toEqual({ "redeliver-exhaust": 1 }));
 
@@ -2897,6 +2910,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         resultReceiverRef: receiver,
         agentInvocationId: `invocation-${runId}`,
         channelId: "channel-1",
+        executionSessionNonce: `session-${runId}-123456`,
       });
       sql.exec(
         `UPDATE runs SET status = 'done', result = ? WHERE run_id = ?`,
