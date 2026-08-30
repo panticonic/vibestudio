@@ -80,6 +80,12 @@ export interface WorkspaceStateServiceDeps {
    * durable slot mutation, regardless of which client initiated it.
    */
   onSlotStateChanged?: (change?: SlotStateChange) => void;
+  /**
+   * Publish changes to derived panel presentation without pretending that the
+   * durable slot topology advanced. Presentation has its own monotonic event
+   * revision and is refreshed by panel id on every connected client.
+   */
+  onPresentationChanged?: (panelIds: string[]) => void;
   panelAccess: PanelAccessPermissionDeps;
 }
 
@@ -177,9 +183,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       deps.presentationDispatch("titlesForSlots", [missing]) as Promise<Record<string, string>>
     )
       .then((titles) => {
-        let changed = false;
-        for (const slotId of missing) changed = observeTitle(slotId, titles[slotId]) || changed;
-        if (changed) deps.onSlotStateChanged?.({ kind: "tree" });
+        const changed = missing.filter((slotId) => observeTitle(slotId, titles[slotId]));
+        if (changed.length > 0) deps.onPresentationChanged?.(changed);
       })
       .catch((error) => reportProjectionFailure("title refresh", error))
       .finally(() => {
@@ -523,15 +528,22 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
               string
             >)
           : {};
+        const effectiveTitle = explicit && titles[input.id] ? titles[input.id] : input.title;
         await deps.presentationDispatch("indexPanel", [
           {
             ...input,
             source: detail.currentHistory.source,
-            ...(explicit && titles[input.id] ? { title: titles[input.id] } : {}),
+            ...(effectiveTitle ? { title: effectiveTitle } : {}),
           },
           entityId,
         ]);
-        deps.onSlotStateChanged?.({ kind: "tree" });
+        // indexPanel deliberately preserves a newer inferred runtime title.
+        // Seed a cold cache from the index input, but never let a later index
+        // pass overwrite a title already observed from the running document.
+        const titleChanged = explicit
+          ? observeTitle(input.id, effectiveTitle)
+          : !titleCache.has(input.id) && observeTitle(input.id, effectiveTitle);
+        if (titleChanged) deps.onPresentationChanged?.([input.id]);
         return entityId;
       },
       "panel.updateTitle": async (_ctx, [slotId, title, options]) => {
@@ -545,8 +557,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           if (explicit) return entityId;
         }
         await deps.presentationDispatch("updatePanelTitle", [slotId, entityId, title, options]);
-        observeTitle(slotId, title);
-        deps.onSlotStateChanged?.({ kind: "tree" });
+        if (observeTitle(slotId, title)) deps.onPresentationChanged?.([slotId]);
         return entityId;
       },
       "panel.incrementAccess": async (_ctx, [slotId]) => {

@@ -31,6 +31,7 @@ function makeDoCtx(key: { source: string; className: string; objectKey: string }
 
 function makeService(opts: {
   onSlotStateChanged?: (change?: SlotStateChange) => void;
+  onPresentationChanged?: (panelIds: string[]) => void;
   /**
    * Map of DO method → return value. The dispatcher uses this to drive
    * outcomes (e.g. simulating the entity-id WorkspaceDO returns from
@@ -74,6 +75,7 @@ function makeService(opts: {
       controlsLifecycleContext: opts.panelAccess?.controlsLifecycleContext ?? (async () => false),
     },
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
+    ...(opts.onPresentationChanged ? { onPresentationChanged: opts.onPresentationChanged } : {}),
   });
   return { svc, calls, presentationCalls };
 }
@@ -209,8 +211,10 @@ describe("workspaceStateService — topology authority", () => {
       ],
       nextCursor: null,
     };
+    const onPresentationChanged = vi.fn();
     const { svc } = makeService({
       dispatchReturns: { panelTreePage: page },
+      onPresentationChanged,
       presentationDispatch: async (method) =>
         method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
     });
@@ -222,6 +226,15 @@ describe("workspaceStateService — topology authority", () => {
     ).resolves.toEqual({
       ...page,
       nodes: [{ ...page.nodes[0], title: "panels/chat", kind: "workspace" }],
+    });
+    await vi.waitFor(() => expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]));
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toEqual({
+      ...page,
+      nodes: [{ ...page.nodes[0], title: "Chat", kind: "workspace" }],
     });
   });
 
@@ -402,6 +415,7 @@ describe("workspaceStateService — topology authority", () => {
 
   it("indexes and titles through the Base owner without asking panel callers to resolve it", async () => {
     const onSlotStateChanged = vi.fn();
+    const onPresentationChanged = vi.fn();
     const detail = {
       revision: 1,
       slot: { slot_id: "panel:chat" },
@@ -410,6 +424,7 @@ describe("workspaceStateService — topology authority", () => {
     };
     const { svc, presentationCalls } = makeService({
       onSlotStateChanged,
+      onPresentationChanged,
       dispatchReturns: { panelTreeDetail: detail },
     });
 
@@ -445,7 +460,139 @@ describe("workspaceStateService — topology authority", () => {
         args: ["panel:chat", "panel:nav-chat", "Renamed chat", { explicit: true }],
       },
     ]);
-    expect(onSlotStateChanged).toHaveBeenCalledTimes(2);
+    expect(onSlotStateChanged).not.toHaveBeenCalled();
+    expect(onPresentationChanged).toHaveBeenNthCalledWith(1, ["panel:chat"]);
+    expect(onPresentationChanged).toHaveBeenNthCalledWith(2, ["panel:chat"]);
+  });
+
+  it("publishes a native page title from the mutation cache on the next tree read", async () => {
+    const page = {
+      revision: 1,
+      group: { kind: "roots" as const, ownerUserId: null },
+      nodes: [
+        {
+          slotId: "panel:chat",
+          parentSlotId: null,
+          ownerUserId: null,
+          source: "panels/chat",
+          createdAt: 1,
+          childCount: 0,
+        },
+      ],
+      nextCursor: null,
+    };
+    const detail = {
+      revision: 1,
+      slot: { slot_id: "panel:chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:nav-chat" },
+    };
+    const onSlotStateChanged = vi.fn();
+    const onPresentationChanged = vi.fn();
+    const { svc, presentationCalls } = makeService({
+      onSlotStateChanged,
+      onPresentationChanged,
+      dispatchReturns: { panelTreeDetail: detail, panelTreePage: page },
+    });
+
+    await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:chat",
+      "Conversation title",
+      { explicit: false },
+    ]);
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toMatchObject({
+      nodes: [{ slotId: "panel:chat", title: "Conversation title" }],
+    });
+
+    expect(presentationCalls).toEqual([
+      { method: "isEntityTitleExplicit", args: ["panel:nav-chat"] },
+      {
+        method: "updatePanelTitle",
+        args: ["panel:chat", "panel:nav-chat", "Conversation title", { explicit: false }],
+      },
+    ]);
+    expect(onSlotStateChanged).not.toHaveBeenCalled();
+    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
+  });
+
+  it("coalesces repeated runtime page titles without redundant presentation refreshes", async () => {
+    const detail = {
+      revision: 1,
+      slot: { slot_id: "panel:chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:nav-chat" },
+    };
+    const onPresentationChanged = vi.fn();
+    const { svc } = makeService({
+      onPresentationChanged,
+      dispatchReturns: { panelTreeDetail: detail },
+    });
+
+    await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:chat",
+      "Conversation title",
+      { explicit: false },
+    ]);
+    await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:chat",
+      "Conversation title",
+      { explicit: false },
+    ]);
+
+    expect(onPresentationChanged).toHaveBeenCalledTimes(1);
+    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
+  });
+
+  it("does not let a later index pass replace a newer runtime page title", async () => {
+    const page = {
+      revision: 1,
+      group: { kind: "roots" as const, ownerUserId: null },
+      nodes: [
+        {
+          slotId: "panel:chat",
+          parentSlotId: null,
+          ownerUserId: null,
+          source: "panels/chat",
+          createdAt: 1,
+          childCount: 0,
+        },
+      ],
+      nextCursor: null,
+    };
+    const detail = {
+      revision: 1,
+      slot: { slot_id: "panel:chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:nav-chat" },
+    };
+    const onPresentationChanged = vi.fn();
+    const { svc } = makeService({
+      onPresentationChanged,
+      dispatchReturns: { panelTreeDetail: detail, panelTreePage: page },
+    });
+
+    await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:chat",
+      "Conversation title",
+      { explicit: false },
+    ]);
+    await svc.handler(makeCtx() as never, "panel.index", [
+      { id: "panel:chat", title: "Agentic Chat", path: "panels/chat" },
+    ]);
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toMatchObject({
+      nodes: [{ slotId: "panel:chat", title: "Conversation title" }],
+    });
+    expect(onPresentationChanged).toHaveBeenCalledTimes(1);
+    expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
   });
 });
 

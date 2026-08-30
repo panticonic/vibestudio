@@ -394,6 +394,26 @@ describe("PanelOrchestrator.closePanel", () => {
   });
 });
 
+describe("PanelOrchestrator.updatePanelTitle", () => {
+  it("routes native page titles through workspace-state so every tree projection is invalidated", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/chat", [], {
+      runtimeEntityId: asPanelEntityId("panel:nav-chat"),
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, serverClient, shellCore } = createOrchestrator(registry);
+
+    await orchestrator.updatePanelTitle(panel.id, "Conversation title");
+
+    expect(serverClient.call).toHaveBeenCalledWith("workspace-state", "panel.updateTitle", [
+      panel.id,
+      "Conversation title",
+      { explicit: false },
+    ]);
+    expect(shellCore.getCurrentEntityId).not.toHaveBeenCalled();
+  });
+});
+
 describe("PanelOrchestrator.ensureLoaded", () => {
   it("loads a panel without selecting or focusing it", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });

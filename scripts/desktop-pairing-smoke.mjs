@@ -1035,6 +1035,52 @@ async function waitForChatExperienceReady(app, panelId, timeoutMs) {
   );
 }
 
+async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
+  const expectedTitle = await evaluateElectron(
+    app,
+    async (_electron, id) => {
+      const testApi = globalThis.__testApi;
+      if (!testApi) throw new Error("Desktop test API is not available");
+      return testApi.executePanelScript(id, "document.title");
+    },
+    panelId,
+    "reading the native panel document title"
+  );
+  if (typeof expectedTitle !== "string" || expectedTitle.trim().length === 0) {
+    throw new Error(`Native panel did not expose a document title: ${JSON.stringify(expectedTitle)}`);
+  }
+
+  const deadline = Date.now() + Math.min(timeoutMs, 30_000);
+  let latestChromeText = "";
+  while (Date.now() < deadline) {
+    latestChromeText = await evaluateElectron(
+      app,
+      async ({ webContents }) => {
+        const shell = webContents
+          .getAllWebContents()
+          .find(
+            (contents) =>
+              !contents.isDestroyed() &&
+              contents.getTitle() === "@workspace-apps/shell" &&
+              !contents.getURL().includes("#overlaySurface=")
+          );
+        if (!shell) return "";
+        return shell.executeJavaScript("document.body?.innerText ?? ''", true);
+      },
+      undefined,
+      "reading hosted shell title chrome"
+    );
+    if (latestChromeText.includes(expectedTitle)) return expectedTitle;
+    await sleep(100);
+  }
+  throw new Error(
+    `Native page title did not reach hosted shell panel-tree and breadcrumb chrome: ${JSON.stringify({
+      expectedTitle,
+      latestChromeText: latestChromeText.slice(0, 1_000),
+    })}`
+  );
+}
+
 async function createAndWaitForNewPanel(app, existingPanelIds, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const controlTimeoutMs = Math.min(30_000, Math.max(1_000, timeoutMs));
@@ -1291,6 +1337,12 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now())
     );
     console.log(`[desktop-smoke] Chat experience ready: ${chatExperience}`);
+    const projectedTitle = await verifyNativePageTitleProjection(
+      electronApp,
+      renderedPanel.panel.id,
+      Math.max(1_000, deadlineMs - Date.now())
+    );
+    console.log(`[desktop-smoke] Native page title projected: ${projectedTitle}`);
     const panelIds = new Set((await getPanelTree(electronApp)).map((panel) => panel.id));
     const newPanel = await createAndWaitForNewPanel(
       electronApp,
@@ -1311,6 +1363,7 @@ async function main() {
         `panels=${Array.isArray(panels) ? panels.length : "unknown"}; ` +
         `renderedPanel=${JSON.stringify(renderedPanel)}; ` +
         `chatExperience=${JSON.stringify(chatExperience)}; ` +
+        `projectedTitle=${JSON.stringify(projectedTitle)}; ` +
         `newPanel=${JSON.stringify(newPanel)}` +
         (screenshotPath ? `; screenshot=${path.relative(repoRoot, screenshotPath)}` : "")
     );

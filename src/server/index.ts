@@ -3831,6 +3831,12 @@ async function main() {
           }),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
           onSlotStateChanged: notifySlotStateListeners,
+          onPresentationChanged: (panelIds) => {
+            eventService.emit("panel-presentation-changed", {
+              revision: ++workspacePresentationRevision,
+              panelIds: [...new Set(panelIds)],
+            });
+          },
         });
       },
       getServiceDefinition() {
