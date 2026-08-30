@@ -4236,11 +4236,6 @@ async function main() {
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           setEntityTitle: async (entityId, title, options) => {
-            await dispatchWorkspacePresentation("setEntityTitle", [
-              entityId,
-              title ?? null,
-              options ?? {},
-            ]);
             const slotId = (await dispatcher.dispatch(
               { caller: createHostCaller("server") },
               "workspace-state",
@@ -4248,11 +4243,19 @@ async function main() {
               [entityId]
             )) as string | null;
             if (slotId) {
-              eventService.emit("panel-presentation-changed", {
-                revision: ++workspacePresentationRevision,
-                panelIds: [slotId],
-              });
+              await dispatcher.dispatch(
+                { caller: createHostCaller("server") },
+                "workspace-state",
+                "panel.updateTitle",
+                [slotId, title ?? null, options ?? {}]
+              );
+              return;
             }
+            await dispatchWorkspacePresentation("setEntityTitle", [
+              entityId,
+              title ?? null,
+              options ?? {},
+            ]);
           },
           onExecutionRecovery: (event) => {
             const active = entityCache.resolveActive(event.entityId);

@@ -547,6 +547,57 @@ describe("workspaceStateService — topology authority", () => {
     expect(onPresentationChanged).toHaveBeenCalledWith(["panel:chat"]);
   });
 
+  it("clears a panel title through the same cache and presentation owner", async () => {
+    const page = {
+      revision: 1,
+      group: { kind: "roots" as const, ownerUserId: null },
+      nodes: [
+        {
+          slotId: "panel:chat",
+          parentSlotId: null,
+          ownerUserId: null,
+          source: "panels/chat",
+          createdAt: 1,
+          childCount: 0,
+        },
+      ],
+      nextCursor: null,
+    };
+    const detail = {
+      revision: 1,
+      slot: { slot_id: "panel:chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:nav-chat" },
+    };
+    const onPresentationChanged = vi.fn();
+    const { svc, presentationCalls } = makeService({
+      onPresentationChanged,
+      dispatchReturns: { panelTreeDetail: detail, panelTreePage: page },
+    });
+
+    await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:chat",
+      "Conversation title",
+      { explicit: true },
+    ]);
+    await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:chat",
+      null,
+      { explicit: true },
+    ]);
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toMatchObject({ nodes: [{ title: "panels/chat" }] });
+    expect(presentationCalls).toContainEqual({
+      method: "updatePanelTitle",
+      args: ["panel:chat", "panel:nav-chat", null, { explicit: true }],
+    });
+    expect(onPresentationChanged).toHaveBeenCalledTimes(2);
+  });
+
   it("does not let a later index pass replace a newer runtime page title", async () => {
     const page = {
       revision: 1,
