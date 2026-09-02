@@ -388,6 +388,7 @@ Authority principals: `code`, `host`, `user`
 | `panelCdp.stop` | Stop loading an approved panel target through its active CDP host. |
 | `panelCdp.consoleHistory` | Read console history from an approved panel target's active CDP host. |
 | `panelCdp.evaluate` | Evaluate one expression in an approved panel target through its active CDP host. The expression runs under a bounded wrapper (8s) and the result is serialized to a string, so no CDP WebSocket client is needed for the common inspect-and-poke case. |
+| `panelCdp.reload` | Reload an approved panel target through its product lifecycle. |
 | `panelCdp.screenshot` | Capture a screenshot of an approved panel target through its active CDP host (force-paints hidden/unslotted panels). Returns base64 image data + mime type; no CDP WebSocket client needed. |
 | `panelCdp.hostProvider.open` | Internal shell/server transport: open a streamed CDP host-provider channel. |
 | `panelCdp.hostProvider.send` | Internal shell/server transport: deliver a CDP host-provider frame to the bridge. |
