@@ -101,8 +101,6 @@ interface TargetRequestJoin {
 export class AcquisitionCoordinator {
   private static readonly DISMISS_COOLDOWN_MS = 10 * 60 * 1_000;
   private static readonly FATIGUE_MEMORY_MS = 24 * 60 * 60 * 1_000;
-  private static readonly INTERRUPT_WINDOW_MS = 60 * 1_000;
-  private static readonly MAX_INTERRUPTS_PER_CONTEXT_WINDOW = 1;
   private static readonly COMPLETION_RETENTION_MS = 10 * 60 * 1_000;
   private static readonly MAX_COMPLETIONS = 512;
   private static readonly MAX_COOLDOWNS = 512;
@@ -117,7 +115,6 @@ export class AcquisitionCoordinator {
     string,
     { until: number; dismissals: number; lastDismissedAt: number }
   >();
-  private readonly interruptions = new Map<string, number[]>();
   private readonly presentingTargetRequests = new Set<string>();
   private readonly targetJoins = new Map<string, Map<string, TargetRequestJoin>>();
 
@@ -579,8 +576,11 @@ export class AcquisitionCoordinator {
         cooldownUntil: cooldown.until,
       };
     }
-    const attention =
-      tierForGroup(inputs) === "critical" ? "interrupt" : this.attentionFor(input, ruleKey, now);
+    // Every actionable acquisition is presented immediately. `attention` is
+    // still carried by the approval protocol for producer-selected external
+    // notification policy, but the coordinator no longer rate-limits prompts
+    // by silently moving concurrent work into a background queue.
+    const attention = "interrupt" as const;
 
     const cardType = cardTypeForGroup(inputs);
     let settle!: (outcome: AcquisitionOutcome) => void;
@@ -993,38 +993,6 @@ export class AcquisitionCoordinator {
         this.cooldowns.delete(ruleKey);
       }
     }
-    for (const [contextKey, timestamps] of this.interruptions) {
-      const live = timestamps.filter(
-        (timestamp) => timestamp + AcquisitionCoordinator.INTERRUPT_WINDOW_MS > now
-      );
-      if (live.length === 0) this.interruptions.delete(contextKey);
-      else if (live.length !== timestamps.length) this.interruptions.set(contextKey, live);
-    }
-  }
-
-  private attentionFor(
-    input: AcquisitionRequestInput,
-    ruleKey: string,
-    now: number
-  ): "interrupt" | "queue" {
-    // Critical confirmations remain immediate. Ordinary requests share one
-    // interruption slot per principal + execution context; concurrent asks
-    // remain fully discoverable in the shell's waiting pill.
-    if (input.tier === "critical") return "interrupt";
-    if ((this.cooldowns.get(ruleKey)?.dismissals ?? 0) >= 2) return "queue";
-    const contextKey = acquisitionAttentionContextKey(input);
-    const recent = (this.interruptions.get(contextKey) ?? []).filter(
-      (timestamp) => timestamp + AcquisitionCoordinator.INTERRUPT_WINDOW_MS > now
-    );
-    if (recent.length >= AcquisitionCoordinator.MAX_INTERRUPTS_PER_CONTEXT_WINDOW) {
-      this.interruptions.set(contextKey, recent);
-      return "queue";
-    }
-    recent.push(now);
-    this.interruptions.delete(contextKey);
-    this.interruptions.set(contextKey, recent);
-    this.trimOldest(this.interruptions, AcquisitionCoordinator.MAX_COOLDOWNS);
-    return "interrupt";
   }
 
   private trimOldest<K, V>(entries: Map<K, V>, maximum: number): void {
@@ -1388,13 +1356,6 @@ function acquisitionRuleKey(input: AcquisitionRequestInput): string {
     input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId,
     input.snapshot.capability,
     input.snapshot.resourceKey,
-  ]);
-}
-
-function acquisitionAttentionContextKey(input: AcquisitionRequestInput): string {
-  return canonicalKey([
-    input.snapshot.callerPrincipal,
-    input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId,
   ]);
 }
 

@@ -1227,7 +1227,7 @@ describe("AcquisitionCoordinator", () => {
     vi.useRealTimers();
   });
 
-  it("interrupts once per principal context and quietly queues a concurrent burst", async () => {
+  it("presents every concurrent acquisition without interruption throttling", async () => {
     const request = vi.fn(async () => "deny" as const);
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-attention-")),
@@ -1270,7 +1270,7 @@ describe("AcquisitionCoordinator", () => {
     ]);
 
     expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({ attention: "interrupt" }));
-    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ attention: "queue" }));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ attention: "interrupt" }));
     grantStore.close();
   });
 

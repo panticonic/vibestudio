@@ -325,7 +325,7 @@ export interface PendingApprovalBase {
     diagnostics?: readonly string[];
     progress?: ApprovalPreparationProgress & { updatedAt: number };
   };
-  /** Whether shell chrome should open this request immediately or keep it in the waiting pill. */
+  /** Whether a newly actionable request should also demand attention outside the app. */
   attention?: "interrupt" | "queue";
   /**
    * Server-resolved display title for the caller, if known. Surfaced by the
