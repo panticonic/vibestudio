@@ -9,6 +9,8 @@ import type {
 
 export interface ApprovalCallerTitleDeps {
   entityCache: Pick<EntityCache, "resolve">;
+  /** Synchronous projection of the Base-owned human display title. */
+  getTitle(entityId: string): string | undefined;
   getIcon?(repoPath: string): string | undefined;
 }
 
@@ -151,6 +153,7 @@ function findOwningPanel(lineage: EntityRecord[]): EntityRecord | undefined {
 }
 
 function breadcrumbForRecord(
+  deps: ApprovalCallerTitleDeps,
   record: EntityRecord,
   callerId: string,
   callerCategoryOverride?: ApprovalRequesterCategory
@@ -165,7 +168,7 @@ function breadcrumbForRecord(
       : "system",
     record.id === callerId ? callerCategoryOverride : undefined
   );
-  const label = fallbackLabel(record, record.id);
+  const label = cleanTitle(deps.getTitle(record.id)) ?? fallbackLabel(record, record.id);
   return {
     id: record.id,
     kind: entityKindToRequesterKind(record.kind),
@@ -182,10 +185,15 @@ export function resolveApprovalRequester(
   const callerRecord = deps.entityCache.resolve(input.callerId);
   const lineage = collectLineage(deps, input.callerId);
   const panel = findOwningPanel(lineage);
+  const panelTitle = panel ? cleanTitle(deps.getTitle(panel.id)) : undefined;
+  const directTitle = cleanTitle(deps.getTitle(input.callerId));
   const category = categoryForRecord(callerRecord, input.callerKind, input.requesterCategory);
   const sourcePath = callerRecord?.source.repoPath ?? input.repoPath;
   const effectiveVersion = callerRecord?.source.effectiveVersion ?? input.effectiveVersion;
-  const title = fallbackLabel(panel ?? callerRecord, panel?.id ?? input.callerId);
+  const title =
+    (input.callerKind === "worker" || input.callerKind === "do"
+      ? (panelTitle ?? directTitle)
+      : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, input.callerId);
   const iconSource = panel?.source.repoPath ?? callerRecord?.source.repoPath ?? input.repoPath;
   const icon = cleanTitle(deps.getIcon?.(iconSource));
   const evalIdentity = input.eval ?? evalMeta(callerRecord);
@@ -196,7 +204,9 @@ export function resolveApprovalRequester(
       ? lineage
           .slice()
           .reverse()
-          .map((record) => breadcrumbForRecord(record, input.callerId, input.requesterCategory))
+          .map((record) =>
+            breadcrumbForRecord(deps, record, input.callerId, input.requesterCategory)
+          )
       : [
           {
             id: input.callerId,
@@ -217,7 +227,7 @@ export function resolveApprovalRequester(
       ? {
           panel: {
             id: panel.id,
-            title: fallbackLabel(panel, panel.id),
+            title: panelTitle ?? fallbackLabel(panel, panel.id),
           },
         }
       : {}),

@@ -1040,6 +1040,8 @@ async function main() {
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const { resolveApprovalCallerTitle, resolveApprovalRequester } =
     await import("./services/approvalCallerTitle.js");
+  const { createEntityTitleProjection } = await import("./services/entityTitleProjection.js");
+  const entityTitleProjection = createEntityTitleProjection();
   const getWorkspaceUnitIcon = (repoPath: string): string | undefined => {
     try {
       const packageJson = JSON.parse(
@@ -1053,6 +1055,7 @@ async function main() {
   };
   const approvalRequesterDeps = {
     entityCache,
+    getTitle: (entityId: string) => entityTitleProjection.get(entityId),
     getIcon: getWorkspaceUnitIcon,
   };
   const { InstallReviewSelectionStore } = await import("./services/installReviewSelections.js");
@@ -1383,6 +1386,7 @@ async function main() {
       connectionGrants,
       clearPresentationTitle: async (entityId: string) => {
         await dispatchWorkspacePresentation("setEntityTitle", [entityId, null]);
+        entityTitleProjection.remove(entityId);
       },
       resourceHandles: userlandResourceHandles,
       workspaceId,
@@ -3819,6 +3823,12 @@ async function main() {
         };
         presentationDispatch = dispatchPresentation;
         resolvedDoDispatchForTitles = doDispatch;
+        await entityTitleProjection.hydrate(
+          () =>
+            dispatchPresentation("listEntityTitles", []) as Promise<
+              Array<{ id: string; title: string }>
+            >
+        );
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
@@ -3839,6 +3849,7 @@ async function main() {
               panelIds: [...new Set(panelIds)],
             });
           },
+          onEntityTitleChanged: (entityId, title) => entityTitleProjection.observe(entityId, title),
         });
       },
       getServiceDefinition() {
@@ -4271,6 +4282,7 @@ async function main() {
               title ?? null,
               options ?? {},
             ]);
+            entityTitleProjection.observe(entityId, title);
           },
           onExecutionRecovery: (event) => {
             const active = entityCache.resolveActive(event.entityId);

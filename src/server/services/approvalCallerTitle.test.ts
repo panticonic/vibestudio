@@ -24,7 +24,7 @@ function record(
 }
 
 describe("resolveApprovalCallerTitle", () => {
-  it("uses the owning panel source label for worker and DO callers", () => {
+  it("promotes the owning panel title for worker and DO callers", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(record("panel:nav-chat", "panel"));
     entityCache._onActivate(record("do:workers/agent:Agent:session", "do", "panel:nav-chat"));
@@ -37,21 +37,35 @@ describe("resolveApprovalCallerTitle", () => {
         "internal"
       )
     );
-    expect(resolveApprovalCallerTitle({ entityCache }, "do:vibestudio/internal:EvalDO:run-1")).toBe(
-      "test"
-    );
+    expect(
+      resolveApprovalCallerTitle(
+        {
+          entityCache,
+          getTitle: (id) => (id === "panel:nav-chat" ? "Import Trello into Flowboard" : undefined),
+        },
+        "do:vibestudio/internal:EvalDO:run-1"
+      )
+    ).toBe("Import Trello into Flowboard");
   });
 
   it("uses the caller source label when there is no panel ancestor", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(record("worker:background", "worker"));
 
-    expect(resolveApprovalCallerTitle({ entityCache }, "worker:background")).toBe("test");
+    expect(
+      resolveApprovalCallerTitle(
+        {
+          entityCache,
+          getTitle: (id) => (id === "worker:background" ? "Background job" : undefined),
+        },
+        "worker:background"
+      )
+    ).toBe("Background job");
   });
 
   it("classifies extension callers even when they have no runtime entity record", () => {
     const requester = resolveApprovalRequester(
-      { entityCache: new EntityCache() },
+      { entityCache: new EntityCache(), getTitle: () => undefined },
       {
         callerId: "extension:@workspace-extensions/git-bridge",
         callerKind: "extension",
@@ -82,7 +96,15 @@ describe("resolveApprovalCallerTitle", () => {
       stateArgs: { ownerPrincipalId: "do:workers/agent:AgentDO:session", subKey: "turn-17" },
     });
     const requester = resolveApprovalRequester(
-      { entityCache },
+      {
+        entityCache,
+        getTitle: (id) =>
+          id === "panel:nav-chat"
+            ? "Import Trello into Flowboard"
+            : id === "do:workers/agent:AgentDO:session"
+              ? "Research agent"
+              : undefined,
+      },
       {
         callerId: "do:vibestudio/internal:EvalDO:run-1",
         callerKind: "do",
@@ -93,8 +115,8 @@ describe("resolveApprovalCallerTitle", () => {
 
     expect(requester).toMatchObject({
       category: "eval",
-      title: "test",
-      panel: { id: "panel:nav-chat", title: "test" },
+      title: "Import Trello into Flowboard",
+      panel: { id: "panel:nav-chat", title: "Import Trello into Flowboard" },
       stableIdentityKey: "do:workers/agent:AgentDO:session",
       eval: {
         ownerId: "do:workers/agent:AgentDO:session",
@@ -102,8 +124,8 @@ describe("resolveApprovalCallerTitle", () => {
       },
     });
     expect(requester.breadcrumbs.map((crumb) => [crumb.category, crumb.label])).toEqual([
-      ["panel", "test"],
-      ["agent", "test"],
+      ["panel", "Import Trello into Flowboard"],
+      ["agent", "Research agent"],
       ["eval", "Eval turn-17"],
     ]);
   });
