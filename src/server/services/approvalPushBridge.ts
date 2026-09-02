@@ -8,6 +8,7 @@ import {
   type PushApprovalDataPayload,
 } from "@vibestudio/shared/approvalContract";
 import {
+  getApprovalAttribution,
   getApprovalCallerPresentation,
   getApprovalCopy,
   getStandardApprovalDecisionActions,
@@ -164,7 +165,8 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
     // Prefer the server-resolved caller title over the bare kind word so the
     // notification names who's asking semantically, never a raw id.
     const requester = approval.callerTitle?.trim() || callerLabel(approval);
-    const body = `${requester} · ${description}`;
+    const target = getApprovalAttribution(approval).target;
+    const body = [requester, target, description].filter(Boolean).join(" · ");
     const members = new Set(deps.workspaceMemberUserIds());
     const delivered = new Set(
       trackedApproval.deliveredTargets.map((target) => `${target.userId}\0${target.clientId}`)

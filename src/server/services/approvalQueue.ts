@@ -168,6 +168,7 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   allowedDecisions?: PendingCapabilityApproval["allowedDecisions"];
   authorityRow?: PendingCapabilityApproval["authorityRow"];
   operationSubstance?: PendingCapabilityApproval["operationSubstance"];
+  target?: PendingCapabilityApproval["target"];
 }
 
 export interface BrowserPermissionApprovalQueueRequest extends ApprovalQueueRequestBase {
@@ -990,6 +991,7 @@ export function createApprovalQueue(deps: {
           allowedDecisions: req.allowedDecisions ? [...req.allowedDecisions].sort() : null,
           authorityRow: req.authorityRow ?? null,
           operationSubstance: req.operationSubstance ?? null,
+          target: req.target ?? null,
           operation: req.operation ?? null,
           diffReview: req.diffReview ?? null,
         }),
@@ -1221,6 +1223,7 @@ export function createApprovalQueue(deps: {
         allowedDecisions: req.allowedDecisions,
         authorityRow: req.authorityRow,
         operationSubstance: req.operationSubstance,
+        target: req.target,
       } satisfies PendingCapabilityApproval;
     }
     if (req.kind === "browser-permission") {

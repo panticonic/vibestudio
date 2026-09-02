@@ -704,6 +704,16 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
           z.object({ kind: z.literal("network"), value: z.literal("*") }).strict(),
         ])
         .optional(),
+      target: z
+        .object({
+          id: z.string(),
+          kind: z.literal("panel"),
+          title: z.string().optional(),
+          sourcePath: z.string().optional(),
+          entityId: z.string().optional(),
+        })
+        .strict()
+        .optional(),
       details: z.array(approvalDetailSchema).optional(),
       snapshot: invocationSnapshotSchema.optional(),
       cardType: z.enum(AUTHORITY_PROMPT_CARD_TYPES).optional(),

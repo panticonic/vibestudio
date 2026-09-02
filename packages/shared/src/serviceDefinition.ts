@@ -1,5 +1,6 @@
 import type { ServiceAuthorityPolicy } from "./serviceAuthority.js";
 import type { AuthorityRequirement } from "./authorization.js";
+import type { ApprovalTargetIdentity } from "./approvals.js";
 import type {
   AuthorityChallengePresentation,
   ServiceContext,
@@ -53,6 +54,8 @@ export type PreparedAuthoritySelection =
 export interface PreparedAuthorityState {
   selections: readonly PreparedAuthoritySelection[];
   payload: unknown;
+  /** Invocation target resolved beside the selections and sealed into their digest. */
+  target?: ApprovalTargetIdentity;
 }
 
 export function preparedAuthorityState(

@@ -348,6 +348,36 @@ describe("approvalQueue", () => {
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
   });
 
+  it("preserves a host-resolved capability target separately from the requester", async () => {
+    const { queue } = createQueue();
+    void queue.request({
+      kind: "capability",
+      callerId: "do:workers/agent:AgentDO:session",
+      callerKind: "do",
+      repoPath: "workers/agent",
+      effectiveVersion: "ev-agent",
+      capability: "context.boundary",
+      title: "Automate panel in another context",
+      target: {
+        id: "panel:flowboard",
+        kind: "panel",
+        title: "Rich Flowboard Store",
+        sourcePath: "panels/flowboard",
+        entityId: "panel:nav-flowboard",
+      },
+    });
+
+    expect(queue.listPending()[0]).toMatchObject({
+      callerId: "do:workers/agent:AgentDO:session",
+      target: {
+        id: "panel:flowboard",
+        title: "Rich Flowboard Store",
+        sourcePath: "panels/flowboard",
+      },
+    });
+    queue.resolve(queue.listPending()[0]!.approvalId, "deny");
+  });
+
   it("coalesces only exact duplicate decision approvals", async () => {
     const { queue } = createQueue();
     const first = queue.request({

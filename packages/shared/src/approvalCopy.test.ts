@@ -476,6 +476,7 @@ describe("approvalCopy", () => {
 
   it("derives semantic attribution chips, never raw ids", () => {
     const byName = (name: string) => fixtures.find((fixture) => fixture.name === name)!.approval;
+    const capability = byName("capability") as Extract<PendingApproval, { kind: "capability" }>;
 
     // Git uses the credential identity; non-oauth use names the audience.
     expect(getApprovalAttribution(byName("credential git-write"))).toEqual({
@@ -491,8 +492,19 @@ describe("approvalCopy", () => {
       relation: "as",
       target: "octo",
     });
-    // Capability/unit-batch requests have no secondary chip.
-    expect(getApprovalAttribution(byName("capability"))).toEqual({});
+    // Capability requests without a target have no secondary chip.
+    expect(getApprovalAttribution(capability)).toEqual({});
+    expect(
+      getApprovalAttribution({
+        ...capability,
+        target: {
+          id: "panel:nav-flowboard",
+          kind: "panel",
+          title: "Rich Flowboard Store",
+          sourcePath: "panels/flowboard",
+        },
+      })
+    ).toEqual({ relation: "on", target: "Rich Flowboard Store" });
   });
 
   it("formats standard action labels by approval subtype", () => {

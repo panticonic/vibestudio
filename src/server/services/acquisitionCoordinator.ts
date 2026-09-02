@@ -2,7 +2,7 @@ import type { AcquisitionInfo, InvocationSnapshot, ResourceScope } from "@vibest
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
-import type { OperationSubstance } from "@vibestudio/shared/approvals";
+import type { ApprovalTargetIdentity, OperationSubstance } from "@vibestudio/shared/approvals";
 import type { AuthorityAcquisitionDecision } from "@vibestudio/shared/approvalContract";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
@@ -36,6 +36,7 @@ export interface AcquisitionRequestInput {
   renderedAction: string;
   resource: ResourceScope;
   presentation?: AuthorityChallengePresentation;
+  target?: ApprovalTargetIdentity;
   substance?: OperationSubstance;
 }
 
@@ -785,6 +786,9 @@ export class AcquisitionCoordinator {
           ? ("unknown" as const)
           : ("eval" as const),
       ...(presentation?.operation ? { operation: presentation.operation } : {}),
+      ...((input.target ?? presentation?.target)
+        ? { target: input.target ?? presentation?.target }
+        : {}),
       ...(presentation?.diffReview ? { diffReview: [...presentation.diffReview] } : {}),
       ...(signal ? { signal } : {}),
     };

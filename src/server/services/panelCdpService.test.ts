@@ -191,6 +191,11 @@ describe("panelCdpService", () => {
       expect.objectContaining({
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         operation: expect.objectContaining({ verb: "Automate panel in" }),
+        target: {
+          id: "target",
+          kind: "panel",
+          title: "Target",
+        },
       })
     );
     expect(getEndpoint).toHaveBeenCalledWith("target", "panel:requester");

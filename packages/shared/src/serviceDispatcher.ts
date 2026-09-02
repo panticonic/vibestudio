@@ -36,6 +36,7 @@ import type {
   ApprovalDecision,
   ApprovalDetailFormat,
   ApprovalOperationDescriptor,
+  ApprovalTargetIdentity,
   DiffReviewEntry,
 } from "./approvals.js";
 import type {
@@ -513,6 +514,8 @@ export interface AuthorityChallengePresentation {
     object: { type: string; label: string; value: string };
     groupKey?: string;
   };
+  /** Host-resolved object the requester will control. Sealed into prepared authority state. */
+  target?: ApprovalTargetIdentity;
   /** Receiver-owned presentation of the exact prepared effect. The dispatcher
    * seals it to `preparedStateDigest`; agent-authored text is never accepted. */
   substance?: {
@@ -916,6 +919,7 @@ export class ServiceDispatcher {
       effect.preparedStateDigest,
       undefined,
       effect.challenge,
+      effect.challenge?.target,
       false,
       effect.tier,
       { tier: effect.tier, session: effect.sessionAdmission, rationale: "host-owned effect" }
@@ -1268,6 +1272,7 @@ export class ServiceDispatcher {
     type PreparedInvocationState = {
       selections: PreparedSelection[];
       payload: unknown;
+      target?: ApprovalTargetIdentity;
     };
     const collectPreparedState = async (): Promise<PreparedInvocationState> => {
       if (!prepareDescriptor) return { selections: [], payload: null };
@@ -1326,7 +1331,11 @@ export class ServiceDispatcher {
           tier: resolvePreparedTier(service, method, leaf.tier, selection.tier),
         });
       }
-      return { selections: collected, payload: prepared.payload };
+      return {
+        selections: collected,
+        payload: prepared.payload,
+        ...(prepared.target ? { target: prepared.target } : {}),
+      };
     };
     const preparedDigest = (prepared: PreparedInvocationState): string =>
       sha256Canonical({
@@ -1355,6 +1364,7 @@ export class ServiceDispatcher {
           tier: tier ?? null,
         })),
         payload: prepared.payload,
+        target: prepared.target ?? null,
       });
     const preparedState = await collectPreparedState();
     const preparedStateDigest = preparedDigest(preparedState);
@@ -1377,7 +1387,8 @@ export class ServiceDispatcher {
           args,
           preparedStateDigest,
           authorizingCaller,
-          challenge
+          challenge,
+          challenge?.target ?? preparedState.target
         ).then(() => undefined),
       allows: async ({
         capability,
@@ -1398,7 +1409,8 @@ export class ServiceDispatcher {
             args,
             preparedStateDigest,
             authorizingCaller,
-            challenge
+            challenge,
+            challenge?.target ?? preparedState.target
           );
           return true;
         } catch (error) {
@@ -1419,6 +1431,7 @@ export class ServiceDispatcher {
       preparedStateDigest,
       undefined,
       undefined,
+      preparedState.target,
       preflight
     );
     if (primary) {
@@ -1445,6 +1458,7 @@ export class ServiceDispatcher {
         preparedStateDigest,
         undefined,
         undefined,
+        preparedState.target,
         preflight,
         additional.tier
       );
@@ -1466,6 +1480,7 @@ export class ServiceDispatcher {
         preparedStateDigest,
         selection.authorizingCaller,
         selection.challenge,
+        selection.challenge?.target ?? preparedState.target,
         preflight,
         tier,
         undefined,
@@ -1543,6 +1558,7 @@ export class ServiceDispatcher {
     preparedStateDigest: string,
     authorizingCaller?: VerifiedCaller,
     challenge?: AuthorityChallengePresentation,
+    target?: ApprovalTargetIdentity,
     preflight = false,
     tierOverride?: "open" | "gated" | "critical",
     effectReview?: MethodTierPolicy,
@@ -1965,6 +1981,7 @@ export class ServiceDispatcher {
           resource: { kind: "exact" as const, key: resourceKey },
           ...(substance ? { substance } : {}),
           ...(challenge ? { presentation: challenge } : {}),
+          ...(target ? { target } : {}),
           ...(attachedHost ? { attachedHost } : {}),
         };
         let presented: AcquisitionInfo | undefined;

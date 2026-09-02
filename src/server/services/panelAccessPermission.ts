@@ -6,6 +6,7 @@ import {
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ApprovalTargetIdentity } from "@vibestudio/shared/approvals";
 import { callerHasAppCapability } from "./chromeTrust.js";
 import { prepareContextBoundarySelection, type ContextBoundaryDeps } from "./contextBoundary.js";
 
@@ -44,6 +45,19 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
   hasAppCapability?(callerId: string, capability: AppCapability): boolean;
   /** Resolve a panel caller's own slot for generic context-boundary preparation. */
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
+}
+
+/** Convert host-resolved panel metadata into the approval target contract. */
+export function approvalTargetForPanel(
+  target: PanelAccessPermissionTarget
+): ApprovalTargetIdentity {
+  return {
+    id: target.id,
+    kind: "panel",
+    ...(target.title ? { title: target.title } : {}),
+    ...(target.source ? { sourcePath: target.source } : {}),
+    ...(target.runtimeEntityId ? { entityId: target.runtimeEntityId } : {}),
+  };
 }
 
 /** Ops that change a panel's context (gate against the DESTINATION, not the current, context). */

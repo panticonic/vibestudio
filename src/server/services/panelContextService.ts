@@ -36,7 +36,7 @@ import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
-import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
+import { approvalTargetForPanel, preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
 /** Presentation lease facts, as the panel-runtime coordinator knows them. */
 export interface PanelContextLease {
@@ -125,6 +125,7 @@ export function createPanelContextService(deps: PanelContextServiceDeps): Servic
         return {
           selections: await preparePanelAccessAuthority(deps, ctx, "cdp", target),
           payload: null,
+          target: approvalTargetForPanel(target),
         };
       },
     },

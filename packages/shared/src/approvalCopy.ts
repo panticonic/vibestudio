@@ -698,11 +698,20 @@ export function getInstallReviewActionCopy(
  * raw id here. This is only the *second* chip, shown as "<relation> <target>".
  */
 export interface ApprovalAttribution {
-  relation?: "for" | "using" | "as";
+  relation?: "for" | "using" | "as" | "on";
   target?: string;
 }
 
 export function getApprovalAttribution(approval: PendingApproval): ApprovalAttribution {
+  if (approval.kind === "capability" && approval.target) {
+    const target =
+      userFacingCallerLabel(approval.target.title) ??
+      userFacingCallerLabel(
+        approval.target.sourcePath ? basename(approval.target.sourcePath) : undefined
+      ) ??
+      userFacingCallerLabel(approval.target.id);
+    return target ? { relation: "on", target } : {};
+  }
   if (approval.kind === "credential") {
     // git + non-oauth use: the headline names the destination, so the chip
     // names the credential identity in play. OAuth connect headlines already
@@ -952,10 +961,7 @@ function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyRes
     const remote = operation?.remote ? formatGitRemoteSummary(operation.remote) : audience;
     const label = operation?.label ?? "git operation";
     if (operation?.force) {
-      return HOST_APPROVAL_COPY.headlines.forcePush(
-        remote,
-        operation.overwrites
-      );
+      return HOST_APPROVAL_COPY.headlines.forcePush(remote, operation.overwrites);
     }
     return HOST_APPROVAL_COPY.headlines.git(
       operation?.action === "write" ? "write" : "read",

@@ -43,6 +43,29 @@ describe("shellApproval service contract", () => {
     expect(shellApprovalMethods.listPending.returns.parse(approvals)).toEqual(approvals);
   });
 
+  it("carries a host-resolved panel target across listPending", () => {
+    const approval = {
+      approvalId: "approval-cdp",
+      callerId: "do:workers/agent:AgentDO:session",
+      callerKind: "do" as const,
+      repoPath: "workers/agent",
+      effectiveVersion: "ev-agent",
+      requestedAt: 0,
+      kind: "capability" as const,
+      capability: "panel.inspect",
+      title: "Inspect a panel",
+      target: {
+        id: "panel:flowboard",
+        kind: "panel" as const,
+        title: "Rich Flowboard Store",
+        sourcePath: "panels/flowboard",
+        entityId: "panel:nav-flowboard",
+      },
+    };
+
+    expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
+  });
+
   it("exposes semantic workspace creation-review preparation states", () => {
     expect(
       shellApprovalMethods.getWorkspaceCreationReviewState.returns.parse({

@@ -12,7 +12,7 @@ import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
-import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
+import { approvalTargetForPanel, preparePanelAccessAuthority } from "./panelAccessPermission.js";
 import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { PanelEvaluateOptions, PanelEvaluateResult } from "@vibestudio/shared/panel/evaluate";
 
@@ -464,6 +464,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
               target
             ),
             payload: null,
+            target: approvalTargetForPanel(target),
           };
         },
       ])

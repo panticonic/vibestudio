@@ -125,6 +125,18 @@ export interface ApprovalRequesterIdentity {
   breadcrumbs: ApprovalRequesterBreadcrumb[];
 }
 
+/** Host-resolved object a capability request will act upon. */
+export interface ApprovalTargetIdentity {
+  id: string;
+  kind: "panel";
+  /** Current human-facing title, snapshotted with the authority request. */
+  title?: string;
+  /** Unit source behind the target, for request/developer details. */
+  sourcePath?: string;
+  /** Active runtime entity, when distinct from the stable panel id. */
+  entityId?: string;
+}
+
 export interface ApprovalOperationDescriptor {
   kind:
     | "browser"
@@ -379,6 +391,8 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
   authorityRow?: import("./authority/authorityRows.js").AuthorityRow;
   /** Exact receiver-prepared effect shown separately from the authority row. */
   operationSubstance?: OperationSubstance;
+  /** Host-verified target identity, distinct from the requesting principal. */
+  target?: ApprovalTargetIdentity;
 }
 
 export type BrowserSitePermissionCapability =
