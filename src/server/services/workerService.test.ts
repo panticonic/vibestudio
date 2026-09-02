@@ -50,7 +50,7 @@ function createDeps() {
         action: "read or change semantic workspace state",
         presentation: { domain: "files", verb: "manage" },
         protocols: ["vibestudio.gad.workspace.v1", "vibestudio.workspace-source.v1"],
-        authority: { principals: ["host", "user", "code"] },
+        authority: { principals: ["host", "user", "code"], binding: "declared" },
         durableObject: { className: "GadWorkspaceDO" },
       },
       {
@@ -222,6 +222,33 @@ describe("workerService workspace service resolution", () => {
     expect(prepareRuntimeImage).toHaveBeenCalledWith("workers/example-store", "main");
   });
 
+  it("does not turn a declared service binding into a second consent gate", async () => {
+    const deps = createDeps();
+    const service = createWorkerService(deps as never);
+
+    await expect(
+      service.authorityPreparation?.["workers.resolveService.workspace-service"]?.(panelCtx, [
+        "vibestudio.gad.workspace.v1",
+        null,
+      ])
+    ).resolves.toEqual({ selections: [], payload: null });
+  });
+
+  it("resolves declared wiring for code without a service capability grant", async () => {
+    const deps = createDeps();
+    const dispatcher = createProductionAuthorityDispatcher(deps);
+
+    await expect(
+      dispatcher.dispatch({ caller: ungrantedExtensionCaller() }, "workers", "resolveService", [
+        "vibestudio.gad.workspace.v1",
+        null,
+      ])
+    ).resolves.toMatchObject({
+      name: "gad.workspace",
+      targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
+    });
+  });
+
   it("resolves workspace source exclusively from the workspace manifest", async () => {
     const deps = createDeps();
     const dispatcher = createTestServiceDispatcher();
@@ -293,12 +320,10 @@ describe("workerService workspace service resolution", () => {
       return selection.challenge.description;
     };
 
-    // This provider declares both phrasings. The approval must read the one
-    // written for the person deciding, not "Own the workspace's semantic source
-    // and history." — someone answering this has to be able to tell what they
-    // are agreeing to.
-    expect(await describe("vibestudio.gad.workspace.v1", null)).toBe(
-      "Read or change semantic workspace state."
+    // Consent-bound providers use the action written for the person deciding,
+    // rather than the developer-facing storage description.
+    expect(await describe("vibestudio.browser-data.v1", null)).toBe(
+      "Use browser history, bookmarks, preferences, and imports."
     );
     expect(await describe("example.store.v1", "chat")).toBe("Use the test service.");
   });

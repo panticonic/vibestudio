@@ -19,6 +19,7 @@ import {
   productBuiltinMethodPolicy,
 } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { workspaceServiceBindingTier } from "@vibestudio/workspace-contracts/types";
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { productAuthorityGrants } from "./productAuthorityGrants.js";
@@ -482,6 +483,7 @@ export function attestWorkspaceDoRpc(
   }
 ): DirectAuthorityAttestation {
   const targetCapability = `workspace-service:${input.service.name}`;
+  const targetTier = workspaceServiceBindingTier(input.service.binding);
   const methodCapability =
     input.methodAuthority.effect.kind !== "open"
       ? (input.methodAuthority.capability ?? input.methodAuthority.effect.capability)
@@ -499,7 +501,7 @@ export function attestWorkspaceDoRpc(
           ...input,
           capability: targetCapability,
           effect: { kind: "open" },
-          tier: input.service.binding === "declared" ? "open" : "gated",
+          tier: targetTier,
         });
   if (target !== attestation) {
     attestation.grants = Object.freeze([...attestation.grants, ...target.grants]);
@@ -508,6 +510,6 @@ export function attestWorkspaceDoRpc(
     ...attestation,
     targetRequirement: requirementForPrincipals(input.service.principals, targetCapability),
     targetCapability,
-    targetTier: input.service.binding === "declared" ? "open" : "gated",
+    targetTier,
   };
 }

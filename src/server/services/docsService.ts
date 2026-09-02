@@ -92,6 +92,7 @@ export function createDocsService(deps: {
         source: service.source,
         protocols: service.protocols ?? [],
         principals: service.authority.principals,
+        ...(service.authority.binding ? { binding: service.authority.binding } : {}),
         ...(live.providerEffectiveVersion
           ? { providerEffectiveVersion: live.providerEffectiveVersion }
           : {}),

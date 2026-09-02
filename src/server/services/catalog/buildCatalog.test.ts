@@ -115,6 +115,34 @@ describe("buildCatalog", () => {
     expect(isCatalogEntryVisible(byId(dynamic, "workspace:example.notes"), "server")).toBe(false);
   });
 
+  it("describes declared service bindings without advertising a consent capability", () => {
+    const dynamic = buildCatalog({
+      definitions: [],
+      workspaceCapabilities: [
+        {
+          name: "gad.workspace",
+          source: "workers/workspace-source",
+          protocols: ["vibestudio.gad.workspace.v1"],
+          principals: ["code", "session"],
+          binding: "declared",
+          target: {
+            kind: "durable-object",
+            className: "GadWorkspaceDO",
+            defaultObjectKey: "workspace",
+          },
+        },
+      ],
+    });
+    const access = byId(dynamic, "workspace:gad.workspace").access as Record<string, unknown>;
+
+    expect(access).toMatchObject({
+      binding: "declared",
+      declarationCapability: "workspace-service:gad.workspace",
+      source: "workers/workspace-source",
+    });
+    expect(access).not.toHaveProperty("capability");
+  });
+
   it("omits a transport-only service parent when every method has a modern wrapper", () => {
     const transportOnly: ServiceDefinition = {
       name: "transportOnly",

@@ -259,6 +259,7 @@ export interface RuntimeServiceDeps {
   /** Resolve host-owned resources before activation, then bind the exact active identity. */
   prepareResourceBindings?: (input: {
     bindings: RuntimeResourceBindingInput[];
+    lifecycleCaller: VerifiedCaller;
     initiatingCaller: VerifiedCaller;
   }) => Promise<{
     contextId: string;
@@ -585,6 +586,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       const preparedResourceBindings = spec.resourceBindings?.length
         ? await deps.prepareResourceBindings?.({
             bindings: spec.resourceBindings,
+            lifecycleCaller: actors.lifecycleCaller,
             initiatingCaller: actors.initiatingCaller,
           })
         : undefined;

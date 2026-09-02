@@ -28,7 +28,7 @@ const record: EntityRecord = {
   activeAuthority: {
     provides: [],
     serviceRequests: [],
-    requests: ["panel.inspect", "context.boundary"].map((capability) => ({
+    requests: ["panel.inspect", "context.boundary", "server-logs.read"].map((capability) => ({
       capability,
       resource: { kind: "prefix" as const, prefix: "" },
       tier: "gated" as const,
@@ -64,6 +64,19 @@ describe("runtime resource bindings", () => {
     userId: "user-a",
     handle: "alice",
   });
+  const shellLifecycleCaller = createVerifiedCaller("app:apps/shell:main", "app");
+  const quickfireLifecycleCaller = createVerifiedCaller(
+    "do:workers/quickfire-service:QuickfireSessionsDO:sessions",
+    "do",
+    {
+      callerId: "do:workers/quickfire-service:QuickfireSessionsDO:sessions",
+      callerKind: "do",
+      repoPath: "workers/quickfire-service",
+      effectiveVersion: "ev-quickfire",
+      executionDigest: "f".repeat(64),
+      requested: [],
+    }
+  );
 
   it("binds an ordinary panel to the exact standard agent without prompting", async () => {
     const confirmPrivilegedPanel = vi.fn(async () => true);
@@ -73,7 +86,7 @@ describe("runtime resource bindings", () => {
         resolvePanel: async () => ({ source: "panels/dashboard", contextId: "ctx-panel" }),
         confirmPrivilegedPanel,
       },
-      { bindings: [binding], initiatingCaller: caller }
+      { bindings: [binding], lifecycleCaller: shellLifecycleCaller, initiatingCaller: caller }
     );
     expect(prepared.contextId).toBe("ctx-panel");
     const grants = await prepared.bind(record);
@@ -104,7 +117,7 @@ describe("runtime resource bindings", () => {
           resolvePanel: async () => ({ source: "about/settings", contextId: "ctx-panel" }),
           confirmPrivilegedPanel,
         },
-        { bindings: [binding], initiatingCaller: caller }
+        { bindings: [binding], lifecycleCaller: shellLifecycleCaller, initiatingCaller: caller }
       ).then((prepared) => prepared.bind(record))
     ).rejects.toThrow(/denied/u);
     expect(confirmPrivilegedPanel).toHaveBeenCalledOnce();
@@ -120,12 +133,14 @@ describe("runtime resource bindings", () => {
     await expect(
       prepareRuntimeResourceBindings(deps, {
         bindings: [{ ...binding, scope: { kind: "agent-channel", channelId: "channel-other" } }],
+        lifecycleCaller: shellLifecycleCaller,
         initiatingCaller: caller,
       }).then((prepared) => prepared.bind(record))
     ).rejects.toThrow(/own agent channel/u);
     await expect(
       prepareRuntimeResourceBindings(deps, {
         bindings: [binding],
+        lifecycleCaller: shellLifecycleCaller,
         initiatingCaller: createVerifiedCaller("server", "server"),
       })
     ).rejects.toThrow(/authenticated user gesture/u);
@@ -147,6 +162,7 @@ describe("runtime resource bindings", () => {
             scope: { kind: "entity" },
           },
         ],
+        lifecycleCaller: shellLifecycleCaller,
         initiatingCaller: caller,
       }
     );
@@ -155,5 +171,44 @@ describe("runtime resource bindings", () => {
     expect(await prepared.bind({ ...record, agentBinding: undefined })).toEqual([]);
     expect(confirmPrivilegedPanel).not.toHaveBeenCalled();
     expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
+  });
+
+  it("pregrants redacted server logs only for a Quickfire-launched agent channel", async () => {
+    const diagnosticsBinding: RuntimeResourceBindingInput = {
+      resource: { kind: "workspace-diagnostics", id: "server-logs" },
+      capabilities: ["server-logs.read"],
+      scope: { kind: "agent-channel", channelId: "channel-a" },
+    };
+    const deps = {
+      grantStore,
+      resolvePanel: async () => ({ source: "panels/dashboard", contextId: "ctx-panel" }),
+      confirmPrivilegedPanel: async () => true,
+    };
+    const prepared = await prepareRuntimeResourceBindings(deps, {
+      bindings: [binding, diagnosticsBinding],
+      lifecycleCaller: quickfireLifecycleCaller,
+      initiatingCaller: caller,
+    });
+
+    await expect(prepared.bind(record)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          subject: `agent:${record.id}@${record.contextId}`,
+          capability: "server-logs.read",
+          resource: { kind: "prefix", prefix: "" },
+          scope: "agent",
+          constraints: expect.not.objectContaining({ sessionId: expect.anything() }),
+        }),
+      ])
+    );
+    expect(revokeRuntimeResourceBindings(grantStore, record.id)).toBe(3);
+    expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
+    await expect(
+      prepareRuntimeResourceBindings(deps, {
+        bindings: [binding, diagnosticsBinding],
+        lifecycleCaller: shellLifecycleCaller,
+        initiatingCaller: caller,
+      })
+    ).rejects.toThrow(/Only Quickfire/u);
   });
 });

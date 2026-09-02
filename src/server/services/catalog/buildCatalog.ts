@@ -29,6 +29,7 @@ export interface WorkspaceCapabilityCatalogEntry {
   source: string;
   protocols: readonly string[];
   principals: readonly PrincipalKind[];
+  binding?: "consent" | "declared";
   providerEffectiveVersion?: string;
   providerBuildError?: string;
   methods?: readonly {
@@ -189,6 +190,13 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
 
   for (const declared of deps.workspaceCapabilities ?? []) {
     const methodNames = (declared.methods ?? []).map((method) => method.name).sort();
+    const bindingAccess =
+      declared.binding === "declared"
+        ? {
+            binding: "declared" as const,
+            declarationCapability: `workspace-service:${declared.name}`,
+          }
+        : { capability: `workspace-service:${declared.name}`, binding: "consent" as const };
     entries.push({
       id: `workspace:${declared.name}`,
       surface: "workspace",
@@ -197,7 +205,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       ...(declared.description ? { description: declared.description } : {}),
       ...(methodNames.length > 0 ? { members: methodNames } : {}),
       access: {
-        capability: `workspace-service:${declared.name}`,
+        ...bindingAccess,
         principals: [...declared.principals],
         source: declared.source,
         protocols: [...declared.protocols],
@@ -220,7 +228,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         ...(method.description ? { description: method.description } : {}),
         signature: method.signature,
         access: {
-          capability: `workspace-service:${declared.name}`,
+          ...bindingAccess,
           principals: [...declared.principals],
           source: declared.source,
           protocols: [...declared.protocols],

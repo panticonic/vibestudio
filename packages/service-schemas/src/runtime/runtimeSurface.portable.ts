@@ -214,7 +214,7 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature:
       "resolveService(query: string, objectKey?: string | null): Promise<ResolvedWorkspaceService>",
     description:
-      "Resolve a manifest-declared service by name or protocol in the caller's exact semantic context. Installed callers must also declare the exact workspace-service:<name> capability in package.json; resolution never grants authority by itself.",
+      "Resolve a manifest-declared service by name or protocol in the caller's exact semantic context. Consent-bound services require the exact workspace-service:<name> capability; declared bindings are reviewed wiring and leave authority to each method's receiver contract. Resolution never grants authority by itself.",
     argumentNames: ["query", "objectKey"],
     argsSchema: {
       type: "array",

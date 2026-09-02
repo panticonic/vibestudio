@@ -114,7 +114,10 @@ describe("manifest-declared workspace source service", () => {
           "vibestudio.vcs.v1",
           "vibestudio.workspace-source.v1",
         ],
-        authority: { principals: ["host", "user", "code", "session", "mission"] },
+        authority: {
+          principals: ["host", "user", "code", "session", "mission"],
+          binding: "declared",
+        },
         durableObject: { className: "GadWorkspaceDO" },
       },
     ],
@@ -144,7 +147,10 @@ describe("manifest-declared workspace source service", () => {
         "vibestudio.workspace-source.v1",
       ],
       source: "workers/workspace-source",
-      authority: { principals: ["host", "user", "code", "session", "mission"] },
+      authority: {
+        principals: ["host", "user", "code", "session", "mission"],
+        binding: "declared",
+      },
       className: "GadWorkspaceDO",
       objectKey: "workspace",
       targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",

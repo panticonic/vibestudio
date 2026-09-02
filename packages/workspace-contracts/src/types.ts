@@ -325,6 +325,13 @@ export type WorkspaceServiceDecl = {
   | { worker: { routePath: string }; durableObject?: never }
 );
 
+/** One policy projection for every host path that admits a workspace service. */
+export function workspaceServiceBindingTier(
+  binding: WorkspaceServiceDecl["authority"]["binding"]
+): "open" | "gated" {
+  return binding === "declared" ? "open" : "gated";
+}
+
 /**
  * Extension declaration in `workspace/meta/vibestudio.yml`. The declared list is
  * the single source of truth for which extensions a workspace uses and the only

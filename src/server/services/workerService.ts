@@ -19,6 +19,7 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
+import { workspaceServiceBindingTier } from "@vibestudio/workspace-contracts/types";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import {
@@ -357,6 +358,13 @@ export function createWorkerService(deps: {
           ? undefined
           : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
         deps.prepareRuntimeImage?.(service.source, buildRef);
+        // A declared binding is reviewed wiring, not an authority-bearing
+        // operation. Direct receiver admission already applies the exact same
+        // distinction in attestWorkspaceDoRpc; resolution must not invent a
+        // second, coarser consent gate in front of the method contract.
+        if (workspaceServiceBindingTier(service.authority.binding) === "open") {
+          return { selections: [], payload: null };
+        }
         const capability = `workspace-service:${service.name}`;
         const serviceTitle = service.title?.trim() || humanizeServiceName(service.name);
         const resourceKey =

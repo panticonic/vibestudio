@@ -14,6 +14,11 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 export const RUNTIME_RESOURCE_BINDING_SURFACE = "runtime-resource-binding";
 const ISSUER = "host:vibestudio";
 const LINEAGE_CLASSES = ["channel-external", "email", "external", "none", "web"] as const;
+const QUICKFIRE_SOURCE = "workers/quickfire-service";
+const WORKSPACE_DIAGNOSTICS_RESOURCE = {
+  kind: "workspace-diagnostics",
+  id: "server-logs",
+} as const;
 
 export interface RuntimeResourceBindingDeps {
   grantStore: CapabilityGrantStore;
@@ -58,6 +63,7 @@ export async function prepareRuntimeResourceBindings(
   deps: RuntimeResourceBindingDeps,
   input: {
     bindings: RuntimeResourceBindingInput[];
+    lifecycleCaller: VerifiedCaller;
     initiatingCaller: VerifiedCaller;
   }
 ): Promise<PreparedRuntimeResourceBindings> {
@@ -69,31 +75,57 @@ export async function prepareRuntimeResourceBindings(
   }
   const resolved: Array<{
     binding: RuntimeResourceBindingInput;
-    panel: { source: string | null; contextId: string };
+    panel: { source: string | null; contextId: string } | null;
   }> = [];
   const resourceKeys = new Set<string>();
   for (const binding of input.bindings) {
-    if (binding.resource.kind !== "panel-slot") {
-      throw new Error(`Unsupported runtime resource kind: ${binding.resource.kind}`);
-    }
     const resourceKey = `${binding.resource.kind}:${binding.resource.id}`;
     if (resourceKeys.has(resourceKey)) {
       throw new Error(`Duplicate runtime resource binding: ${resourceKey}`);
     }
     resourceKeys.add(resourceKey);
-    if (binding.scope.kind === "entity") {
-      if (binding.capabilities.length !== 0) {
-        throw new Error("An entity lifecycle binding cannot grant capabilities");
+    if (binding.resource.kind === "panel-slot") {
+      if (
+        (binding.scope.kind === "entity" && binding.capabilities.length !== 0) ||
+        (binding.scope.kind === "agent-channel" &&
+          (binding.capabilities.length !== 1 || binding.capabilities[0] !== "panel.inspect"))
+      ) {
+        throw new Error("A panel binding must either select context or grant panel.inspect");
       }
-    } else if (binding.capabilities.length !== 1 || binding.capabilities[0] !== "panel.inspect") {
-      throw new Error("An agent-channel panel binding may grant only panel.inspect");
+      const panel = await deps.resolvePanel(binding.resource.id);
+      if (!panel.contextId) throw new Error(`Panel slot is not open: ${binding.resource.id}`);
+      resolved.push({ binding, panel: { source: panel.source, contextId: panel.contextId } });
+      continue;
     }
-    const panel = await deps.resolvePanel(binding.resource.id);
-    if (!panel.contextId) throw new Error(`Panel slot is not open: ${binding.resource.id}`);
-    resolved.push({ binding, panel: { source: panel.source, contextId: panel.contextId } });
+    if (
+      binding.resource.kind === WORKSPACE_DIAGNOSTICS_RESOURCE.kind &&
+      binding.resource.id === WORKSPACE_DIAGNOSTICS_RESOURCE.id
+    ) {
+      // Diagnostics are not panel authority. Quickfire's verified launcher may
+      // attach this separate, lifecycle-owned resource to the same agent; the
+      // resulting grant targets the agent binding used by eval authorization.
+      if (
+        binding.scope.kind !== "agent-channel" ||
+        binding.capabilities.length !== 1 ||
+        binding.capabilities[0] !== "server-logs.read" ||
+        input.lifecycleCaller.code?.repoPath !== QUICKFIRE_SOURCE
+      ) {
+        throw new Error("Only Quickfire may bind redacted workspace diagnostics");
+      }
+      resolved.push({ binding, panel: null });
+      continue;
+    }
+    throw new Error(`Unsupported runtime resource: ${resourceKey}`);
   }
-  const contextId = resolved[0]!.panel.contextId;
-  if (resolved.some(({ panel }) => panel.contextId !== contextId)) {
+  const panelBindings = resolved.filter(
+    (entry): entry is typeof entry & { panel: NonNullable<typeof entry.panel> } =>
+      entry.panel !== null
+  );
+  const contextId = panelBindings[0]?.panel.contextId;
+  if (!contextId) {
+    throw new Error("Runtime resource bindings require a context-owning resource");
+  }
+  if (panelBindings.some(({ panel }) => panel.contextId !== contextId)) {
     throw new Error("Runtime resource bindings must resolve to one semantic context");
   }
 
@@ -102,19 +134,21 @@ export async function prepareRuntimeResourceBindings(
     bind: async (record) => {
       const issued: AuthorityGrant[] = [];
       for (const { binding, panel } of resolved) {
-        if (record.contextId !== panel.contextId) {
+        if (panel && record.contextId !== panel.contextId) {
           throw new Error("Runtime resource context does not match the target entity context");
         }
         if (binding.scope.kind === "entity") continue;
         if (!record.agentBinding || record.agentBinding.channelId !== binding.scope.channelId) {
-          throw new Error("A panel binding must name the target runtime's own agent channel");
-        }
-        if (!record.activeAuthority || !declares(record, "panel.inspect")) {
-          throw new Error(
-            "The target runtime did not declare the requested panel inspection binding"
-          );
+          throw new Error("A resource binding must name the target runtime's own agent channel");
         }
         if (
+          !record.activeAuthority ||
+          binding.capabilities.some((capability) => !declares(record, capability))
+        ) {
+          throw new Error("The target runtime did not declare the requested resource binding");
+        }
+        if (
+          panel &&
           severity(panel.source) === "severe" &&
           !(await deps.confirmPrivilegedPanel({
             slotId: binding.resource.id,
@@ -125,38 +159,68 @@ export async function prepareRuntimeResourceBindings(
         ) {
           throw new Error("Panel resource binding was denied");
         }
-        const subject = codePrincipal(record.source);
-        const constraints = {
-          sessionId: binding.scope.channelId,
-          lineageAtConsent: [...LINEAGE_CLASSES],
-        };
         const shared = {
           effect: "allow" as const,
-          subject,
-          scope: "session" as const,
-          constraints,
           issuedBy: ISSUER,
           provenance: "acquisition" as const,
           decidedBy: `user:${input.initiatingCaller.subject!.userId}`,
           decisionSurface: bindingSurface(record.id, binding.resource.kind, binding.resource.id),
           createdAt: Date.now(),
         };
-        const resources: Array<{ capability: string; resource: ResourceScope }> = [
-          { capability: "panel.inspect", resource: { kind: "exact", key: "panel.inspect" } },
-        ];
-        if (declares(record, "context.boundary")) {
+        const resources: Array<{
+          capability: string;
+          resource: ResourceScope;
+          subject: AuthorityGrant["subject"];
+          scope: AuthorityGrant["scope"];
+          constraints: NonNullable<AuthorityGrant["constraints"]>;
+        }> = panel
+          ? [
+              {
+                capability: "panel.inspect",
+                resource: { kind: "exact", key: "panel.inspect" },
+                subject: codePrincipal(record.source),
+                scope: "session",
+                constraints: {
+                  sessionId: binding.scope.channelId,
+                  lineageAtConsent: [...LINEAGE_CLASSES],
+                },
+              },
+            ]
+          : [
+              {
+                capability: "server-logs.read",
+                resource: { kind: "prefix", prefix: "" },
+                subject: `agent:${record.id}@${record.contextId}`,
+                scope: "agent",
+                constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },
+              },
+            ];
+        if (panel && declares(record, "context.boundary")) {
           resources.push({
             capability: "context.boundary",
             resource: {
               kind: "prefix",
               prefix: contextBoundaryResourceKey(panel.contextId, ""),
             },
+            subject: codePrincipal(record.source),
+            scope: "session",
+            constraints: {
+              sessionId: binding.scope.channelId,
+              lineageAtConsent: [...LINEAGE_CLASSES],
+            },
           });
         }
         issued.push(
           ...deps.grantStore.transaction(() =>
-            resources.map(({ capability, resource }) =>
-              deps.grantStore.issue({ ...shared, capability, resource })
+            resources.map(({ capability, resource, subject, scope, constraints }) =>
+              deps.grantStore.issue({
+                ...shared,
+                capability,
+                resource,
+                subject,
+                scope,
+                constraints,
+              })
             )
           )
         );

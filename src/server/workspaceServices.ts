@@ -1,4 +1,3 @@
-import type { PrincipalKind } from "@vibestudio/rpc";
 import type { DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import type {
   WorkspaceDeclarations,
@@ -6,9 +5,10 @@ import type {
 } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 
-export interface WorkspaceServiceAuthority {
-  principals: PrincipalKind[];
-}
+// Keep the resolved shape tied to the canonical declaration. The former local
+// shadow type dropped `binding`, which let resolution and receiver admission
+// silently apply different policy to the same service.
+export type WorkspaceServiceAuthority = WorkspaceServiceDecl["authority"];
 
 export interface WorkspaceServiceResolution {
   origin: "product" | "workspace";
@@ -74,7 +74,7 @@ function buildResolution(
   routes: WorkspaceDeclarations["routes"]
 ): ResolvedWorkspaceService {
   const protocols = service.protocols ?? [];
-  const authority = service.authority as WorkspaceServiceAuthority;
+  const authority: WorkspaceServiceAuthority = service.authority;
   const source = service.source;
 
   if (service.durableObject) {
