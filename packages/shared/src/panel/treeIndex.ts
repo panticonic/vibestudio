@@ -89,7 +89,11 @@ export interface PanelTreeSearchPage {
 }
 
 export interface PanelTreeSearchInput {
-  /** Matches indexed title, source/path, manifest description/dependencies, tags, and keywords. */
+  /**
+   * Plain-text search over indexed title, source/path, manifest
+   * description/dependencies, tags, and keywords. Punctuation separates terms;
+   * query-language operators are not accepted.
+   */
   query: string;
   cursor?: string;
   limit?: number;
