@@ -190,7 +190,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
         },
       ],
       severityPreview: "sensitive",
-      wouldPrompt: { cardType: "permission.gated", renderedAction: "write it" },
+      wouldPrompt: { cardType: "permission.gated", renderedAction: "test dry write" },
     });
     expect(acquire).not.toHaveBeenCalled();
     expect(consume).not.toHaveBeenCalled();
@@ -606,6 +606,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       state: "closed" as const,
       info: request(input),
     }));
+    const invalidate = vi.fn();
     const d = createTestServiceDispatcher({
       methods: {
         "acquisition.act": { tier: "gated", capability: "test:acquisition.act" },
@@ -615,7 +616,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       ...testAuthority(caller, capability, resourceKey),
       grants: [],
     }));
-    d.setAuthorityAcquirer({ request, acquire, consume: vi.fn(), invalidate: vi.fn() });
+    d.setAuthorityAcquirer({ request, acquire, consume: vi.fn(), invalidate });
     d.registerService({
       name: "acquisition",
       authority: { principals: ["code", "user"] },
@@ -629,6 +630,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       errorData: { acquisition: { pending: true } },
     });
     expect(request).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
     expect(acquire).not.toHaveBeenCalled();
 
     const sessionCtx: ServiceContext = {

@@ -371,6 +371,50 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
+  it("binds an installed-code once decision to its code principal", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-once-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => "once" as const) } as never,
+      grantStore,
+    });
+    const codeSnapshot = {
+      ...snapshot(),
+      callerPrincipal: `code:extensions/shell@${"c".repeat(64)}` as const,
+    };
+
+    await coordinator.requestAndWait({
+      snapshot: codeSnapshot,
+      snapshotDigest: invocationSnapshotDigest(codeSnapshot),
+      tier: "gated",
+      caller: createVerifiedCaller("extension:shell", "extension", {
+        callerId: "extension:shell",
+        callerKind: "extension",
+        repoPath: "extensions/shell",
+        effectiveVersion: "ev-test",
+        executionDigest: "c".repeat(64),
+        requested: [],
+      }),
+      renderedAction: "open a terminal",
+      resource: { kind: "exact", key: codeSnapshot.resourceKey },
+      presentation: reviewedPresentation(),
+    });
+
+    expect(
+      grantStore.grantsForSubjects([codeSnapshot.callerPrincipal], codeSnapshot.capability)
+    ).toEqual([
+      expect.objectContaining({
+        subject: codeSnapshot.callerPrincipal,
+        scope: "once",
+        constraints: expect.objectContaining({
+          invocationDigest: invocationSnapshotDigest(codeSnapshot),
+        }),
+      }),
+    ]);
+    grantStore.close();
+  });
+
   it("coalesces concurrent installed-code asks covered by the same reusable decision", async () => {
     let resolve!: (decision: "version") => void;
     const request = vi.fn(
@@ -408,7 +452,10 @@ describe("AcquisitionCoordinator", () => {
       caller,
       renderedAction: "use the local service",
       resource: { kind: "exact" as const, key: firstSnapshot.resourceKey },
-      presentation: reviewedPresentation(),
+      presentation: {
+        ...reviewedPresentation(),
+        allowedDecisions: ["version", "deny"] as const,
+      },
     };
 
     const first = coordinator.request({
@@ -1340,6 +1387,43 @@ describe("AcquisitionCoordinator", () => {
       presentation: reviewedPresentation(),
     });
 
+    expect(notifyOwner).not.toHaveBeenCalled();
+    grantStore.close();
+  });
+
+  it("does not redrive an owner after an RPC awaitDecision waiter joins", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-rpc-wait-")),
+    });
+    const notifyOwner = vi.fn();
+    let settle!: (decision: "deny") => void;
+    const presented = new Promise<"deny">((resolve) => {
+      settle = resolve;
+    });
+    const snap = snapshot();
+    const caller = createVerifiedCaller("panel:terminal", "panel");
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => presented) } as never,
+      grantStore,
+      notifyOwner,
+    });
+    const info = coordinator.request({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller,
+      renderedAction: "open a terminal",
+      resource: { kind: "origin", origin: "https://example.com" },
+      presentation: reviewedPresentation(),
+    });
+
+    const waited = coordinator.awaitDecision({
+      acquisitionId: info.acquisitionId,
+      ownerRuntimeId: caller.runtime.id,
+    });
+    settle("deny");
+
+    await expect(waited).resolves.toMatchObject({ state: "decided", decision: "deny" });
     expect(notifyOwner).not.toHaveBeenCalled();
     grantStore.close();
   });

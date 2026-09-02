@@ -339,6 +339,40 @@ async function approvePendingTerminalWork(
   }
 }
 
+async function callTerminalPanelWithApprovals<T>(
+  app: ElectronApplication,
+  window: Page,
+  panelId: string,
+  method: string,
+  args?: unknown
+): Promise<T> {
+  let settled = false;
+  let value: T | undefined;
+  let failure: unknown;
+  void callTerminalPanel<T>(app, panelId, method, args)
+    .then((result) => {
+      value = result;
+    })
+    .catch((error: unknown) => {
+      failure = error;
+    })
+    .finally(() => {
+      settled = true;
+    });
+
+  await expect
+    .poll(
+      async () => {
+        await approvePendingTerminalWork(app, window);
+        return settled;
+      },
+      { timeout: 30_000, intervals: [100, 250, 500, 1000] }
+    )
+    .toBe(true);
+  if (failure !== undefined) throw failure;
+  return value as T;
+}
+
 function configureTerminalOnlySource(sourceRoot: string): void {
   const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
@@ -1045,8 +1079,9 @@ test.describe("Terminal Startup", () => {
       .toMatch(/[1-9]\d* of \d+/);
     await clickPanelSelector(app, terminalPanelId, "[aria-label='Close find']");
 
-    const split = await callTerminalPanel<{ sessionId: string | undefined }>(
+    const split = await callTerminalPanelWithApprovals<{ sessionId: string | undefined }>(
       app,
+      testApp.window,
       terminalPanelId,
       "splitPane",
       { direction: "right" }
@@ -1064,8 +1099,9 @@ test.describe("Terminal Startup", () => {
     );
     await expectRenderedToContain(app, terminalPanelId, split.sessionId!, "vibestudio-split-input");
 
-    const tab = await callTerminalPanel<{ sessionId: string | undefined }>(
+    const tab = await callTerminalPanelWithApprovals<{ sessionId: string | undefined }>(
       app,
+      testApp.window,
       terminalPanelId,
       "openSession",
       {}

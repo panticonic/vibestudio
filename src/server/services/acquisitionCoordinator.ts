@@ -659,6 +659,11 @@ export class AcquisitionCoordinator {
   }): Promise<AcquisitionOutcome> {
     const targetJoin = this.targetJoins.get(input.acquisitionId)?.get(input.ownerRuntimeId);
     if (targetJoin) {
+      // `authority.awaitDecision` is the second half of the RPC client's
+      // wait-mode protocol. Once that waiter has joined, settlement is already
+      // delivered through the held call; waking the owner as well can restart
+      // the runtime and tear down the transport carrying this response.
+      targetJoin.continuation = "in-band";
       const signal = input.signal;
       if (!signal) return await targetJoin.outcome;
       if (signal.aborted) throw acquisitionWaitAbortError();
@@ -680,6 +685,10 @@ export class AcquisitionCoordinator {
     if (entry.info.ownerRuntimeId !== input.ownerRuntimeId) {
       throw Object.assign(new Error("Acquisition is not owned by this task"), { code: "EACCES" });
     }
+    // A separately initiated await is just as in-band as requestAndWait().
+    // Record the live continuation at the rendezvous, rather than retaining
+    // the fire-and-forget classification from the original protected call.
+    entry.continuation = "in-band";
     const signal = input.signal;
     if (!signal) return await entry.outcome;
     if (signal.aborted) throw acquisitionWaitAbortError();
@@ -1036,11 +1045,18 @@ export class AcquisitionCoordinator {
     const lineageAtConsent = [...(input.snapshot.lineageClasses ?? ["none"])];
     const sessionSubject = `session:${input.snapshot.sessionId}` as const;
     if (decision === "once") {
+      // Critical confirmations are deliberately session facts, but an
+      // ordinary gated grant must remain in the caller's authorizing subject
+      // family. Installed code does not inherit ambient session grants; using
+      // a session subject here made an approved exact code invocation
+      // impossible to consume and left RPC clients retrying forever.
+      const onceSubject =
+        input.tier === "critical" ? sessionSubject : input.snapshot.callerPrincipal;
       this.deps.grantStore.issue({
         effect: "allow",
         capability: input.snapshot.capability,
         resource: input.resource,
-        subject: sessionSubject,
+        subject: onceSubject,
         constraints: {
           sessionId: input.snapshot.sessionId,
           invocationDigest: input.snapshotDigest,
@@ -1270,20 +1286,24 @@ function exactAcquisitionRequestKey(input: {
 }
 
 /**
- * Installed code cannot receive an invocation-scoped decision for a gated
- * request: the only positive choices are the current task (when attested) or
- * the installed version. Keeping a rendezvous per invocation in that case
- * creates several indistinguishable cards for concurrent calls, even though
- * every decision the card offers necessarily covers all of them.
+ * Installed code requests may be coalesced across invocations only when the
+ * operation excludes invocation-scoped approval. If `once` is available, the
+ * rendezvous must retain exact invocation identity so consuming one decision
+ * cannot strand a later identical call behind a completed acquisition.
  *
  * Coalesce only when the eventual grant and the user-visible operation are the
  * same. Critical effects and session-origin calls retain their exact invocation
  * identity because they can still be approved once.
  */
 function acquisitionRequestKey(input: AcquisitionRequestInput): string {
+  const permitsInvocationDecision =
+    decisionsForOrigin(input).includes("once") &&
+    (input.presentation?.allowedDecisions === undefined ||
+      input.presentation.allowedDecisions.includes("once"));
   if (
     input.tier !== "gated" ||
     !input.snapshot.callerPrincipal.startsWith("code:") ||
+    permitsInvocationDecision ||
     input.presentation?.installReview
   ) {
     return exactAcquisitionRequestKey(input);

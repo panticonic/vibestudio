@@ -2164,6 +2164,16 @@ export class ServiceDispatcher {
             );
           }
         } else if (this.authorityAcquirer) {
+          // A later exact invocation may legitimately need a fresh decision
+          // after consuming an earlier once grant. Clear the bounded
+          // awaitDecision race observation before publishing this new ask;
+          // otherwise request() returns the old completed acquisition and an
+          // RPC wait-mode client retries the denied invocation forever.
+          this.authorityAcquirer.invalidate(
+            snapshotDigest,
+            caller.runtime.id,
+            resolved.context.authorizingOrigin.principal
+          );
           presented = this.authorityAcquirer.request(acquisitionInput);
           this.observeAuthority(resolved.context, "authority-requested", {
             capability,
