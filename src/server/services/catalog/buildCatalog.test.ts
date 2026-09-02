@@ -408,7 +408,7 @@ describe("buildCatalog", () => {
       },
     });
     expect(byId(projected, "runtime:workerRuntime.panelTree.search")).toMatchObject({
-      description: expect.stringContaining("entry.node and entry.handle"),
+      description: expect.stringMatching(/entry\.node.*entry\.handle/),
       returnsSchema: {
         properties: {
           hits: {
