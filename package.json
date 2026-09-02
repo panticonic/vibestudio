@@ -7,7 +7,7 @@
   "description": "A horizontally stacked panel app built with Electron and TypeScript",
   "main": "dist/main.cjs",
   "bin": {
-    "vibestudio": "dist/cli/client.mjs",
+    "vibestudio": "scripts/vibestudio-launcher.mjs",
     "vibestudio-server": "dist/server.mjs"
   },
   "scripts": {

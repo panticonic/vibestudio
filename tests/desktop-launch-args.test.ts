@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import {
@@ -9,6 +10,10 @@ import {
 describe("desktop launcher argument routing", () => {
   const pairUrl = `https://vibestudio.app/p#${"A".repeat(84)}`;
   const deepLink = `vibestudio://connect/${"A".repeat(84)}`;
+
+  it("launches the GUI for a bare invocation", () => {
+    expect(resolveDesktopLaunchArgs([])).toEqual({ wantsGui: true, args: [] });
+  });
 
   it("launches the GUI for compact pairing carriers", () => {
     expect(resolveDesktopLaunchArgs(["open", pairUrl])).toEqual({
@@ -26,5 +31,13 @@ describe("desktop launcher argument routing", () => {
       wantsGui: false,
       args: ["remote", "status"],
     });
+  });
+
+  it("is the vibestudio entry point in a built or linked source checkout", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+    ) as { bin?: Record<string, string> };
+
+    expect(manifest.bin?.vibestudio).toBe("scripts/vibestudio-launcher.mjs");
   });
 });
