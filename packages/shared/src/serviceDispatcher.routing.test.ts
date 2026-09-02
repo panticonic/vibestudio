@@ -54,10 +54,10 @@ describe("ServiceDispatcher ownership", () => {
     ).toEqual({ kind: "exact", key: "activate:app:task-board" });
   });
 
-  it("presents the reviewed method, human target, and reusable grant boundary", async () => {
+  it("presents the reviewed method and human target without enforcement prose", async () => {
     const dispatcher = new ServiceDispatcher();
     const capability = "runtime.supervision.manage";
-    const request = vi.fn(() => ({
+    const request = vi.fn((_input: unknown) => ({
       acquisitionId: "acq:activate-task-board",
       ownerRuntimeId: "app:caller",
       snapshotDigest: "d".repeat(64),
@@ -138,16 +138,13 @@ describe("ServiceDispatcher ownership", () => {
           },
         }),
         substance: expect.objectContaining({
-          summary: "start a workspace service task-board",
-          detail: expect.stringContaining("Longer choices permit later calls"),
-          facts: expect.arrayContaining([
-            { label: "Operation", value: "lifecycle.activate" },
-            { label: "Authority", value: capability },
-            { label: "Authority target", value: "activate:app:task-board" },
-          ]),
+          summary: "Start a workspace service: task-board",
         }),
       })
     );
+    const requested = request.mock.calls[0]?.[0] as { substance?: unknown } | undefined;
+    expect(requested?.substance).not.toHaveProperty("detail");
+    expect(requested?.substance).not.toHaveProperty("facts");
   });
 
   it("seals receiver-reviewed semantics into compiled authority-plan leaves", () => {

@@ -183,33 +183,22 @@ export interface OperationSubstance {
 export function operationSubstanceForAuthority(input: {
   provided?: Omit<OperationSubstance, "digest">;
   fallbackKind?: OperationSubstance["kind"] | null;
-  fallbackSummary: string;
-  service: string;
-  method: string;
-  capability: string;
-  resourceKey: string;
+  fallbackAction: string;
+  fallbackTarget: string;
   digest: string;
 }): OperationSubstance {
-  const scopeExplanation =
-    "Allow once permits only this call. Longer choices permit later calls using the same authority target for the stated lifetime.";
-  const providerFacts = input.provided?.facts ?? [];
-  const trustedFacts = [
-    { label: "Operation", value: `${input.service}.${input.method}` },
-    { label: "Authority", value: input.capability },
-    { label: "Authority target", value: input.resourceKey },
-  ];
+  const action = input.fallbackAction.trim().replace(/\s+/gu, " ");
+  const target = input.fallbackTarget.trim().replace(/\s+/gu, " ");
+  const actionSentence = action ? `${action[0]!.toUpperCase()}${action.slice(1)}` : target;
+  const fallbackSummary =
+    !target || action.toLocaleLowerCase().includes(target.toLocaleLowerCase())
+      ? actionSentence
+      : `${actionSentence}: ${target}`;
   return {
     kind: input.provided?.kind ?? input.fallbackKind ?? "custom",
-    summary: input.provided?.summary ?? input.fallbackSummary,
-    detail: input.provided?.detail
-      ? `${input.provided.detail}\n\n${scopeExplanation}`
-      : scopeExplanation,
-    facts: [
-      ...providerFacts,
-      ...trustedFacts.filter(
-        (fact) => !providerFacts.some((providerFact) => providerFact.label === fact.label)
-      ),
-    ],
+    summary: input.provided?.summary ?? fallbackSummary,
+    ...(input.provided?.detail ? { detail: input.provided.detail } : {}),
+    ...(input.provided?.facts?.length ? { facts: input.provided.facts } : {}),
     digest: input.digest,
   };
 }

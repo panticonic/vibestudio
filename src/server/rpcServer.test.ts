@@ -2238,15 +2238,7 @@ describe("RpcServer relay behavior", () => {
         tier: "critical",
         renderedAction: "remove a person from a shared conversation",
         substance: expect.objectContaining({
-          summary: "remove a person from a shared conversation Conversations",
-          detail: expect.stringContaining("Allow once permits only this call"),
-          facts: expect.arrayContaining([
-            {
-              label: "Operation",
-              value: "workers/pubsub-channel:PubSubChannel.removeMember",
-            },
-            { label: "Authority", value: "channel.members.remove" },
-          ]),
+          summary: "Remove a person from a shared conversation: Conversations",
         }),
         snapshot: expect.objectContaining({
           capability: "channel.members.remove",

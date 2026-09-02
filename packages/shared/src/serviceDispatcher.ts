@@ -1731,11 +1731,8 @@ export class ServiceDispatcher {
     const substance = operationSubstanceForAuthority({
       ...(effectiveChallenge.substance ? { provided: effectiveChallenge.substance } : {}),
       fallbackKind: receiverPolicy.substanceKind,
-      fallbackSummary: `${operationPresentation.verb} ${operationPresentation.object.value}`,
-      service,
-      method,
-      capability,
-      resourceKey,
+      fallbackAction: operationPresentation.verb,
+      fallbackTarget: operationPresentation.object.value,
       digest: preparedStateDigest,
     });
     const resolver = this.authorityResolver;

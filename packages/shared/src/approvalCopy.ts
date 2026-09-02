@@ -766,7 +766,7 @@ export function getApprovalCopy(approval: PendingApproval): {
     case "secret-input":
       return {
         title: approval.title,
-        summary: spoken(approval.description) ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
+        summary: approvalDescription(approval) ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
         warning: approval.warning,
       };
     case "device-code":
@@ -803,6 +803,16 @@ function spoken(value: string | null | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function approvalDescription(approval: PendingApproval): string | undefined {
+  const description = spoken("description" in approval ? approval.description : undefined);
+  if (!description) return undefined;
+  const requester = getApprovalCallerPresentation(approval);
+  return description.replace(
+    /\{requesterKind\}/gu,
+    `this ${requester.kindLabel.toLocaleLowerCase()}`
+  );
+}
+
 function getInstallReviewCopy(approval: PendingUnitInstallReviewApproval): ApprovalCopyResult {
   const copy = HOST_APPROVAL_COPY.installReview;
   const templateTitle = spoken(approval.template?.title);
@@ -825,14 +835,14 @@ function getInstallReviewCopy(approval: PendingUnitInstallReviewApproval): Appro
   // than heading a card with an empty line where the reason should be.
   const summary =
     approval.mode === "part-changed"
-      ? (spoken(approval.description) ??
+      ? (approvalDescription(approval) ??
         (approval.parts.length === 1
           ? copy.summary.partChanged
           : "Someone edited these parts in your workspace."))
       : approval.parts.length === 0 && approval.unchangedPartCount > 0
         ? copy.summary.noPermissionChanges(approval.unchangedPartCount)
         : (spoken(approval.template?.purpose) ??
-          spoken(approval.description) ??
+          approvalDescription(approval) ??
           // Last resort, and never blank: the platform's own count of what is
           // arriving. It says nothing the template claimed, which is exactly
           // right for a template that claimed nothing printable.
@@ -891,19 +901,19 @@ const CAPABILITY_COPY_HANDLERS: Record<
   "network.response.read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
-    return { title: fallback.title, summary: spoken(approval.description) ?? fallback.summary };
+    return { title: fallback.title, summary: approvalDescription(approval) ?? fallback.summary };
   },
   "cors-response-read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     const fallback = HOST_APPROVAL_COPY.headlines.corsRead(destination);
-    return { title: fallback.title, summary: spoken(approval.description) ?? fallback.summary };
+    return { title: fallback.title, summary: approvalDescription(approval) ?? fallback.summary };
   },
   "workerd.inspector"(approval) {
     const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
     const fallback = HOST_APPROVAL_COPY.headlines.inspectRuntime(target);
     return {
       title: targetAwareGenericTitle(approval.title, fallback.title),
-      summary: spoken(approval.description) ?? fallback.summary,
+      summary: approvalDescription(approval) ?? fallback.summary,
     };
   },
   "context.boundary"(approval) {
@@ -918,7 +928,7 @@ const CAPABILITY_COPY_HANDLERS: Record<
     return {
       title: targetAwareGenericTitle(approval.title, fallbackTitle),
       summary:
-        spoken(approval.description) ??
+        approvalDescription(approval) ??
         HOST_APPROVAL_COPY.headlines.contextBoundarySummary(subject),
       warning: HOST_APPROVAL_COPY.headlines.contextBoundaryWarning,
     };
@@ -928,7 +938,7 @@ const CAPABILITY_COPY_HANDLERS: Record<
     const fallback = HOST_APPROVAL_COPY.headlines.disableService(formatServiceName(target));
     return {
       title: targetAwareGenericTitle(approval.title, fallback.title),
-      summary: spoken(approval.description) ?? fallback.summary,
+      summary: approvalDescription(approval) ?? fallback.summary,
     };
   },
 };
@@ -953,7 +963,7 @@ function getCapabilityCopy(approval: PendingCapabilityApproval): ApprovalCopyRes
   const fallback = HOST_APPROVAL_COPY.headlines.genericCapability(target);
   return withComposedAuthorityWarning(approval, {
     title: targetAwareGenericTitle(approval.title, fallback.title),
-    summary: spoken(approval.description) ?? fallback.summary,
+    summary: approvalDescription(approval) ?? fallback.summary,
   });
 }
 
@@ -1039,6 +1049,28 @@ export function getCapabilityPrimaryDestination(approval: PendingCapabilityAppro
 
 export function shouldOpenApprovalDetails(approval: PendingApproval): boolean {
   return approval.kind === "unit-install-review";
+}
+
+/** The exact-effect block earns its visual weight only when it adds something
+ * the headline did not already say. Technical identities belong in details. */
+export function shouldShowOperationSubstance(
+  approval: PendingCapabilityApproval
+): approval is PendingCapabilityApproval & {
+  operationSubstance: NonNullable<PendingCapabilityApproval["operationSubstance"]>;
+} {
+  const substance = approval.operationSubstance;
+  if (!substance) return false;
+  if (substance.detail?.trim() || substance.facts?.length) return true;
+  const target = approval.resource?.value.trim();
+  if (!target || isOpaqueId(target) || /^(?:do|worker|panel|app|extension):/iu.test(target)) {
+    return false;
+  }
+  const normalizedTarget = target.toLocaleLowerCase();
+  return (
+    substance.summary.toLocaleLowerCase().includes(normalizedTarget) &&
+    !approval.title.toLocaleLowerCase().includes(normalizedTarget) &&
+    !approval.description?.toLocaleLowerCase().includes(normalizedTarget)
+  );
 }
 
 function isBrowserOpenApproval(approval: PendingCapabilityApproval): boolean {

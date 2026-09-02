@@ -3948,11 +3948,8 @@ export class RpcServer {
           ? operationSubstanceForAuthority({
               ...(preparedChallenge?.substance ? { provided: preparedChallenge.substance } : {}),
               fallbackKind: policyFor(denied.leaf.capability).substanceKind,
-              fallbackSummary: `${renderedAction} ${operationTarget}`,
-              service: `${input.ref.source}:${input.ref.className}`,
-              method: input.method,
-              capability: denied.leaf.capability,
-              resourceKey: denied.leaf.resourceKey,
+              fallbackAction: renderedAction,
+              fallbackTarget: operationTarget,
               digest: denied.snapshot.preparedStateDigest,
             })
           : null;

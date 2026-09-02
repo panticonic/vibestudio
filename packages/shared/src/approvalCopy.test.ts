@@ -19,6 +19,7 @@ import {
   getInstallReviewActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
+  shouldShowOperationSubstance,
 } from "./approvalCopy.js";
 
 const base = {
@@ -449,6 +450,55 @@ describe("approvalCopy", () => {
     expect(getRequesterCategoryLabel("durable-object")).toBe("Service");
     expect(getRequesterCategoryLabel("internal-service")).toBe("Built-in service");
     expect(getRequesterCategoryLabel("unknown")).toBe("Requester");
+  });
+
+  it("resolves host requester templates before approval copy reaches the UI", () => {
+    const copy = getApprovalCopy({
+      ...base,
+      kind: "capability",
+      callerKind: "do",
+      capability: "panel.inspect",
+      title: "Inspect a panel with developer tools",
+      description: "Allows {requesterKind} to inspect a panel with developer tools.",
+    });
+
+    expect(copy.summary).toBe("Allows this service to inspect a panel with developer tools.");
+    expect(copy.summary).not.toContain("{");
+  });
+
+  it("hides exact-effect blocks that only repeat the approval heading", () => {
+    expect(
+      shouldShowOperationSubstance({
+        ...base,
+        kind: "capability",
+        capability: "panel.inspect",
+        title: "Inspect a panel with developer tools",
+        description: "Inspect a panel with developer tools.",
+        resource: { type: "panel", label: "Panel", value: "panel.inspect" },
+        operationSubstance: {
+          kind: "custom",
+          summary: "Inspect a panel with developer tools",
+          digest: "prepared",
+        },
+      })
+    ).toBe(false);
+  });
+
+  it("shows exact-effect blocks that add a human target", () => {
+    expect(
+      shouldShowOperationSubstance({
+        ...base,
+        kind: "capability",
+        capability: "runtime.supervision.manage",
+        title: "Start a workspace app or service",
+        resource: { type: "workspace-runtime", label: "App or service", value: "Task Board" },
+        operationSubstance: {
+          kind: "custom",
+          summary: "Start a workspace app or service: Task Board",
+          digest: "prepared",
+        },
+      })
+    ).toBe(true);
   });
 
   it("retains the cross-context warning when it is a composed authority facet", () => {
