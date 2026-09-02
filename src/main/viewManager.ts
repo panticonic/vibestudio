@@ -2122,7 +2122,7 @@ export class ViewManager {
       }
       if (alreadyOrdered) {
         // The content overlays are a fixed-order group above every panel view
-        // (quickfire over the approval card, per ContentOverlayManager).
+        // (blocking approval over quickfire, per ContentOverlayManager).
         const visibleShellOverlays = [
           this.nativeShellOverlay.getVisibleView(),
           ...this.shellContentOverlay.getVisibleViews(),

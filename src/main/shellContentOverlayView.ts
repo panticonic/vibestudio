@@ -210,7 +210,6 @@ export class ShellContentOverlayView {
     if (options.focus !== undefined) this.pendingFocus = options.focus === true;
     this.applyBounds();
     this.pushRender();
-    this.applyPendingFocus();
   }
 
   hide(): void {
@@ -249,6 +248,12 @@ export class ShellContentOverlayView {
   /** Apply a focus request after an owner has finished re-stacking overlays. */
   applyRequestedFocus(): void {
     this.applyPendingFocus();
+  }
+
+  /** Restore keyboard ownership after a higher blocking surface closes. */
+  focus(): void {
+    if (!this.isVisible()) return;
+    this.view?.webContents.focus();
   }
 
   /** Re-raise above the panels (called after every native layer reconcile). */

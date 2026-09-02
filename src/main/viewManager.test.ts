@@ -272,14 +272,82 @@ describe("ViewManager", () => {
         "file:///shell/index.html#overlaySurface=quickfire"
       );
 
-      // Quickfire is the higher of the fixed-order pair.
+      // Blocking consent is the higher of the fixed-order pair. Quickfire can
+      // itself be waiting for this decision, so hiding it underneath would
+      // leave the conversation spinner with no visible way forward.
       const children = mockWindow.contentView.children as unknown[];
-      expect(children.indexOf(quickfireView)).toBeGreaterThan(children.indexOf(cardView));
+      expect(children.indexOf(cardView)).toBeGreaterThan(children.indexOf(quickfireView));
 
       // Hiding one surface leaves the other visible.
       vm.hideContentOverlay("quickfire");
       expect(quickfireView.setVisible).toHaveBeenLastCalledWith(false);
       expect(cardView.setVisible).toHaveBeenLastCalledWith(true);
+    });
+
+    it("keeps blocking consent focused above quickfire and restores quickfire afterward", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellContents = vm.getShellWebContents();
+      (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
+      const bounds = { x: 0, y: 0, width: 800, height: 600 };
+
+      vm.showContentOverlay({
+        surface: "quickfire",
+        bounds,
+        props: { mode: "quickfire" },
+        theme: { appearance: "light" },
+        focus: true,
+      });
+      const quickfireView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      vm.showContentOverlay({
+        surface: "approval-card",
+        bounds,
+        props: { approvalId: "approval-1" },
+        theme: { appearance: "light" },
+        focus: true,
+      });
+      const approvalView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const readyHandlers = (ipcMain.on as Mock).mock.calls
+        .filter(([channel]) => channel === "vibestudio:content-overlay:ready")
+        .map(([, handler]) => handler as (event: { sender: { id: number } }) => void);
+      for (const handler of readyHandlers) {
+        handler({ sender: { id: quickfireView.webContents.id } });
+        handler({ sender: { id: approvalView.webContents.id } });
+      }
+
+      quickfireView.webContents.focus.mockClear();
+      approvalView.webContents.focus.mockClear();
+      vm.showContentOverlay({
+        surface: "quickfire",
+        bounds,
+        props: { mode: "quickfire" },
+        theme: { appearance: "light" },
+        focus: true,
+      });
+
+      expect(quickfireView.webContents.focus).not.toHaveBeenCalled();
+      const children = mockWindow.contentView.children as unknown[];
+      expect(children.indexOf(approvalView)).toBeGreaterThan(children.indexOf(quickfireView));
+
+      vm.updateContentOverlay("quickfire", { focus: true });
+      expect(quickfireView.webContents.focus).not.toHaveBeenCalled();
+
+      vm.hideContentOverlay("quickfire");
+      expect(approvalView.webContents.focus).not.toHaveBeenCalled();
+      vm.showContentOverlay({
+        surface: "quickfire",
+        bounds,
+        props: { mode: "quickfire" },
+        theme: { appearance: "light" },
+        focus: false,
+      });
+
+      vm.hideContentOverlay("approval-card");
+      expect(quickfireView.webContents.focus).toHaveBeenCalledTimes(1);
     });
 
     it("routes an update to the named surface only", () => {

@@ -8,12 +8,13 @@ import {
 /**
  * Fixed stacking order for the content overlays, lowest first.
  *
- * Quickfire sits above the approval card because it is focused, transient
- * chrome the user just summoned, while the card is ambient and corner-snapped;
- * they never contest the same space. Surfaces not named here stack below both,
- * in creation order, which is the conservative default for a new surface.
+ * Consent sits above Quickfire because a routed Quickfire launch can itself be
+ * waiting for that decision. Putting the waiting surface above its approval is
+ * a presentation deadlock: the request remains healthy but the user cannot see
+ * how to release it. Surfaces not named here stack below both, in creation
+ * order, which is the conservative default for a new surface.
  */
-const SURFACE_STACKING_ORDER = ["approval-card", "quickfire"] as const;
+const SURFACE_STACKING_ORDER = ["quickfire", "approval-card"] as const;
 
 function stackingRank(surface: string): number {
   const index = (SURFACE_STACKING_ORDER as readonly string[]).indexOf(surface);
@@ -55,12 +56,13 @@ export class ContentOverlayManager {
     const instance = this.ensure(options.surface);
     instance.show(options);
     // A newly shown surface must respect the fixed pair order rather than
-    // simply landing on top: an approval card shown while quickfire is open
-    // belongs underneath it.
+    // simply landing on top. In particular, consent remains actionable even
+    // when the operation waiting for it owns another overlay.
     this.bringToFront();
     // Re-adding native views can move focus back to another WebContents. Apply
-    // the request only after the final stacking pass has completed.
-    instance.applyRequestedFocus();
+    // a request only when its surface is actually topmost; a lower overlay must
+    // never steal focus through a blocking decision above it.
+    if (this.topVisibleInstance() === instance) instance.applyRequestedFocus();
   }
 
   /**
@@ -69,11 +71,20 @@ export class ContentOverlayManager {
    * single-instance behavior this class removes.
    */
   update(surface: string, options: ContentOverlayUpdateOptions): void {
-    this.instances.get(surface)?.update({ ...options, surface });
+    const instance = this.instances.get(surface);
+    if (!instance) return;
+    instance.update({ ...options, surface });
+    if (this.topVisibleInstance() === instance) instance.applyRequestedFocus();
   }
 
   hide(surface: string): void {
-    this.instances.get(surface)?.hide();
+    const instance = this.instances.get(surface);
+    const restoreFocus = instance?.isVisible() === true && this.topVisibleInstance() === instance;
+    instance?.hide();
+    this.bringToFront();
+    // Resolving a blocking overlay returns keyboard ownership to the surface
+    // it interrupted (not to an arbitrary panel behind both native views).
+    if (restoreFocus) this.topVisibleInstance()?.focus();
   }
 
   isVisible(surface: string): boolean {
@@ -112,6 +123,14 @@ export class ContentOverlayManager {
           stackingRank(left.surface) - stackingRank(right.surface) ||
           left.creationIndex - right.creationIndex
       );
+  }
+
+  private topVisibleInstance(): ShellContentOverlayView | null {
+    return (
+      this.orderedInstances()
+        .filter(({ instance }) => instance.isVisible())
+        .at(-1)?.instance ?? null
+    );
   }
 
   private ensure(surface: string): ShellContentOverlayView {
