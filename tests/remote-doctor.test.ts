@@ -13,11 +13,14 @@ import path from "node:path";
 
 function tmpFile(bytes: Uint8Array, mode = 0o600): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-iroh-doctor-"));
+  ownedTempDirs.add(dir);
   const file = path.join(dir, "endpoint.key");
   fs.writeFileSync(file, bytes, { mode });
   fs.chmodSync(file, mode);
   return file;
 }
+
+const ownedTempDirs = new Set<string>();
 
 const fakeBinding = {
   Endpoint: { builder: vi.fn() },
@@ -28,7 +31,13 @@ const fakeBinding = {
   },
 };
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  for (const dir of ownedTempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  ownedTempDirs.clear();
+});
 
 describe("remote-doctor", () => {
   it("selects durable hub and workspace endpoint-key paths", () => {

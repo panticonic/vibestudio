@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
@@ -32,8 +32,36 @@ function publicationEvent(): ProtectedPublicationEvent {
 }
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-host-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-host-"));
+  ownedTempDirs.add(dir);
+  return dir;
 }
+
+const ownedTempDirs = new Set<string>();
+const ownedHosts = new Set<ExtensionHost>();
+
+afterEach(async () => {
+  const shutdowns = await Promise.allSettled(
+    [...ownedHosts].map(async (host) => {
+      await host.whenSettled();
+      await host.shutdown();
+    }),
+  );
+  ownedHosts.clear();
+  for (const dir of ownedTempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  ownedTempDirs.clear();
+  const failures = shutdowns.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      "Failed to shut down an ExtensionHost test fixture",
+    );
+  }
+});
 
 function panelCtx(callerId = "panel-1") {
   return {
@@ -290,6 +318,7 @@ function makeHost(
     unregisterBuildProvider: overrides.unregisterBuildProvider,
     recordUnitLog: overrides.recordUnitLog,
   });
+  ownedHosts.add(host);
   if (overrides.installed !== false) {
     host.registry.upsert({
       unitKind: "extension",
@@ -839,37 +868,46 @@ describe("ExtensionHost reconcileDeclared", () => {
       activeDepEv: "ev-runtime-old",
       extensionTransport,
     });
+    let releaseApproval!: () => void;
     (approvalQueue.request as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise(() => {})
+      () =>
+        new Promise<"deny">((resolve) => {
+          releaseApproval = () => resolve("deny");
+        })
     );
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
-    await host.reconcileDeclared(declare(extensionNode.name));
-    const invoke = Promise.race([
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
-      new Promise((resolve) => setTimeout(() => resolve("timed-out"), 25)),
-    ]);
+    try {
+      await host.reconcileDeclared(declare(extensionNode.name));
+      const invoke = Promise.race([
+        host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
+        new Promise((resolve) => setTimeout(() => resolve("timed-out"), 25)),
+      ]);
 
-    await expect(invoke).resolves.toBe("called:blame");
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "unit-install-review",
-        mode: "adopt-root",
-        units: [
-          expect.objectContaining({
-            unitKind: "extension",
-            unitName: extensionNode.name,
-            source: { kind: "workspace-repo", repo: extensionNode.relativePath, ref: "main" },
-          }),
-        ],
-      })
-    );
-    expect(host.registry.get(extensionNode.name)).toMatchObject({ activeBundleKey: "bundle-key" });
-    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
-      "blame",
-      [],
-      expect.objectContaining({ extensionName: extensionNode.name }),
-    ]);
+      await expect(invoke).resolves.toBe("called:blame");
+      expect(approvalQueue.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "unit-install-review",
+          mode: "adopt-root",
+          units: [
+            expect.objectContaining({
+              unitKind: "extension",
+              unitName: extensionNode.name,
+              source: { kind: "workspace-repo", repo: extensionNode.relativePath, ref: "main" },
+            }),
+          ],
+        })
+      );
+      expect(host.registry.get(extensionNode.name)).toMatchObject({ activeBundleKey: "bundle-key" });
+      expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
+        "blame",
+        [],
+        expect.objectContaining({ extensionName: extensionNode.name }),
+      ]);
+    } finally {
+      releaseApproval();
+      await host.whenSettled();
+    }
   });
 
   it("does not hold target-local invocation behind unrelated reconciliation work", async () => {

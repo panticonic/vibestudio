@@ -83,7 +83,7 @@ async function within<T>(promise: Promise<T>, message: string, timeoutMs: number
 }
 
 describe.runIf(RUN)("Iroh complete native remote smoke", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-iroh-e2e-"));
+  let tmp = "";
   const clients = new Set<ConnectedClient>();
   const serverSecret = SecretKey.generate();
   let serverEndpoint: Endpoint;
@@ -114,9 +114,20 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   };
 
   const closeClient = async (client: ConnectedClient): Promise<void> => {
+    const results = await Promise.allSettled([
+      client.pipe.close(),
+      client.endpoint.close(),
+    ]);
+    const failures = results.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        "Failed to close an Iroh test client",
+      );
+    }
     clients.delete(client);
-    await client.pipe.close().catch(() => undefined);
-    await client.endpoint.close().catch(() => undefined);
   };
 
   const mintInvite = (): string => {
@@ -161,9 +172,13 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   };
 
   beforeAll(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-iroh-e2e-"));
     const central = new CentralDataManager({ databasePath: path.join(tmp, "identity.db") });
-    workspaceId = central.addWorkspace("iroh-smoke").workspaceId;
-    central.close();
+    try {
+      workspaceId = central.addWorkspace("iroh-smoke").workspaceId;
+    } finally {
+      central.close();
+    }
     identityDb = new IdentityDb({ path: path.join(tmp, "identity.db"), readOnly: false });
     userStore = new UserStore(identityDb);
     userStore.createRoot({ handle: "root", displayName: "Root" });
@@ -245,11 +260,27 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   }, 30_000);
 
   afterAll(async () => {
-    await Promise.all([...clients].map(closeClient));
-    await ingress?.stop().catch(() => undefined);
-    await rpcServer?.stop().catch(() => undefined);
-    identityDb?.close();
-    fs.rmSync(tmp, { recursive: true, force: true });
+    const failures: unknown[] = [];
+    const cleanup = async (operation: () => void | Promise<void>) => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    for (const client of [...clients]) {
+      await cleanup(() => closeClient(client));
+    }
+    await cleanup(() => ingress?.stop());
+    await cleanup(() => rpcServer?.stop());
+    await cleanup(() => identityDb?.close());
+    if (tmp) {
+      await cleanup(() => fs.rmSync(tmp, { recursive: true, force: true }));
+      tmp = "";
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Failed to clean up the Iroh E2E fixture");
+    }
   });
 
   it("pairs a fresh endpoint and dispatches authenticated RPC through production ingress", async () => {

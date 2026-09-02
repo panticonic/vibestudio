@@ -29,17 +29,30 @@ function runElectronFixture(): Promise<FixtureResult> {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const output: Buffer[] = [];
+    let timeoutError: Error | null = null;
     child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => output.push(chunk));
-    child.once("error", reject);
-    const timeout = setTimeout(() => {
-      if (child.pid) process.kill(-child.pid, "SIGKILL");
-      reject(
-        new Error(`Electron Iroh fixture timed out\n${Buffer.concat(output).toString("utf8")}`)
-      );
-    }, 30_000);
-    child.once("exit", (code, signal) => {
+    child.once("error", (error) => {
       clearTimeout(timeout);
+      reject(error);
+    });
+    const timeout = setTimeout(() => {
+      timeoutError = new Error(
+        `Electron Iroh fixture timed out\n${Buffer.concat(output).toString("utf8")}`,
+      );
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") reject(error);
+      }
+    }, 30_000);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      if (timeoutError) {
+        reject(timeoutError);
+        return;
+      }
       resolve({ code, signal, output: Buffer.concat(output).toString("utf8") });
     });
   });
