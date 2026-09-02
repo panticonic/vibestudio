@@ -485,6 +485,7 @@ Authority principals: `code`, `host`, `user`
 | `runtime.activateReservedEntity` | Prepare and atomically activate the immutable runtime image for a previously reserved code-backed entity. |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
 | `runtime.releaseResourceBindings` | Release every host-owned resource binding attached to one owned runtime entity. |
+| `runtime.replaceResourceBindings` | Replace the host-owned resource bindings of one active owned runtime entity after validating them against its current identity and authority manifest. |
 | `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For declared source and build readiness use build.listUnits. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.listContexts` | List durable semantic workspace contexts, optionally restricted to an exact id prefix. This is domain-neutral workflow discovery; context contents remain subject to their ordinary VCS read authority. |

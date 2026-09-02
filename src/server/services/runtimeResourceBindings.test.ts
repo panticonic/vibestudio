@@ -92,7 +92,7 @@ describe("runtime resource bindings", () => {
     const grants = await prepared.bind(record);
 
     expect(confirmPrivilegedPanel).not.toHaveBeenCalled();
-    expect(grants).toHaveLength(2);
+    expect(grants).toHaveLength(4);
     expect(grants).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -100,11 +100,19 @@ describe("runtime resource bindings", () => {
           capability: "panel.inspect",
           constraints: expect.objectContaining({ sessionId: "channel-a" }),
         }),
+        expect.objectContaining({
+          subject: `agent:${record.id}@${record.contextId}`,
+          capability: "panel.inspect",
+          scope: "agent",
+        }),
         expect.objectContaining({ capability: "context.boundary" }),
       ])
     );
 
-    expect(revokeRuntimeResourceBindings(grantStore, record.id)).toBe(2);
+    const reconciled = await prepared.bind(record);
+    expect(reconciled).toHaveLength(4);
+    expect(grantStore.listActiveAuthorityGrants()).toHaveLength(4);
+    expect(revokeRuntimeResourceBindings(grantStore, record.id)).toBe(4);
     expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
   });
 
@@ -122,6 +130,24 @@ describe("runtime resource bindings", () => {
     ).rejects.toThrow(/denied/u);
     expect(confirmPrivilegedPanel).toHaveBeenCalledOnce();
     expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
+  });
+
+  it("reuses an unchanged privileged binding without prompting again", async () => {
+    const confirmPrivilegedPanel = vi.fn(async () => true);
+    const prepared = await prepareRuntimeResourceBindings(
+      {
+        grantStore,
+        resolvePanel: async () => ({ source: "about/settings", contextId: "ctx-panel" }),
+        confirmPrivilegedPanel,
+      },
+      { bindings: [binding], lifecycleCaller: shellLifecycleCaller, initiatingCaller: caller }
+    );
+
+    await prepared.bind(record);
+    await prepared.bind(record);
+
+    expect(confirmPrivilegedPanel).toHaveBeenCalledOnce();
+    expect(grantStore.listActiveAuthorityGrants()).toHaveLength(4);
   });
 
   it("fails closed for unowned channels and unauthenticated launches", async () => {
@@ -201,7 +227,7 @@ describe("runtime resource bindings", () => {
         }),
       ])
     );
-    expect(revokeRuntimeResourceBindings(grantStore, record.id)).toBe(3);
+    expect(revokeRuntimeResourceBindings(grantStore, record.id)).toBe(5);
     expect(grantStore.listActiveAuthorityGrants()).toEqual([]);
     await expect(
       prepareRuntimeResourceBindings(deps, {

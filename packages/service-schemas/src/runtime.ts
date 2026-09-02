@@ -754,6 +754,29 @@ export const runtimeMethods = defineServiceMethods({
     authority: { principals: ["host", "user", "code"] },
     access: { sensitivity: "write" },
   },
+  replaceResourceBindings: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "runtime.resource-binding",
+      rationale:
+        "The runtime owner may reconcile host-validated resources for an existing entity; resource resolution and capability declarations remain authoritative",
+    },
+    description:
+      "Replace the host-owned resource bindings of one active owned runtime entity after validating them against its current identity and authority manifest.",
+    args: z.tuple([
+      z
+        .object({
+          id: z.string().min(1),
+          bindings: z.array(RuntimeResourceBindingSchema).min(1).max(16),
+        })
+        .strict(),
+    ]),
+    returns: z.void(),
+    authority: { principals: ["host", "user", "code"] },
+    access: { sensitivity: "write" },
+  },
   recoverExecution: {
     capability: "runtime.execution.recover",
     tier: {

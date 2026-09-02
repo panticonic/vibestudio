@@ -654,6 +654,32 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     await deps.releaseResourceBindings(record);
   }
 
+  async function replaceResourceBindings(
+    actors: RuntimeCreationActors,
+    input: { id: string; bindings: RuntimeResourceBindingInput[] }
+  ): Promise<void> {
+    const record = await store.resolveActiveRecord(input.id);
+    if (!record) {
+      throw new Error(`runtime.replaceResourceBindings target is not active: ${input.id}`);
+    }
+    if (
+      !isTrustedRuntimeHost(actors.lifecycleCaller) &&
+      !callerOwnsEntity(actors.lifecycleCaller, record)
+    ) {
+      throw new Error(`runtime.replaceResourceBindings caller does not own ${input.id}`);
+    }
+    const prepared = await deps.prepareResourceBindings?.({
+      bindings: input.bindings,
+      lifecycleCaller: actors.lifecycleCaller,
+      initiatingCaller: actors.initiatingCaller,
+    });
+    if (!prepared) throw new Error("Runtime resource bindings are unavailable");
+    if (prepared.contextId !== record.contextId) {
+      throw new Error("Runtime resource context does not match the target entity context");
+    }
+    await prepared.bind(record);
+  }
+
   async function rebindAgentChannel(
     caller: VerifiedCaller,
     input: { entityId: string; channelId: string }
@@ -2152,6 +2178,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       },
       releaseResourceBindings: async (ctx, [{ id }]) => {
         await releaseResourceBindings(ctx.caller, id);
+      },
+      replaceResourceBindings: async (ctx, [input]) => {
+        await replaceResourceBindings(
+          {
+            lifecycleCaller: ctx.caller,
+            initiatingCaller: verifiedInitiator(ctx),
+          },
+          input
+        );
       },
       recoverExecution: (ctx, [input]) => recoverExecution(ctx.caller, input),
       listEntities: (_ctx, [input]) => listEntities(input?.kind),

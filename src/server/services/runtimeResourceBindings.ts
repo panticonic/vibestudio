@@ -1,6 +1,7 @@
 import type { AuthorityGrant, ResourceScope } from "@vibestudio/rpc";
 import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { panelAccessSeverityForTarget } from "@vibestudio/shared/panelAccessPolicy";
 import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import type {
@@ -57,6 +58,22 @@ function bindingSurface(entityId: string, resourceKind?: string, resourceId?: st
   return resourceKind && resourceId
     ? `${prefix}:${resourceKind}:${encodeURIComponent(resourceId)}`
     : prefix;
+}
+
+function bindingGrantSignature(
+  grant: Pick<
+    AuthorityGrant,
+    "capability" | "resource" | "subject" | "scope" | "constraints" | "decisionSurface"
+  >
+): string {
+  return canonicalJson({
+    capability: grant.capability,
+    resource: grant.resource,
+    subject: grant.subject,
+    scope: grant.scope,
+    constraints: grant.constraints ?? {},
+    decisionSurface: grant.decisionSurface,
+  });
 }
 
 export async function prepareRuntimeResourceBindings(
@@ -132,7 +149,23 @@ export async function prepareRuntimeResourceBindings(
   return {
     contextId,
     bind: async (record) => {
-      const issued: AuthorityGrant[] = [];
+      const preparedGrants: Array<{
+        shared: {
+          effect: "allow";
+          issuedBy: string;
+          provenance: "acquisition";
+          decidedBy: string;
+          decisionSurface: string;
+          createdAt: number;
+        };
+        resources: Array<{
+          capability: string;
+          resource: ResourceScope;
+          subject: AuthorityGrant["subject"];
+          scope: AuthorityGrant["scope"];
+          constraints: NonNullable<AuthorityGrant["constraints"]>;
+        }>;
+      }> = [];
       for (const { binding, panel } of resolved) {
         if (panel && record.contextId !== panel.contextId) {
           throw new Error("Runtime resource context does not match the target entity context");
@@ -146,18 +179,6 @@ export async function prepareRuntimeResourceBindings(
           binding.capabilities.some((capability) => !declares(record, capability))
         ) {
           throw new Error("The target runtime did not declare the requested resource binding");
-        }
-        if (
-          panel &&
-          severity(panel.source) === "severe" &&
-          !(await deps.confirmPrivilegedPanel({
-            slotId: binding.resource.id,
-            source: panel.source,
-            contextId: panel.contextId,
-            record,
-          }))
-        ) {
-          throw new Error("Panel resource binding was denied");
         }
         const shared = {
           effect: "allow" as const,
@@ -185,6 +206,13 @@ export async function prepareRuntimeResourceBindings(
                   lineageAtConsent: [...LINEAGE_CLASSES],
                 },
               },
+              {
+                capability: "panel.inspect",
+                resource: { kind: "exact", key: "panel.inspect" },
+                subject: `agent:${record.id}@${record.contextId}`,
+                scope: "agent",
+                constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },
+              },
             ]
           : [
               {
@@ -209,23 +237,67 @@ export async function prepareRuntimeResourceBindings(
               lineageAtConsent: [...LINEAGE_CLASSES],
             },
           });
+          resources.push({
+            capability: "context.boundary",
+            resource: {
+              kind: "prefix",
+              prefix: contextBoundaryResourceKey(panel.contextId, ""),
+            },
+            subject: `agent:${record.id}@${record.contextId}`,
+            scope: "agent",
+            constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },
+          });
         }
-        issued.push(
-          ...deps.grantStore.transaction(() =>
-            resources.map(({ capability, resource, subject, scope, constraints }) =>
-              deps.grantStore.issue({
-                ...shared,
-                capability,
-                resource,
-                subject,
-                scope,
-                constraints,
-              })
-            )
+        preparedGrants.push({ shared, resources });
+      }
+      const prior = deps.grantStore
+        .listActiveAuthorityGrants()
+        .filter((grant) => grant.decisionSurface?.startsWith(`${bindingSurface(record.id)}:`));
+      const expectedSignatures = preparedGrants
+        .flatMap(({ shared, resources }) =>
+          resources.map((resource) => bindingGrantSignature({ ...resource, ...shared }))
+        )
+        .sort();
+      const priorSignatures = prior.map(bindingGrantSignature).sort();
+      if (
+        expectedSignatures.length === priorSignatures.length &&
+        expectedSignatures.every((signature, index) => signature === priorSignatures[index])
+      ) {
+        return prior;
+      }
+      for (const { binding, panel } of resolved) {
+        if (
+          panel &&
+          binding.scope.kind === "agent-channel" &&
+          severity(panel.source) === "severe" &&
+          !(await deps.confirmPrivilegedPanel({
+            slotId: binding.resource.id,
+            source: panel.source,
+            contextId: panel.contextId,
+            record,
+          }))
+        ) {
+          throw new Error("Panel resource binding was denied");
+        }
+      }
+      return deps.grantStore.transaction(() => {
+        const revokedAt = Date.now();
+        for (const grant of prior) {
+          if (grant.id) deps.grantStore.revoke(grant.id, revokedAt);
+        }
+        return preparedGrants.flatMap(({ shared, resources }) =>
+          resources.map(({ capability, resource, subject, scope, constraints }) =>
+            deps.grantStore.issue({
+              ...shared,
+              capability,
+              resource,
+              subject,
+              scope,
+              constraints,
+            })
           )
         );
-      }
-      return issued;
+      });
     },
   };
 }
