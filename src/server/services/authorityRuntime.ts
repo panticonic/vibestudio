@@ -20,6 +20,7 @@ import {
 } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { workspaceServiceBindingTier } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceServiceBinding } from "@vibestudio/workspace-contracts/types";
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { productAuthorityGrants } from "./productAuthorityGrants.js";
@@ -477,13 +478,16 @@ export function attestWorkspaceDoRpc(
     service: {
       name: string;
       principals: readonly PrincipalKind[];
-      binding?: "consent" | "declared";
+      binding?: WorkspaceServiceBinding;
     };
     methodAuthority: WorkspaceDoMethodAuthority;
   }
 ): DirectAuthorityAttestation {
   const targetCapability = `workspace-service:${input.service.name}`;
-  const targetTier = workspaceServiceBindingTier(input.service.binding);
+  const targetTier = workspaceServiceBindingTier(
+    input.service.binding,
+    input.caller.code?.repoPath
+  );
   const methodCapability =
     input.methodAuthority.effect.kind !== "open"
       ? (input.methodAuthority.capability ?? input.methodAuthority.effect.capability)

@@ -143,6 +143,32 @@ describe("buildCatalog", () => {
     expect(access).not.toHaveProperty("capability");
   });
 
+  it("publishes the consumer allowlist for a declared-for service binding", () => {
+    const dynamic = buildCatalog({
+      definitions: [],
+      workspaceCapabilities: [
+        {
+          name: "flowboard-store",
+          source: "workers/flowboard-store",
+          protocols: ["flowboard.store.v1"],
+          principals: ["code"],
+          binding: { declaredFor: ["panels/flowboard"] },
+          target: {
+            kind: "durable-object",
+            className: "FlowboardStore",
+            defaultObjectKey: "main",
+          },
+        },
+      ],
+    });
+
+    expect(byId(dynamic, "workspace:flowboard-store").access).toMatchObject({
+      binding: "declared-for",
+      declaredFor: ["panels/flowboard"],
+      declarationCapability: "workspace-service:flowboard-store",
+    });
+  });
+
   it("omits a transport-only service parent when every method has a modern wrapper", () => {
     const transportOnly: ServiceDefinition = {
       name: "transportOnly",

@@ -285,6 +285,8 @@ export interface WorkspaceSingletonObjectDecl {
   contextId?: string;
 }
 
+export type WorkspaceServiceBinding = "consent" | "declared" | { declaredFor: string[] };
+
 /** Workspace-authored service declaration in `workspace/meta/vibestudio.yml`. */
 export type WorkspaceServiceDecl = {
   source: string;
@@ -309,9 +311,11 @@ export type WorkspaceServiceDecl = {
     principals: ("host" | "user" | "code" | "session" | "mission")[];
     /**
      * `consent` makes use of the service itself a permission. `declared` treats
-     * the binding as reviewed wiring and leaves effects to method authority.
+     * every manifest-confined consumer as reviewed wiring. `declaredFor` does
+     * the same only for the named consumer unit paths; every other caller must
+     * still acquire consent.
      */
-    binding?: "consent" | "declared";
+    binding?: WorkspaceServiceBinding;
   };
 } & (
   | {
@@ -327,9 +331,19 @@ export type WorkspaceServiceDecl = {
 
 /** One policy projection for every host path that admits a workspace service. */
 export function workspaceServiceBindingTier(
-  binding: WorkspaceServiceDecl["authority"]["binding"]
+  binding: WorkspaceServiceDecl["authority"]["binding"],
+  callerRepoPath?: string
 ): "open" | "gated" {
-  return binding === "declared" ? "open" : "gated";
+  if (binding === "declared") return "open";
+  if (
+    binding &&
+    typeof binding === "object" &&
+    callerRepoPath !== undefined &&
+    binding.declaredFor.includes(callerRepoPath)
+  ) {
+    return "open";
+  }
+  return "gated";
 }
 
 /**

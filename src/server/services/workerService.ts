@@ -362,7 +362,10 @@ export function createWorkerService(deps: {
         // operation. Direct receiver admission already applies the exact same
         // distinction in attestWorkspaceDoRpc; resolution must not invent a
         // second, coarser consent gate in front of the method contract.
-        if (workspaceServiceBindingTier(service.authority.binding) === "open") {
+        if (
+          workspaceServiceBindingTier(service.authority.binding, ctx.caller.code?.repoPath) ===
+          "open"
+        ) {
           return { selections: [], payload: null };
         }
         const capability = `workspace-service:${service.name}`;

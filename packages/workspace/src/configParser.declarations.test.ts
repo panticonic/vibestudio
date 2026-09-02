@@ -258,6 +258,32 @@ describe("manifest declarations: product workspace services", () => {
     });
   });
 
+  it("accepts declared wiring restricted to named consumer units", () => {
+    expect(
+      parse(`services:
+  - source: workers/flowboard-store
+    name: flowboard-store
+    action: manage Flowboard lists and tasks
+    presentation:
+      domain: automation
+      verb: act
+    authority:
+      binding:
+        declaredFor: [panels/flowboard]
+      principals: [code]
+    durableObject:
+      className: FlowboardStore
+`)
+    ).toMatchObject({
+      services: [
+        {
+          name: "flowboard-store",
+          authority: { binding: { declaredFor: ["panels/flowboard"] } },
+        },
+      ],
+    });
+  });
+
   it("accepts the workspace source provider as an ordinary manifest service", () => {
     expect(
       parse(`services:

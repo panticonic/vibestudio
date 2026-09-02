@@ -15,6 +15,7 @@ import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
 import { resolveMethodTierPolicy } from "@vibestudio/shared/serviceAuthority";
+import type { WorkspaceServiceBinding } from "@vibestudio/workspace-contracts/types";
 
 export interface BuildCatalogDeps {
   definitions: ServiceDefinition[];
@@ -29,7 +30,7 @@ export interface WorkspaceCapabilityCatalogEntry {
   source: string;
   protocols: readonly string[];
   principals: readonly PrincipalKind[];
-  binding?: "consent" | "declared";
+  binding?: WorkspaceServiceBinding;
   providerEffectiveVersion?: string;
   providerBuildError?: string;
   methods?: readonly {
@@ -196,7 +197,13 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
             binding: "declared" as const,
             declarationCapability: `workspace-service:${declared.name}`,
           }
-        : { capability: `workspace-service:${declared.name}`, binding: "consent" as const };
+        : declared.binding && typeof declared.binding === "object"
+          ? {
+              binding: "declared-for" as const,
+              declaredFor: [...declared.binding.declaredFor],
+              declarationCapability: `workspace-service:${declared.name}`,
+            }
+          : { capability: `workspace-service:${declared.name}`, binding: "consent" as const };
     entries.push({
       id: `workspace:${declared.name}`,
       surface: "workspace",

@@ -234,6 +234,35 @@ describe("workerService workspace service resolution", () => {
     ).resolves.toEqual({ selections: [], payload: null });
   });
 
+  it("opens a declared-for binding only to the named consumer unit", async () => {
+    const deps = createDeps();
+    const channel = deps.workspaceDecls.services.find((service) => service.name === "channel")!;
+    channel.authority.binding = { declaredFor: ["extensions/test"] };
+    const service = createWorkerService(deps as never);
+    const allowed = { caller: ungrantedExtensionCaller() };
+    const other = {
+      caller: createVerifiedCaller("extension:other", "extension", {
+        callerId: "extension:other",
+        callerKind: "extension",
+        repoPath: "extensions/other",
+        effectiveVersion: "ev-other",
+        executionDigest: "1".repeat(64),
+        requested: [],
+      }),
+    };
+
+    await expect(
+      service.authorityPreparation?.["workers.resolveService.workspace-service"]?.(allowed, [
+        "example.store.v1",
+        "chat",
+      ])
+    ).resolves.toEqual({ selections: [], payload: null });
+    const prepared = await service.authorityPreparation?.[
+      "workers.resolveService.workspace-service"
+    ]?.(other, ["example.store.v1", "chat"]);
+    expect(prepared?.selections).toHaveLength(1);
+  });
+
   it("resolves declared wiring for code without a service capability grant", async () => {
     const deps = createDeps();
     const dispatcher = createProductionAuthorityDispatcher(deps);

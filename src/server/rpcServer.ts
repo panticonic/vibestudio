@@ -93,6 +93,10 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import {
+  workspaceServiceBindingTier,
+  type WorkspaceServiceBinding,
+} from "@vibestudio/workspace-contracts/types";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import type { DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import {
@@ -688,7 +692,7 @@ export class RpcServer {
         | Promise<
             readonly {
               capability: string;
-              serviceBinding?: "consent" | "declared";
+              serviceBinding?: WorkspaceServiceBinding;
               methodEffect: RpcAuthorityEffect;
               methodCapability?: string;
               methodReceiverAuthority?: {
@@ -723,7 +727,7 @@ export class RpcServer {
           >
         | readonly {
             capability: string;
-            serviceBinding?: "consent" | "declared";
+            serviceBinding?: WorkspaceServiceBinding;
             methodEffect: RpcAuthorityEffect;
             methodCapability?: string;
             methodReceiverAuthority?: {
@@ -3639,10 +3643,10 @@ export class RpcServer {
               workspaceAuthority.capability
             ),
             targetCapability: workspaceAuthority.capability,
-            targetTier:
-              workspaceAuthority.serviceBinding === "declared"
-                ? ("open" as const)
-                : ("gated" as const),
+            targetTier: workspaceServiceBindingTier(
+              workspaceAuthority.serviceBinding,
+              input.caller.code?.repoPath
+            ),
           }
         : {}),
       ...(input.readOnly ? { readOnly: true as const } : {}),
@@ -3654,8 +3658,9 @@ export class RpcServer {
     const requiredMethodCapability =
       workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
     const requiredMethodTier = workspaceAuthority?.methodTier;
-    const requiredServiceTier =
-      workspaceAuthority?.serviceBinding === "declared" ? ("open" as const) : ("gated" as const);
+    const requiredServiceTier = workspaceAuthority
+      ? workspaceServiceBindingTier(workspaceAuthority.serviceBinding, input.caller.code?.repoPath)
+      : ("gated" as const);
     const staticLeaves =
       workspaceAuthority && requiredMethodCapability && requiredMethodTier
         ? [

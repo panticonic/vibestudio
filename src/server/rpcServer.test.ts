@@ -2619,6 +2619,79 @@ describe("RpcServer relay behavior", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("treats a declared-for workspace-service binding as wiring only for named units", async () => {
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:flowboard-store",
+      ownerRuntimeId: "panel:other",
+      snapshotDigest: "d".repeat(64),
+      capability: "workspace-service:flowboard-store",
+      resourceKey: "do:workers/flowboard-store:FlowboardStore:main",
+      tier: "gated" as const,
+      cardType: "permission.gated" as const,
+      renderedAction: "use Flowboard task storage",
+      pending: true,
+    }));
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:flowboard-store",
+          serviceBinding: { declaredFor: ["panels/flowboard"] },
+          methodEffect: { kind: "open" },
+          methodCapability: "workspace-service:flowboard-store",
+          methodTier: "open",
+          principals: ["code"],
+          presentation: { domain: "automation", verb: "manage" },
+          title: "Flowboard task storage",
+          action: "use Flowboard task storage",
+          declaredBy: "workers/flowboard-store",
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const caller = (runtimeId: string, repoPath: string) =>
+      createVerifiedCaller(runtimeId, "panel", {
+        callerId: runtimeId,
+        callerKind: "panel",
+        repoPath,
+        effectiveVersion: `ev-${runtimeId}`,
+        executionDigest: "a".repeat(64),
+        requested: [
+          {
+            capability: "workspace-service:flowboard-store",
+            resource: { kind: "prefix", prefix: "" },
+          },
+        ],
+      });
+    const invoke = (verifiedCaller: ReturnType<typeof caller>) =>
+      testServer(server).directDOAuthorization({
+        caller: verifiedCaller,
+        ref: {
+          source: "workers/flowboard-store",
+          className: "FlowboardStore",
+          objectKey: "main",
+        },
+        method: "getBoard",
+        args: [],
+        readOnly: true,
+      });
+
+    await expect(invoke(caller("panel:flowboard", "panels/flowboard"))).resolves.toMatchObject({
+      targetCapability: "workspace-service:flowboard-store",
+      targetTier: "open",
+    });
+    expect(request).not.toHaveBeenCalled();
+
+    await expect(invoke(caller("panel:other", "panels/other"))).rejects.toMatchObject({
+      code: "EACQUIRE",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves admitted test-session policy in direct workspace-service acquisitions", async () => {
     const request = vi.fn(() => ({
       acquisitionId: "acq:test-models",

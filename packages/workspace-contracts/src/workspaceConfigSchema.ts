@@ -235,6 +235,17 @@ export const WorkspaceTemplatePresentationSchema = z
   .transform((value) => sanitizeTemplatePresentation(value));
 
 const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
+const WorkspaceServiceBindingSchema = z.union([
+  z.enum(["consent", "declared"]),
+  z
+    .object({ declaredFor: z.array(z.string().min(1)).min(1) })
+    .strict()
+    .superRefine(({ declaredFor }, ctx) => {
+      if (new Set(declaredFor).size !== declaredFor.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "declaredFor contains duplicates" });
+      }
+    }),
+]);
 const WorkspaceServicePresentationSchema = z
   .object({
     domain: z.enum(["files", "sharing", "accounts", "web", "automation", "people", "computer"]),
@@ -267,7 +278,7 @@ const WorkspaceServiceSchema = z.union([
       authority: z
         .object({
           principals: z.array(WorkspaceServicePrincipalSchema).min(1),
-          binding: z.enum(["consent", "declared"]).optional(),
+          binding: WorkspaceServiceBindingSchema.optional(),
         })
         .strict(),
       durableObject: z
@@ -291,7 +302,7 @@ const WorkspaceServiceSchema = z.union([
       authority: z
         .object({
           principals: z.array(WorkspaceServicePrincipalSchema).min(1),
-          binding: z.enum(["consent", "declared"]).optional(),
+          binding: WorkspaceServiceBindingSchema.optional(),
         })
         .strict(),
       worker: z.object({ routePath: z.string() }).strict(),
