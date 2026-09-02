@@ -11729,6 +11729,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:build.getTestArtifact",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "getTestArtifact",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "build.read",
+      "reviewRationale": "Compiles selected workspace tests into an immutable artifact without executing them",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.getTestArtifact"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.getTestArtifact),allOf(capability(user,service:build.getTestArtifact),workspace-member),allOf(capability(code,service:build.getTestArtifact),workspace-member))",
+      "r3b": {
+        "review": "immutable-production-test-artifact-read",
+        "change": "Adds an open read that compiles an explicitly selected workspace test suite into the same immutable artifact format used by production runtimes. It executes no test, mutates no runtime, and remains bounded by the caller's existing workspace source visibility."
+      },
+      "capability": "service:build.getTestArtifact",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:build.hasUnit",
       "rpcPlane": "host-service",
       "owner": "build",
@@ -12048,6 +12094,52 @@
         "change": null
       },
       "capability": "service:build.recompute",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:build.resolveTestSuite",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "resolveTestSuite",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "build.read",
+      "reviewRationale": "Reads the test runtime declared in an exact workspace manifest",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.resolveTestSuite"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.resolveTestSuite),allOf(capability(user,service:build.resolveTestSuite),workspace-member),allOf(capability(code,service:build.resolveTestSuite),workspace-member))",
+      "r3b": {
+        "review": "exact-workspace-test-suite-metadata-read",
+        "change": "Adds an open read of the test runtime and selection declared by one exact workspace manifest. It returns build metadata only and neither executes code nor broadens source or runtime authority."
+      },
+      "capability": "service:build.resolveTestSuite",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -23380,6 +23472,52 @@
         "change": null
       },
       "capability": "service:runtime.releaseResourceBindings",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:runtime.replaceResourceBindings",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "replaceResourceBindings",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "runtime.resource-binding",
+      "reviewRationale": "The runtime owner may reconcile host-validated resources for an existing entity; resource resolution and capability declarations remain authoritative",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.replaceResourceBindings"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:runtime.replaceResourceBindings),allOf(capability(user,service:runtime.replaceResourceBindings),workspace-member),allOf(capability(code,service:runtime.replaceResourceBindings),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-runtime-resource-reconciliation",
+        "change": "Lets an authenticated runtime owner reconcile the host-validated resource relationships of one already-active entity. The receiver revalidates ownership, identity, declared capabilities, and every binding before one transactional replacement; callers cannot mint capabilities or modify a foreign entity."
+      },
+      "capability": "service:runtime.replaceResourceBindings",
       "parityAssertion": "generated-census:host-authority"
     },
     {

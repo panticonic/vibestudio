@@ -14,6 +14,7 @@ export const RUNTIME_METHOD_NAMES = [
   "faultAbortAgentVessel",
   "retireEntity",
   "releaseResourceBindings",
+  "replaceResourceBindings",
   "recoverExecution",
   "listEntities",
   "resolveContext",

@@ -2042,6 +2042,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "build.getTestArtifact": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Compiles selected workspace tests into an immutable artifact without executing them",
+    },
+    capability: null,
+    presentation: null,
+  },
   "build.hasUnit": {
     tier: {
       tier: "open",
@@ -2131,6 +2143,17 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "act",
       },
     },
+  },
+  "build.resolveTestSuite": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Reads the test runtime declared in an exact workspace manifest",
+    },
+    capability: null,
+    presentation: null,
   },
   "chromiumFetch.close": {
     tier: {
@@ -5637,6 +5660,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "runtime.resource-binding",
       rationale:
         "The runtime owner may end an existing host-validated resource relationship without gaining authority",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "runtime.replaceResourceBindings": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "runtime.resource-binding",
+      rationale:
+        "The runtime owner may reconcile host-validated resources for an existing entity; resource resolution and capability declarations remain authoritative",
     },
     capability: null,
     presentation: null,

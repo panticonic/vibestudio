@@ -1963,6 +1963,23 @@
         "capability": null,
         "presentation": null
       },
+      "getTestArtifact": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "build.read",
+          "rationale": "Compiles selected workspace tests into an immutable artifact without executing them"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "hasUnit": {
         "authority": {
           "inherits": true
@@ -2090,6 +2107,23 @@
             "verb": "act"
           }
         }
+      },
+      "resolveTestSuite": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "build.read",
+          "rationale": "Reads the test runtime declared in an exact workspace manifest"
+        },
+        "capability": null,
+        "presentation": null
       }
     }
   },
@@ -9940,6 +9974,27 @@
           "residency": "identity",
           "family": "runtime.resource-binding",
           "rationale": "The runtime owner may end an existing host-validated resource relationship without gaining authority"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "replaceResourceBindings": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "runtime.resource-binding",
+          "rationale": "The runtime owner may reconcile host-validated resources for an existing entity; resource resolution and capability declarations remain authoritative"
         },
         "capability": null,
         "presentation": null

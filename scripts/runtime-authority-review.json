@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:cfa860e5087c03c68c37ff18645393f0dad2f32320455baa1fb28d8dc01a4781",
+  "censusDigest": "sha256:600d420eb98e7a59559ebc2f51b273f156f818028400a339df5b0ac57ef71bea",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -525,6 +525,18 @@
     "host:runtime.supervision.rollback": {
       "review": "compound-runtime-rollback-authority-target",
       "change": "Binds rollback authority to the exact operation, runtime kind, and release identity while presenting the human release name. Reusable authority no longer spans unrelated lifecycle actions or units."
+    },
+    "host:build.getTestArtifact": {
+      "review": "immutable-production-test-artifact-read",
+      "change": "Adds an open read that compiles an explicitly selected workspace test suite into the same immutable artifact format used by production runtimes. It executes no test, mutates no runtime, and remains bounded by the caller's existing workspace source visibility."
+    },
+    "host:build.resolveTestSuite": {
+      "review": "exact-workspace-test-suite-metadata-read",
+      "change": "Adds an open read of the test runtime and selection declared by one exact workspace manifest. It returns build metadata only and neither executes code nor broadens source or runtime authority."
+    },
+    "host:runtime.replaceResourceBindings": {
+      "review": "owner-scoped-runtime-resource-reconciliation",
+      "change": "Lets an authenticated runtime owner reconcile the host-validated resource relationships of one already-active entity. The receiver revalidates ownership, identity, declared capabilities, and every binding before one transactional replacement; callers cannot mint capabilities or modify a foreign entity."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace": {
       "review": "host-only-runtime-resource-binding-commit",
