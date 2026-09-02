@@ -45,7 +45,7 @@ export function isSystemOwnedRuntime(
   callerId: string,
   callerKind: CallerKind
 ): boolean {
-  if (callerKind !== "do" && callerKind !== "worker") return false;
+  if (callerKind !== "panel" && callerKind !== "do" && callerKind !== "worker") return false;
   return entityCache.resolveActive(callerId)?.ownerUserId === "system";
 }
 

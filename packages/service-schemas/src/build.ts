@@ -455,6 +455,7 @@ export type UnitBuildTargetWire = z.infer<typeof unitBuildTargetSchema>;
  */
 export const unitBuildReportSchema = z
   .object({
+    stateHash: z.string().min(1),
     repoPath: z.string(),
     unitName: z.string().optional(),
     kind: z.string(),
@@ -465,6 +466,47 @@ export const unitBuildReportSchema = z
   })
   .strict();
 export type UnitBuildReportWire = z.infer<typeof unitBuildReportSchema>;
+
+export const unitVerificationReceiptV1Schema = z
+  .object({
+    protocol: z.literal("unit-verification-receipt.v1"),
+    operation: z.enum(["build", "test"]),
+    target: z.string().min(1),
+    contextId: z.string().min(1),
+    ref: z.string().min(1),
+    stateHash: z.string().min(1),
+    reportDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+    suite: z.string().min(1).optional(),
+    runtime: z.enum(["browser", "workerd", "native"]).optional(),
+    artifactKey: z.string().min(1).nullable().optional(),
+    executionDigest: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .nullable()
+      .optional(),
+    reportRequest: z
+      .object({ method: z.string().min(1), args: z.array(z.unknown()) })
+      .strict()
+      .optional(),
+    unit: z
+      .object({ repoPath: z.string(), unitName: z.string().optional(), kind: z.string() })
+      .strict()
+      .optional(),
+    status: z.string().min(1).optional(),
+    builds: z
+      .array(z.object({ target: z.string(), buildKey: z.string().nullable() }).strict())
+      .optional(),
+    diagnostics: z
+      .object({
+        total: z.number().int().nonnegative(),
+        retained: z.number().int().nonnegative(),
+        truncated: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type UnitVerificationReceiptV1 = z.infer<typeof unitVerificationReceiptV1Schema>;
 
 const buildProfileArtifactSchema = z
   .object({
@@ -668,6 +710,74 @@ export type BuildUnitCatalogEntry = z.infer<typeof buildUnitCatalogEntrySchema>;
 export const libraryBuildTargetSchema = z.enum(["panel", "worker"]);
 export type LibraryBuildTarget = z.infer<typeof libraryBuildTargetSchema>;
 
+export const workspaceTestRuntimeSchema = z.enum(["browser", "workerd", "native"]);
+export type WorkspaceTestRuntime = z.infer<typeof workspaceTestRuntimeSchema>;
+
+export const workspaceTestSuiteDeclarationSchema = z
+  .object({
+    name: z.string().min(1),
+    runtime: workspaceTestRuntimeSchema,
+    include: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+
+export const workspaceTestPlanSchema = z
+  .object({
+    protocol: z.literal("workspace-test-plan.v1"),
+    target: z.string().min(1),
+    suite: z.string().min(1),
+    runtime: workspaceTestRuntimeSchema,
+    stateHash: z.string().min(1),
+  })
+  .strict();
+export type WorkspaceTestPlan = z.infer<typeof workspaceTestPlanSchema>;
+
+export const testFileResultSchema = z
+  .object({
+    file: z.string(),
+    status: z.enum(["pass", "fail", "skip"]),
+    duration: z.number().nonnegative().optional(),
+    errors: z.array(z.string()).optional(),
+  })
+  .strict();
+
+export const testExecutionResultV1Schema = z
+  .object({
+    protocol: z.literal("workspace-test-execution-result.v1"),
+    artifactKey: z.string().min(1),
+    executionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+    runtime: workspaceTestRuntimeSchema,
+    status: z.enum(["passed", "failed", "no-tests", "cancelled", "infrastructure-error"]),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+    durationMs: z.number().nonnegative(),
+    files: z.array(testFileResultSchema),
+  })
+  .strict();
+export type TestExecutionResultV1 = z.infer<typeof testExecutionResultV1Schema>;
+
+export const workspaceTestArtifactV1Schema = z
+  .object({
+    protocol: z.literal("workspace-test-artifact.v1"),
+    artifactKey: z.string().min(1),
+    execution: executionArtifactRefSchema,
+    target: z.string().min(1),
+    suite: z.string().min(1),
+    runtime: z.enum(["browser", "workerd"]),
+    selectedFiles: z.array(z.string()).min(1),
+  })
+  .strict();
+export interface WorkspaceTestArtifactV1 {
+  protocol: "workspace-test-artifact.v1";
+  artifactKey: string;
+  execution: ExecutionArtifactRefV1;
+  target: string;
+  suite: string;
+  runtime: "browser" | "workerd";
+  selectedFiles: string[];
+}
+
 export const buildMethods = defineServiceMethods({
   listUnits: {
     tier: {
@@ -729,6 +839,45 @@ export const buildMethods = defineServiceMethods({
     // Compilation only populates a content-addressed cache. It does not alter
     // workspace source, publish an artifact, install a dependency, or advance
     // semantic state, so read-only evals must be able to load workspace code.
+    access: READ_ACCESS,
+  },
+  getTestArtifact: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Compiles selected workspace tests into an immutable artifact without executing them",
+    },
+    description:
+      "Build a declared test suite from an exact workspace state. Runtime is read from the unit manifest and cannot be overridden by the caller.",
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1),
+      z
+        .object({
+          suite: z.string().min(1).optional(),
+          file: z.string().min(1).optional(),
+        })
+        .strict()
+        .optional(),
+    ]),
+    returns: workspaceTestArtifactV1Schema,
+    access: READ_ACCESS,
+  },
+  resolveTestSuite: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Reads the test runtime declared in an exact workspace manifest",
+    },
+    description:
+      "Resolve one declared test suite and its execution runtime without executing or compiling source.",
+    args: z.tuple([z.string().min(1), z.string().min(1), z.string().min(1).optional()]),
+    returns: workspaceTestPlanSchema,
     access: READ_ACCESS,
   },
   getBuildNpm: {

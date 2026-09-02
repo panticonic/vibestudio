@@ -196,6 +196,14 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   });
   delete globalThis.__vibestudioConnectionId;
 
+  // A headless host's fallback shell owns an asynchronous authenticated
+  // WebSocket. Do not start (and eventually mark ready) the panel bundle until
+  // that panel endpoint is actually routable. Desktop/mobile bridges are
+  // already host-owned and need not expose this readiness hook.
+  if (typeof globalThis.__vibestudioShell?.ready === "function") {
+    await globalThis.__vibestudioShell.ready();
+  }
+
   globalThis.__vibestudioContextReady = true;
   const bundle = document.createElement("script");
   bundle.type = "module";

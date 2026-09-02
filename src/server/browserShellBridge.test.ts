@@ -4,6 +4,7 @@ import type { BrowserShellBridgeGlobals } from "./browserShellBridge.js";
 
 const mocks = vi.hoisted(() => ({
   createWsTransport: vi.fn(),
+  ready: vi.fn(),
   send: vi.fn(),
   onMessage: vi.fn(),
   onRecovery: vi.fn(),
@@ -18,6 +19,8 @@ const { installFallbackShellBridge } = await import("./browserShellBridge.js");
 describe("installFallbackShellBridge", () => {
   beforeEach(() => {
     mocks.createWsTransport.mockReset();
+    mocks.ready.mockReset();
+    mocks.ready.mockResolvedValue(undefined);
     mocks.send.mockReset();
     mocks.onMessage.mockReset();
     mocks.onRecovery.mockReset();
@@ -25,6 +28,7 @@ describe("installFallbackShellBridge", () => {
 
   it("installs a panel WebSocket-backed shell bridge when host injection is absent", async () => {
     mocks.createWsTransport.mockReturnValue({
+      ready: mocks.ready,
       send: mocks.send,
       onMessage: mocks.onMessage,
       onRecovery: mocks.onRecovery,
@@ -55,6 +59,8 @@ describe("installFallbackShellBridge", () => {
       })
     );
     expect(globals.__vibestudioShell).toBe(shell);
+    await shell?.ready?.();
+    expect(mocks.ready).toHaveBeenCalledOnce();
 
     const envelope = {
       from: "panel:nav-entry-a",

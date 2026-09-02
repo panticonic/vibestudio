@@ -29,7 +29,7 @@ import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
-import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
+import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
 import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
@@ -1891,6 +1891,13 @@ export interface BuildUnitOptions {
    * worker/workerd entry instead of a panel entry that bootstraps on load.
    */
   libraryTarget?: LibraryBuildTarget;
+  /** Build a statically discovered declared test suite as an immutable library artifact. */
+  test?: {
+    suite: string;
+    runtime: WorkspaceTestRuntime;
+    include: string[];
+    file?: string;
+  };
   /** Scheduling only; never part of the deterministic artifact identity. */
   priority?: BuildPriority;
 }
@@ -1900,6 +1907,19 @@ export function effectiveBuildVersion(
   ev: string,
   options?: BuildUnitOptions
 ): string {
+  if (options?.test) {
+    return `${ev}:test:${createHash("sha256")
+      .update(
+        JSON.stringify({
+          suite: options.test.suite,
+          runtime: options.test.runtime,
+          include: options.test.include,
+          file: options.test.file ?? null,
+        })
+      )
+      .digest("hex")
+      .slice(0, 16)}`;
+  }
   if (options?.library) {
     return `${ev}:lib:${createHash("sha256")
       .update(
@@ -2052,7 +2072,19 @@ async function doBuild(
         options?.library ? `library:${options.libraryTarget ?? "?"}` : `build:${node.kind}`
       );
 
-      if (options?.library) {
+      if (options?.test) {
+        return await buildTestBundle(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          authority,
+          options.test
+        );
+      } else if (options?.library) {
         if (!options.libraryTarget) {
           throw new Error(
             `library build for ${node.name} requires an explicit libraryTarget ('panel' or 'worker')`
@@ -2135,6 +2167,143 @@ async function doBuild(
   } finally {
     trace.done();
   }
+}
+
+function testGlobExpression(pattern: string): RegExp {
+  const normalized = pattern.replace(/\\/gu, "/");
+  if (
+    normalized.startsWith("/") ||
+    normalized.split("/").some((part) => part === "..") ||
+    normalized.includes("\0")
+  ) {
+    throw new BuildRequestError("invalid_test_pattern", `Unsafe test include pattern: ${pattern}`, {
+      pattern,
+    });
+  }
+  let expression = "^";
+  for (let index = 0; index < normalized.length; index++) {
+    const char = normalized[index]!;
+    if (char === "*" && normalized[index + 1] === "*") {
+      index++;
+      if (normalized[index + 1] === "/") {
+        index++;
+        expression += "(?:.*/)?";
+      } else {
+        expression += ".*";
+      }
+    } else if (char === "*") {
+      expression += "[^/]*";
+    } else if (char === "?") {
+      expression += "[^/]";
+    } else {
+      expression += char.replace(/[|\\{}()[\]^$+?.]/gu, "\\$&");
+    }
+  }
+  return new RegExp(`${expression}$`, "u");
+}
+
+function walkUnitFiles(root: string, current = ""): string[] {
+  const directory = path.join(root, current);
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
+      continue;
+    }
+    const relative = current ? `${current}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...walkUnitFiles(root, relative));
+    else if (entry.isFile()) files.push(relative);
+  }
+  return files;
+}
+
+function selectTestFiles(
+  unitRoot: string,
+  include: readonly string[],
+  file: string | undefined
+): string[] {
+  const expressions = include.map(testGlobExpression);
+  const normalizedFile = file?.replace(/\\/gu, "/");
+  if (
+    normalizedFile &&
+    (path.posix.isAbsolute(normalizedFile) ||
+      normalizedFile.split("/").some((part) => part === ".."))
+  ) {
+    throw new BuildRequestError("invalid_test_file", `Test file escapes its unit: ${file}`, {
+      file,
+    });
+  }
+  const matches = walkUnitFiles(unitRoot)
+    .filter((candidate) => expressions.some((expression) => expression.test(candidate)))
+    .filter((candidate) => !normalizedFile || candidate === normalizedFile)
+    .sort();
+  if (matches.length === 0) {
+    throw new BuildRequestError(
+      "no_test_files",
+      normalizedFile
+        ? `Test file ${normalizedFile} is not a member of the declared suite`
+        : `Declared test suite selected no files`,
+      { file: normalizedFile ?? null }
+    );
+  }
+  if (matches.length > 200) {
+    throw new BuildRequestError(
+      "too_many_test_files",
+      `Declared test suite selected ${matches.length} files; the per-run limit is 200`,
+      { selected: matches.length, limit: 200 }
+    );
+  }
+  return matches;
+}
+
+async function buildTestBundle(
+  node: GraphNode,
+  ev: string,
+  buildKey: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  sourceRoot: string,
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest,
+  test: NonNullable<BuildUnitOptions["test"]>
+): Promise<BuildResult> {
+  if (test.runtime === "native") {
+    throw new BuildRequestError(
+      "native_test_artifact_requires_native_executor",
+      `Suite ${test.suite} is native and cannot be compiled for a sandbox executor`,
+      { suite: test.suite, runtime: test.runtime }
+    );
+  }
+  const selectedFiles = selectTestFiles(
+    path.join(sourceRoot, node.relativePath),
+    test.include,
+    test.file
+  );
+  const runtimeTest = { suite: test.suite, runtime: test.runtime, selectedFiles } as const;
+  return test.runtime === "browser"
+    ? buildPanel(
+        node,
+        ev,
+        buildKey,
+        graph,
+        workspaceRoot,
+        false,
+        sourceRoot,
+        sourceStateHash,
+        authority,
+        runtimeTest
+      )
+    : buildWorker(
+        node,
+        ev,
+        buildKey,
+        graph,
+        workspaceRoot,
+        false,
+        sourceRoot,
+        sourceStateHash,
+        authority,
+        runtimeTest
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -2484,6 +2653,61 @@ function executableModulesFromMetafile(
   return modules;
 }
 
+interface RuntimeTestBuild {
+  suite: string;
+  runtime: "browser" | "workerd";
+  selectedFiles: string[];
+}
+
+function runtimeTestImports(
+  outdir: string,
+  sourcePath: string,
+  selectedFiles: readonly string[]
+): string {
+  return selectedFiles
+    .map((file) => {
+      const specifier = relativeModuleSpecifier(outdir, path.join(sourcePath, ...file.split("/")));
+      return `setCurrentTestFile(${JSON.stringify(file)}); await import(${JSON.stringify(specifier)});`;
+    })
+    .join("\n");
+}
+
+function panelTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBuild): string {
+  return [
+    `import { rpc } from "@workspace/runtime";`,
+    `import { setCurrentTestFile, runTests as executeRegisteredTests } from "@workspace/test-runtime";`,
+    runtimeTestImports(outdir, sourcePath, test.selectedFiles),
+    `const root = document.getElementById("root");`,
+    `if (root) root.textContent = ${JSON.stringify(`Ready to run ${test.suite} tests`)};`,
+    `rpc.expose("tests.run", async request => {`,
+    `  if (root) root.textContent = ${JSON.stringify(`Running ${test.suite} tests…`)};`,
+    `  const result = await executeRegisteredTests(request.args[0], "browser");`,
+    `  if (root) root.textContent = result.status === "passed" ? result.passed + " tests passed" : result.failed + " tests failed";`,
+    `  return result;`,
+    `});`,
+    "",
+  ].join("\n");
+}
+
+function workerTestEntry(outdir: string, sourcePath: string, test: RuntimeTestBuild): string {
+  return [
+    `import { createWorkerRuntime, handleWorkerRpc } from "@workspace/runtime/worker";`,
+    `import { setCurrentTestFile, runTests as executeRegisteredTests } from "@workspace/test-runtime";`,
+    runtimeTestImports(outdir, sourcePath, test.selectedFiles),
+    `let runtime;`,
+    `let exposed = false;`,
+    `export default { async fetch(request, env) {`,
+    `  runtime ??= createWorkerRuntime(env);`,
+    `  if (!exposed) {`,
+    `    runtime.rpc.expose("tests.run", request => executeRegisteredTests(request.args[0], "workerd"));`,
+    `    exposed = true;`,
+    `  }`,
+    `  return handleWorkerRpc(runtime, request) ?? new Response("Workspace test worker");`,
+    `} };`,
+    "",
+  ].join("\n");
+}
+
 async function buildPanel(
   node: GraphNode,
   ev: string,
@@ -2493,7 +2717,8 @@ async function buildPanel(
   sourcemap: boolean,
   sourceRoot: string,
   sourceStateHash: string,
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  runtimeTest?: RuntimeTestBuild
 ): Promise<BuildResult> {
   const profileStartedAt = Date.now();
   const profileStartedRss = process.memoryUsage().rss;
@@ -2507,9 +2732,12 @@ async function buildPanel(
   );
   const environmentReadyAt = Date.now();
   const { outdir, nodePaths } = env;
-  const entryFile = resolveEntryPoint(node, env.sourcePath, {
-    conditions: PANEL_CONDITIONS,
-  });
+  const entryFile = runtimeTest
+    ? path.join(outdir, "_test-entry.ts")
+    : resolveEntryPoint(node, env.sourcePath, { conditions: PANEL_CONDITIONS });
+  if (runtimeTest) {
+    fs.writeFileSync(entryFile, panelTestEntry(outdir, env.sourcePath, runtimeTest));
+  }
 
   // Read extracted manifest for ref-correct build decisions
   const panelSourcePath = path.join(sourceRoot, node.relativePath);
@@ -2848,8 +3076,14 @@ async function buildPanel(
       framework: resolved.framework,
       ...(bundleReport ? { bundleReport } : {}),
       ...(sharedStyleMetadata ? { sharedStyles: sharedStyleMetadata } : {}),
-      details:
-        node.kind === "app"
+      details: runtimeTest
+        ? {
+            kind: "test",
+            suite: runtimeTest.suite,
+            runtime: runtimeTest.runtime,
+            selectedFiles: runtimeTest.selectedFiles,
+          }
+        : node.kind === "app"
           ? {
               kind: "app",
               target: "electron",
@@ -3261,7 +3495,8 @@ async function buildWorker(
   sourcemap: boolean,
   sourceRoot: string,
   sourceStateHash: string,
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  runtimeTest?: RuntimeTestBuild
 ): Promise<BuildResult> {
   const profileStartedAt = Date.now();
   const profileStartedRss = process.memoryUsage().rss;
@@ -3275,9 +3510,12 @@ async function buildWorker(
   );
   const environmentReadyAt = Date.now();
   const { outdir, nodePaths, resolveDir } = env;
-  const entryFile = resolveEntryPoint(node, env.sourcePath, {
-    conditions: WORKER_CONDITIONS,
-  });
+  const entryFile = runtimeTest
+    ? path.join(outdir, "_test-entry.ts")
+    : resolveEntryPoint(node, env.sourcePath, { conditions: WORKER_CONDITIONS });
+  if (runtimeTest) {
+    fs.writeFileSync(entryFile, workerTestEntry(outdir, env.sourcePath, runtimeTest));
+  }
 
   // Workers run from an immutable in-memory module map supplied to workerd's
   // workerLoader. Package resolution is unavailable there, so dependencies are
@@ -3467,7 +3705,14 @@ async function buildWorker(
         authority,
         workspaceRpcCatalog,
         executableModules,
-        details: { kind: "generic" },
+        details: runtimeTest
+          ? {
+              kind: "test",
+              suite: runtimeTest.suite,
+              runtime: runtimeTest.runtime,
+              selectedFiles: runtimeTest.selectedFiles,
+            }
+          : { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
       const stored = await buildStore.put(buildKey, artifacts, metadata);
@@ -3484,6 +3729,16 @@ async function buildWorker(
       sourceStateHash,
       authority,
       {
+        ...(runtimeTest
+          ? {
+              details: {
+                kind: "test" as const,
+                suite: runtimeTest.suite,
+                runtime: runtimeTest.runtime,
+                selectedFiles: runtimeTest.selectedFiles,
+              },
+            }
+          : {}),
         workspaceRpcCatalog,
         executableModules,
       },

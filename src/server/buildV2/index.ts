@@ -56,7 +56,11 @@ import {
   type BuildDiagnostic,
 } from "./diagnostics.js";
 import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
-import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
+import type {
+  LibraryBuildTarget,
+  WorkspaceTestArtifactV1,
+  WorkspaceTestPlan,
+} from "@vibestudio/service-schemas/build";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
   createExactWorkspaceAuthorityEnvironment,
@@ -167,6 +171,7 @@ export interface UnitBuildTarget {
 }
 
 export interface UnitBuildReport {
+  stateHash: string;
   repoPath: string;
   unitName?: string;
   kind: GraphNode["kind"] | "content";
@@ -342,6 +347,14 @@ export interface BuildSystemV2 {
     ref?: string,
     options?: BuildUnitOptions & { library?: false | undefined }
   ): Promise<BuildResult>;
+
+  /** Build one manifest-declared suite against an exact state without executing it. */
+  getTestArtifact(
+    unitPath: string,
+    ref: string,
+    selection?: { suite?: string; file?: string }
+  ): Promise<WorkspaceTestArtifactV1>;
+  resolveTestSuite(unitPath: string, ref: string, suite?: string): Promise<WorkspaceTestPlan>;
 
   /** Resolve the declared icon directly from current or explicitly selected workspace content. */
   getUnitIcon(
@@ -1694,6 +1707,7 @@ export async function initBuildSystemV2(
   ): Promise<{ report: UnitBuildReport; reusable: boolean }> => {
     const ev = view.evMap[node.name];
     const base: Omit<UnitBuildReport, "status" | "diagnostics" | "builds"> = {
+      stateHash: viewStateHash,
       repoPath: node.relativePath,
       unitName: node.name,
       kind: node.kind,
@@ -2033,8 +2047,132 @@ export async function initBuildSystemV2(
     return options?.library ? libraryBuildResult(build) : build;
   } as BuildSystemV2["getBuild"];
 
+  const resolveDeclaredTestSuite = async (
+    unitPath: string,
+    requestedRef: string,
+    requestedSuite?: string
+  ) => {
+    const ref = validateBuildRef(requestedRef);
+    if (!ref || (!ref.startsWith("ctx:") && !ref.startsWith("state:"))) {
+      throw new BuildRequestError(
+        "test_artifact_requires_exact_ref",
+        "Test artifacts require an exact ctx: or state: reference",
+        { ref: requestedRef }
+      );
+    }
+    const stateHash = ref.startsWith("state:")
+      ? ref
+      : await source.resolveContextState(ref.slice("ctx:".length));
+    const view = await viewAt(stateHash);
+    const node = resolveUnit(view.graph, unitPath, workspaceRoot);
+    if (!node) {
+      throw new BuildRequestError("package_not_found", `Unknown test unit at ${ref}: ${unitPath}`, {
+        specifier: unitPath,
+        ref,
+      });
+    }
+    assertNodeBuildable(node);
+    const suites = node.manifest.tests ?? [];
+    if (suites.length === 0) {
+      throw new BuildRequestError(
+        "test_suite_not_declared",
+        `${node.relativePath} must declare package.json#vibestudio.tests before it can run tests`,
+        { target: node.relativePath }
+      );
+    }
+    const suite = requestedSuite
+      ? suites.find((candidate) => candidate.name === requestedSuite)
+      : suites.length === 1
+        ? suites[0]
+        : undefined;
+    if (!suite) {
+      throw new BuildRequestError(
+        requestedSuite ? "test_suite_not_found" : "test_suite_required",
+        requestedSuite
+          ? `Unknown test suite ${JSON.stringify(requestedSuite)} for ${node.relativePath}`
+          : `${node.relativePath} declares multiple test suites; choose one of ${suites
+              .map((candidate) => `${candidate.name} (${candidate.runtime})`)
+              .join(", ")}`,
+        { suites: suites.map(({ name, runtime }) => ({ name, runtime })) }
+      );
+    }
+    const requiredKind =
+      suite.runtime === "browser" ? "panel" : suite.runtime === "workerd" ? "worker" : null;
+    if (requiredKind && node.kind !== requiredKind) {
+      throw new BuildRequestError(
+        "test_runtime_kind_mismatch",
+        `Suite ${suite.name} declares runtime ${suite.runtime}, which requires a ${requiredKind} target; ${node.relativePath} is a ${node.kind}`,
+        { target: node.relativePath, suite: suite.name, runtime: suite.runtime, kind: node.kind }
+      );
+    }
+    const ev = view.evMap[node.name];
+    if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+    return { stateHash, view, node, suite, ev };
+  };
+
+  const resolveTestSuite: BuildSystemV2["resolveTestSuite"] = async (
+    unitPath,
+    requestedRef,
+    requestedSuite
+  ) => {
+    const { node, suite, stateHash } = await resolveDeclaredTestSuite(
+      unitPath,
+      requestedRef,
+      requestedSuite
+    );
+    return {
+      protocol: "workspace-test-plan.v1",
+      target: node.relativePath,
+      suite: suite.name,
+      runtime: suite.runtime,
+      stateHash,
+    };
+  };
+
+  const getTestArtifact: BuildSystemV2["getTestArtifact"] = async (
+    unitPath,
+    requestedRef,
+    selection = {}
+  ) => {
+    const { stateHash, view, node, suite, ev } = await resolveDeclaredTestSuite(
+      unitPath,
+      requestedRef,
+      selection.suite
+    );
+    if (suite.runtime === "native") {
+      throw new BuildRequestError(
+        "native_test_suite",
+        `Suite ${suite.name} requires the explicit native test executor`,
+        { target: node.relativePath, suite: suite.name, runtime: suite.runtime }
+      );
+    }
+    const build = await buildUnit(node, ev, view.graph, workspaceRoot, stateHash, {
+      test: {
+        suite: suite.name,
+        runtime: suite.runtime,
+        include: [...suite.include],
+        ...(selection.file ? { file: selection.file } : {}),
+      },
+    });
+    const details = build.metadata.details;
+    if (details.kind !== "test" || !build.metadata.execution) {
+      throw new Error(`Build ${build.buildKey} did not produce a sealed test artifact`);
+    }
+    return {
+      protocol: "workspace-test-artifact.v1",
+      artifactKey: build.buildKey,
+      execution: executionArtifactRefFromBuild(source.workspaceId, build),
+      target: node.relativePath,
+      suite: details.suite,
+      runtime: details.runtime,
+      selectedFiles: details.selectedFiles,
+    };
+  };
+
   const buildSystem: BuildSystemV2 = {
     getBuild,
+    getTestArtifact,
+    resolveTestSuite,
     getUnitIcon,
     bindRuntimeImage,
 
@@ -2603,6 +2741,7 @@ export async function initBuildSystemV2(
       const node = resolveUnit(view.graph, unitName, workspaceRoot);
       if (!node) {
         return {
+          stateHash: viewStateHash,
           repoPath: unitName,
           kind: "content",
           status: "skipped",

@@ -320,11 +320,18 @@ export interface EntityReservationInput extends EntityActivationInput {
  */
 export type RuntimeEntityBuildRef = string;
 
+/** Exact immutable BuildV2 incarnation selected by a trusted build response. */
+export interface RuntimeExecutionArtifactSelector {
+  buildKey: string;
+  executionDigest: string;
+}
+
 /** Workspace-authored executable image selected from an immutable build. */
 export interface CodeExecution {
   surface: "code";
   source: RepoPath;
   ref?: RuntimeEntityBuildRef;
+  artifact?: RuntimeExecutionArtifactSelector;
 }
 
 /**

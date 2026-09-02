@@ -92,6 +92,49 @@ describe("PanelExecutionReconciler", () => {
     });
   });
 
+  it("preserves an exact test artifact through committed handoff and durable recovery", async () => {
+    const artifact = {
+      buildKey: "c".repeat(64),
+      executionDigest: "d".repeat(64),
+    };
+    const { reconciler, activate } = harness();
+    reconciler.observe({
+      kind: "current-entity",
+      slotId: detail.slot.slot_id,
+      previousEntityId: null,
+      currentEntityId: entity.id,
+      presentation: "awaiting-execution",
+      desiredExecution: {
+        source: entity.source.repoPath,
+        key: entity.key,
+        contextId: entity.contextId,
+        stateArgs: { mode: "inspect" },
+        artifact,
+      },
+    });
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledOnce());
+    expect(activate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execution: { surface: "code", source: entity.source.repoPath, artifact },
+      })
+    );
+
+    const recovery = harness();
+    recovery.getDetail.mockResolvedValue({
+      ...detail,
+      currentHistory: {
+        ...detail.currentHistory,
+        options: JSON.stringify({ artifact }),
+      },
+    });
+    await recovery.reconciler.recoverPreparingPanels();
+    expect(recovery.activate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execution: { surface: "code", source: entity.source.repoPath, artifact },
+      })
+    );
+  });
+
   it("does not reread durable slot state on the committed execution handoff", async () => {
     const { reconciler, activate, getDetail } = harness();
 

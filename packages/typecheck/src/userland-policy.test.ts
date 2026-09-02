@@ -11,5 +11,10 @@ describe("USERLAND_TYPECHECK_BASELINE", () => {
     ) as { compilerOptions?: Record<string, unknown> };
 
     expect(workspaceConfig.compilerOptions).toMatchObject(USERLAND_TYPECHECK_BASELINE);
+    expect(workspaceConfig.compilerOptions).not.toHaveProperty("noUnusedLocals");
+    expect(workspaceConfig.compilerOptions).not.toHaveProperty("noUnusedParameters");
+    expect(workspaceConfig.compilerOptions).not.toHaveProperty(
+      "noPropertyAccessFromIndexSignature"
+    );
   });
 });

@@ -244,6 +244,61 @@ function buildDependencyOverrides(pkg: PackageJson): Record<string, string> {
   return normalizeSimpleOverrides(pkg.vibestudio?.dependencyResolution?.overrides);
 }
 
+function testSuiteDeclarationErrors(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return ["vibestudio.tests must be an array"];
+  const errors: string[] = [];
+  const names = new Set<string>();
+  const patterns = new Map<string, string>();
+  for (const [index, raw] of value.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      errors.push(`vibestudio.tests[${index}] must be an object`);
+      continue;
+    }
+    const suite = raw as Record<string, unknown>;
+    const unknown = Object.keys(suite).filter(
+      (key) => key !== "name" && key !== "runtime" && key !== "include"
+    );
+    if (unknown.length > 0) {
+      errors.push(`vibestudio.tests[${index}] has unknown fields: ${unknown.join(", ")}`);
+    }
+    if (typeof suite["name"] !== "string" || suite["name"].length === 0) {
+      errors.push(`vibestudio.tests[${index}].name must be a non-empty string`);
+    } else if (names.has(suite["name"])) {
+      errors.push(`vibestudio.tests has duplicate suite name ${JSON.stringify(suite["name"])}`);
+    } else {
+      names.add(suite["name"]);
+    }
+    if (!new Set(["browser", "workerd", "native"]).has(String(suite["runtime"]))) {
+      errors.push(`vibestudio.tests[${index}].runtime must be browser, workerd, or native`);
+    }
+    if (!Array.isArray(suite["include"]) || suite["include"].length === 0) {
+      errors.push(`vibestudio.tests[${index}].include must be a non-empty array`);
+      continue;
+    }
+    for (const pattern of suite["include"]) {
+      if (
+        typeof pattern !== "string" ||
+        pattern.length === 0 ||
+        path.posix.isAbsolute(pattern.replace(/\\/gu, "/")) ||
+        pattern.replace(/\\/gu, "/").split("/").includes("..")
+      ) {
+        errors.push(`vibestudio.tests[${index}].include contains an unsafe pattern`);
+        continue;
+      }
+      const owner = patterns.get(pattern);
+      if (owner) {
+        errors.push(
+          `vibestudio.tests pattern ${JSON.stringify(pattern)} is owned by both ${JSON.stringify(owner)} and ${JSON.stringify(String(suite["name"]))}`
+        );
+      } else {
+        patterns.set(pattern, String(suite["name"]));
+      }
+    }
+  }
+  return errors;
+}
+
 function readPackageJson(dir: string): PackageJson | null {
   const p = path.join(dir, "package.json");
   if (!fs.existsSync(p)) return null;
@@ -282,6 +337,10 @@ function packageNodeFromJson(
       internalDeps.push(depName);
       recordInternalDepSpecError(partialNode, depName, depSpec);
     }
+  }
+  const suiteErrors = testSuiteDeclarationErrors(pkg.vibestudio?.tests);
+  if (suiteErrors.length > 0) {
+    partialNode.dependencyErrors = [...(partialNode.dependencyErrors ?? []), ...suiteErrors];
   }
 
   return {

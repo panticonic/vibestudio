@@ -32,6 +32,7 @@ function makeDoCtx(key: { source: string; className: string; objectKey: string }
 function makeService(opts: {
   onSlotStateChanged?: (change?: SlotStateChange) => void;
   onPresentationChanged?: (panelIds: string[]) => void;
+  onEntityTitleChanged?: (entityId: string, title: string | undefined) => void;
   /**
    * Map of DO method → return value. The dispatcher uses this to drive
    * outcomes (e.g. simulating the entity-id WorkspaceDO returns from
@@ -76,6 +77,7 @@ function makeService(opts: {
     },
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
     ...(opts.onPresentationChanged ? { onPresentationChanged: opts.onPresentationChanged } : {}),
+    ...(opts.onEntityTitleChanged ? { onEntityTitleChanged: opts.onEntityTitleChanged } : {}),
   });
   return { svc, calls, presentationCalls };
 }
@@ -416,6 +418,7 @@ describe("workspaceStateService — topology authority", () => {
   it("indexes and titles through the Base owner without asking panel callers to resolve it", async () => {
     const onSlotStateChanged = vi.fn();
     const onPresentationChanged = vi.fn();
+    const onEntityTitleChanged = vi.fn();
     const detail = {
       revision: 1,
       slot: { slot_id: "panel:chat" },
@@ -425,6 +428,7 @@ describe("workspaceStateService — topology authority", () => {
     const { svc, presentationCalls } = makeService({
       onSlotStateChanged,
       onPresentationChanged,
+      onEntityTitleChanged,
       dispatchReturns: { panelTreeDetail: detail },
     });
 
@@ -463,6 +467,8 @@ describe("workspaceStateService — topology authority", () => {
     expect(onSlotStateChanged).not.toHaveBeenCalled();
     expect(onPresentationChanged).toHaveBeenNthCalledWith(1, ["panel:chat"]);
     expect(onPresentationChanged).toHaveBeenNthCalledWith(2, ["panel:chat"]);
+    expect(onEntityTitleChanged).toHaveBeenNthCalledWith(1, "panel:nav-chat", "Agentic Chat");
+    expect(onEntityTitleChanged).toHaveBeenNthCalledWith(2, "panel:nav-chat", "Renamed chat");
   });
 
   it("publishes a native page title from the mutation cache on the next tree read", async () => {
@@ -771,6 +777,34 @@ describe("workspaceStateService — slot-state change hook", () => {
         stateArgs: {},
       },
     });
+  });
+
+  it("publishes the exact artifact committed with a preparing panel slot", async () => {
+    const onSlotStateChanged = vi.fn();
+    const { svc } = makeService({ onSlotStateChanged });
+    const artifact = {
+      buildKey: "e".repeat(64),
+      executionDigest: "f".repeat(64),
+    };
+    const input = {
+      slotId: "panel:tree/tests",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: "nav-tests",
+        entityId: "panel:nav-tests",
+        source: "panels/tests",
+        contextId: "ctx-tests",
+        options: { artifact },
+      },
+    };
+
+    await svc.handler(makeCtx() as never, "slot.create", [input]);
+
+    expect(onSlotStateChanged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        desiredExecution: expect.objectContaining({ artifact }),
+      })
+    );
   });
 
   it("does not let a cold presentation bind delay durable execution handoff", async () => {

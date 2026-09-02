@@ -1009,6 +1009,30 @@ describe("runtimeService deferred panel activation", () => {
     });
   });
 
+  it("resumes an activated entity when its stable reservation is retried", async () => {
+    const { service, instance } = await buildDeps();
+    const spec = {
+      kind: "panel" as const,
+      execution: { surface: "code" as const, source: "panels/tests" },
+      contextId: "ctx-tests-panel",
+      key: "stable-tests-panel",
+    };
+
+    await service.handler({ caller: serverCaller }, "reserveEntity", [spec]);
+    const active = (await service.handler({ caller: serverCaller }, "activateReservedEntity", [
+      spec,
+    ])) as RuntimeEntityHandle;
+    const resumed = (await service.handler({ caller: serverCaller }, "reserveEntity", [
+      spec,
+    ])) as RuntimeEntityHandle;
+
+    expect(resumed).toEqual({ ...active, created: false });
+    expect(instance.entityResolve(active.id)).toMatchObject({
+      status: "active",
+      source: { repoPath: "panels/tests", effectiveVersion: "ev-panel" },
+    });
+  });
+
   it("retires a cancelled reservation without invoking executable release", async () => {
     const { service, instance, releaseEntity, preparePanel } = await buildDeps();
     const spec = {

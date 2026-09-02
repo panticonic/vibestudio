@@ -758,6 +758,32 @@ export class WorkerdManager {
     return this.persistRuntimeImage(imageId, binding, scopeRef);
   }
 
+  private bindExactWorkerImage(
+    imageId: string,
+    source: string,
+    artifact: { buildKey: string; executionDigest: string }
+  ): RuntimeImageRecord {
+    const provider = this.requireWorkspaceProvider("exact worker image binding");
+    const build = provider.getBuildByExecution(artifact.buildKey, artifact.executionDigest);
+    if (!build) {
+      throw new Error(`Exact worker artifact ${artifact.buildKey} is unavailable`);
+    }
+    if (
+      build.metadata.kind !== "worker" ||
+      build.metadata.sourcePath !== source ||
+      build.metadata.details.kind !== "test" ||
+      build.metadata.details.runtime !== "workerd"
+    ) {
+      throw new Error(`Build ${artifact.buildKey} is not a workerd test artifact for ${source}`);
+    }
+    return this.persistRuntimeImage(imageId, {
+      source,
+      unitName: build.metadata.name,
+      artifact: executionArtifactRefFromBuild(this.deps.workspaceId, build),
+      authority: assertPresent(build.metadata.authority),
+    });
+  }
+
   private persistRuntimeImage(
     imageId: string,
     binding: RuntimeImageBinding,
@@ -1173,6 +1199,7 @@ export class WorkerdManager {
   async startWorker(args: {
     source: string;
     ref?: string;
+    artifact?: { buildKey: string; executionDigest: string };
     key: string;
     contextId: string;
     stateArgs?: unknown;
@@ -1270,7 +1297,9 @@ export class WorkerdManager {
     try {
       instance.status = "starting";
       const [image] = await Promise.all([
-        this.bindRuntimeImage(targetId, args.source, scopeRef),
+        args.artifact
+          ? Promise.resolve(this.bindExactWorkerImage(targetId, args.source, args.artifact))
+          : this.bindRuntimeImage(targetId, args.source, scopeRef),
         this.ensureWorkerdRunning(),
       ]);
       instance.scopeRef = image.scopeRef;

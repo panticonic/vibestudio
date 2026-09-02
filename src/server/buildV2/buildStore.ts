@@ -172,6 +172,12 @@ export type BuildMetadataDetails =
       } | null;
     }
   | { kind: "library"; format: "cjs" | "async-cjs" }
+  | {
+      kind: "test";
+      suite: string;
+      runtime: "browser" | "workerd";
+      selectedFiles: string[];
+    }
   | { kind: "generic" };
 
 export interface BuildMetadata {

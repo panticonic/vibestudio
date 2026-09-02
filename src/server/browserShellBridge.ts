@@ -15,6 +15,7 @@ export type PanelInitPayload = {
 };
 
 export type ShellEnvelopeBridge = {
+  ready?: () => Promise<void>;
   postEnvelope?: (envelope: RpcEnvelope) => void | Promise<void>;
   onEnvelope?: (handler: (envelope: RpcEnvelope) => void) => () => void;
   onRecovery?: (
@@ -114,6 +115,7 @@ export function installFallbackShellBridge(
   });
   const panelInit: PanelInitPayload = { ...init, gatewayConfig, entityId, slotId, connectionId };
   const shell: ShellEnvelopeBridge = {
+    ready: () => transport.ready?.() ?? Promise.resolve(),
     postEnvelope: (envelope) => transport.send(envelope),
     onEnvelope: (handler) => transport.onMessage(handler),
     onRecovery: (kind, handler) => transport.onRecovery(kind, handler),

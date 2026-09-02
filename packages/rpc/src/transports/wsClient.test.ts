@@ -267,7 +267,9 @@ describe("wsClientTransport", () => {
     const connected = transport.connectAndWait();
     await flushAsyncWork();
 
-    await expect(connected).rejects.toThrow("Auth refresh returned the rejected token");
+    await expect(connected).rejects.toThrow(
+      "Server auth failed: Invalid token; auth refresh returned the rejected token"
+    );
     expect(refreshAuthToken).toHaveBeenCalledTimes(1);
     expect(sockets).toHaveLength(0);
     expect(transport.status?.()).toBe("disconnected");

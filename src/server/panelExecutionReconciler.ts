@@ -41,6 +41,9 @@ export class PanelExecutionReconciler {
               surface: "code",
               source: change.desiredExecution.source,
               ...(change.desiredExecution.ref ? { ref: change.desiredExecution.ref } : {}),
+              ...(change.desiredExecution.artifact
+                ? { artifact: change.desiredExecution.artifact }
+                : {}),
             },
             key: change.desiredExecution.key,
             contextId: change.desiredExecution.contextId,
@@ -150,18 +153,23 @@ export class PanelExecutionReconciler {
       throw new Error(`Browser slot ${slotId} cannot have a preparing code reservation`);
     }
     const options = detail.currentHistory.options
-      ? (JSON.parse(detail.currentHistory.options) as { ref?: unknown })
+      ? (JSON.parse(detail.currentHistory.options) as { ref?: unknown; artifact?: unknown })
       : {};
     const stateArgs = detail.currentHistory.state_args
       ? (JSON.parse(detail.currentHistory.state_args) as unknown)
       : {};
     const ref = typeof options.ref === "string" && options.ref.length > 0 ? options.ref : undefined;
+    const artifact =
+      options.artifact && typeof options.artifact === "object"
+        ? (options.artifact as { buildKey: string; executionDigest: string })
+        : undefined;
     await this.deps.activate({
       kind: "panel",
       execution: {
         surface: "code",
         source: detail.currentHistory.source,
         ...(ref ? { ref } : {}),
+        ...(artifact ? { artifact } : {}),
       },
       key: detail.entity.key,
       contextId: detail.entity.contextId,

@@ -77,6 +77,10 @@ export function createBuildService(deps: {
               library: false,
             });
       },
+      getTestArtifact: (_ctx, [unit, ref, selection]) =>
+        deps.buildSystem.getTestArtifact(unit, ref, selection),
+      resolveTestSuite: (_ctx, [unit, ref, suite]) =>
+        deps.buildSystem.resolveTestSuite(unit, ref, suite),
       getBuildNpm: (_ctx, [specifier, version, externals]) =>
         deps.buildSystem.getBuildNpm(specifier, version, externals),
       getBuildMetadata: (_ctx, [key, options]) => {

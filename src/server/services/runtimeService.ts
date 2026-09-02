@@ -766,6 +766,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       if (!isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, preexisting)) {
         throw new Error(`runtime.reserveEntity caller does not own reservation ${canonicalId}`);
       }
+      // A stable operation may be resumed after its reserved entity has already
+      // activated. Its durable coordinates are the reservation result; do not
+      // feed the deliberately unresolved reservation source (effectiveVersion
+      // "") back through the store after activation sealed that field.
+      if (preexisting.status === "active") {
+        return { ...entityHandle(preexisting), created: false };
+      }
     }
     const created = !preexisting || preexisting.status === "retired";
     const externalAgentBinding = await resolveAgentBinding(

@@ -314,7 +314,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     try {
       const refreshedAuthToken = await config.adapter.refreshAuthToken();
       if (refreshedAuthToken === rejectedToken) {
-        failAuthentication("Auth refresh returned the rejected token");
+        failAuthentication(
+          `Server auth failed: ${reason}; auth refresh returned the rejected token`
+        );
         return;
       }
       if (closed || socketGeneration !== generation) return;

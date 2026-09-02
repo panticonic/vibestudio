@@ -2,28 +2,19 @@ import { describe, expect, it } from "vitest";
 import { createUserSubjectSource, isSystemOwnedRuntime } from "./userSubjectSource.js";
 
 describe("isSystemOwnedRuntime", () => {
-  it("recognizes only system-owned DO and worker entity records", () => {
+  it("recognizes every system-owned executable runtime entity", () => {
     const entityCache = {
       resolveActive: (callerId: string) =>
-        callerId === "do:workers/model-settings:ModelSettingsDO:workspace-model-settings"
-          ? ({ ownerUserId: "system" } as never)
-          : null,
+        callerId.startsWith("system-owned:") ? ({ ownerUserId: "system" } as never) : null,
     };
 
-    expect(
-      isSystemOwnedRuntime(
-        entityCache,
-        "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
-        "do"
-      )
-    ).toBe(true);
-    expect(
-      isSystemOwnedRuntime(
-        entityCache,
-        "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
-        "panel"
-      )
-    ).toBe(false);
+    for (const callerKind of ["panel", "do", "worker"] as const) {
+      expect(isSystemOwnedRuntime(entityCache, `system-owned:${callerKind}`, callerKind)).toBe(
+        true
+      );
+    }
+    expect(isSystemOwnedRuntime(entityCache, "system-owned:shell", "shell")).toBe(false);
+    expect(isSystemOwnedRuntime(entityCache, "human-owned:panel", "panel")).toBe(false);
   });
 });
 

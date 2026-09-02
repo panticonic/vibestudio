@@ -34,6 +34,13 @@ const WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION = {
 const PersistedPanelOptionsSchema = z
   .object({
     ref: z.string().nullable().optional(),
+    artifact: z
+      .object({
+        buildKey: z.string().regex(/^[0-9a-f]{64}$/u),
+        executionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+      })
+      .strict()
+      .optional(),
     placement: z
       .object({
         disposition: z.enum(["side", "side-if-room", "replace", "split-below"]).optional(),

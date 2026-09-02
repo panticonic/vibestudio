@@ -4091,6 +4091,7 @@ async function main() {
                 prepared = await workerdManager.startWorker({
                   source,
                   ref,
+                  ...(spec.execution.artifact ? { artifact: spec.execution.artifact } : {}),
                   key,
                   contextId,
                   stateArgs: spec.stateArgs,
@@ -4100,21 +4101,33 @@ async function main() {
               } else if (spec.kind === "app") {
                 prepared = await resolveBuildExecution(source, ref);
               } else if (spec.kind === "panel") {
-                if (existingBuildKey) {
-                  const build = buildSystem.getBuildByKey(existingBuildKey);
+                const selectedBuildKey = spec.execution.artifact?.buildKey ?? existingBuildKey;
+                if (selectedBuildKey) {
+                  const build = spec.execution.artifact
+                    ? buildSystem.getBuildByExecution(
+                        selectedBuildKey,
+                        spec.execution.artifact.executionDigest
+                      )
+                    : buildSystem.getBuildByKey(selectedBuildKey);
                   if (!build) {
                     throw new Error(
-                      `Activated panel build ${existingBuildKey} for ${source} is unavailable from the immutable build store`
+                      `Activated panel build ${selectedBuildKey} for ${source} is unavailable from the immutable build store`
                     );
                   }
-                  if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
+                  if (
+                    build.metadata.kind !== "panel" ||
+                    build.metadata.sourcePath !== source ||
+                    (spec.execution.artifact &&
+                      (build.metadata.details.kind !== "test" ||
+                        build.metadata.details.runtime !== "browser"))
+                  ) {
                     throw new Error(
-                      `Activated panel build ${existingBuildKey} does not belong to panel source ${source}`
+                      `Activated panel build ${selectedBuildKey} does not belong to panel source ${source}`
                     );
                   }
                   prepared = {
                     effectiveVersion: build.metadata.ev,
-                    buildKey: existingBuildKey,
+                    buildKey: selectedBuildKey,
                     executionDigest: build.metadata.execution?.executionDigest,
                     authority: build.metadata.authority,
                   };

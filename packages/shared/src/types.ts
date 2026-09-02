@@ -28,6 +28,8 @@ export type { PanelPlacementHint };
  * optional in the type.
  */
 export interface PackageManifest {
+  /** Explicit test suites. Runtime selection is reviewed source, never a call-time fallback. */
+  tests?: WorkspaceTestSuiteDeclaration[];
   /** Build V2-owned external dependency resolution policy for this unit's closure. */
   dependencyResolution?: {
     /** npm-compatible dependency overrides applied only while building consumers of this unit. */
@@ -133,6 +135,17 @@ export interface PackageManifest {
   // Note: workspace services and HTTP routes are no longer declared per worker.
   // They live in `workspace/meta/vibestudio.yml` under `services:` and `routes:`,
   // joined against `singletonObjects:` for DO singleton keys.
+}
+
+export type WorkspaceTestRuntime = "browser" | "workerd" | "native";
+
+export interface WorkspaceTestSuiteDeclaration {
+  /** Unit-local stable suite name. */
+  name: string;
+  /** Production-matched execution realm. */
+  runtime: WorkspaceTestRuntime;
+  /** Unit-relative glob patterns. Files must be owned by exactly one suite. */
+  include: string[];
 }
 
 export type ThemeMode = "light" | "dark" | "system";

@@ -22,6 +22,13 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("delete globalThis.__vibestudioConnectionId");
   });
 
+  it("waits for a headless fallback transport before starting the panel bundle", () => {
+    const ready = PANEL_BOOTSTRAP_SCRIPT.indexOf("__vibestudioShell.ready()");
+    const bundle = PANEL_BOOTSTRAP_SCRIPT.indexOf('document.createElement("script")', ready);
+    expect(ready).toBeGreaterThan(-1);
+    expect(bundle).toBeGreaterThan(ready);
+  });
+
   it("keys persisted panel init by document URL instead of one shared session key", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain(
       'const storageKey = () => "__vibestudioPanelInit:" + location.href;'

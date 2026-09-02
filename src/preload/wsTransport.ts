@@ -28,6 +28,7 @@ type vibestudioTransportGlobals = typeof globalThis & {
 };
 
 export type TransportBridge = {
+  ready?: () => Promise<void>;
   send: (envelope: RpcEnvelope, signal?: AbortSignal) => Promise<void>;
   onMessage: (handler: EnvelopeHandler) => () => void;
   onRecovery: (kind: RecoveryKind, handler: () => void | Promise<void>) => () => void;
@@ -161,6 +162,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
   base.connect();
 
   return {
+    ready: () => base.connectAndWait(),
     async send(envelope, _signal) {
       const rpcMessage = envelope.message;
       if (

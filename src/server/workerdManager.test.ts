@@ -409,6 +409,40 @@ describe("WorkerdManager", () => {
   // Instance lifecycle
   // -------------------------------------------------------------------------
   describe("startWorker", () => {
+    it("binds an exact sealed workerd test artifact without rebuilding mutable source", async () => {
+      const build = mockWorkerBuild();
+      build.metadata.details = {
+        kind: "test",
+        suite: "unit",
+        runtime: "workerd",
+        selectedFiles: ["model.test.ts"],
+      };
+      const deps = createMockDeps({
+        getBuildByExecution: vi.fn((buildKey, executionDigest) =>
+          buildKey === build.buildKey &&
+          executionDigest === build.metadata.execution?.executionDigest
+            ? build
+            : null
+        ),
+      });
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.startWorker(
+        startArgs({
+          artifact: {
+            buildKey: build.buildKey,
+            executionDigest: build.metadata.execution!.executionDigest,
+          },
+        })
+      );
+
+      expect(deps.getBuildByExecution).toHaveBeenCalledWith(
+        build.buildKey,
+        build.metadata.execution!.executionDigest
+      );
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+    });
+
     it("mints a bearer token for the worker entity callerId", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);

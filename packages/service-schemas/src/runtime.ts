@@ -361,6 +361,14 @@ export const CodeExecutionSchema = z
     surface: z.literal("code"),
     source: z.string().describe("Workspace-relative executable source repo path."),
     ref: BuildRefSchema.optional(),
+    artifact: z
+      .object({
+        buildKey: z.string().regex(/^[0-9a-f]{64}$/u),
+        executionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+      })
+      .strict()
+      .optional()
+      .describe("Exact sealed BuildV2 incarnation selected by a trusted build response."),
   })
   .strict();
 

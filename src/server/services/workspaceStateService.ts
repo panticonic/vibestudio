@@ -59,6 +59,7 @@ export type SlotStateChange =
         contextId: string;
         stateArgs: unknown;
         ref?: string;
+        artifact?: { buildKey: string; executionDigest: string };
       };
     }
   | { kind: "tree" }
@@ -86,6 +87,8 @@ export interface WorkspaceStateServiceDeps {
    * revision and is refreshed by panel id on every connected client.
    */
   onPresentationChanged?: (panelIds: string[]) => void;
+  /** Refresh the host's synchronous security-attribution projection after Base commits a title. */
+  onEntityTitleChanged?: (entityId: string, title: string | undefined) => void;
   panelAccess: PanelAccessPermissionDeps;
 }
 
@@ -418,6 +421,9 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
                         input.initialEntry.options.ref.length > 0
                           ? { ref: input.initialEntry.options.ref }
                           : {}),
+                        ...(input.initialEntry.options?.artifact
+                          ? { artifact: input.initialEntry.options.artifact }
+                          : {}),
                       },
                     }
                   : {}),
@@ -431,6 +437,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
             input.initialEntry.source,
             title ?? null,
           ]);
+          if (title) deps.onEntityTitleChanged?.(input.initialEntry.entityId, title);
         }
       },
       "slot.commitPreparedNavigation": async (_ctx, [input]) => {
@@ -459,6 +466,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
             detail.currentHistory.source,
             title ?? null,
           ]);
+          if (title) deps.onEntityTitleChanged?.(detail.entity.id, title);
         }
         return result;
       },
@@ -544,6 +552,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           ? observeTitle(input.id, effectiveTitle)
           : !titleCache.has(input.id) && observeTitle(input.id, effectiveTitle);
         if (titleChanged) deps.onPresentationChanged?.([input.id]);
+        if (effectiveTitle) deps.onEntityTitleChanged?.(entityId, effectiveTitle);
         return entityId;
       },
       "panel.updateTitle": async (_ctx, [slotId, title, options]) => {
@@ -567,6 +576,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           ? observeTitle(slotId, normalizedTitle)
           : titleCache.delete(slotId);
         if (titleChanged) deps.onPresentationChanged?.([slotId]);
+        deps.onEntityTitleChanged?.(entityId, normalizedTitle ?? undefined);
         return entityId;
       },
       "panel.incrementAccess": async (_ctx, [slotId]) => {

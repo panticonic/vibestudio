@@ -444,3 +444,35 @@ describe("discoverPackageGraph app units", () => {
     }
   });
 });
+
+describe("declared test suites", () => {
+  it("records invalid and ambiguous suite declarations as build-blocking manifest errors", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-test-suite-graph-"));
+    try {
+      const panel = path.join(root, "panels", "fixture");
+      fs.mkdirSync(panel, { recursive: true });
+      fs.writeFileSync(
+        path.join(panel, "package.json"),
+        JSON.stringify({
+          name: "@workspace-panels/fixture",
+          vibestudio: {
+            tests: [
+              { name: "unit", runtime: "browser", include: ["**/*.test.ts"] },
+              { name: "unit", runtime: "node", include: ["**/*.test.ts"] },
+            ],
+          },
+        })
+      );
+      const errors = discoverPackageGraph(root).get("@workspace-panels/fixture").dependencyErrors;
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("duplicate suite name"),
+          expect.stringContaining("runtime must be browser, workerd, or native"),
+          expect.stringContaining("owned by both"),
+        ])
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
