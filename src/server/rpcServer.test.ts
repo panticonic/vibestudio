@@ -2967,7 +2967,12 @@ describe("RpcServer relay behavior", () => {
         undefined,
         "wrong-eval-session-nonce"
       )
-    ).toThrow(/not active/);
+    ).toThrow(
+      expect.objectContaining({
+        code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
+        message: expect.stringMatching(/not active/),
+      })
+    );
   });
 
   it("delegates a test policy only for the exact active invocation without mutating receiver context", () => {
@@ -3010,7 +3015,12 @@ describe("RpcServer relay behavior", () => {
     expect(caller.testPolicy).toEqual(policy);
 
     release();
-    expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
+    expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(
+      expect.objectContaining({
+        code: "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE",
+        message: expect.stringMatching(/not active/),
+      })
+    );
   });
 
   it("retains the verified initiator only for the exact active receiver invocation", () => {

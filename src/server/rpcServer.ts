@@ -452,6 +452,9 @@ type ReconnectOutcome =
 type RelayErrorCode =
   | "EACQUIRE"
   | "EACCES"
+  | "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE"
+  | "EVALUATED_EXECUTION_SESSION_STALE"
+  | "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE"
   | "RECONNECT_GRACE_EXPIRED"
   | "SERVER_SHUTTING_DOWN"
   | "DO_CONTEXT_MISMATCH"
@@ -986,7 +989,10 @@ export class RpcServer {
       ? (this.deps.executionSessionForRuntime?.(callerId, executionSessionNonce) ?? null)
       : null;
     if (executionSessionNonce && !executionSession) {
-      throw createRelayError("Evaluated execution session is not active", "EACCES");
+      throw createRelayError(
+        "Evaluated execution session is not active",
+        "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE"
+      );
     }
     if (
       executionSession &&
@@ -997,7 +1003,7 @@ export class RpcServer {
     ) {
       throw createRelayError(
         "Evaluated execution admission no longer matches live state",
-        "EACCES"
+        "EVALUATED_EXECUTION_SESSION_STALE"
       );
     }
     const code = executionSession
@@ -1052,7 +1058,10 @@ export class RpcServer {
     }
     const active = this.activeAuthorityParents.get(authorityParentNonce);
     if (!active) {
-      throw createRelayError("Invocation authority parent is not active", "EACCES");
+      throw createRelayError(
+        "Invocation authority parent is not active",
+        "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE"
+      );
     }
     if (active.receiverRuntimeId !== callerRuntimeId) {
       throw createRelayError("Invocation authority parent belongs to another runtime", "EACCES");

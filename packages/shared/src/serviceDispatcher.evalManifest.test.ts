@@ -113,6 +113,29 @@ function setup(input: {
 }
 
 describe("evaluated-run authority ceiling", () => {
+  it("returns typed writable-session recovery for a read-only eval", async () => {
+    const { dispatcher, context, handler } = setup({
+      mode: "adaptive",
+      approvals: "prompt",
+      granted: true,
+    });
+    context.readOnly = true;
+
+    await expect(dispatcher.dispatch(context, "manifestTest", "write", [])).rejects.toMatchObject({
+      code: "EVAL_READ_ONLY",
+      errorData: {
+        authorityFailure: {
+          reasonCode: "eval-read-only",
+          remediation: {
+            kind: "use-writable-session",
+            message: expect.stringContaining('authority.effects set to "read-write"'),
+          },
+        },
+      },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("denies strict missing coverage before a broad live grant can widen the run", async () => {
     const { dispatcher, context, handler } = setup({
       mode: "strict",

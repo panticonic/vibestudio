@@ -27,7 +27,10 @@ import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
   evalLifecycleFailureCodes,
 } from "@vibestudio/service-schemas/eval";
-import { evalEngineMethods } from "@vibestudio/service-schemas/evalEngine";
+import {
+  EVAL_ENGINE_HOST_CONTRACT_VERSION,
+  evalEngineMethods,
+} from "@vibestudio/service-schemas/evalEngine";
 import { evalEventIngressMethods } from "@vibestudio/service-schemas/evalEventIngress";
 import { evalExecutionRootsMethods } from "@vibestudio/service-schemas/evalExecutionRoots";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
@@ -201,11 +204,11 @@ interface SandboxResult {
 
 interface ScopeManagerLike {
   readonly current: Record<string, unknown>;
-  readonly api: unknown;
-  hydrate(): Promise<ScopeRecovery>;
-  persist(): Promise<void>;
+  apiFrom(resolvePersistence: () => unknown): unknown;
+  hydrate(persistence: unknown): Promise<ScopeRecovery>;
+  persist(persistence: unknown): Promise<void>;
   enterEval(): void;
-  exitEval(): Promise<void>;
+  exitEval(persistence: unknown): Promise<void>;
 }
 
 interface ScopeRecovery {
@@ -234,11 +237,12 @@ interface ScopeBlobBackendLike {
 }
 
 interface EvalEngine {
+  EVAL_ENGINE_HOST_CONTRACT_VERSION: number;
   executeSandbox(code: string, options: Record<string, unknown>): Promise<SandboxResult>;
   ScopeManager: new (opts: {
     channelId: string;
     panelId: string;
-    persistence: unknown;
+    persistence?: unknown;
   }) => ScopeManagerLike;
   SqlScopePersistence: new (sql: unknown, blobs: ScopeBlobBackendLike) => unknown;
 }
@@ -295,6 +299,14 @@ type ExternalOpenClient = TypedServiceClient<typeof externalOpenMethods>;
 /** One run's immutable outbound authority/provenance boundary. */
 interface EvalExecutionContext {
   readonly rpc: RpcClient;
+  /** Owner-infrastructure RPC carries only this run's durable admission. It
+   * deliberately excludes guest causality, read-only attenuation, and abort
+   * state so cached scope persistence cannot retain one cell's effect context. */
+  readonly callInfrastructure: <T = unknown>(
+    targetId: string,
+    method: string,
+    args: unknown[]
+  ) => Promise<T>;
   readonly signal?: AbortSignal;
   readonly contextId: string;
   readonly runId?: string;
@@ -801,8 +813,20 @@ export class EvalDO extends DurableObjectBase {
     });
     const callMainService = (service: string, method: string, args: unknown[]) =>
       rpc.call("main", `${service}.${method}`, args);
+    const callInfrastructure = <T = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[]
+    ): Promise<T> => {
+      const options: RpcCallOptions = {};
+      if (input.executionSessionNonce) {
+        bindExecutionSession(options, input.executionSessionNonce);
+      }
+      return base.call<T>(targetId, method, args, options);
+    };
     return Object.freeze({
       rpc,
+      callInfrastructure,
       signal,
       contextId: input.contextId ?? "",
       ...(input.runId ? { runId: input.runId } : {}),
@@ -1462,7 +1486,7 @@ export class EvalDO extends DurableObjectBase {
           // ordinary abort signal. They can therefore mutate `scope` after
           // runLocked's exitEval() has persisted its final snapshot. Persist
           // once more after cleanup so those terminal writes are durable.
-          await this.scopeManager?.persist();
+          await this.persistRunScope(runId);
         } catch (error) {
           cancellationCleanupError = error;
           console.error(`[EvalDO] cancellation cleanup failed for timed-out run ${runId}`, error);
@@ -1504,7 +1528,7 @@ export class EvalDO extends DurableObjectBase {
         }
         try {
           await this.executeRunCancelHandlers(runId);
-          await this.scopeManager?.persist();
+          await this.persistRunScope(runId);
         } catch (error) {
           cancellationCleanupError = error;
           console.error(`[EvalDO] cancellation cleanup failed for timed-out run ${runId}`, error);
@@ -1520,7 +1544,12 @@ export class EvalDO extends DurableObjectBase {
         currentStatus !== "cancelled" &&
         isAbortDerivedError(err, controller.signal.reason);
       const cancelled = currentStatus === "cancelling" || currentStatus === "cancelled";
-      const approvalRouteLost = errorCodeInChain(err) === "EAPPROVALROUTELOST";
+      const errorCode = errorCodeInChain(err);
+      const approvalRouteLost = errorCode === "EAPPROVALROUTELOST";
+      const executionAdmissionLost =
+        errorCode === "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE" ||
+        errorCode === "EVALUATED_EXECUTION_SESSION_STALE" ||
+        errorCode === "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE";
       if (approvalRouteLost) {
         console.warn(`[EvalDO] approval route lost for run ${runId}`);
       } else if (!deadlineExceeded && !cancelled) {
@@ -1556,7 +1585,26 @@ export class EvalDO extends DurableObjectBase {
                 ? err.message
                 : String(err),
             failureKind: "infrastructure",
-            failureCode: approvalRouteLost ? "approval-route-lost" : "eval_host_failed",
+            failureCode: approvalRouteLost
+              ? "approval-route-lost"
+              : executionAdmissionLost
+                ? evalLifecycleFailureCodes.executionAdmissionLost
+                : "eval_host_failed",
+            ...(executionAdmissionLost
+              ? {
+                  errorData: {
+                    retry: {
+                      policy: "reobserve",
+                      commandIdPolicy: "use-new-after-reobserve",
+                    },
+                    recovery: {
+                      action: "reobserve",
+                      instruction:
+                        "Inspect the effects and current state reached by this eval, then issue a new eval for only the unfinished work; the runtime creates a fresh execution admission automatically.",
+                    },
+                  },
+                }
+              : {}),
             kernel: kernel ?? this.kernelStatusForRun(),
           };
     } finally {
@@ -1901,7 +1949,9 @@ export class EvalDO extends DurableObjectBase {
     }
     const read = this.runChain.then(async () => {
       const execution = this.infrastructureExecution();
-      const manager = await this.ensureScopeManager(await this.ensureEngine(execution));
+      const engine = await this.ensureEngine(execution);
+      const persistence = this.createScopePersistence(engine, execution);
+      const manager = await this.ensureScopeManager(engine, this.scopeGeneration, persistence);
       const source = manager.current[key];
       if (typeof source !== "string") {
         throw new Error(`eval: scope value ${JSON.stringify(key)} is unavailable or is not text`);
@@ -1925,13 +1975,15 @@ export class EvalDO extends DurableObjectBase {
   async deleteScopeValue(key: string): Promise<{ ok: boolean; existed: boolean }> {
     const remove = this.runChain.then(async () => {
       const execution = this.infrastructureExecution();
-      const manager = await this.ensureScopeManager(await this.ensureEngine(execution));
+      const engine = await this.ensureEngine(execution);
+      const persistence = this.createScopePersistence(engine, execution);
+      const manager = await this.ensureScopeManager(engine, this.scopeGeneration, persistence);
       const existed = Object.prototype.hasOwnProperty.call(manager.current, key);
       manager.enterEval();
       try {
         Reflect.deleteProperty(manager.current, key);
       } finally {
-        await manager.exitEval();
+        await manager.exitEval(persistence);
       }
       return { ok: true, existed };
     });
@@ -2361,7 +2413,7 @@ export class EvalDO extends DurableObjectBase {
       // than disappearing behind the cleanup error.
       let persistenceFailure: unknown;
       try {
-        await this.scopeManager?.persist();
+        await this.persistRunScope(runId);
       } catch (error) {
         persistenceFailure = error;
       }
@@ -2602,7 +2654,8 @@ export class EvalDO extends DurableObjectBase {
     const execution = this.createExecutionContext({ ...args, runId }, signal, cleanupPhase);
     const engine = await this.ensureEngine(execution);
     const support = await this.ensureRuntimeSupport(execution);
-    const scopeManager = await this.ensureScopeManager(engine, scopeGeneration);
+    const scopePersistence = this.createScopePersistence(engine, execution);
+    const scopeManager = await this.ensureScopeManager(engine, scopeGeneration, scopePersistence);
 
     // Runtime clients can be retained by module singletons and scope, so they
     // borrow this immutable execution through activeEvalExecution at call time.
@@ -2674,7 +2727,11 @@ export class EvalDO extends DurableObjectBase {
           : {}),
       }),
       scope: scopeManager.current,
-      scopes: hardenBoundary(scopeManager.api),
+      scopes: hardenBoundary(
+        scopeManager.apiFrom(() =>
+          this.createScopePersistence(engine, this.requireActiveEvalExecution(), scopeGeneration)
+        )
+      ),
       db: hardenBoundary(this.dbBinding(scopeGeneration)),
       // `help()` → discovery for an agent driving eval: the importable runtime
       // surface (what `import {…} from "@workspace/runtime"` gives), the eval-only
@@ -2933,7 +2990,7 @@ export class EvalDO extends DurableObjectBase {
           if (!localKeys.has(specifier)) this.moduleMap[specifier] = value;
         }
       }
-      await scopeManager.exitEval();
+      await scopeManager.exitEval(scopePersistence);
     }
   }
 
@@ -3173,6 +3230,16 @@ export class EvalDO extends DurableObjectBase {
     const loaded = await this.loadLibraryModule(engineSource, execution, {
       externals: Object.keys(moduleMap),
     });
+    const contractVersion =
+      loaded && typeof loaded === "object"
+        ? (loaded as Record<string, unknown>)["EVAL_ENGINE_HOST_CONTRACT_VERSION"]
+        : undefined;
+    if (contractVersion !== EVAL_ENGINE_HOST_CONTRACT_VERSION) {
+      throw new Error(
+        `eval: provider ${JSON.stringify(engineSource)} uses host contract ${String(contractVersion)}; ` +
+          `this runtime requires ${EVAL_ENGINE_HOST_CONTRACT_VERSION}`
+      );
+    }
     this.engine = loaded as EvalEngine;
     return this.engine;
   }
@@ -3217,21 +3284,55 @@ export class EvalDO extends DurableObjectBase {
 
   private async ensureScopeManager(
     engine: EvalEngine,
-    generation = this.scopeGeneration
+    generation: number,
+    persistence: unknown
   ): Promise<ScopeManagerLike> {
     if (generation !== this.scopeGeneration) {
       throw new Error("eval execution was invalidated by a scope reset");
     }
     if (this.scopeManager) return this.scopeManager;
-    // Scope persistence is owner infrastructure, not an eval-authored effect.
-    // The cached manager must never retain the causal edge, containment, or
-    // abort signal of whichever run happened to initialize it first.
-    const blobstore = this.infrastructureExecution().blobstore;
+    // The manager owns only notebook state. Every operation receives a fresh,
+    // explicit persistence capability and therefore cannot retain whichever
+    // run or maintenance invocation happened to initialize it.
+    const mgr = new engine.ScopeManager({
+      channelId: this.objectKey, // one scope per EvalDO instance
+      panelId: "eval",
+    });
+    // MUST await hydrate before the manager is used: enterEval/exitEval read &
+    // re-persist `current`, so a run that proceeds before the prior scope loads
+    // would execute with an empty scope and then OVERWRITE the persisted scope on
+    // exit (cold-start data loss). loadCurrent is safe pre-write (ensureSchema
+    // created the table in the persistence ctor) and returns empty on a fresh DO.
+    const recovery = await mgr.hydrate(persistence);
+    if (generation !== this.scopeGeneration) {
+      throw new Error("eval execution was invalidated by a scope reset");
+    }
+    this.scopeRecovery = recovery;
+    this.scopeManager = mgr;
+    return mgr;
+  }
+
+  /**
+   * Create one operation-scoped persistence capability. The reusable manager
+   * receives this object explicitly and never stores it; blob RPC carries only
+   * the owning run's durable execution admission (or the live maintenance
+   * invocation), never guest effect context or an ambient cached parent.
+   */
+  private createScopePersistence(
+    engine: EvalEngine,
+    execution: EvalExecutionContext,
+    generation = this.scopeGeneration
+  ): unknown {
+    const blobstore = createTypedServiceClient(
+      "blobstore",
+      blobstoreMethods,
+      (service, method, args) => execution.callInfrastructure("main", `${service}.${method}`, args)
+    );
     const rawPersistence = new engine.SqlScopePersistence(this.sql, {
       putText: (valueJson: string) => blobstore.putText(valueJson),
       getText: (digest: string) => blobstore.getText(digest),
     });
-    const persistence = new Proxy(rawPersistence as object, {
+    return new Proxy(rawPersistence as object, {
       get: (target, property) => {
         const value = Reflect.get(target, property);
         if (property === "upsert" && typeof value === "function") {
@@ -3245,23 +3346,21 @@ export class EvalDO extends DurableObjectBase {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const mgr = new engine.ScopeManager({
-      channelId: this.objectKey, // one scope per EvalDO instance
-      panelId: "eval",
-      persistence,
-    });
-    // MUST await hydrate before the manager is used: enterEval/exitEval read &
-    // re-persist `current`, so a run that proceeds before the prior scope loads
-    // would execute with an empty scope and then OVERWRITE the persisted scope on
-    // exit (cold-start data loss). loadCurrent is safe pre-write (ensureSchema
-    // created the table in the persistence ctor) and returns empty on a fresh DO.
-    const recovery = await mgr.hydrate();
-    if (generation !== this.scopeGeneration) {
-      throw new Error("eval execution was invalidated by a scope reset");
+  }
+
+  /** Persist cleanup mutations under the exact durable admission of their run. */
+  private async persistRunScope(runId: string): Promise<void> {
+    const manager = this.scopeManager;
+    if (!manager) return;
+    const row = this.sql.exec(`SELECT args FROM runs WHERE run_id = ?`, runId).toArray()[0];
+    if (!row) throw new Error(`eval: cannot persist scope for unknown run ${runId}`);
+    const args = JSON.parse(String(row["args"])) as RunArgs;
+    const execution = this.createExecutionContext({ ...args, runId });
+    const engine = this.engine;
+    if (!engine) {
+      throw new Error(`eval: run ${runId} has scope state without a loaded eval engine`);
     }
-    this.scopeRecovery = recovery;
-    this.scopeManager = mgr;
-    return mgr;
+    await manager.persist(this.createScopePersistence(engine, execution));
   }
 
   /** loadImport over the build service (same on-demand build surface as the in-app eval tool). */

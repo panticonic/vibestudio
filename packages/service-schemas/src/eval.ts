@@ -40,6 +40,8 @@ export const evalLifecycleFailureCodes = {
   runtimeRestarted: "eval_runtime_restarted",
   /** infrastructure: a planned runtime lifecycle transition retired the generation executing this run. */
   runtimeGenerationLost: "runtime_generation_lost",
+  /** infrastructure: the host admission backing an evaluated execution expired or no longer matches. */
+  executionAdmissionLost: "eval_execution_admission_lost",
   /** cancelled: the caller's own opt-in deadline elapsed. */
   deadlineExceeded: "eval_deadline_exceeded",
   /** cancelled: explicit owner/user cancellation. */

@@ -166,6 +166,15 @@ describe("runtime surface schemaRef parity", () => {
         },
       },
     });
+    expect(PANEL_TREE_METHOD_CATALOG.search.description).toContain(
+      "result.hits` (not `result.entries`)"
+    );
+    expect(PANEL_TREE_METHOD_CATALOG.search.examples).toEqual([
+      expect.objectContaining({
+        args: [{ query: "trello", limit: 20 }],
+        note: expect.stringContaining("map `hit.entry`"),
+      }),
+    ]);
     expect(PANEL_TREE_METHOD_CATALOG.navigateHistory.signature).toContain(
       "navigateHistory(id: string"
     );

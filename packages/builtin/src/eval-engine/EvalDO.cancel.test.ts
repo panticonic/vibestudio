@@ -21,6 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import type { RpcCallOptions } from "@vibestudio/rpc";
 import { executionSessionNonceFor } from "@vibestudio/rpc/internal";
+import { EVAL_ENGINE_HOST_CONTRACT_VERSION } from "@vibestudio/service-schemas/evalEngine";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,
@@ -144,6 +145,31 @@ function redeliveryState(sql: {
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("rejects an incompatible workspace eval engine before executing a cell", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_ENGINE_SOURCE"] =
+      "@workspace/eval";
+    const ensureEngine = priv<(execution: unknown) => Promise<unknown>>(instance, "ensureEngine");
+
+    setPriv(instance, "loadLibraryModule", vi.fn(async () => ({})));
+    await expect(ensureEngine.call(instance, {})).rejects.toThrow(
+      /uses host contract undefined; this runtime requires 1/
+    );
+
+    setPriv(
+      instance,
+      "loadLibraryModule",
+      vi.fn(async () => ({ EVAL_ENGINE_HOST_CONTRACT_VERSION: 2 }))
+    );
+    await expect(ensureEngine.call(instance, {})).rejects.toThrow(
+      /uses host contract 2; this runtime requires 1/
+    );
+
+    const compatible = { EVAL_ENGINE_HOST_CONTRACT_VERSION };
+    setPriv(instance, "loadLibraryModule", vi.fn(async () => compatible));
+    await expect(ensureEngine.call(instance, {})).resolves.toBe(compatible);
+  });
+
   it("injects resident delivery registration from the exact EvalDO activation", async () => {
     const { instance } = await createTestDO(EvalDO);
     const activeExecution = priv<{
@@ -798,10 +824,12 @@ describe("EvalDO cancellation + forced recovery", () => {
     const enterEval = vi.fn();
     const exitEval = vi.fn(() => Promise.resolve());
     const persist = vi.fn(() => Promise.resolve());
-    setPriv(instance, "ensureEngine", () => Promise.resolve({}));
+    setPriv(instance, "ensureEngine", () =>
+      Promise.resolve({ SqlScopePersistence: class SqlScopePersistence {} })
+    );
     setPriv(instance, "scopeManager", {
       current,
-      api: {},
+      apiFrom: () => ({}),
       hydrate: () => Promise.resolve(),
       persist,
       enterEval,
@@ -1630,7 +1658,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const persisted: Array<Record<string, unknown>> = [];
     setPriv(instance, "scopeManager", {
       current: scope,
-      api: {},
+      apiFrom: () => ({}),
       hydrate: () => Promise.resolve(),
       persist: async () => {
         persisted.push(structuredClone(scope));
@@ -1638,6 +1666,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       enterEval: () => undefined,
       exitEval: () => Promise.resolve(),
     });
+    setPriv(instance, "engine", { SqlScopePersistence: class SqlScopePersistence {} });
     priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
       "run-cleanup-rejects",
       new Set([
@@ -1674,7 +1703,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const persistedSnapshots: Array<Record<string, unknown>> = [];
     setPriv(instance, "scopeManager", {
       current: scope,
-      api: {},
+      apiFrom: () => ({}),
       hydrate: () => Promise.resolve(),
       persist: async () => {
         persistedSnapshots.push(structuredClone(scope));
@@ -1682,6 +1711,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       enterEval: () => undefined,
       exitEval: () => Promise.resolve(),
     });
+    setPriv(instance, "engine", { SqlScopePersistence: class SqlScopePersistence {} });
 
     const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
       instance,
@@ -2079,7 +2109,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
     const fakeScope = {
       current: {},
-      api: {},
+      apiFrom: () => ({}),
       enterEval: () => {},
       exitEval: () => Promise.resolve(),
     };
@@ -2098,6 +2128,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     const runSignals = new Map<string, AbortSignal | undefined>();
     setPriv(instance, "ensureEngine", () =>
       Promise.resolve({
+        SqlScopePersistence: class SqlScopePersistence {},
         executeSandbox: async (
           code: string,
           options: { bindings: Record<string, unknown>; signal?: AbortSignal }
@@ -2189,14 +2220,18 @@ describe("EvalDO cancellation + forced recovery", () => {
     }
   });
 
-  it("keeps cached scope persistence outside every run execution context", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const scopeWrites: Array<RpcCallOptions | undefined> = [];
+  it("borrows the current admission for cached scope persistence without guest effect context", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const scopeOperations: Array<{ method: string; options: RpcCallOptions | undefined }> = [];
     const fakeRpc = {
       selfId: "do:test:EvalDO:test-key",
       call: vi.fn((_target: string, method: string, _args: unknown[], options?: RpcCallOptions) => {
+        if (method === "blobstore.getText") {
+          scopeOperations.push({ method, options });
+          return Promise.resolve("{}");
+        }
         if (method === "blobstore.putText") {
-          scopeWrites.push(options);
+          scopeOperations.push({ method, options });
           return Promise.resolve({ digest: "a".repeat(64), size: 2 });
         }
         return Promise.resolve(null);
@@ -2243,8 +2278,13 @@ describe("EvalDO cancellation + forced recovery", () => {
       | { putText(value: string): Promise<unknown>; getText(digest: string): Promise<unknown> }
       | undefined;
     let managerConstructions = 0;
+    let retainedScopes: { save(): Promise<void> } | undefined;
     const engine = {
       SqlScopePersistence: class {
+        readonly backend: {
+          putText(value: string): Promise<unknown>;
+          getText(digest: string): Promise<unknown>;
+        };
         constructor(
           _sql: unknown,
           backend: {
@@ -2252,25 +2292,40 @@ describe("EvalDO cancellation + forced recovery", () => {
             getText(digest: string): Promise<unknown>;
           }
         ) {
+          this.backend = backend;
           persistenceBackend = backend;
+        }
+        async putBlob(value: string): Promise<void> {
+          await this.backend.putText(value);
         }
       },
       ScopeManager: class {
         readonly current: Record<string, unknown> = {};
-        readonly api = {};
+        apiFrom(resolvePersistence: () => { putBlob(value: string): Promise<void> }): {
+          save(): Promise<void>;
+        } {
+          return { save: () => resolvePersistence().putBlob("{}") };
+        }
         constructor() {
           managerConstructions += 1;
         }
-        hydrate(): Promise<void> {
-          return Promise.resolve();
+        async hydrate(): Promise<void> {
+          await persistenceBackend!.getText("a".repeat(64));
         }
         enterEval(): void {}
         async exitEval(): Promise<void> {
           await persistenceBackend!.putText("{}");
         }
+        async persist(persistence: { putBlob(value: string): Promise<void> }): Promise<void> {
+          await persistence.putBlob("{}");
+        }
       },
-      executeSandbox: () =>
-        Promise.resolve({ success: true, consoleOutput: "", returnValue: undefined }),
+      executeSandbox: async (_code: string, options: { bindings: Record<string, unknown> }) => {
+        const scopes = options.bindings["scopes"] as { save(): Promise<void> };
+        if (retainedScopes) await retainedScopes.save();
+        else retainedScopes = scopes;
+        return { success: true, consoleOutput: "", returnValue: undefined };
+      },
     };
     setPriv(instance, "ensureEngine", () => Promise.resolve(engine));
     const runLocked = priv<RunLockedFn>(instance, "runLocked").bind(instance);
@@ -2280,6 +2335,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         code: "A",
         contextId: "ctx",
         gatewayToken: "gateway-test",
+        executionSessionNonce: "session-scope-a-123456",
         causalParent: {
           kind: "trajectory-invocation",
           logId: "trajectory:a",
@@ -2295,14 +2351,48 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     const controllerB = new AbortController();
     await runLocked(
-      { code: "B", contextId: "ctx", gatewayToken: "gateway-test" },
+      {
+        code: "B",
+        contextId: "ctx",
+        gatewayToken: "gateway-test",
+        executionSessionNonce: "session-scope-b-123456",
+      },
       controllerB.signal,
       "run-b"
     );
 
+    seedPendingRun(sql, "run-cleanup-persist", {
+      executionSessionNonce: "session-scope-cleanup-123456",
+      causalParent: {
+        kind: "trajectory-invocation",
+        logId: "trajectory:cleanup",
+        head: "main",
+        invocationId: "invocation:cleanup",
+      },
+      readOnly: true,
+    });
+    setPriv(instance, "engine", engine);
+    await priv<(runId: string) => Promise<void>>(instance, "persistRunScope").call(
+      instance,
+      "run-cleanup-persist"
+    );
+
     expect(managerConstructions).toBe(1);
-    expect(scopeWrites).toHaveLength(2);
-    for (const options of scopeWrites) {
+    expect(scopeOperations.map(({ method }) => method)).toEqual([
+      "blobstore.getText",
+      "blobstore.putText",
+      "blobstore.putText",
+      "blobstore.putText",
+      "blobstore.putText",
+    ]);
+    expect(scopeOperations.map(({ options }) => executionSessionNonceFor(options))).toEqual([
+      "session-scope-a-123456",
+      "session-scope-a-123456",
+      "session-scope-b-123456",
+      "session-scope-b-123456",
+      "session-scope-cleanup-123456",
+    ]);
+    for (const { options } of scopeOperations) {
       expect(options?.causalParent).toBeUndefined();
       expect(options?.readOnly).toBeUndefined();
       expect(options?.signal).toBeUndefined();
@@ -2594,12 +2684,13 @@ describe("EvalDO cancellation + forced recovery", () => {
     // Stub the heavy engine path: capture the bindings, then invoke the eval's rpc binding ourselves.
     const fakeScope = {
       current: {},
-      api: {},
+      apiFrom: () => ({}),
       enterEval: () => {},
       exitEval: () => Promise.resolve(),
     };
     setPriv(instance, "ensureEngine", () =>
       Promise.resolve({
+        SqlScopePersistence: class SqlScopePersistence {},
         executeSandbox: async (
           _code: string,
           opts: {
@@ -3004,6 +3095,35 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
     expect(errorLog).not.toHaveBeenCalled();
     warn.mockRestore();
+    errorLog.mockRestore();
+  });
+
+  it("surfaces execution-admission loss as recoverable without blindly replaying the cell", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { instance, sql } = await createTestDO(EvalDO);
+    setPriv(instance, "runLocked", () =>
+      Promise.reject(
+        Object.assign(new Error("Evaluated execution session is not active"), {
+          code: "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE",
+        })
+      )
+    );
+    seedPendingRun(sql, "admission-lost", { code: "await performEffect()" });
+
+    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "admission-lost"
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "infrastructure",
+      failureCode: "eval_execution_admission_lost",
+      errorData: {
+        retry: { policy: "reobserve", commandIdPolicy: "use-new-after-reobserve" },
+        recovery: { action: "reobserve", instruction: expect.stringContaining("unfinished work") },
+      },
+    });
     errorLog.mockRestore();
   });
 

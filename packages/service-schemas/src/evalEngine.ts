@@ -5,6 +5,14 @@ import { executionArtifactRefSchema } from "./build.js";
 import { evalEventsPageSchema, evalRunResultSchema, evalRunStatusSchema } from "./eval.js";
 import { vcsStateNodeRefSchema } from "./vcs.js";
 
+/**
+ * Exact ABI between the builtin EvalDO host and the dynamically loaded
+ * workspace eval engine. Bump this whenever either side's structural contract
+ * changes; mismatched workspace/host checkouts must fail before executing a
+ * cell instead of failing later through an absent or differently-shaped API.
+ */
+export const EVAL_ENGINE_HOST_CONTRACT_VERSION = 1 as const;
+
 const hostOnly: ServiceAuthorityPolicy = { principals: ["host"] };
 const managed = (sensitivity: "read" | "write" | "destructive") => ({
   capability: "runtime.code-execution.manage",

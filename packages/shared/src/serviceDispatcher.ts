@@ -1510,14 +1510,21 @@ export class ServiceDispatcher {
           preflightPrompt
         );
       }
-      throw new ServiceError(
-        service,
-        method,
+      const reason =
         `Blocked in read-only mode: '${service}.${method}' is not declared read-only ` +
-          `(sensitivity ${methodDef?.access?.sensitivity ?? "unknown"}). A read-only caller may ` +
-          `only invoke methods declaring access.sensitivity === "read".`,
-        "EVAL_READ_ONLY"
-      );
+        `(sensitivity ${methodDef?.access?.sensitivity ?? "unknown"}). A read-only caller may ` +
+        `only invoke methods declaring access.sensitivity === "read".`;
+      throw new ServiceError(service, method, reason, "EVAL_READ_ONLY", undefined, "service", {
+        authorityFailure: {
+          reasonCode: "eval-read-only",
+          reason,
+          remediation: {
+            kind: "use-writable-session",
+            message:
+              'Issue a new eval with authority.effects set to "read-write"; the current read-only eval cannot widen itself.',
+          },
+        },
+      });
     }
     if (preflight) {
       return preflightResult(preflightLeaves, severityForLeaves(preflightLeaves), preflightPrompt);

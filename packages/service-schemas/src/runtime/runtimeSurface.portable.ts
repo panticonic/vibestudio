@@ -606,7 +606,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
   search: {
     signature: "search(input: PanelTreeSearchInput): Promise<PanelRuntimeTreeSearchPage>",
     description:
-      "Return a bounded page whose hits contain entry.node and entry.handle plus hydrated ancestor entries.",
+      "Return a bounded search page. Read `result.hits` (not `result.entries`); each hit contains `entry.node`, `entry.handle`, and hydrated ancestor entries.",
     argumentNames: ["input"],
     argsSchema: {
       type: "array",
@@ -647,6 +647,12 @@ export const PANEL_TREE_METHOD_CATALOG = {
       required: ["revision", "hits", "nextCursor"],
       additionalProperties: false,
     },
+    examples: [
+      {
+        args: [{ query: "trello", limit: 20 }],
+        note: "Destructure `{ hits }` from the result and map `hit.entry`; ordinary tree pages use `entries`, search pages use `hits`.",
+      },
+    ],
   },
   parent: {
     signature: "parent(id: string): PanelHandle | null",
