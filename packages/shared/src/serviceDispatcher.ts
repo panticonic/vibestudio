@@ -38,7 +38,9 @@ import type {
   ApprovalOperationDescriptor,
   ApprovalTargetIdentity,
   DiffReviewEntry,
+  OperationSubstance,
 } from "./approvals.js";
+import { operationSubstanceForAuthority } from "./approvals.js";
 import type {
   AcquisitionInfo,
   AuthorityPreflightLeaf,
@@ -694,6 +696,24 @@ interface AuthorityAssessmentBaseline {
   evalContextId?: string;
 }
 
+interface AuthorityAcquisitionRequest {
+  snapshot: InvocationSnapshot;
+  snapshotDigest: string;
+  tier: "gated" | "critical";
+  caller: VerifiedCaller;
+  renderedAction: string;
+  resource: ResourceScope;
+  presentation?: AuthorityChallengePresentation;
+  substance?: OperationSubstance;
+  target?: ApprovalTargetIdentity;
+  attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
+}
+
+interface CollectedAuthorityAcquisition {
+  input: AuthorityAcquisitionRequest;
+  context: AuthorizationContext;
+}
+
 /**
  * Service dispatcher — all services registered via registerService().
  */
@@ -703,27 +723,19 @@ export class ServiceDispatcher {
   private readonly methodTiers = new Map<string, MethodTierPolicy>();
   private initialized = false;
   private authorityAcquirer?: {
-    request(input: {
-      snapshot: InvocationSnapshot;
-      snapshotDigest: string;
-      tier: "gated" | "critical";
-      caller: VerifiedCaller;
-      renderedAction: string;
-      resource: ResourceScope;
-      presentation?: AuthorityChallengePresentation;
-      attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
-    }): AcquisitionInfo;
+    request(input: AuthorityAcquisitionRequest): AcquisitionInfo;
+    requestMany?(inputs: readonly AuthorityAcquisitionRequest[]): AcquisitionInfo;
+    canAcquireMany?(inputs: readonly AuthorityAcquisitionRequest[]): boolean;
     acquire(
-      input: {
-        snapshot: InvocationSnapshot;
-        snapshotDigest: string;
-        tier: "gated" | "critical";
-        caller: VerifiedCaller;
-        renderedAction: string;
-        resource: ResourceScope;
-        presentation?: AuthorityChallengePresentation;
-        attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
-      },
+      input: AuthorityAcquisitionRequest,
+      signal?: AbortSignal
+    ): Promise<{
+      state: "decided" | "closed";
+      decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
+      info?: AcquisitionInfo;
+    }>;
+    acquireMany?(
+      inputs: readonly AuthorityAcquisitionRequest[],
       signal?: AbortSignal
     ): Promise<{
       state: "decided" | "closed";
@@ -1188,10 +1200,115 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[],
     preflight: boolean,
-    baseline?: AuthorityAssessmentBaseline
+    baseline?: AuthorityAssessmentBaseline,
+    acquisitionCollector?: CollectedAuthorityAcquisition[]
   ): Promise<void | AuthorityPreflightResult> {
     const assessmentBaseline = baseline ?? captureAuthorityAssessmentBaseline(ctx);
     if (baseline) restoreAuthorityAssessmentBaseline(ctx, baseline);
+    if (
+      !preflight &&
+      !baseline &&
+      this.authorityAcquirer &&
+      (this.authorityAcquirer.acquireMany || this.authorityAcquirer.requestMany)
+    ) {
+      const collected: CollectedAuthorityAcquisition[] = [];
+      const previewCtx: ServiceContext = {
+        ...ctx,
+        caller: assessmentBaseline.caller,
+        ...(assessmentBaseline.authorizingCaller
+          ? { authorizingCaller: assessmentBaseline.authorizingCaller }
+          : {}),
+        ...(assessmentBaseline.authorization
+          ? { authorization: assessmentBaseline.authorization }
+          : {}),
+        ...(assessmentBaseline.transportCaller
+          ? { transportCaller: assessmentBaseline.transportCaller }
+          : {}),
+        ...(assessmentBaseline.authorityDecisions
+          ? { authorityDecisions: new Map(assessmentBaseline.authorityDecisions) }
+          : {}),
+      };
+      const preview = (await this.assessAuthority(
+        previewCtx,
+        service,
+        method,
+        args,
+        true,
+        undefined,
+        collected
+      )) as AuthorityPreflightResult;
+      if (collected.length > 1 && !preview.leaves.some((leaf) => leaf.status === "denied")) {
+        const acquisitionInputs = collected.map(({ input }) => input);
+        const canAcquireMany = this.authorityAcquirer.canAcquireMany?.(acquisitionInputs) ?? true;
+        if (!canAcquireMany) {
+          // The route can enforce every leaf, but cannot bind one signed
+          // decision to the complete set. Preserve independent acquisition.
+        } else {
+          for (const { input, context } of collected) {
+            this.observeAuthority(context, "authority-requested", {
+              capability: input.snapshot.capability,
+              resourceKey: input.snapshot.resourceKey,
+              tier: input.tier,
+              snapshotDigest: input.snapshotDigest,
+            });
+            this.authorityAcquirer.invalidate(
+              input.snapshotDigest,
+              input.caller.runtime.id,
+              context.authorizingOrigin.principal
+            );
+          }
+          const waitForDecision =
+            ctx.authorityAcquisition === "wait" ||
+            collected.some(({ context }) => context.authorizingOrigin.kind !== "code");
+          if (
+            (waitForDecision && !this.authorityAcquirer.acquireMany) ||
+            (!waitForDecision && !this.authorityAcquirer.requestMany)
+          ) {
+            // This transport has not implemented atomic composed acquisition.
+            // Fall through to its existing single-leaf path without weakening a
+            // requirement or pretending the leaves were reviewed together.
+          } else {
+            const outcome = waitForDecision
+              ? await this.authorityAcquirer.acquireMany!(acquisitionInputs, ctx.signal)
+              : null;
+            const info =
+              outcome?.info ??
+              (outcome ? undefined : this.authorityAcquirer.requestMany!(acquisitionInputs));
+            if (outcome || info?.preauthorized) {
+              for (const { input, context } of collected) {
+                this.observeAuthority(context, "authority-decided", {
+                  capability: input.snapshot.capability,
+                  resourceKey: input.snapshot.resourceKey,
+                  tier: input.tier,
+                  decision: outcome?.decision ?? "preauthorized",
+                  acquisitionId: info?.acquisitionId,
+                  snapshotDigest: input.snapshotDigest,
+                });
+              }
+            }
+            if (outcome?.state === "decided" || info?.preauthorized) {
+              return this.assessAuthority(ctx, service, method, args, false, assessmentBaseline);
+            }
+            const first = collected[0]!.input;
+            const failure = preview.leaves.find(
+              (leaf) =>
+                leaf.capability === first.snapshot.capability &&
+                leaf.resourceKey === first.snapshot.resourceKey
+            )?.failure;
+            throw new ServiceAccessError(
+              service,
+              method,
+              "This operation is waiting for approval",
+              "EACQUIRE",
+              {
+                ...(info ? { acquisition: info } : {}),
+                ...(failure ? { authorityFailure: failure } : {}),
+              }
+            );
+          }
+        }
+      }
+    }
     delete ctx.preparedAuthority;
     if (ctx.evalInvocation && !ctx.transportCaller) ctx.transportCaller = ctx.caller;
     const serviceDef = this.definitions.get(service);
@@ -1437,6 +1554,7 @@ export class ServiceDispatcher {
     if (primary) {
       preflightLeaves.push(primary.leaf);
       preflightPrompt ??= primary.wouldPrompt;
+      if (primary.acquisition) acquisitionCollector?.push(primary.acquisition);
     }
     for (const additional of "additional" in descriptor ? (descriptor.additional ?? []) : []) {
       if (
@@ -1465,6 +1583,7 @@ export class ServiceDispatcher {
       if (result) {
         preflightLeaves.push(result.leaf);
         preflightPrompt ??= result.wouldPrompt;
+        if (result.acquisition) acquisitionCollector?.push(result.acquisition);
       }
     }
     for (const { selection, requirement, tier } of preparedState.selections) {
@@ -1489,6 +1608,7 @@ export class ServiceDispatcher {
       if (result) {
         preflightLeaves.push(result.leaf);
         preflightPrompt ??= result.wouldPrompt;
+        if (result.acquisition) acquisitionCollector?.push(result.acquisition);
       }
     }
 
@@ -1571,6 +1691,7 @@ export class ServiceDispatcher {
   ): Promise<{
     leaf: AuthorityPreflightLeaf;
     wouldPrompt?: AuthorityPreflightResult["wouldPrompt"];
+    acquisition?: CollectedAuthorityAcquisition;
   } | void> {
     const reviewedMethod = effectReview ?? this.methodTiers.get(`${service}.${method}`);
     if (!reviewedMethod) {
@@ -1578,31 +1699,45 @@ export class ServiceDispatcher {
     }
     const reviewedTier = tierOverride ?? reviewedMethod.tier;
     const receiverPolicy = receiverAuthorityPolicy(capability, challenge?.authorityVocabulary);
-    const operationPresentation =
-      challenge?.operation ?? methodDef.access?.approval?.[0]?.operation;
-    const preparedTarget =
-      validatedArgs.length === 1
-        ? safeJsonArg(validatedArgs[0])
-        : validatedArgs.length > 1
-          ? safeJsonArg(validatedArgs)
-          : resourceKey;
-    const substance = receiverPolicy.requiresSubstance
-      ? {
-          kind: challenge?.substance?.kind ?? receiverPolicy.substanceKind ?? "custom",
-          summary:
-            challenge?.substance?.summary ??
-            `${operationPresentation?.verb ?? describeCapability(capability).action} ${
-              operationPresentation && "object" in operationPresentation
-                ? operationPresentation.object.value
-                : preparedTarget
-            }`,
-          ...(challenge?.substance?.detail ? { detail: challenge.substance.detail } : {}),
-          ...(challenge?.substance?.facts ? { facts: challenge.substance.facts } : {}),
-          digest: preparedStateDigest,
-        }
-      : challenge?.substance
-        ? { ...challenge.substance, digest: preparedStateDigest }
+    const reviewedPresentation =
+      capability === methodDef.capability ? methodDef.presentation : undefined;
+    const capabilityPresentation = reviewedPresentation ?? describeCapability(capability);
+    const methodAuthority = methodDef.authority;
+    const declaredResource =
+      capability === methodDef.capability && methodAuthority && "requirement" in methodAuthority
+        ? methodAuthority.resource
         : null;
+    const reviewResource = authorityResourcePresentation(
+      declaredResource,
+      validatedArgs,
+      resourceKey,
+      `${service}.${method}`
+    );
+    const effectiveChallenge: AuthorityChallengePresentation = challenge ?? {
+      title: capabilityPresentation.title,
+      description: capabilityPresentation.description,
+      deniedReason: `${capabilityPresentation.title} was not allowed`,
+      resource: reviewResource,
+      operation: {
+        kind: "unknown",
+        verb: capabilityPresentation.action,
+        object: reviewResource,
+      },
+    };
+    const operationPresentation = effectiveChallenge.operation;
+    // Consent always names the exact invocation. Receiver-provided prose may
+    // enrich the explanation, but the trusted dispatcher supplies and seals
+    // the method and authority target even when the receiver supplies none.
+    const substance = operationSubstanceForAuthority({
+      ...(effectiveChallenge.substance ? { provided: effectiveChallenge.substance } : {}),
+      fallbackKind: receiverPolicy.substanceKind,
+      fallbackSummary: `${operationPresentation.verb} ${operationPresentation.object.value}`,
+      service,
+      method,
+      capability,
+      resourceKey,
+      digest: preparedStateDigest,
+    });
     const resolver = this.authorityResolver;
     if (!resolver) {
       throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
@@ -1617,7 +1752,7 @@ export class ServiceDispatcher {
         capability,
         resourceKey,
         requirement,
-        ...(challenge ? { challenge } : {}),
+        challenge: effectiveChallenge,
         ...(methodDef.access?.sensitivity ? { sensitivity: methodDef.access.sensitivity } : {}),
         tier: reviewedTier,
         sessionAdmission: reviewedMethod.session,
@@ -1896,10 +2031,19 @@ export class ServiceDispatcher {
           });
       if (acquirable) {
         const tier = reviewedTier as "gated" | "critical";
-        const renderedAction =
-          challenge?.operation.verb ??
-          methodDef.access?.approval?.[0]?.operation.verb ??
-          describeCapability(capability).action;
+        const renderedAction = effectiveChallenge.operation.verb;
+        const acquisitionInput: AuthorityAcquisitionRequest = {
+          snapshot,
+          snapshotDigest,
+          tier,
+          caller,
+          renderedAction,
+          resource: { kind: "exact", key: resourceKey },
+          substance,
+          presentation: effectiveChallenge,
+          ...(target ? { target } : {}),
+          ...(attachedHost ? { attachedHost } : {}),
+        };
         if (preflight) {
           if (runManifest?.approvals === "pregranted-only") {
             return {
@@ -1939,6 +2083,7 @@ export class ServiceDispatcher {
                     : "permission.gated",
               renderedAction,
             },
+            acquisition: { input: acquisitionInput, context: resolved.context },
           };
         }
         // A host-attested test policy is itself a non-interactive,
@@ -1972,18 +2117,6 @@ export class ServiceDispatcher {
             { denied: true, authorityFailure: pregrantedFailure }
           );
         }
-        const acquisitionInput = {
-          snapshot,
-          snapshotDigest,
-          tier,
-          caller,
-          renderedAction,
-          resource: { kind: "exact" as const, key: resourceKey },
-          ...(substance ? { substance } : {}),
-          ...(challenge ? { presentation: challenge } : {}),
-          ...(target ? { target } : {}),
-          ...(attachedHost ? { attachedHost } : {}),
-        };
         let presented: AcquisitionInfo | undefined;
         if (
           this.authorityAcquirer &&
@@ -2340,6 +2473,20 @@ function deriveAuthorityResource(
   args: unknown[]
 ): string {
   if (derivation.kind === "literal") return derivation.key;
+  if (derivation.kind === "argument-fields") {
+    const source = args[derivation.index];
+    if (source === null || typeof source !== "object") {
+      throw new Error(`Cannot derive authority resource from argument ${derivation.index}`);
+    }
+    const parts = derivation.fields.map((field) => {
+      const value = (source as Record<string | number, unknown>)[field];
+      if (typeof value !== "string" && typeof value !== "number") {
+        throw new Error(`Authority resource field ${String(field)} must be a string or number`);
+      }
+      return String(value);
+    });
+    return `${derivation.prefix ?? ""}${parts.join(derivation.separator ?? ":")}`;
+  }
   let value: unknown = args[derivation.index];
   for (const segment of derivation.path ?? []) {
     if (value === null || typeof value !== "object") {
@@ -2364,6 +2511,28 @@ function deriveAuthorityResource(
     else throw new Error("Authority external URL must use http, https, or mailto");
   }
   return derivation.prefix ? `${derivation.prefix}${rendered}` : rendered;
+}
+
+function authorityResourcePresentation(
+  derivation: MethodAuthorityDescriptor["resource"] | null,
+  args: readonly unknown[],
+  resourceKey: string,
+  fallbackType: string
+): AuthorityChallengePresentation["resource"] {
+  const presentation = derivation?.presentation;
+  let value = resourceKey;
+  if (derivation?.kind === "argument-fields" && presentation?.displayField !== undefined) {
+    const source = args[derivation.index];
+    if (source !== null && typeof source === "object") {
+      const displayed = (source as Record<string | number, unknown>)[presentation.displayField];
+      if (typeof displayed === "string" || typeof displayed === "number") value = String(displayed);
+    }
+  }
+  return {
+    type: presentation?.type ?? fallbackType,
+    label: presentation?.label ?? "Target",
+    value,
+  };
 }
 
 function captureAuthorityAssessmentBaseline(ctx: ServiceContext): AuthorityAssessmentBaseline {

@@ -136,15 +136,17 @@ async function dispatchCdp(
   const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
     const resolved = testAuthority(caller, capability, resourceKey);
-    return capability === CONTEXT_BOUNDARY_CAPABILITY
-      ? {
-          ...resolved,
-          grants: deps.grantStore.grantsForSubjects(
-            [resolved.context.authorizingOrigin.principal],
-            capability
-          ),
-        }
-      : resolved;
+    const acquired = deps.grantStore.grantsForSubjects(
+      [resolved.context.authorizingOrigin.principal],
+      capability
+    );
+    return {
+      ...resolved,
+      grants:
+        capability === CONTEXT_BOUNDARY_CAPABILITY || caller.runtime.id === "agent:composed"
+          ? acquired
+          : [...resolved.grants, ...acquired],
+    };
   });
   const acquisition = new AcquisitionCoordinator({
     approvalQueue: deps.approvalQueue,
@@ -152,7 +154,9 @@ async function dispatchCdp(
   });
   dispatcher.setAuthorityAcquirer({
     request: (input) => acquisition.request(input),
+    requestMany: (inputs) => acquisition.requestMany(inputs),
     acquire: (input) => acquisition.requestAndWait(input),
+    acquireMany: (inputs) => acquisition.requestManyAndWait(inputs),
     consume: (grantId) => acquisition.consume(grantId),
     invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
       acquisition.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
@@ -168,6 +172,102 @@ async function dispatchCdp(
 }
 
 describe("panelCdpService", () => {
+  it("reports CDP reload itself when a read-only eval attempts mutation", async () => {
+    const reload = vi.fn(async () => undefined);
+    const service = cdpService({
+      getTarget: () => ({
+        id: "panel:target",
+        title: "Task board",
+        kind: "workspace",
+        source: "panels/task-board",
+        contextId: "ctx-caller",
+        runtimeEntityId: "panel:entity-target",
+      }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://unused" })),
+      reload,
+    });
+    const context: ServiceContext = { ...ctx(), readOnly: true };
+
+    await expect(dispatchCdp(service, context, "reload", ["panel:target"])).rejects.toMatchObject({
+      code: "EVAL_READ_ONLY",
+      message: expect.stringContaining("panelCdp.reload"),
+    });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("reloads through the semantic panel operation with the resolved entity", async () => {
+    const reload = vi.fn(async () => undefined);
+    const service = cdpService({
+      getTarget: () => ({
+        id: "panel:target",
+        title: "Task board",
+        kind: "workspace",
+        source: "panels/task-board",
+        contextId: "ctx-caller",
+        runtimeEntityId: "panel:entity-target",
+      }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://unused" })),
+      reload,
+    });
+    const context = ctx();
+
+    await expect(
+      dispatchCdp(service, context, "reload", ["panel:target"])
+    ).resolves.toBeUndefined();
+    expect(reload).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: context.caller }),
+      "panel:target",
+      "panel:entity-target"
+    );
+  });
+
+  it("asks once when an agent needs both panel inspection and cross-context authority", async () => {
+    const approvalQueue = approvalQueueMock("session");
+    const endpoint = { wsEndpoint: "ws://server/cdp/target", token: "t" };
+    const service = cdpService({
+      approvalQueue,
+      getTarget: () => ({
+        id: "target",
+        title: "Example dashboard",
+        kind: "browser",
+        contextId: "ctx-target",
+      }),
+      getEndpoint: vi.fn(async () => endpoint),
+    });
+    const caller = createVerifiedCaller(
+      "agent:composed",
+      "agent",
+      null,
+      { entityId: "composed", contextId: "ctx-caller", channelId: "chat-1" },
+      null,
+      createTestExecutionSession({
+        runtimeId: "agent:composed",
+        contextId: "ctx-caller",
+        mode: "interactive",
+        agentBinding: {
+          entityId: "composed",
+          channelId: "chat-1",
+          bindingId: "composed",
+        },
+      })
+    );
+
+    await expect(dispatchCdp(service, { caller }, "getCdpEndpoint", ["target"])).resolves.toEqual(
+      endpoint
+    );
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({ title: "Example dashboard" }),
+        authorityFacets: [
+          expect.objectContaining({ capability: "panel.inspect" }),
+          expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY }),
+        ],
+      })
+    );
+  });
+
   it("gates endpoint minting on a cross-context target", async () => {
     const approvalQueue = approvalQueueMock("version");
     const endpoint = { wsEndpoint: "ws://server/cdp/target", token: "t" };

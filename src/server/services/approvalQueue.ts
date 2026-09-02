@@ -167,6 +167,7 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   cardType?: PendingCapabilityApproval["cardType"];
   allowedDecisions?: PendingCapabilityApproval["allowedDecisions"];
   authorityRow?: PendingCapabilityApproval["authorityRow"];
+  authorityFacets?: PendingCapabilityApproval["authorityFacets"];
   operationSubstance?: PendingCapabilityApproval["operationSubstance"];
   target?: PendingCapabilityApproval["target"];
 }
@@ -990,6 +991,7 @@ export function createApprovalQueue(deps: {
           cardType: req.cardType ?? null,
           allowedDecisions: req.allowedDecisions ? [...req.allowedDecisions].sort() : null,
           authorityRow: req.authorityRow ?? null,
+          authorityFacets: req.authorityFacets ?? null,
           operationSubstance: req.operationSubstance ?? null,
           target: req.target ?? null,
           operation: req.operation ?? null,
@@ -1222,6 +1224,7 @@ export function createApprovalQueue(deps: {
         cardType: req.cardType,
         allowedDecisions: req.allowedDecisions,
         authorityRow: req.authorityRow,
+        authorityFacets: req.authorityFacets,
         operationSubstance: req.operationSubstance,
         target: req.target,
       } satisfies PendingCapabilityApproval;

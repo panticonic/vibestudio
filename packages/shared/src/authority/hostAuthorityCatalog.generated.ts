@@ -4724,6 +4724,18 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "panelCdp.reload": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "Reloads the exact receiver-bound panel generation without exposing its host lease mechanics",
+    },
+    capability: null,
+    presentation: null,
+  },
   "panelCdp.screenshot": {
     tier: {
       tier: "open",
@@ -8195,6 +8207,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.evaluate": ["context.boundary"],
   "panelCdp.getCdpEndpoint": ["context.boundary"],
+  "panelCdp.reload": ["context.boundary"],
   "panelCdp.screenshot": ["context.boundary"],
   "panelCdp.stop": ["context.boundary"],
   "panelContext.describe": ["context.boundary"],

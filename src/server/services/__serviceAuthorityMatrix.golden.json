@@ -7526,6 +7526,144 @@
           }
         }
       },
+      "reload": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.reload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.reload"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.reload"
+          },
+          "prepared": {
+            "resolver": "panelCdp.reload.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": [
+                    "gated",
+                    "critical"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "cdp.native-effect",
+          "rationale": "Reloads the exact receiver-bound panel generation without exposing its host lease mechanics"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "screenshot": {
         "authority": {
           "requirement": {
@@ -10124,11 +10262,72 @@
       },
       "supervision.activate": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "runtime.supervision.manage"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument-fields",
+            "index": 0,
+            "fields": [
+              "kind",
+              "releaseId"
+            ],
+            "prefix": "activate:",
+            "presentation": {
+              "type": "workspace-runtime",
+              "label": "App or service",
+              "displayField": "releaseId"
+            }
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -10257,11 +10456,72 @@
       },
       "supervision.prepare": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "runtime.supervision.manage"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument-fields",
+            "index": 0,
+            "fields": [
+              "kind",
+              "releaseId"
+            ],
+            "prefix": "prepare:",
+            "presentation": {
+              "type": "workspace-runtime",
+              "label": "App or service",
+              "displayField": "releaseId"
+            }
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -10325,11 +10585,72 @@
       },
       "supervision.restart": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "runtime.supervision.manage"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument-fields",
+            "index": 0,
+            "fields": [
+              "kind",
+              "entityId"
+            ],
+            "prefix": "restart:",
+            "presentation": {
+              "type": "workspace-runtime",
+              "label": "App or service",
+              "displayField": "entityId"
+            }
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -10355,11 +10676,72 @@
       },
       "supervision.retire": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "runtime.supervision.manage"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument-fields",
+            "index": 0,
+            "fields": [
+              "kind",
+              "entityId"
+            ],
+            "prefix": "retire:",
+            "presentation": {
+              "type": "workspace-runtime",
+              "label": "App or service",
+              "displayField": "entityId"
+            }
+          }
         },
         "access": {
           "sensitivity": "destructive"
@@ -10385,11 +10767,72 @@
       },
       "supervision.rollback": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "runtime.supervision.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "runtime.supervision.manage"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument-fields",
+            "index": 0,
+            "fields": [
+              "kind",
+              "releaseId"
+            ],
+            "prefix": "rollback:",
+            "presentation": {
+              "type": "workspace-runtime",
+              "label": "App or service",
+              "displayField": "releaseId"
+            }
+          }
         },
         "access": {
           "sensitivity": "write"

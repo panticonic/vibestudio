@@ -1814,7 +1814,9 @@ async function startHubControlTransport(
   const acquisitions = new AcquisitionCoordinator({ approvalQueue, grantStore });
   dispatcher.setAuthorityAcquirer({
     request: (input) => acquisitions.request(input),
+    requestMany: (inputs) => acquisitions.requestMany(inputs),
     acquire: (input, signal) => acquisitions.requestAndWait(input, signal),
+    acquireMany: (inputs, signal) => acquisitions.requestManyAndWait(inputs, signal),
     consume: (grantId) => acquisitions.consume(grantId),
     touch: (grantId) => acquisitions.touch(grantId),
     priorInteractiveApprovalCount: (input) => grantStore.priorInteractiveApprovalCount(input),

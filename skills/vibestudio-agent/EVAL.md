@@ -31,10 +31,10 @@ a later execution by its owning queue/workflow.
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rpc.call(method, args)`                 | Raw RPC: `await rpc.call("vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                             |
 | `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `workers.resolveService`: `const svc = await rpc.call("workers.resolveService", ["vibestudio.testkit-driver.v1", null]); await rpc.callTarget(svc.targetId, "ping", [])` |
-| `services`                               | Portable dynamic service namespace: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`. It is the same client exposed by `@workspace/runtime` to panels, workers, and eval.                              |
+| `services`                               | Portable dynamic service namespace: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`. It is the same client exposed by `@workspace/runtime` to panels, workers, and eval.                                 |
 | `fs`                                     | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})`                                                                                                 |
-| `runtime`                                | Portable typed runtime lifecycle and supervision client for the current workspace context.                                                                                                                                            |
-| `hosts`                                  | Portable owner-scoped attached-host access for development sessions.                                                                                                                                                                   |
+| `runtime`                                | Portable typed runtime lifecycle and supervision client for the current workspace context.                                                                                                                                          |
+| `hosts`                                  | Portable owner-scoped attached-host access for development sessions.                                                                                                                                                                |
 | `ctx`                                    | `{contextId, sessionId, workspaceId, serverUrl}`                                                                                                                                                                                    |
 | `scope`                                  | Persistent REPL scope (see below): `scope.results = data` survives across runs                                                                                                                                                      |
 | `help()`                                 | `await help()` lists services + import guidance; `await help("vcs")` describes one service                                                                                                                                          |
@@ -136,7 +136,16 @@ import {
 - There is no advisory approval API. Workspace providers protect their own
   resources with manifest-declared `authority.provides` capabilities and
   literal receiver effects; host-mediated runtime APIs acquire their own
-  authority at the receiver boundary.
+  authority at the receiver boundary. When one exact operation needs multiple
+  independent permissions, the shell reviews them together; one answer records
+  each permission under its own resource and duration, then the receiver
+  rechecks the complete operation before it runs.
+- `authority.effects` describes the whole eval cell. Use `"read-only"` only
+  when every nested operation is observational. Panel `diagnose()`,
+  `cdp.consoleHistory()`, and `cdp.screenshot()` are reads; `cdp.reload()`,
+  `cdp.evaluate()`, navigation, clicks, and lifecycle changes require
+  `"read-write"`. Split mutation from follow-up observation when you want the
+  latter to retain a read-only ceiling.
 - `parent` / `getParent()` resolve the owning panel of the eval session (the
   agent's launch parent when an agent runs the eval), or a no-panel handle when
   there is none.

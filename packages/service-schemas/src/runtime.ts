@@ -3,6 +3,7 @@
  */
 
 import { z } from "zod";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type {
   MethodAccessDescriptor,
   ServiceAuthorityPolicy,
@@ -11,6 +12,24 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
 import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 import { vcsStateNodeRefSchema } from "./vcs.js";
+
+const runtimeSupervisionAuthority = (
+  operation: "activate" | "prepare" | "restart" | "retire" | "rollback",
+  identityField: "releaseId" | "entityId"
+) => ({
+  requirement: requirementForPrincipals(["code", "user", "host"], "runtime.supervision.manage"),
+  resource: {
+    kind: "argument-fields" as const,
+    index: 0,
+    fields: ["kind", identityField] as const,
+    prefix: `${operation}:`,
+    presentation: {
+      type: "workspace-runtime",
+      label: "App or service",
+      displayField: identityField,
+    },
+  },
+});
 
 export const AgentExecutionTestPolicySpecSchema = z
   .object({
@@ -1394,7 +1413,7 @@ export const runtimeMethods = defineServiceMethods({
     description: "Restart one exact supervised entity through its owning driver.",
     args: z.tuple([RuntimeSupervisionEntityKeySchema]),
     returns: z.void(),
-    authority: { principals: ["code", "user", "host"] },
+    authority: runtimeSupervisionAuthority("restart", "entityId"),
     access: { sensitivity: "write" },
   },
   "supervision.activate": {
@@ -1417,7 +1436,7 @@ export const runtimeMethods = defineServiceMethods({
     description: "Activate one exact admitted app or extension release.",
     args: z.tuple([RuntimeSupervisionActivationKeySchema]),
     returns: RuntimeSupervisionActivationResultSchema,
-    authority: { principals: ["code", "user", "host"] },
+    authority: runtimeSupervisionAuthority("activate", "releaseId"),
     access: { sensitivity: "write" },
   },
   "supervision.prepare": {
@@ -1440,7 +1459,7 @@ export const runtimeMethods = defineServiceMethods({
     description: "Prepare an immutable app release from a source ref.",
     args: z.tuple([RuntimeSupervisionActivationKeySchema, z.object({ ref: z.string() }).strict()]),
     returns: RuntimeSupervisionPreparedReleaseSchema,
-    authority: { principals: ["code", "user", "host"] },
+    authority: runtimeSupervisionAuthority("prepare", "releaseId"),
     access: { sensitivity: "write" },
   },
   "supervision.retire": {
@@ -1462,7 +1481,7 @@ export const runtimeMethods = defineServiceMethods({
     description: "Retire one exact supervised entity through its owning driver.",
     args: z.tuple([RuntimeSupervisionEntityKeySchema]),
     returns: z.void(),
-    authority: { principals: ["code", "user", "host"] },
+    authority: runtimeSupervisionAuthority("retire", "entityId"),
     access: RETIRE_ACCESS,
   },
   "supervision.versions": {
@@ -1507,7 +1526,7 @@ export const runtimeMethods = defineServiceMethods({
         activeBuildKey: z.string(),
       })
       .strict(),
-    authority: { principals: ["code", "user", "host"] },
+    authority: runtimeSupervisionAuthority("rollback", "releaseId"),
     access: { sensitivity: "write" },
   },
 });

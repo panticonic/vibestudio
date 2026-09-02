@@ -19,7 +19,6 @@ import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts
 import type { HostConfig } from "@vibestudio/shared/hostConfig";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
-import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
 import {
   normalizePanelEvaluateResult,
@@ -33,6 +32,7 @@ import {
   callerControlsContextTransition,
   type LifecycleContextControlStore,
 } from "./services/lifecycleContextControl.js";
+import { panelAccessTargetFromDetail } from "./services/panelAccessPermission.js";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -141,6 +141,8 @@ export interface CommonDeps {
    * Callers retry default lease assignment after a true result.
    */
   ensureDefaultHeadlessHost?: () => Promise<boolean>;
+  /** Reload one exact current panel entity through the canonical unit driver. */
+  reloadPanel?: (ctx: ServiceContext, panelId: string, runtimeEntityId: string) => Promise<void>;
   getGatewayPort?: () => number | null;
   /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
   ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
@@ -215,18 +217,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       "panelTree.detail",
       [panelId]
     )) as {
+      slot: { current_entity_title?: string | null };
       currentHistory: { source: string; context_id: string };
       entity: { id: string };
     } | null;
     if (!detail) return null;
-    return {
-      id: panelId,
-      title: panelId,
-      source: detail.currentHistory.source,
-      kind: isBrowserPanelSource(detail.currentHistory.source) ? "browser" : "workspace",
-      runtimeEntityId: detail.entity.id,
-      contextId: detail.currentHistory.context_id,
-    };
+    return panelAccessTargetFromDetail(panelId, detail);
   };
   const resolveRequesterPanelMetadataForServices = async (
     caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
@@ -475,6 +471,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               { ...(options ?? {}), timeoutMs: panelEvaluateTimeoutMs(options) },
             ]);
             return normalizePanelEvaluateResult(result);
+          },
+          reload: async (ctx, panelId, runtimeEntityId) => {
+            if (!deps.reloadPanel) throw new Error("Panel reload driver is unavailable");
+            await deps.reloadPanel(ctx, panelId, runtimeEntityId);
           },
           hostProvider: hostProviderChannel,
           logAccess: (event) => {

@@ -1013,6 +1013,71 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
+  it("presents and persists every authority leaf for one operation as one decision", async () => {
+    const request = vi.fn(async () => "session" as const);
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-composed-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+    });
+    const primary = {
+      ...snapshot(),
+      capability: "panel.inspect",
+      resourceKey: "panel.inspect",
+    };
+    const boundary = {
+      ...primary,
+      capability: "context.boundary",
+      resourceKey: "context/ctx-target/requester/agent",
+    };
+    const caller = createVerifiedCaller("agent:composed", "agent", null);
+
+    await coordinator.requestManyAndWait([
+      {
+        snapshot: primary,
+        snapshotDigest: invocationSnapshotDigest(primary),
+        tier: "gated",
+        caller,
+        renderedAction: "inspect a panel with developer tools",
+        resource: { kind: "exact", key: primary.resourceKey },
+        presentation: {
+          ...reviewedPresentation(),
+          title: "Inspect Example dashboard with developer tools",
+          resource: { type: "panel", label: "Panel", value: "Example dashboard" },
+        },
+      },
+      {
+        snapshot: boundary,
+        snapshotDigest: invocationSnapshotDigest(boundary),
+        tier: "gated",
+        caller,
+        renderedAction: "automate a panel in another workspace branch",
+        resource: { kind: "exact", key: boundary.resourceKey },
+        presentation: {
+          ...reviewedPresentation(),
+          title: "Work in another workspace branch",
+          resource: { type: "context", label: "Workspace branch", value: "Project planning" },
+        },
+      },
+    ]);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "panel.inspect",
+        authorityFacets: [
+          expect.objectContaining({ capability: "panel.inspect" }),
+          expect.objectContaining({ capability: "context.boundary" }),
+        ],
+      })
+    );
+    expect(grantStore.grantsForSubjects(["session:chat-1"], "panel.inspect")).toHaveLength(1);
+    expect(grantStore.grantsForSubjects(["session:chat-1"], "context.boundary")).toHaveLength(1);
+    grantStore.close();
+  });
+
   it("does not deduplicate the same snapshot across authenticated runtimes", () => {
     const request = vi.fn(() => new Promise<"session">(() => {}));
     const grantStore = new CapabilityGrantStore({

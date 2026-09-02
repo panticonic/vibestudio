@@ -433,22 +433,27 @@ export class AcquisitionCoordinator {
   }
 
   request(input: AcquisitionRequestInput, signal?: AbortSignal): AcquisitionInfo {
-    return this.requestWithContinuation(input, "owner-redrive", signal);
+    return this.requestWithContinuation([input], "owner-redrive", signal);
+  }
+
+  requestMany(inputs: readonly AcquisitionRequestInput[], signal?: AbortSignal): AcquisitionInfo {
+    return this.requestWithContinuation(inputs, "owner-redrive", signal);
   }
 
   private requestWithContinuation(
-    input: AcquisitionRequestInput,
+    inputs: readonly AcquisitionRequestInput[],
     continuation: PendingAcquisition["continuation"],
     signal?: AbortSignal
   ): AcquisitionInfo {
+    const input = validateAcquisitionGroup(inputs);
     // Validate the subject/operation decision intersection before publishing a
     // pending card. An unconsumable approval is a protocol error, not a prompt.
-    intersectAllowedDecisions(decisionsForOrigin(input), input.presentation?.allowedDecisions);
+    allowedDecisionsForGroup(inputs);
     const now = Date.now();
     this.pruneTerminalCaches(now);
-    const targetRequest = this.matchingTargetRequest(input);
+    const targetRequest = inputs.length === 1 ? this.matchingTargetRequest(input) : null;
     if (targetRequest) return this.joinTargetRequest(targetRequest, input, continuation);
-    const requestKey = acquisitionRequestKey(input);
+    const requestKey = acquisitionRequestGroupKey(inputs);
     const existing = this.byRequestKey.get(requestKey);
     if (existing) {
       // The continuation gate must reflect the LIVE waiters, not whichever call
@@ -481,55 +486,66 @@ export class AcquisitionCoordinator {
           input
         );
       }
-      const rule = testPolicyAuthorityDecision(input.caller, undefined, {
-        capability: input.snapshot.capability,
-        resourceKey: input.snapshot.resourceKey,
-        tier: input.tier,
-        irreversible: input.snapshot.irreversible,
-      });
-      if (!rule && testPolicy.kind === "case" && testPolicy.case.unexpectedPrompts === "fail") {
+      const rules = inputs.map((facet) =>
+        testPolicyAuthorityDecision(facet.caller, undefined, {
+          capability: facet.snapshot.capability,
+          resourceKey: facet.snapshot.resourceKey,
+          tier: facet.tier,
+          irreversible: facet.snapshot.irreversible,
+        })
+      );
+      const missingRuleIndex = rules.findIndex((rule) => !rule);
+      if (
+        missingRuleIndex >= 0 &&
+        testPolicy.kind === "case" &&
+        testPolicy.case.unexpectedPrompts === "fail"
+      ) {
+        const unexpected = inputs[missingRuleIndex]!;
         throw Object.assign(
           new Error(
             `Unexpected authority prompt in system test ${testPolicy.case.testId}: ` +
-              `${input.snapshot.capability} on ${input.snapshot.resourceKey} (${input.tier})`
+              `${unexpected.snapshot.capability} on ${unexpected.snapshot.resourceKey} (${unexpected.tier})`
           ),
           {
             code: "EUNEXPECTEDTESTPROMPT",
             testId: testPolicy.case.testId,
-            capability: input.snapshot.capability,
-            resourceKey: input.snapshot.resourceKey,
-            tier: input.tier,
+            capability: unexpected.snapshot.capability,
+            resourceKey: unexpected.snapshot.resourceKey,
+            tier: unexpected.tier,
           }
         );
       }
-      if (!rule) {
+      if (missingRuleIndex >= 0) {
         // Orchestrator policies intentionally cannot ratify critical or
         // irreversible work; those requests continue through the real queue.
       } else {
-        this.deps.grantStore.issue({
-          effect: rule.decision === "deny" ? "deny" : "allow",
-          capability: input.snapshot.capability,
-          resource: input.resource,
-          // Test policy may be inherited by reviewed infrastructure code without
-          // changing its authorizing origin into a session. Mint the invocation
-          // grant to the exact principal the immutable snapshot evaluated; keep
-          // the execution/session identity as a constraint, never as a substitute
-          // principal.
-          subject: input.snapshot.callerPrincipal,
-          constraints: {
-            sessionId: input.snapshot.sessionId,
-            ...(input.snapshot.agentBindingId
-              ? { agentBindingId: input.snapshot.agentBindingId }
-              : {}),
-            invocationDigest: input.snapshotDigest,
-            lineageAtConsent: [...(input.snapshot.lineageClasses ?? ["none"])],
-          },
-          issuedBy: `host:${input.snapshot.testPolicyId}:${rule.ruleId}`,
-          provenance:
-            input.tier === "critical" && rule.decision === "once"
-              ? "critical-confirmation"
-              : "preauthorization",
-          scope: "once",
+        inputs.forEach((facet, index) => {
+          const rule = rules[index]!;
+          this.deps.grantStore.issue({
+            effect: rule.decision === "deny" ? "deny" : "allow",
+            capability: facet.snapshot.capability,
+            resource: facet.resource,
+            // Test policy may be inherited by reviewed infrastructure code without
+            // changing its authorizing origin into a session. Mint the invocation
+            // grant to the exact principal the immutable snapshot evaluated; keep
+            // the execution/session identity as a constraint, never as a substitute
+            // principal.
+            subject: facet.snapshot.callerPrincipal,
+            constraints: {
+              sessionId: facet.snapshot.sessionId,
+              ...(facet.snapshot.agentBindingId
+                ? { agentBindingId: facet.snapshot.agentBindingId }
+                : {}),
+              invocationDigest: facet.snapshotDigest,
+              lineageAtConsent: [...(facet.snapshot.lineageClasses ?? ["none"])],
+            },
+            issuedBy: `host:${facet.snapshot.testPolicyId}:${rule.ruleId}`,
+            provenance:
+              facet.tier === "critical" && rule.decision === "once"
+                ? "critical-confirmation"
+                : "preauthorization",
+            scope: "once",
+          });
         });
         const info: AcquisitionInfo = {
           acquisitionId,
@@ -537,8 +553,8 @@ export class AcquisitionCoordinator {
           snapshotDigest: input.snapshotDigest,
           capability: input.snapshot.capability,
           resourceKey: input.snapshot.resourceKey,
-          tier: input.tier,
-          cardType: cardTypeFor(input),
+          tier: tierForGroup(inputs),
+          cardType: cardTypeForGroup(inputs),
           renderedAction: input.renderedAction,
           pending: false,
           preauthorized: true,
@@ -556,16 +572,17 @@ export class AcquisitionCoordinator {
         snapshotDigest: input.snapshotDigest,
         capability: input.snapshot.capability,
         resourceKey: input.snapshot.resourceKey,
-        tier: input.tier,
-        cardType: cardTypeFor(input),
+        tier: tierForGroup(inputs),
+        cardType: cardTypeForGroup(inputs),
         renderedAction: input.renderedAction,
         pending: true,
         cooldownUntil: cooldown.until,
       };
     }
-    const attention = this.attentionFor(input, ruleKey, now);
+    const attention =
+      tierForGroup(inputs) === "critical" ? "interrupt" : this.attentionFor(input, ruleKey, now);
 
-    const cardType = cardTypeFor(input);
+    const cardType = cardTypeForGroup(inputs);
     let settle!: (outcome: AcquisitionOutcome) => void;
     const outcome = new Promise<AcquisitionOutcome>((resolve) => {
       settle = resolve;
@@ -576,7 +593,7 @@ export class AcquisitionCoordinator {
       snapshotDigest: input.snapshotDigest,
       capability: input.snapshot.capability,
       resourceKey: input.snapshot.resourceKey,
-      tier: input.tier,
+      tier: tierForGroup(inputs),
       cardType,
       renderedAction: input.renderedAction,
       pending: false,
@@ -595,7 +612,7 @@ export class AcquisitionCoordinator {
     this.byRequestKey.set(requestKey, entry);
     this.byId.set(acquisitionId, entry);
     info.pending = true;
-    void this.present(entry, input, attention, signal).catch((error) => {
+    void this.present(entry, inputs, attention, signal).catch((error) => {
       this.finish(entry, { state: "closed" });
       console.error("[AuthorityAcquisition] approval presentation failed:", error);
     });
@@ -606,7 +623,15 @@ export class AcquisitionCoordinator {
     input: AcquisitionRequestInput,
     signal?: AbortSignal
   ): Promise<AcquisitionOutcome> {
-    const info = this.requestWithContinuation(input, "in-band", signal);
+    return this.requestManyAndWait([input], signal);
+  }
+
+  async requestManyAndWait(
+    inputs: readonly AcquisitionRequestInput[],
+    signal?: AbortSignal
+  ): Promise<AcquisitionOutcome> {
+    const input = validateAcquisitionGroup(inputs);
+    const info = this.requestWithContinuation(inputs, "in-band", signal);
     if (info.cooldownUntil) return { state: "closed", info };
     // Host preauthorization is completed synchronously by request(). It mints
     // a fresh single-use grant for this invocation and has no presentation
@@ -763,16 +788,14 @@ export class AcquisitionCoordinator {
 
   private async present(
     entry: PendingAcquisition,
-    input: AcquisitionRequestInput,
+    inputs: readonly AcquisitionRequestInput[],
     attention: "interrupt" | "queue",
     invocationSignal?: AbortSignal
   ): Promise<void> {
+    const input = validateAcquisitionGroup(inputs);
     const presentation = input.presentation;
-    const signal = combineAbortSignals(invocationSignal, presentation?.signal);
-    const allowedDecisions = intersectAllowedDecisions(
-      decisionsForOrigin(input),
-      input.presentation?.allowedDecisions
-    );
+    const signal = combineAcquisitionSignals(invocationSignal, inputs);
+    const allowedDecisions = allowedDecisionsForGroup(inputs);
     const requestBase = {
       callerId: input.caller.runtime.id,
       callerKind: approvalCallerKind(input.caller.runtime.kind),
@@ -832,11 +855,15 @@ export class AcquisitionCoordinator {
           kind: "capability",
           capability: input.snapshot.capability,
           dedupKey: presentation?.dedupKey ?? entry.info.acquisitionId,
-          severity: presentation?.severity ?? (input.tier === "critical" ? "severe" : "standard"),
+          severity:
+            inputs.some((facet) => facet.presentation?.severity === "severe") ||
+            tierForGroup(inputs) === "critical"
+              ? "severe"
+              : (presentation?.severity ?? "standard"),
           title: presentation?.title ?? authorityActionTitle(input.renderedAction),
           description:
             presentation?.description ??
-            (input.tier === "critical"
+            (tierForGroup(inputs) === "critical"
               ? "This action can't be undone. Check the details before confirming."
               : `Requests permission to ${input.renderedAction}.`),
           resource: presentation?.resource ?? {
@@ -850,7 +877,7 @@ export class AcquisitionCoordinator {
             kind: "unknown",
             verb: input.renderedAction,
             groupKey:
-              input.tier === "critical"
+              tierForGroup(inputs) === "critical"
                 ? `confirm:${input.snapshotDigest}`
                 : `acquire:${input.snapshot.sessionId}`,
           },
@@ -858,33 +885,22 @@ export class AcquisitionCoordinator {
           snapshot: input.snapshot,
           cardType: entry.info.cardType,
           allowedDecisions: [...allowedDecisions],
-          authorityRow: authorityRow({
-            capability: input.snapshot.capability,
-            resource: input.resource,
-            resourcePhrase: presentation?.resource.value,
-            tier: input.tier,
-            statement: "prospective",
-            provenance: {
-              source: "receiver",
-              ...(presentation?.authorityVocabulary
-                ? { surface: `declared by ${presentation.authorityVocabulary.declaredBy}` }
-                : {}),
-            },
-            flags: {
-              lineageTainted:
-                input.snapshot.lineageClasses?.some((lineage) => lineage !== "none") ?? false,
-              irreversible: input.snapshot.irreversible === true,
-            },
-            ...(presentation?.authorityVocabulary
-              ? {
-                  category: {
-                    domain: presentation.authorityVocabulary.domain,
-                    verb: presentation.authorityVocabulary.verb,
-                  },
-                  reviewedAction: input.renderedAction,
-                }
-              : {}),
-          }),
+          authorityRow: authorityRowForAcquisition(input),
+          ...(inputs.length > 1
+            ? {
+                authorityFacets: inputs.map((facet) => ({
+                  capability: facet.snapshot.capability,
+                  title: facet.presentation?.title ?? authorityActionTitle(facet.renderedAction),
+                  ...(facet.presentation?.description
+                    ? { description: facet.presentation.description }
+                    : {}),
+                  ...(facet.presentation?.resource
+                    ? { resource: facet.presentation.resource }
+                    : {}),
+                  row: authorityRowForAcquisition(facet),
+                })),
+              }
+            : {}),
           ...(input.substance ? { operationSubstance: input.substance } : {}),
         });
 
@@ -921,12 +937,14 @@ export class AcquisitionCoordinator {
     ) {
       throw new Error(`Authority presentation returned disallowed decision '${decision}'`);
     }
-    const grantId = this.persistDecision(input, authorityDecision);
+    const grantIds = inputs
+      .map((facet) => this.persistDecision(facet, authorityDecision))
+      .filter((grantId): grantId is string => grantId !== undefined);
     entry.info.pending = false;
     this.finish(entry, {
       state: "decided",
       decision: authorityDecision,
-      ...(grantId ? { grantId } : {}),
+      ...(grantIds[0] ? { grantId: grantIds[0] } : {}),
     });
   }
 
@@ -1240,15 +1258,6 @@ function testPolicyIntegrityError(
   });
 }
 
-function combineAbortSignals(
-  invocationSignal: AbortSignal | undefined,
-  presentationSignal: AbortSignal | undefined
-): AbortSignal | undefined {
-  if (!invocationSignal) return presentationSignal;
-  if (!presentationSignal || presentationSignal === invocationSignal) return invocationSignal;
-  return AbortSignal.any([invocationSignal, presentationSignal]);
-}
-
 function acquisitionWaitAbortError(): Error {
   return Object.assign(new Error("Authority acquisition wait was aborted"), {
     name: "AbortError",
@@ -1333,6 +1342,42 @@ function acquisitionRequestKey(input: AcquisitionRequestInput): string {
   ]);
 }
 
+function validateAcquisitionGroup(
+  inputs: readonly AcquisitionRequestInput[]
+): AcquisitionRequestInput {
+  const first = inputs[0];
+  if (!first) throw new Error("Authority acquisition group cannot be empty");
+  for (const input of inputs.slice(1)) {
+    if (
+      input.snapshot.sessionId !== first.snapshot.sessionId ||
+      input.snapshot.service !== first.snapshot.service ||
+      input.snapshot.method !== first.snapshot.method ||
+      input.snapshot.argsDigest !== first.snapshot.argsDigest ||
+      input.snapshot.preparedStateDigest !== first.snapshot.preparedStateDigest
+    ) {
+      throw new Error("Composed authority leaves must belong to one exact invocation");
+    }
+  }
+  return first;
+}
+
+function acquisitionRequestGroupKey(inputs: readonly AcquisitionRequestInput[]): string {
+  const first = validateAcquisitionGroup(inputs);
+  if (inputs.length === 1) return acquisitionRequestKey(first);
+  return canonicalKey([
+    "composed-acquisition-v1",
+    canonicalJson(
+      inputs.map((input) => ({
+        requestKey: acquisitionRequestKey(input),
+        snapshotDigest: input.snapshotDigest,
+        presentation: input.presentation ?? null,
+        target: input.target ?? null,
+        substance: input.substance ?? null,
+      }))
+    ),
+  ]);
+}
+
 function acquisitionIdFor(requestKey: string): string {
   return `acq:${createHash("sha256").update(requestKey).digest("hex")}`;
 }
@@ -1359,6 +1404,58 @@ function cardTypeFor(input: AcquisitionRequestInput): AuthorityPromptCardType {
     capability: input.snapshot.capability,
     outsideContent: input.snapshot.contextLineage?.class === "external",
   });
+}
+
+function tierForGroup(inputs: readonly AcquisitionRequestInput[]): "gated" | "critical" {
+  return inputs.some((input) => input.tier === "critical") ? "critical" : "gated";
+}
+
+function cardTypeForGroup(inputs: readonly AcquisitionRequestInput[]): AuthorityPromptCardType {
+  if (tierForGroup(inputs) === "critical") return "confirm.critical";
+  const outside = inputs.find((input) => input.snapshot.contextLineage?.class === "external");
+  return cardTypeFor(outside ?? validateAcquisitionGroup(inputs));
+}
+
+function authorityRowForAcquisition(input: AcquisitionRequestInput) {
+  const presentation = input.presentation;
+  return authorityRow({
+    capability: input.snapshot.capability,
+    resource: input.resource,
+    resourcePhrase: presentation?.resource.value,
+    tier: input.tier,
+    statement: "prospective",
+    provenance: {
+      source: "receiver",
+      ...(presentation?.authorityVocabulary
+        ? { surface: `declared by ${presentation.authorityVocabulary.declaredBy}` }
+        : {}),
+    },
+    flags: {
+      lineageTainted: input.snapshot.lineageClasses?.some((lineage) => lineage !== "none") ?? false,
+      irreversible: input.snapshot.irreversible === true,
+    },
+    ...(presentation?.authorityVocabulary
+      ? {
+          category: {
+            domain: presentation.authorityVocabulary.domain,
+            verb: presentation.authorityVocabulary.verb,
+          },
+          reviewedAction: input.renderedAction,
+        }
+      : {}),
+  });
+}
+
+function combineAcquisitionSignals(
+  invocationSignal: AbortSignal | undefined,
+  inputs: readonly AcquisitionRequestInput[]
+): AbortSignal | undefined {
+  const signals = [invocationSignal, ...inputs.map((input) => input.presentation?.signal)].filter(
+    (signal): signal is AbortSignal => signal !== undefined
+  );
+  if (signals.length === 0) return undefined;
+  if (signals.length === 1) return signals[0];
+  return AbortSignal.any([...new Set(signals)]);
 }
 
 function approvalCallerKind(
@@ -1422,6 +1519,25 @@ function intersectAllowedDecisions(
       "Authority acquisition has no grant decision valid for this origin and operation"
     );
   }
+  return allowed;
+}
+
+function allowedDecisionsForGroup(
+  inputs: readonly AcquisitionRequestInput[]
+): AuthorityAcquisitionDecision[] {
+  validateAcquisitionGroup(inputs);
+  let allowed: AuthorityAcquisitionDecision[] | null = null;
+  for (const input of inputs) {
+    const current = intersectAllowedDecisions(
+      decisionsForOrigin(input),
+      input.presentation?.allowedDecisions
+    );
+    allowed = allowed ? allowed.filter((decision) => current.includes(decision)) : current;
+  }
+  if (!allowed || !allowed.some((decision) => decision !== "deny")) {
+    throw new Error("Composed authority leaves have no common grant decision");
+  }
+  if (!allowed.includes("deny")) allowed.push("deny");
   return allowed;
 }
 

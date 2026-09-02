@@ -110,6 +110,7 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
     expression: string,
     options?: PanelEvaluateOptions
   ): Promise<PanelEvaluateResult>;
+  reload?(ctx: ServiceContext, panelId: string, runtimeEntityId: string): Promise<void>;
   stop?(panelId: string, requesterEntityId: string): Promise<unknown>;
   consoleHistory?(
     panelId: string,
@@ -274,6 +275,21 @@ const panelCdpMethods = defineServiceMethods({
     authority: cdpBoundaryAuthority("evaluate"),
     // Arbitrary page script can mutate the document it runs in; this is not a
     // read-only observation even when the caller only means to look.
+    access: { sensitivity: "write" },
+  },
+  reload: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "Reloads the exact receiver-bound panel generation without exposing its host lease mechanics",
+    },
+    description: "Reload an approved panel target through its product lifecycle.",
+    args: z.tuple([z.string()]),
+    returns: z.void(),
+    authority: cdpBoundaryAuthority("reload"),
     access: { sensitivity: "write" },
   },
   screenshot: {
@@ -450,6 +466,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         ["consoleHistory", "cdp"],
         ["screenshot", "cdp"],
         ["evaluate", "cdp"],
+        ["reload", "reload"],
         ["stop", "stop"],
       ].map(([method, operation]) => [
         `panelCdp.${method}.contextBoundary`,
@@ -519,6 +536,11 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         // throw, so the latch advances on the attempt, not on the outcome.
         await recordCdpIngestion(ctx, target, "evaluate");
         return result;
+      },
+      reload: async (ctx, [panelId]) => {
+        const target = await recordCdpAccess(ctx, "reload", panelId);
+        if (!deps.reload) throw new Error("Panel reload driver is not available");
+        await deps.reload(ctx, panelId, target.runtimeEntityId ?? panelId);
       },
       stop: async (ctx, [panelId]) => {
         await recordCdpAccess(ctx, "stop", panelId);

@@ -145,8 +145,18 @@ export class AttachedHostDecisionConsumer {
 
 export interface OrdinaryAuthorityAcquirer {
   request(input: AttachedHostAcquisitionInput): AcquisitionInfo;
+  requestMany?(inputs: readonly AttachedHostAcquisitionInput[]): AcquisitionInfo;
+  canAcquireMany?(inputs: readonly AttachedHostAcquisitionInput[]): boolean;
   acquire(
     input: AttachedHostAcquisitionInput,
+    signal?: AbortSignal
+  ): Promise<{
+    state: "decided" | "closed";
+    decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
+    info?: AcquisitionInfo;
+  }>;
+  acquireMany?(
+    inputs: readonly AttachedHostAcquisitionInput[],
     signal?: AbortSignal
   ): Promise<{
     state: "decided" | "closed";
@@ -171,8 +181,37 @@ export function attachedHostAwareAuthorityAcquirer(
 ): OrdinaryAuthorityAcquirer {
   return {
     request: (input) => (input.attachedHost ? attached.request(input) : ordinary.request(input)),
+    ...(ordinary.requestMany
+      ? {
+          canAcquireMany: (inputs: readonly AttachedHostAcquisitionInput[]) =>
+            inputs.every((input) => !input.attachedHost),
+          requestMany: (inputs: readonly AttachedHostAcquisitionInput[]) => {
+            if (inputs.some((input) => input.attachedHost))
+              throw bridgeError(
+                "EATTACHED_ACQUISITION_MODE",
+                "Attached-host routes do not support one signed decision over multiple leaves"
+              );
+            return ordinary.requestMany!(inputs);
+          },
+        }
+      : {}),
     acquire: (input, signal) =>
       input.attachedHost ? attached.acquire(input) : ordinary.acquire(input, signal),
+    ...(ordinary.acquireMany
+      ? {
+          acquireMany: async (
+            inputs: readonly AttachedHostAcquisitionInput[],
+            signal?: AbortSignal
+          ) => {
+            if (inputs.some((input) => input.attachedHost))
+              throw bridgeError(
+                "EATTACHED_ACQUISITION_MODE",
+                "Attached-host routes do not support one signed decision over multiple leaves"
+              );
+            return ordinary.acquireMany!(inputs, signal);
+          },
+        }
+      : {}),
     consume: (grantId) => ordinary.consume(grantId),
     ...(ordinary.touch ? { touch: (grantId: string) => ordinary.touch!(grantId) } : {}),
     ...(ordinary.priorInteractiveApprovalCount

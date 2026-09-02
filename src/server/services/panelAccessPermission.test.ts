@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { contextBoundaryResourceKey } from "./contextBoundary.js";
 import {
+  panelAccessTargetFromDetail,
   preparePanelAccessAuthority,
   type PanelAccessPermissionDeps,
 } from "./panelAccessPermission.js";
@@ -23,6 +24,33 @@ const deps = (overrides: Partial<PanelAccessPermissionDeps> = {}): PanelAccessPe
 });
 
 describe("preparePanelAccessAuthority", () => {
+  it("projects the semantic panel title instead of its stable tree address", () => {
+    expect(
+      panelAccessTargetFromDetail("panel:tree/root/browser~example", {
+        slot: { current_entity_title: "Example dashboard" },
+        currentHistory: { source: "browser:https://example.com", context_id: "ctx-target" },
+        entity: { id: "panel:runtime" },
+      })
+    ).toEqual({
+      id: "panel:tree/root/browser~example",
+      title: "Example dashboard",
+      source: "browser:https://example.com",
+      kind: "browser",
+      runtimeEntityId: "panel:runtime",
+      contextId: "ctx-target",
+    });
+  });
+
+  it("uses the presented source while a semantic panel title is unavailable", () => {
+    expect(
+      panelAccessTargetFromDetail("panel:tree/root/panels~chat", {
+        slot: { current_entity_title: null },
+        currentHistory: { source: "panels/chat", context_id: "ctx-target" },
+        entity: { id: "panel:runtime" },
+      }).title
+    ).toBe("panels/chat");
+  });
+
   it("leaves reads, same-context actions, and fresh destinations open", async () => {
     await expect(
       preparePanelAccessAuthority(deps(), ctx, "read", { id: "target", contextId: "ctx-target" })

@@ -28,14 +28,33 @@ import type {
 import type { AuthorityRequirement, PrincipalKind } from "./authorization.js";
 import type { CapabilityPresentation } from "./authorityPresentation.js";
 
+export interface AuthorityResourcePresentation {
+  type: string;
+  label: string;
+  /** For a compound argument identity, the field people recognize as the
+   * target. Enforcement still uses every declared field. */
+  displayField?: string | number;
+}
+
 export type AuthorityResourceDerivation =
-  | { kind: "literal"; key: string }
+  | { kind: "literal"; key: string; presentation?: AuthorityResourcePresentation }
   | {
       kind: "argument";
       index: number;
       path?: readonly (string | number)[];
       prefix?: string;
       transform?: "url-origin" | "external-url-scope";
+      presentation?: AuthorityResourcePresentation;
+    }
+  | {
+      /** Build one stable identity from the scalar fields which jointly name
+       * a target, rather than granting on only one convenient field. */
+      kind: "argument-fields";
+      index: number;
+      fields: readonly (string | number)[];
+      prefix?: string;
+      separator?: string;
+      presentation?: AuthorityResourcePresentation;
     };
 
 declare const fixedPreparedAuthorityRequirementBrand: unique symbol;

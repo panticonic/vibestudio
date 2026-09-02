@@ -1,5 +1,6 @@
 import type { PendingApproval } from "./approvals.js";
 import type { InstallReviewPart } from "./authority/unitInstallReview.js";
+import { authorityRow } from "./authority/authorityRows.js";
 import {
   formatAccount,
   formatGitRemoteSummary,
@@ -448,6 +449,38 @@ describe("approvalCopy", () => {
     expect(getRequesterCategoryLabel("durable-object")).toBe("Service");
     expect(getRequesterCategoryLabel("internal-service")).toBe("Built-in service");
     expect(getRequesterCategoryLabel("unknown")).toBe("Requester");
+  });
+
+  it("retains the cross-context warning when it is a composed authority facet", () => {
+    const inspection = authorityRow({
+      capability: "panel.inspect",
+      resource: { kind: "exact", key: "panel.inspect" },
+      tier: "gated",
+      statement: "prospective",
+      provenance: { source: "receiver" },
+    });
+    const boundary = authorityRow({
+      capability: "context.boundary",
+      resource: { kind: "exact", key: "context/target/requester/agent" },
+      tier: "gated",
+      statement: "prospective",
+      provenance: { source: "receiver" },
+    });
+    const copy = getApprovalCopy({
+      ...base,
+      kind: "capability",
+      capability: "panel.inspect",
+      title: "Inspect a panel with developer tools",
+      authorityRow: inspection,
+      authorityFacets: [
+        { capability: "panel.inspect", title: "Inspect a panel", row: inspection },
+        { capability: "context.boundary", title: "Cross a workspace branch", row: boundary },
+      ],
+    });
+
+    expect(copy.warning).toBe(
+      "This can affect files and running work in a different part of your project."
+    );
   });
 
   it("describes genuine cross-conversation access without exposing runtime ids", () => {

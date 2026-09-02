@@ -130,8 +130,12 @@ vibestudio panel console <panel-id> --errors
 ```
 
 Open a context-pinned preview through eval when needed. Scope rules allow panel
-automation only where the caller has the required context relationship. Use
-[RECIPES.md](RECIPES.md) for the full edit/build/open/screenshot/console loop.
+automation only where the caller has the required context relationship. One
+panel operation can require several independent protections (for example,
+developer-tools access plus entry into another existing workspace branch); the
+shell presents those together as one decision and lists every protection it
+covers. Use [RECIPES.md](RECIPES.md) for the full
+edit/build/open/screenshot/console loop.
 
 ## Linked subagents
 
@@ -143,11 +147,11 @@ parent workspace agent to delegate when necessary.
 
 ## Further reference
 
-| File | Read for |
-| --- | --- |
-| [FILES.md](FILES.md) | Remote files, managed moves/copies, skills, RPC transport |
-| [BUILDING.md](BUILDING.md) | Context builds, publication, projection, activation diagnostics |
-| [EVAL.md](EVAL.md) | Eval bindings, imports, scope, cancellation |
-| [API.md](API.md) | Generated offline RPC reference |
-| [RECIPES.md](RECIPES.md) | CLI, eval, diagnostics, sessions, channels, panels |
-| [SYSTEM_TESTING.md](SYSTEM_TESTING.md) | Managed system-test repair loop |
+| File                                   | Read for                                                        |
+| -------------------------------------- | --------------------------------------------------------------- |
+| [FILES.md](FILES.md)                   | Remote files, managed moves/copies, skills, RPC transport       |
+| [BUILDING.md](BUILDING.md)             | Context builds, publication, projection, activation diagnostics |
+| [EVAL.md](EVAL.md)                     | Eval bindings, imports, scope, cancellation                     |
+| [API.md](API.md)                       | Generated offline RPC reference                                 |
+| [RECIPES.md](RECIPES.md)               | CLI, eval, diagnostics, sessions, channels, panels              |
+| [SYSTEM_TESTING.md](SYSTEM_TESTING.md) | Managed system-test repair loop                                 |

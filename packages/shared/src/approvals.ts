@@ -177,6 +177,43 @@ export interface OperationSubstance {
   digest: string;
 }
 
+/** Build the complete, host-sealed disclosure for one authority acquisition.
+ * Provider copy can explain domain meaning, but it cannot replace the trusted
+ * invocation identity or the distinction between one-shot and reusable grants. */
+export function operationSubstanceForAuthority(input: {
+  provided?: Omit<OperationSubstance, "digest">;
+  fallbackKind?: OperationSubstance["kind"] | null;
+  fallbackSummary: string;
+  service: string;
+  method: string;
+  capability: string;
+  resourceKey: string;
+  digest: string;
+}): OperationSubstance {
+  const scopeExplanation =
+    "Allow once permits only this call. Longer choices permit later calls using the same authority target for the stated lifetime.";
+  const providerFacts = input.provided?.facts ?? [];
+  const trustedFacts = [
+    { label: "Operation", value: `${input.service}.${input.method}` },
+    { label: "Authority", value: input.capability },
+    { label: "Authority target", value: input.resourceKey },
+  ];
+  return {
+    kind: input.provided?.kind ?? input.fallbackKind ?? "custom",
+    summary: input.provided?.summary ?? input.fallbackSummary,
+    detail: input.provided?.detail
+      ? `${input.provided.detail}\n\n${scopeExplanation}`
+      : scopeExplanation,
+    facts: [
+      ...providerFacts,
+      ...trustedFacts.filter(
+        (fact) => !providerFacts.some((providerFact) => providerFact.label === fact.label)
+      ),
+    ],
+    digest: input.digest,
+  };
+}
+
 export type ApprovalResourceScope =
   | {
       kind: "exact";
@@ -389,6 +426,22 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
   allowedDecisions?: ApprovalDecision[];
   /** Canonical server-side projection used by every authority surface. */
   authorityRow?: import("./authority/authorityRows.js").AuthorityRow;
+  /**
+   * Every independently enforced authority leaf covered by this one decision.
+   * A composed approval is one user decision over one operation, while each
+   * facet retains its own capability, resource, and durable grant semantics.
+   */
+  authorityFacets?: Array<{
+    capability: string;
+    title: string;
+    description?: string;
+    resource?: {
+      type: string;
+      label: string;
+      value: string;
+    };
+    row: import("./authority/authorityRows.js").AuthorityRow;
+  }>;
   /** Exact receiver-prepared effect shown separately from the authority row. */
   operationSubstance?: OperationSubstance;
   /** Host-verified target identity, distinct from the requesting principal. */

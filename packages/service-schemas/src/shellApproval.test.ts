@@ -44,6 +44,13 @@ describe("shellApproval service contract", () => {
   });
 
   it("carries a host-resolved panel target across listPending", () => {
+    const inspection = authorityRow({
+      capability: "panel.inspect",
+      resource: { kind: "exact", key: "panel.inspect" },
+      tier: "gated",
+      statement: "prospective",
+      provenance: { source: "receiver" },
+    });
     const approval = {
       approvalId: "approval-cdp",
       callerId: "do:workers/agent:AgentDO:session",
@@ -54,6 +61,15 @@ describe("shellApproval service contract", () => {
       kind: "capability" as const,
       capability: "panel.inspect",
       title: "Inspect a panel",
+      authorityRow: inspection,
+      authorityFacets: [
+        {
+          capability: "panel.inspect",
+          title: "Inspect a panel with developer tools",
+          resource: { type: "panel", label: "Panel", value: "Rich Flowboard Store" },
+          row: inspection,
+        },
+      ],
       target: {
         id: "panel:flowboard",
         kind: "panel" as const,

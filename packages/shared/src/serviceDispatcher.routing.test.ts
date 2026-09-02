@@ -6,8 +6,150 @@ import {
   verifiedInitiatingUserId,
   verifiedInitiator,
 } from "./serviceDispatcher.js";
+import { testAuthority } from "./serviceDispatcherTestUtils.js";
 
 describe("ServiceDispatcher ownership", () => {
+  it("derives a complete compound identity for lifecycle-style authority targets", () => {
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService({
+      name: "lifecycle",
+      authority: { principals: ["code"] },
+      methods: {
+        activate: {
+          args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
+          capability: "runtime.supervision.manage",
+          tier: { tier: "gated", session: "family", rationale: "Starts admitted code" },
+          presentation: {
+            title: "Start a workspace service",
+            action: "start a workspace service",
+            description: "Start one admitted service release.",
+            group: "runtime",
+            authorityCategory: { domain: "automation", verb: "manage" },
+          },
+          authority: {
+            requirement: {
+              kind: "capability",
+              principal: "code",
+              capability: "runtime.supervision.manage",
+            },
+            resource: {
+              kind: "argument-fields",
+              index: 0,
+              fields: ["kind", "releaseId"],
+              prefix: "activate:",
+            },
+          },
+        },
+      },
+      handler: vi.fn(),
+    });
+
+    expect(
+      dispatcher.compileAuthorityPlanLeaf({
+        service: "lifecycle",
+        method: "activate",
+        args: [{ kind: "app", releaseId: "task-board" }],
+        use: "action",
+      }).resource
+    ).toEqual({ kind: "exact", key: "activate:app:task-board" });
+  });
+
+  it("presents the reviewed method, human target, and reusable grant boundary", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const capability = "runtime.supervision.manage";
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:activate-task-board",
+      ownerRuntimeId: "app:caller",
+      snapshotDigest: "d".repeat(64),
+      capability,
+      resourceKey: "activate:app:task-board",
+      tier: "gated" as const,
+      cardType: "permission.gated" as const,
+      renderedAction: "start a workspace service",
+      pending: true,
+    }));
+    dispatcher.setAuthorityAcquirer({
+      request,
+      acquire: vi.fn(),
+      consume: vi.fn(),
+      invalidate: vi.fn(),
+    });
+    dispatcher.setAuthorityResolver(({ caller, resourceKey }) => {
+      const resolved = testAuthority(caller, capability, resourceKey);
+      return { ...resolved, grants: [] };
+    });
+    dispatcher.registerService({
+      name: "lifecycle",
+      authority: { principals: ["code"] },
+      methods: {
+        activate: {
+          args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
+          capability,
+          tier: { tier: "gated", session: "family", rationale: "Starts admitted code" },
+          presentation: {
+            title: "Start a workspace service",
+            action: "start a workspace service",
+            description: "Start one admitted service release.",
+            group: "runtime",
+            authorityCategory: { domain: "automation", verb: "manage" },
+          },
+          authority: {
+            requirement: { kind: "capability", principal: "code", capability },
+            resource: {
+              kind: "argument-fields",
+              index: 0,
+              fields: ["kind", "releaseId"],
+              prefix: "activate:",
+              presentation: {
+                type: "workspace-runtime",
+                label: "App or service",
+                displayField: "releaseId",
+              },
+            },
+          },
+        },
+      },
+      handler: vi.fn(),
+    });
+    dispatcher.markInitialized();
+    const caller = createVerifiedCaller("app:caller", "app", {
+      callerId: "app:caller",
+      callerKind: "app",
+      repoPath: "apps/caller",
+      effectiveVersion: "ev-caller",
+      requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
+    });
+    delete caller.codeApproved;
+
+    await expect(
+      dispatcher.dispatch({ caller }, "lifecycle", "activate", [
+        { kind: "app", releaseId: "task-board" },
+      ])
+    ).rejects.toMatchObject({ code: "EACQUIRE" });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource: { kind: "exact", key: "activate:app:task-board" },
+        presentation: expect.objectContaining({
+          title: "Start a workspace service",
+          resource: {
+            type: "workspace-runtime",
+            label: "App or service",
+            value: "task-board",
+          },
+        }),
+        substance: expect.objectContaining({
+          summary: "start a workspace service task-board",
+          detail: expect.stringContaining("Longer choices permit later calls"),
+          facts: expect.arrayContaining([
+            { label: "Operation", value: "lifecycle.activate" },
+            { label: "Authority", value: capability },
+            { label: "Authority target", value: "activate:app:task-board" },
+          ]),
+        }),
+      })
+    );
+  });
+
   it("seals receiver-reviewed semantics into compiled authority-plan leaves", () => {
     const dispatcher = new ServiceDispatcher();
     dispatcher.registerService({

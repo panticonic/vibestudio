@@ -20295,6 +20295,98 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:panelCdp.reload",
+      "rpcPlane": "host-service",
+      "owner": "panelCdp",
+      "method": "reload",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "cdp.native-effect",
+      "reviewRationale": "Reloads the exact receiver-bound panel generation without exposing its host lease mechanics",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelCdp.reload"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:panelCdp.reload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:panelCdp.reload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:panelCdp.reload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:panelCdp.reload\"}]}",
+      "r3b": {
+        "review": "receiver-bound-semantic-panel-reload",
+        "change": "Adds a write-classified reload for one exact receiver-resolved panel target. The host owns presentation-lease preparation and the canonical panel unit driver, so read-only callers are rejected at panelCdp.reload instead of an internal ensureSlot call; cross-context authority remains independently enforced."
+      },
+      "capability": "service:panelCdp.reload",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelCdp.reload#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "panelCdp",
+      "method": "reload",
+      "tier": "gated|critical",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "cdp.native-effect",
+      "reviewRationale": "Reloads the exact receiver-bound panel generation without exposing its host lease mechanics",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "panelCdp.reload.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:panelCdp.screenshot",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
@@ -23573,13 +23665,24 @@
       "mechanismFamily": "runtime.supervision",
       "reviewRationale": "Generic activation of one exact admitted release through its owning executable-unit driver.",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:runtime.supervision.activate"
+        "kind": "argument-fields",
+        "index": 0,
+        "fields": [
+          "kind",
+          "releaseId"
+        ],
+        "prefix": "activate:",
+        "presentation": {
+          "type": "workspace-runtime",
+          "label": "App or service",
+          "displayField": "releaseId"
+        }
       },
       "authorityPrincipals": [
         "code",
-        "user",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -23600,10 +23703,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.activate),allOf(capability(user,service:runtime.supervision.activate),workspace-member),allOf(capability(code,service:runtime.supervision.activate),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "compound-runtime-activation-authority-target",
+        "change": "Binds activation authority to the exact operation, runtime kind, and release identity while presenting the human release name. This narrows reusable grants that previously shared one generic runtime.supervision.manage resource."
       },
       "capability": "service:runtime.supervision.activate",
       "parityAssertion": "generated-census:host-authority"
@@ -23847,13 +23950,24 @@
       "mechanismFamily": "runtime.release-preparation",
       "reviewRationale": "Materializes one immutable release selector through the owning driver without selecting or launching it.",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:runtime.supervision.prepare"
+        "kind": "argument-fields",
+        "index": 0,
+        "fields": [
+          "kind",
+          "releaseId"
+        ],
+        "prefix": "prepare:",
+        "presentation": {
+          "type": "workspace-runtime",
+          "label": "App or service",
+          "displayField": "releaseId"
+        }
       },
       "authorityPrincipals": [
         "code",
-        "user",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -23874,10 +23988,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.prepare),allOf(capability(user,service:runtime.supervision.prepare),workspace-member),allOf(capability(code,service:runtime.supervision.prepare),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "compound-runtime-preparation-authority-target",
+        "change": "Binds release preparation authority to the exact operation, runtime kind, and release identity while presenting the human release name. The receiver still owns method semantics and validates every identity field."
       },
       "capability": "service:runtime.supervision.prepare",
       "parityAssertion": "generated-census:host-authority"
@@ -23981,13 +24095,24 @@
       "mechanismFamily": "runtime.supervision",
       "reviewRationale": "Restarts one exact driver-owned execution without changing its durable product state.",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:runtime.supervision.restart"
+        "kind": "argument-fields",
+        "index": 0,
+        "fields": [
+          "kind",
+          "entityId"
+        ],
+        "prefix": "restart:",
+        "presentation": {
+          "type": "workspace-runtime",
+          "label": "App or service",
+          "displayField": "entityId"
+        }
       },
       "authorityPrincipals": [
         "code",
-        "user",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24008,10 +24133,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.restart),allOf(capability(user,service:runtime.supervision.restart),workspace-member),allOf(capability(code,service:runtime.supervision.restart),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "compound-runtime-restart-authority-target",
+        "change": "Binds restart authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. A grant for one runtime unit cannot authorize another unit or lifecycle verb."
       },
       "capability": "service:runtime.supervision.restart",
       "parityAssertion": "generated-census:host-authority"
@@ -24027,13 +24152,24 @@
       "mechanismFamily": "runtime.supervision",
       "reviewRationale": "Retires one exact driver-owned execution and its owned native resources.",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:runtime.supervision.retire"
+        "kind": "argument-fields",
+        "index": 0,
+        "fields": [
+          "kind",
+          "entityId"
+        ],
+        "prefix": "retire:",
+        "presentation": {
+          "type": "workspace-runtime",
+          "label": "App or service",
+          "displayField": "entityId"
+        }
       },
       "authorityPrincipals": [
         "code",
-        "user",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -24054,10 +24190,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.retire),allOf(capability(user,service:runtime.supervision.retire),workspace-member),allOf(capability(code,service:runtime.supervision.retire),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "compound-runtime-retirement-authority-target",
+        "change": "Binds destructive retirement authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. Existing critical confirmation semantics remain unchanged."
       },
       "capability": "service:runtime.supervision.retire",
       "parityAssertion": "generated-census:host-authority"
@@ -24073,13 +24209,24 @@
       "mechanismFamily": "runtime.supervision-release",
       "reviewRationale": "Rollback is addressed by release identity and delegated only to a driver exposing the release facet.",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:runtime.supervision.rollback"
+        "kind": "argument-fields",
+        "index": 0,
+        "fields": [
+          "kind",
+          "releaseId"
+        ],
+        "prefix": "rollback:",
+        "presentation": {
+          "type": "workspace-runtime",
+          "label": "App or service",
+          "displayField": "releaseId"
+        }
       },
       "authorityPrincipals": [
         "code",
-        "user",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24100,10 +24247,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:runtime.supervision.rollback),allOf(capability(user,service:runtime.supervision.rollback),workspace-member),allOf(capability(code,service:runtime.supervision.rollback),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"runtime.supervision.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"runtime.supervision.manage\"}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "compound-runtime-rollback-authority-target",
+        "change": "Binds rollback authority to the exact operation, runtime kind, and release identity while presenting the human release name. Reusable authority no longer spans unrelated lifecycle actions or units."
       },
       "capability": "service:runtime.supervision.rollback",
       "parityAssertion": "generated-census:host-authority"

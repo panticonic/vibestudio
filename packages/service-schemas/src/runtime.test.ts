@@ -29,6 +29,23 @@ describe("RuntimeEntityHandleSchema", () => {
 });
 
 describe("runtime context-boundary authority", () => {
+  it("binds lifecycle grants to the exact operation, runtime kind, and target", () => {
+    expect(runtimeMethods["supervision.activate"].authority).toMatchObject({
+      resource: {
+        kind: "argument-fields",
+        fields: ["kind", "releaseId"],
+        prefix: "activate:",
+      },
+    });
+    expect(runtimeMethods["supervision.retire"].authority).toMatchObject({
+      resource: {
+        kind: "argument-fields",
+        fields: ["kind", "entityId"],
+        prefix: "retire:",
+      },
+    });
+  });
+
   it("requires explicit exact or prefix capability-name scopes in test policies", () => {
     const spec = {
       testId: "dynamic-service",

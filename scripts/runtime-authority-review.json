@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:f851fd9eaa466e38c1177ebc086b25b1042c17d8c116dea8768fb5a8930c2c50",
+  "censusDigest": "sha256:cfa860e5087c03c68c37ff18645393f0dad2f32320455baa1fb28d8dc01a4781",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -501,6 +501,30 @@
     "host:panelCdp.evaluate": {
       "review": "receiver-bound-bounded-page-evaluation",
       "change": "Adds a one-RPC Runtime.evaluate against the exact native view already selected by receiver-bound panel target authority, so the common inspect-and-poke case no longer needs a raw CDP WebSocket endpoint. The expression runs under a shared wrapper with an 8s RPC bound and a serialized result; the cross-context leaf and the external ingestion record are identical to panelCdp.screenshot."
+    },
+    "host:panelCdp.reload": {
+      "review": "receiver-bound-semantic-panel-reload",
+      "change": "Adds a write-classified reload for one exact receiver-resolved panel target. The host owns presentation-lease preparation and the canonical panel unit driver, so read-only callers are rejected at panelCdp.reload instead of an internal ensureSlot call; cross-context authority remains independently enforced."
+    },
+    "host:runtime.supervision.activate": {
+      "review": "compound-runtime-activation-authority-target",
+      "change": "Binds activation authority to the exact operation, runtime kind, and release identity while presenting the human release name. This narrows reusable grants that previously shared one generic runtime.supervision.manage resource."
+    },
+    "host:runtime.supervision.prepare": {
+      "review": "compound-runtime-preparation-authority-target",
+      "change": "Binds release preparation authority to the exact operation, runtime kind, and release identity while presenting the human release name. The receiver still owns method semantics and validates every identity field."
+    },
+    "host:runtime.supervision.restart": {
+      "review": "compound-runtime-restart-authority-target",
+      "change": "Binds restart authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. A grant for one runtime unit cannot authorize another unit or lifecycle verb."
+    },
+    "host:runtime.supervision.retire": {
+      "review": "compound-runtime-retirement-authority-target",
+      "change": "Binds destructive retirement authority to the exact operation, runtime kind, and entity identity while presenting the recognizable app or service target. Existing critical confirmation semantics remain unchanged."
+    },
+    "host:runtime.supervision.rollback": {
+      "review": "compound-runtime-rollback-authority-target",
+      "change": "Binds rollback authority to the exact operation, runtime kind, and release identity while presenting the human release name. Reusable authority no longer spans unrelated lifecycle actions or units."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace": {
       "review": "host-only-runtime-resource-binding-commit",

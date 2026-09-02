@@ -719,6 +719,22 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       cardType: z.enum(AUTHORITY_PROMPT_CARD_TYPES).optional(),
       allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
       authorityRow: authorityRowSchema.optional(),
+      authorityFacets: z
+        .array(
+          z
+            .object({
+              capability: z.string(),
+              title: z.string(),
+              description: z.string().optional(),
+              resource: z
+                .object({ type: z.string(), label: z.string(), value: z.string() })
+                .strict()
+                .optional(),
+              row: authorityRowSchema,
+            })
+            .strict()
+        )
+        .optional(),
       operationSubstance: z
         .object({
           kind: z.enum(["change-set", "send", "deletion", "custom"]),

@@ -2226,7 +2226,9 @@ async function main() {
   const ordinaryAuthorityAcquirer: import("./services/attachedHostAuthorityBridge.js").OrdinaryAuthorityAcquirer =
     {
       request: (input) => acquisitionCoordinator.request(input),
+      requestMany: (inputs) => acquisitionCoordinator.requestMany(inputs),
       acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
+      acquireMany: (inputs, signal) => acquisitionCoordinator.requestManyAndWait(inputs, signal),
       consume: (grantId) => acquisitionCoordinator.consume(grantId),
       touch: (grantId) => acquisitionCoordinator.touch(grantId),
       priorInteractiveApprovalCount: (input) =>
@@ -4736,6 +4738,7 @@ async function main() {
             "panelTreeDetail",
             slotId
           )) as {
+            slot: { current_entity_title?: string | null };
             currentHistory: { source: string; context_id: string };
             entity: { id: string };
           } | null;
@@ -4759,7 +4762,7 @@ async function main() {
               );
             }
           }
-          const { preparePanelAccessAuthority } =
+          const { panelAccessTargetFromDetail, preparePanelAccessAuthority } =
             await import("./services/panelAccessPermission.js");
           const { createVerifiedCaller } = await import("@vibestudio/shared/serviceDispatcher");
           const isEntityControlledBy = (entityId: string, callerId: string): boolean => {
@@ -4815,12 +4818,7 @@ async function main() {
             { caller },
             contextBoundary.operation,
             {
-              id: slotId,
-              title: slotId,
-              source: detail.currentHistory.source,
-              kind: isOpenPanelBrowserUrl(detail.currentHistory.source) ? "browser" : "workspace",
-              runtimeEntityId: detail.entity.id,
-              contextId: detail.currentHistory.context_id,
+              ...panelAccessTargetFromDetail(slotId, detail),
               ...(typeof requestedContext === "string" && requestedContext.length > 0
                 ? { requestedContextId: requestedContext }
                 : {}),
@@ -6252,6 +6250,13 @@ async function main() {
       const manager = getHeadlessHostManager();
       if (!manager) return false;
       return Boolean(await manager.ensureHeadlessHost());
+    },
+    reloadPanel: async (
+      ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
+      _panelId: string,
+      runtimeEntityId: string
+    ) => {
+      await unitSupervisor.restart(ctx, { kind: "panel", entityId: runtimeEntityId });
     },
     getGatewayPort: () => gatewayPortResolved,
     eventService,

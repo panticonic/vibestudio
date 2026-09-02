@@ -73,6 +73,7 @@ import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
+import { operationSubstanceForAuthority } from "@vibestudio/shared/approvals";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   authenticatedCallerOf,
@@ -3930,31 +3931,39 @@ export class RpcServer {
         });
         throw error;
       }
+      const renderedAction =
+        preparedChallenge?.operation.verb ??
+        (workspaceAuthority &&
+        denied.leaf.capability === workspaceAuthority.methodCapability &&
+        workspaceAuthority.methodReceiverAuthority
+          ? workspaceAuthority.methodReceiverAuthority.action
+          : (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability).action);
+      const operationTarget =
+        preparedChallenge?.operation.object.value ??
+        resolvedHandle?.presentation.title ??
+        workspaceAuthority?.title ??
+        denied.leaf.resourceKey;
+      const disclosedSubstance =
+        workspaceAuthority || policyFor(denied.leaf.capability).requiresSubstance
+          ? operationSubstanceForAuthority({
+              ...(preparedChallenge?.substance ? { provided: preparedChallenge.substance } : {}),
+              fallbackKind: policyFor(denied.leaf.capability).substanceKind,
+              fallbackSummary: `${renderedAction} ${operationTarget}`,
+              service: `${input.ref.source}:${input.ref.className}`,
+              method: input.method,
+              capability: denied.leaf.capability,
+              resourceKey: denied.leaf.resourceKey,
+              digest: denied.snapshot.preparedStateDigest,
+            })
+          : null;
       const acquisitionInput = {
         snapshot: denied.snapshot,
         snapshotDigest: denied.snapshotDigest,
         tier: denied.leaf.tier as "gated" | "critical",
         caller: denied.leaf.caller,
-        renderedAction:
-          preparedChallenge?.operation.verb ??
-          (workspaceAuthority &&
-          denied.leaf.capability === workspaceAuthority.methodCapability &&
-          workspaceAuthority.methodReceiverAuthority
-            ? workspaceAuthority.methodReceiverAuthority.action
-            : (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability).action),
+        renderedAction,
         resource: { kind: "exact", key: denied.leaf.resourceKey },
-        ...(policyFor(denied.leaf.capability).requiresSubstance
-          ? {
-              substance: {
-                kind: policyFor(denied.leaf.capability).substanceKind ?? "custom",
-                summary: `${
-                  (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability)
-                    .action
-                } ${workspaceAuthority?.title ?? denied.leaf.resourceKey}`,
-                digest: denied.snapshot.preparedStateDigest,
-              },
-            }
-          : {}),
+        ...(disclosedSubstance ? { substance: disclosedSubstance } : {}),
         ...(preparedChallenge
           ? { presentation: preparedChallenge }
           : workspaceAuthority?.methodReceiverAuthority &&

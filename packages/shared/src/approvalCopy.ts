@@ -937,21 +937,37 @@ function getCapabilityCopy(approval: PendingCapabilityApproval): ApprovalCopyRes
   const handler = CAPABILITY_COPY_HANDLERS[approval.capability];
   if (handler) {
     const result = handler(approval);
-    if (result) return result;
+    if (result) return withComposedAuthorityWarning(approval, result);
   }
   if (isBrowserOpenApproval(approval)) {
     const isOAuth = isOAuthExternalApproval(approval);
     const destination = formatCapabilityDestination(approval, isOAuth);
-    return isOAuth
-      ? HOST_APPROVAL_COPY.headlines.browserSignIn(destination)
-      : HOST_APPROVAL_COPY.headlines.browserOpen(destination);
+    return withComposedAuthorityWarning(
+      approval,
+      isOAuth
+        ? HOST_APPROVAL_COPY.headlines.browserSignIn(destination)
+        : HOST_APPROVAL_COPY.headlines.browserOpen(destination)
+    );
   }
   const target = genericCapabilityTarget(approval);
   const fallback = HOST_APPROVAL_COPY.headlines.genericCapability(target);
-  return {
+  return withComposedAuthorityWarning(approval, {
     title: targetAwareGenericTitle(approval.title, fallback.title),
     summary: spoken(approval.description) ?? fallback.summary,
-  };
+  });
+}
+
+function withComposedAuthorityWarning(
+  approval: PendingCapabilityApproval,
+  copy: ApprovalCopyResult
+): ApprovalCopyResult {
+  if (
+    copy.warning ||
+    !approval.authorityFacets?.some((facet) => facet.capability === "context.boundary")
+  ) {
+    return copy;
+  }
+  return { ...copy, warning: HOST_APPROVAL_COPY.headlines.contextBoundaryWarning };
 }
 
 function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyResult {

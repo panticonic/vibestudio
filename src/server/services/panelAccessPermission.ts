@@ -23,6 +23,31 @@ export interface PanelAccessPermissionTarget extends PanelAccessTarget {
   operationGroupKey?: string;
 }
 
+type PanelAccessDetail = {
+  slot: { current_entity_title?: string | null };
+  currentHistory: { source: string; context_id: string };
+  entity: { id: string };
+};
+
+/** One canonical projection from durable panel detail to approval/control metadata. */
+export function panelAccessTargetFromDetail(
+  panelId: string,
+  detail: PanelAccessDetail
+): PanelAccessPermissionTarget {
+  const source = detail.currentHistory.source;
+  return {
+    id: panelId,
+    // A slot id is an address, never presentation copy. The workspace-state
+    // boundary already resolves the current entity title and falls back to the
+    // presented source while title propagation is in flight.
+    title: detail.slot.current_entity_title?.trim() || source,
+    source,
+    kind: source.startsWith("browser:") ? "browser" : "workspace",
+    runtimeEntityId: detail.entity.id,
+    contextId: detail.currentHistory.context_id,
+  };
+}
+
 export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
   /** Resolve a (subject) principal's own context — durable, async. */
   resolveCallerContext(callerId: string): Promise<string | null>;
