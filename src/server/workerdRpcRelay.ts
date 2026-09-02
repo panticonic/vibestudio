@@ -11,6 +11,11 @@ import type { AttestedCaller, DirectAuthorityAttestation } from "@vibestudio/rpc
 import { Agent, type Dispatcher } from "undici";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { EntityNotCreatedError } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  DURABLE_WORK_READY_HEADER,
+  decodeDurableWorkReady,
+  type DurableWorkQueue,
+} from "@vibestudio/shared/durableWork";
 
 export type DORef = DORefParam;
 
@@ -195,6 +200,8 @@ export interface DurableObjectRelayDeps {
   readOnly?: boolean;
   /** Exact upstream invocation coordinate; provenance only, never authorization. */
   causalParent?: RpcCausalParent;
+  /** Disposable post-commit readiness acceleration for the exact receiver. */
+  onWorkReady?: (queues: DurableWorkQueue[]) => void;
 }
 
 function generateRequestId(): string {
@@ -273,6 +280,19 @@ async function fetchEnvelopeFromDO(
     ) as Error & { cause?: unknown };
     wrapped.cause = error;
     throw wrapped;
+  }
+
+  const encodedReady = res.headers.get(DURABLE_WORK_READY_HEADER);
+  if (encodedReady) {
+    try {
+      const queues = decodeDurableWorkReady(encodedReady);
+      if (queues.length > 0) deps.onWorkReady?.(queues);
+    } catch (error) {
+      // The owner registry remains the correctness backstop. A malformed
+      // disposable hint must not turn a committed semantic call into an
+      // apparent failure that its caller might replay.
+      console.error("[WorkerdRpcRelay] ignored invalid durable-work receipt", error);
+    }
   }
 
   return res;

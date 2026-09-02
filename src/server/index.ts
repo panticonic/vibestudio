@@ -3637,6 +3637,7 @@ async function main() {
   // managed service below; the workspace-state `onAlarmChanged` hook pokes it.
   let alarmDriverInstance: import("./services/alarmDriver.js").AlarmDriver | null = null;
   let durableWorkDispatch: import("./doDispatch.js").DODispatch | null = null;
+  let durableWorkRpcServer: import("./rpcServer.js").RpcServer | null = null;
 
   // Slot-tree change fan-out: the workspace-state service pokes this after any
   // mutating slot.* method; the panel-tree bridge subscribes (registerSlotStateListener)
@@ -6055,11 +6056,14 @@ async function main() {
   {
     container.registerManaged({
       name: "durableWorkDriver",
-      dependencies: ["workerdWorkspace", "doDispatch"],
+      dependencies: ["workerdWorkspace", "doDispatch", "rpcServer"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
+        const rpcServer = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+        ).server;
         const { DurableWorkDriver, createDurableWorkHandlers, createDurableWorkOwnerScanner } =
           await import("./services/durableWorkDriver.js");
         const workspaceOwner: import("@vibestudio/shared/doDispatcher").DORef = {
@@ -6074,13 +6078,17 @@ async function main() {
           workerId,
         });
         doDispatch.setWorkReadyObserver((hint) => driver.notify(hint));
+        rpcServer.setWorkReadyObserver((hint) => driver.notify(hint));
         durableWorkDispatch = doDispatch;
+        durableWorkRpcServer = rpcServer;
         return driver;
       },
       async stop(instance: import("./services/durableWorkDriver.js").DurableWorkDriver | null) {
         durableWorkDispatch?.setWorkReadyObserver(null);
+        durableWorkRpcServer?.setWorkReadyObserver(null);
         await instance?.quiesce();
         durableWorkDispatch = null;
+        durableWorkRpcServer = null;
       },
       getServiceDefinition() {
         return createDurableWorkService(

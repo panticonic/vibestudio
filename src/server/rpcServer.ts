@@ -94,6 +94,7 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
+import type { DurableWorkReadyHint } from "@vibestudio/shared/durableWork";
 import {
   AUTHENTICATION_FRAME_MAX_BYTES,
   RPC_MAX_PENDING_AUTHENTICATIONS,
@@ -572,6 +573,7 @@ export class RpcServer {
       contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
     }
   >();
+  private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
 
   private static readonly DISCONNECT_GRACE_MS = 3000;
 
@@ -947,6 +949,11 @@ export class RpcServer {
         this.connections.notifyConnectionsChanged();
       },
     });
+  }
+
+  /** Observe disposable readiness receipts from caller-attributed DO relays. */
+  setWorkReadyObserver(observer: ((hint: DurableWorkReadyHint) => void) | null): void {
+    this.workReadyObserver = observer;
   }
 
   private verifiedCallerFor(
@@ -4190,6 +4197,7 @@ export class RpcServer {
             ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
             ...(meta?.readOnly ? { readOnly: true } : {}),
             ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
+            onWorkReady: (queues) => this.workReadyObserver?.({ owner: ref, queues }),
           },
           meta?.signal
         );
@@ -4323,6 +4331,7 @@ export class RpcServer {
             : {}),
           ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
           ...(causalParent ? { causalParent } : {}),
+          onWorkReady: (queues) => this.workReadyObserver?.({ owner: ref, queues }),
         },
         signal
       );
@@ -4498,6 +4507,7 @@ export class RpcServer {
         callerKind: fromKind,
         ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
         authorization,
+        onWorkReady: (queues) => this.workReadyObserver?.({ owner: ref, queues }),
       });
       return;
     }

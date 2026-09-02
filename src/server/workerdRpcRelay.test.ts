@@ -9,6 +9,7 @@ import {
   streamFromDurableObject,
 } from "./workerdRpcRelay.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -108,6 +109,27 @@ describe("workerdRpcRelay", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
     expect(body.delivery).toMatchObject({ idempotencyKey: "idem-1", readOnly: true });
     expect(body.message).toMatchObject({ type: "request", method: "ping", args: ["arg"] });
+  });
+
+  it("surfaces durable-work readiness from caller-attributed DO relays", async () => {
+    const response = responseEnvelope({ ok: true });
+    response.headers.set(DURABLE_WORK_READY_HEADER, "channel-delivery,agent-effect");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    const onWorkReady = vi.fn();
+
+    await postToDurableObject(
+      { source: "workers/channel", className: "ChannelDO", objectKey: "task-1" },
+      "publish",
+      [],
+      {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+        onWorkReady,
+      }
+    );
+
+    expect(onWorkReady).toHaveBeenCalledOnce();
+    expect(onWorkReady).toHaveBeenCalledWith(["channel-delivery", "agent-effect"]);
   });
 
   it("preserves structured service failures while unwrapping the DO envelope", async () => {
