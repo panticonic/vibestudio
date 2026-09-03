@@ -11,6 +11,7 @@ import {
   directAuthorityCapability,
   isBlessedSystemTestConduit,
   isAttestedSystemTestHarness,
+  testPolicyAllowsGatedInvocation,
   testPolicyAuthorityDecision,
 } from "./authorityRuntime.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -165,6 +166,52 @@ describe("authority runtime", () => {
         tier: "gated",
       })
     ).toBeNull();
+  });
+
+  it("allows gated receiver checks only through an affirmative test-policy decision", () => {
+    const ordinaryCaller = createVerifiedCaller("worker:ordinary", "worker");
+    expect(
+      testPolicyAllowsGatedInvocation(ordinaryCaller, undefined, {
+        capability: "credential.use",
+        resourceKey: "credential.use",
+      })
+    ).toBe(false);
+
+    const taskCaller = createVerifiedCaller("agent:test", "agent", null, null, null, null, {
+      policyId: "test:task-decision",
+      kind: "case",
+      orchestratorPolicyId: "test:orchestrator",
+      case: {
+        testId: "task-decision",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
+        authority: [
+          {
+            ruleId: "credential-use",
+            capability: { kind: "exact", key: "credential.use" },
+            resource: { kind: "exact", key: "credential.use" },
+            tier: "gated",
+            decision: "task",
+          },
+        ],
+        unexpectedPrompts: "fail",
+      },
+    });
+    expect(
+      testPolicyAllowsGatedInvocation(taskCaller, undefined, {
+        capability: "credential.use",
+        resourceKey: "credential.use",
+      })
+    ).toBe(true);
+    expect(
+      testPolicyAllowsGatedInvocation(taskCaller, undefined, {
+        capability: "credential.use",
+        resourceKey: "credential.other",
+      })
+    ).toBe(false);
   });
 
   it("binds direct human critical calls to the exact authenticated session", () => {

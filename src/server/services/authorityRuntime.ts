@@ -125,12 +125,11 @@ export function testPolicyAllowsGatedInvocation(
   authorization: AuthorizationContext | undefined,
   input: { capability: string; resourceKey: string }
 ): boolean {
-  return (
-    testPolicyAuthorityDecision(caller, authorization, {
-      ...input,
-      tier: "gated",
-    })?.decision !== "deny"
-  );
+  const decision = testPolicyAuthorityDecision(caller, authorization, {
+    ...input,
+    tier: "gated",
+  })?.decision;
+  return decision === "once" || decision === "task";
 }
 
 /**
