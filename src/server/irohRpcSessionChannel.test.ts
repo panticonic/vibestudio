@@ -142,3 +142,51 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
     });
   });
 });
+
+describe("IrohRpcSessionChannel shutdown lifecycle", () => {
+  it("closes locally when the peer is already gone before the close notification", async () => {
+    const onClosed = vi.fn();
+    const log = vi.fn();
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => {
+        throw new Error("connection closed");
+      }),
+      onClosed,
+      log,
+    });
+
+    channel.close(4001, "authentication rejected");
+
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalledWith("shell"));
+    expect(channel.readyState).toBe(channel.CLOSED);
+    expect(log).toHaveBeenCalledWith(
+      "Iroh session shell close notification failed: connection closed"
+    );
+  });
+
+  it("settles a rejected termination notification without delaying local termination", async () => {
+    const onClosed = vi.fn();
+    const log = vi.fn();
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => {
+        throw new Error("connection closed");
+      }),
+      onClosed,
+      log,
+    });
+
+    channel.terminate();
+
+    expect(onClosed).toHaveBeenCalledWith("shell");
+    expect(channel.readyState).toBe(channel.CLOSED);
+    await vi.waitFor(() =>
+      expect(log).toHaveBeenCalledWith(
+        "Iroh session shell termination notification failed: connection closed"
+      )
+    );
+  });
+});

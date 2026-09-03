@@ -128,18 +128,21 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
         ...(reason === undefined ? {} : { reason }),
         terminal: code !== undefined && code >= 4000,
       })
+      .catch((error) => this.logControlFailure("close notification", error))
       .finally(() => this.fireClosed(code, reason));
   }
 
   terminate(): void {
     if (this.state !== OPEN) return;
-    void this.options.writeControl({
-      t: IROH_SESSION_CLOSED,
-      sid: this.options.sid,
-      code: 1006,
-      reason: "terminated",
-      terminal: true,
-    });
+    void this.options
+      .writeControl({
+        t: IROH_SESSION_CLOSED,
+        sid: this.options.sid,
+        code: 1006,
+        reason: "terminated",
+        terminal: true,
+      })
+      .catch((error) => this.logControlFailure("termination notification", error));
     this.fireClosed(1006, "terminated");
   }
 
@@ -479,6 +482,14 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       settle();
       throw error;
     });
+  }
+
+  private logControlFailure(operation: string, error: unknown): void {
+    this.options.log?.(
+      `Iroh session ${this.options.sid} ${operation} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 
   private fireClosed(code?: number, reason?: string): void {
