@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  INITIAL_WORKSPACE_TEMPLATE_ENV,
   parseBaseTemplateReleaseArtifact,
+  readBaseTemplateRelease,
   readWorkspaceCreationTemplate,
   sameWorkspaceTemplatePin,
 } from "./baseTemplateRelease.js";
@@ -37,13 +39,26 @@ describe("Base release pointer", () => {
     ).toEqual(pin);
   });
 
-  it("rejects a development Base override outside development mode", () => {
-    expect(() =>
-      readWorkspaceCreationTemplate("/unused", {
+  it("does not let a local acquisition source select production workspace creation", () => {
+    expect(
+      readWorkspaceCreationTemplate(process.cwd(), {
         NODE_ENV: "production",
         VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(pin),
       })
-    ).toThrow(/only select workspace creation in development mode/);
+    ).toEqual(readBaseTemplateRelease(process.cwd()).baseTemplate);
+  });
+
+  it("allows a source desktop to select its initial template without development mode", () => {
+    expect(
+      readWorkspaceCreationTemplate(
+        "/unused",
+        {
+          NODE_ENV: "production",
+          [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(pin),
+        },
+        { allowInitialOverride: true }
+      )
+    ).toEqual(pin);
   });
 
   it("compares every exact coordinate, including the credential requirement", () => {

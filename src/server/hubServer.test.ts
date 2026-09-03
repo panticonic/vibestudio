@@ -40,6 +40,7 @@ import {
   type WorkspaceRuntime,
 } from "./hubServer.js";
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
+import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
 
 describe("hub control HTTP routing", () => {
   it("routes both RPC dispatch and pre-upgrade admission to the control server", () => {
@@ -131,6 +132,23 @@ describe("hub workspace creation template selection", () => {
         },
       })
     ).toEqual(developmentPin);
+  });
+
+  it("uses a local checkout only to acquire a production source launch's explicit intent", () => {
+    const environment = {
+      NODE_ENV: "production",
+      VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+    };
+    expect(
+      selectWorkspaceCreationRootTemplate({
+        appRoot: process.cwd(),
+        requested: developmentPin,
+        environment,
+      })
+    ).toEqual(developmentPin);
+    expect(selectWorkspaceCreationRootTemplate({ appRoot: process.cwd(), environment })).toEqual(
+      readBaseTemplateRelease(process.cwd()).baseTemplate
+    );
   });
 
   it("rejects a conflicting explicit template before registering the workspace", () => {

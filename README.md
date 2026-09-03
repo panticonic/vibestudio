@@ -156,7 +156,7 @@ mode concurrently with other native-input work.
 ```bash
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev:base setup   # clone and remember the external Base checkout (one time)
-pnpm start           # build + start Electron in the source developer instance
+pnpm start           # build + start Electron with normal desktop semantics
 pnpm dev             # launch a fresh disposable development workspace
 pnpm dev:production  # fresh disposable instance using the pinned production Base
 pnpm dev:iroh        # build + start a local hub, then connect through Iroh
@@ -177,26 +177,25 @@ pnpm dev:base setup
 The command clones the canonical Base repository into the sibling
 `../vibestudio-workspace-base` directory when it is absent, then records its
 canonical path in this repository's local Git configuration under
-`vibestudio.baseCheckout`. The setting is untracked, shared by this clone's Git
-worktrees, and resolved by every Base-aware developer command: `pnpm start`, `pnpm dev`,
-`pnpm server:live`, userland and browser tests, type checks, generators, Metro,
-smoke tests, and commit checks. It is deliberately not an ambient `.env` file.
-Once setup has completed, no command or commit requires the checkout path again.
+`vibestudio.baseCheckout`. The setting is untracked and shared by this clone's
+Git worktrees. Base-aware developer commands resolve it when they need
+unpublished Base input: `pnpm dev`, `pnpm server:live`, userland and browser
+tests, type checks, generators, Metro, smoke tests, and commit checks, plus
+`pnpm start` when the ordinary desktop profile needs its first workspace. It is
+deliberately not an ambient `.env` file. Once setup has completed, no command or
+commit requires the checkout path again.
 
-`pnpm start` and `pnpm dev` snapshot the checkout's visible worktree into an instance-owned
-checkpoint. Tracked and untracked non-ignored edits are included; you do not
-need to commit, push, tag, or publish Base before starting or restarting the
-app. The developer checkout itself is never staged or committed by this
-process.
+When a command needs that unpublished input, it snapshots the checkout's
+visible worktree into a privately owned checkpoint. Tracked and untracked
+non-ignored edits are included; you do not need to commit, push, tag, or publish
+Base before launching. The developer checkout itself is never staged or
+committed by this process.
 
-The default `source` developer instance is a two-way co-development session.
+The persistent `source` server instance is a two-way co-development session.
 Its initial semantic workspace comes from that worktree checkpoint, and every
 reviewed publication to protected `main` is projected back to the configured
-Base checkout. The projection is a three-way merge against the publication's
-exact previous state: checkout-only edits are preserved, identical edits
-coalesce, and overlapping edits reject the entire write-back before any file is
-touched. Named, disposable, system-test, and candidate-pair instances never
-write to the configured checkout.
+Base checkout. `pnpm start` is deliberately not a source instance: it uses the
+ordinary desktop profile and never writes workspace publications into Base.
 
 To exercise the shipped experience instead, run `pnpm dev:production`. It
 ignores (but does not change) the local development selection, creates a fresh
@@ -218,9 +217,12 @@ single-command overrides. They do not change the stored selection.
 See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
 `pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)
 
-`pnpm start` follows the same startup policy as the packaged app: it reopens the
-most recently used registered workspace, creating `default` only when the
-instance has no workspace yet. `pnpm dev` explicitly launches a fresh,
+`pnpm start` builds the unpublished checkout with production runtime semantics
+and launches it against the ordinary desktop profile. It reopens the most
+recently used registered workspace, creating `default` from the linked
+development Base only when the profile has no workspace yet. It does not expose
+developer instances, ephemeral workspaces, or Base write-back. `pnpm dev`
+explicitly launches a fresh,
 hub-owned disposable workspace and always stops its hub on quit so the
 workspace checkout and catalog lifecycle are removed. Persistent and ephemeral
 launches therefore exercise the same application; only workspace ownership and
@@ -258,7 +260,7 @@ instances run concurrently. Stopping one never targets another hub.
 - `pnpm type-check:cloudflare` - Type-check the callback/apex Cloudflare Worker
 - `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker
-- `pnpm start` - Build and start the source developer instance with the configured Base
+- `pnpm start` - Build unpublished code and launch it with normal desktop semantics
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
 - `pnpm format:check` - Check formatting
