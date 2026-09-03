@@ -67,8 +67,12 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
-      - name: Install browser test runtime
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install browser and desktop integration runtimes
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes gnome-keyring
+          command -v gnome-keyring-daemon
 
       - name: Desktop Iroh pairing, approvals, panels, relaunch, and recovery
         run: pnpm test:iroh-desktop-e2e
