@@ -22,7 +22,6 @@ import {
 } from "./capabilityGrantStore.js";
 import { createHash } from "node:crypto";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
-import { capabilityNotability } from "@vibestudio/shared/authority/capabilityNotability";
 import { testPolicyAuthorityDecision } from "./authorityRuntime.js";
 import type {
   DurableTargetAuthorityRequest,
@@ -119,21 +118,51 @@ export class AcquisitionCoordinator {
   private readonly presentingTargetRequests = new Set<string>();
   private readonly presentingTaskRuleGroups = new Set<string>();
   private readonly targetJoins = new Map<string, Map<string, TargetRequestJoin>>();
-  private readonly taskTitles = new Map<string, string>();
-
   constructor(
     private readonly deps: {
       approvalQueue: ApprovalQueue;
       grantStore: CapabilityGrantStore;
       targetRequests?: TargetAuthorityRequestStore;
       notifyOwner?: (ownerRuntimeId: string, acquisitionId: string) => Promise<void> | void;
+      resolveTaskTitle?: (taskSubject: string) => Promise<string | null>;
+      expandLineageKeys?: (keys: readonly string[]) => readonly string[];
     }
   ) {}
 
-  setTaskTitle(taskSubject: string, title: string): void {
-    const normalized = title.trim();
-    if (normalized) this.taskTitles.set(taskSubject, normalized);
-    else this.taskTitles.delete(taskSubject);
+  private async taskTitleFor(taskSubject: string): Promise<string | undefined> {
+    if (!this.deps.resolveTaskTitle || !taskSubject.startsWith("task:")) return undefined;
+    try {
+      const title = (await this.deps.resolveTaskTitle(taskSubject))?.trim();
+      return title ? title.slice(0, 120) : undefined;
+    } catch (error) {
+      console.warn(`[AuthorityAcquisition] could not resolve title for ${taskSubject}:`, error);
+      return undefined;
+    }
+  }
+
+  private expandSourceLineage(lineage: readonly string[]): string[] {
+    const keys = lineage
+      .filter((item) => item.startsWith("source:"))
+      .map((item) => item.slice("source:".length));
+    try {
+      return [...new Set(this.deps.expandLineageKeys?.(keys) ?? keys)].sort();
+    } catch (error) {
+      console.warn("[AuthorityAcquisition] could not expand outside-content lineage:", error);
+      return keys.filter((key) => !key.startsWith("lineage-set:")).sort();
+    }
+  }
+
+  private sourceDeltaKeys(
+    grants: readonly import("@vibestudio/rpc").AuthorityGrant[],
+    lineage: readonly string[]
+  ): string[] {
+    const currentSources = this.expandSourceLineage(lineage);
+    return currentSources.filter((source) =>
+      grants.some(
+        (grant) =>
+          !this.expandSourceLineage(grant.constraints?.lineageAtConsent ?? []).includes(source)
+      )
+    );
   }
 
   requestForTarget(input: {
@@ -155,8 +184,7 @@ export class AcquisitionCoordinator {
   }
 
   requestTaskRulesForTarget(
-    inputs: readonly Parameters<AcquisitionCoordinator["requestForTarget"]>[0][],
-    taskRef?: string
+    inputs: readonly Parameters<AcquisitionCoordinator["requestForTarget"]>[0][]
   ): DurableTargetAuthorityRequest[] {
     const first = inputs[0];
     if (!first) return [];
@@ -171,19 +199,19 @@ export class AcquisitionCoordinator {
       throw new Error("A task rules card requires one target, one plan, and no critical rows");
     }
     const requests = inputs.map((input) => this.requireTargetRequests().ensure(input));
-    this.presentTaskRuleRequests(
+    void this.presentTaskRuleRequests(
       requests.filter((request) => request.state === "pending"),
-      first.sourceUser,
-      taskRef
-    );
+      first.sourceUser
+    ).catch((error) => {
+      console.error("[AuthorityAcquisition] task rules presentation failed:", error);
+    });
     return requests;
   }
 
-  private presentTaskRuleRequests(
+  private async presentTaskRuleRequests(
     requests: readonly DurableTargetAuthorityRequest[],
-    sourceUser: `user:${string}`,
-    taskRef?: string
-  ): void {
+    sourceUser: `user:${string}`
+  ): Promise<void> {
     const first = requests[0];
     if (!first) return;
     const groupKey = `${first.targetSubject}:${first.authorityPlanDigest}`;
@@ -193,55 +221,68 @@ export class AcquisitionCoordinator {
       throw new Error("Task rules require typed approval resolution support");
     }
     this.presentingTaskRuleGroups.add(groupKey);
-    const handle = requestWithHandle.call(this.deps.approvalQueue, {
-      kind: "capability",
-      callerId: targetRequestCallerId(groupKey),
-      callerKind: "system",
-      repoPath: "vibestudio/authority",
-      effectiveVersion: first.authorityPlanDigest,
-      attention: "interrupt",
-      operationId: `preflight:${groupKey}`,
-      taskSubject: first.targetSubject,
-      ...(this.taskTitles.get(first.targetSubject)
-        ? { taskTitle: this.taskTitles.get(first.targetSubject)! }
-        : {}),
-      securityIdentity: groupKey,
-      semanticFamily: "task.rules",
-      sourcesShown: [],
-      repeatReason: "none",
-      requestedByUserId: sourceUser.slice("user:".length),
-      requesterCategory: "agent",
-      dedupKey: `task-rules:${groupKey}`,
-      capability: first.capability,
-      title: "Allow these planned actions for this chat?",
-      description:
-        "This agent plans to use these actions. Allow them now so it won't interrupt you later?",
-      resource: { type: "chat", label: "Chat", value: first.targetSubject },
-      grantResourceKey: first.targetSubject,
-      operation: {
-        kind: "unknown",
-        verb: "allow planned actions",
-        object: { type: "chat", label: "Chat", value: first.targetSubject },
-      },
-      cardType: "task.rules",
-      allowedDecisions: ["task", "deny"],
-      authorityRow: targetRequestAuthorityRow(first),
-      authorityFacets: requests.map((request) => ({
-        selectionKey: request.requestId,
-        defaultSelected: true,
-        capability: request.capability,
-        title: request.review.action,
-        resource: {
-          type: request.resource.kind,
-          label: "Where",
-          value:
-            request.resource.kind === "exact"
-              ? request.resource.key
-              : canonicalJson(request.resource),
-        },
-        row: targetRequestAuthorityRow(request),
-      })),
-    });
+    const taskTitle = this.deps.resolveTaskTitle
+      ? await this.taskTitleFor(first.targetSubject)
+      : undefined;
+    const taskName = taskTitle ? `“${taskTitle}”` : "this task";
+    const singleRule = requests.length === 1 ? requests[0] : undefined;
+    const handle = (() => {
+      try {
+        return requestWithHandle.call(this.deps.approvalQueue, {
+          kind: "capability",
+          callerId: targetRequestCallerId(groupKey),
+          callerKind: "system",
+          repoPath: "vibestudio/authority",
+          effectiveVersion: first.authorityPlanDigest,
+          attention: "interrupt",
+          operationId: `preflight:${groupKey}`,
+          taskSubject: first.targetSubject,
+          ...(taskTitle ? { taskTitle } : {}),
+          securityIdentity: groupKey,
+          semanticFamily: "task.rules",
+          sourcesShown: [],
+          repeatReason: "none",
+          requestedByUserId: sourceUser.slice("user:".length),
+          requesterCategory: "agent",
+          dedupKey: `task-rules:${groupKey}`,
+          capability: first.capability,
+          title: singleRule
+            ? `Allow ${taskName} to ${singleRule.review.action}?`
+            : `Allow these planned actions for ${taskName}?`,
+          description: singleRule
+            ? "This action is part of the task's current plan. Allowing it now avoids an interruption when it is needed."
+            : "These actions are part of the task's current plan. Choose the ones it may use without interrupting you later.",
+          resource: { type: "chat", label: "Chat", value: first.targetSubject },
+          grantResourceKey: first.targetSubject,
+          operation: {
+            kind: "unknown",
+            verb: "allow planned actions",
+            object: { type: "chat", label: "Chat", value: first.targetSubject },
+          },
+          cardType: "task.rules",
+          allowedDecisions: ["task", "deny"],
+          authorityRow: targetRequestAuthorityRow(first),
+          authorityFacets: requests.map((request) => ({
+            selectionKey: request.requestId,
+            defaultSelected: true,
+            capability: request.capability,
+            title: request.review.action,
+            resource: {
+              type: request.resource.kind,
+              label: "Where",
+              value:
+                request.resource.kind === "exact"
+                  ? request.resource.key
+                  : canonicalJson(request.resource),
+            },
+            row: targetRequestAuthorityRow(request),
+          })),
+        });
+      } catch (error) {
+        this.presentingTaskRuleGroups.delete(groupKey);
+        throw error;
+      }
+    })();
     void handle.resolution
       .then(({ decision, selectedAuthorityFacetKeys, resolver }) => {
         const selected = new Set(selectedAuthorityFacetKeys ?? []);
@@ -252,8 +293,7 @@ export class AcquisitionCoordinator {
             const grantId = this.persistTargetDecision(
               live,
               "allow",
-              resolver ? `user:${resolver.subject.userId}` : sourceUser,
-              taskRef
+              resolver ? `user:${resolver.subject.userId}` : sourceUser
             );
             this.requireTargetRequests().settle(request.requestId, "granted", grantId);
             this.settleTargetJoiners(request.requestId, {
@@ -441,8 +481,7 @@ export class AcquisitionCoordinator {
   private persistTargetDecision(
     request: DurableTargetAuthorityRequest,
     effect: "allow" | "deny",
-    issuedBy: `user:${string}`,
-    taskRef?: string
+    issuedBy: `user:${string}`
   ): string | undefined {
     const missionSubject = request.targetSubject.startsWith("mission:")
       ? (request.targetSubject as `mission:${string}@${string}`)
@@ -455,7 +494,6 @@ export class AcquisitionCoordinator {
       subject: request.targetSubject,
       constraints: {
         ...(missionSubject ? { missionSubject } : {}),
-        ...(taskRef ? { taskRef } : {}),
         lineageAtConsent: [],
       },
       issuedBy,
@@ -598,7 +636,13 @@ export class AcquisitionCoordinator {
 
     const sourceDelta = this.sourceDeltaFor(input);
     if (sourceDelta) {
-      return this.requestSourceDelta(input, sourceDelta.grants, sourceDelta.lineage, continuation);
+      return this.requestSourceDelta(
+        input,
+        sourceDelta.grants,
+        sourceDelta.lineage,
+        sourceDelta.newSources,
+        continuation
+      );
     }
 
     const testPolicy = input.caller.testPolicy ?? input.caller.executionSession?.testPolicy ?? null;
@@ -674,7 +718,6 @@ export class AcquisitionCoordinator {
             constraints:
               rule.decision === "task"
                 ? {
-                    ...(facet.snapshot.taskRef ? { taskRef: facet.snapshot.taskRef } : {}),
                     lineageAtConsent: [...(facet.snapshot.lineageClasses ?? ["none"])],
                   }
                 : {
@@ -776,26 +819,42 @@ export class AcquisitionCoordinator {
   private sourceDeltaFor(input: AcquisitionRequestInput): {
     grants: import("@vibestudio/rpc").AuthorityGrant[];
     lineage: string[];
+    newSources: string[];
   } | null {
     const subject = input.snapshot.taskAuthority;
     const lineage = [...(input.snapshot.lineageClasses ?? [])];
     if (!subject || !lineage.some((entry) => entry.startsWith("source:"))) return null;
-    const grants = this.deps.grantStore
+    const candidates = this.deps.grantStore
       .listActiveAuthorityGrants()
       .filter(
-        (grant) =>
-          grant.subject === subject &&
-          grant.effect === "allow" &&
-          grant.scope === "task" &&
-          lineage.some((entry) => !(grant.constraints?.lineageAtConsent ?? []).includes(entry))
+        (grant) => grant.subject === subject && grant.effect === "allow" && grant.scope === "task"
       );
-    return grants.length > 0 ? { grants, lineage } : null;
+    const exactSources = this.expandSourceLineage(lineage);
+    const affectedFacetKeys = new Set(
+      candidates
+        .filter((grant) => {
+          const consentSources = this.expandSourceLineage(
+            grant.constraints?.lineageAtConsent ?? []
+          );
+          return exactSources.length > 0
+            ? exactSources.some((source) => !consentSources.includes(source))
+            : lineage.some((entry) => !(grant.constraints?.lineageAtConsent ?? []).includes(entry));
+        })
+        .map((grant) => canonicalKey([grant.capability, resourceKeyOfScope(grant.resource)]))
+    );
+    const grants = candidates.filter((grant) =>
+      affectedFacetKeys.has(canonicalKey([grant.capability, resourceKeyOfScope(grant.resource)]))
+    );
+    return grants.length > 0
+      ? { grants, lineage, newSources: this.sourceDeltaKeys(grants, lineage) }
+      : null;
   }
 
   private requestSourceDelta(
     input: AcquisitionRequestInput,
     grants: readonly import("@vibestudio/rpc").AuthorityGrant[],
     lineage: readonly string[],
+    newSources: readonly string[],
     continuation: PendingAcquisition["continuation"]
   ): AcquisitionInfo {
     const currentGrant = grants.find(
@@ -805,21 +864,33 @@ export class AcquisitionCoordinator {
     );
     const facets: Array<{
       selectionKey: string;
-      grant: import("@vibestudio/rpc").AuthorityGrant | null;
+      grants: import("@vibestudio/rpc").AuthorityGrant[];
       capability: string;
       resource: ResourceScope;
       row: ReturnType<typeof authorityRowForAcquisition>;
-    }> = grants.map((grant) => ({
-      selectionKey: grantSelectionKey(grant),
-      grant,
-      capability: grant.capability,
-      resource: grant.resource,
-      row: grantAuthorityRow(grant),
-    }));
+    }> = [];
+    for (const grant of grants) {
+      const existing = facets.find(
+        (facet) =>
+          facet.capability === grant.capability &&
+          resourceKeyOfScope(facet.resource) === resourceKeyOfScope(grant.resource)
+      );
+      if (existing) {
+        existing.grants.push(grant);
+      } else {
+        facets.push({
+          selectionKey: grantSelectionKey(grant),
+          grants: [grant],
+          capability: grant.capability,
+          resource: grant.resource,
+          row: grantAuthorityRow(grant),
+        });
+      }
+    }
     if (!currentGrant) {
       facets.push({
         selectionKey: acquisitionFacetSelectionKey(input),
-        grant: null,
+        grants: [],
         capability: input.snapshot.capability,
         resource: input.resource,
         row: authorityRowForAcquisition(input),
@@ -866,69 +937,82 @@ export class AcquisitionCoordinator {
     const requestWithHandle = this.deps.approvalQueue.requestWithHandle;
     if (!requestWithHandle)
       throw new Error("Source deltas require typed approval resolution support");
-    const source =
-      lineage.find((entry) => entry.startsWith("source:"))?.slice(7) ?? "outside content";
-    const handle = requestWithHandle.call(this.deps.approvalQueue, {
-      kind: "capability",
-      callerId: input.caller.runtime.id,
-      callerKind: approvalCallerKind(input.caller.runtime.kind),
-      repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
-      effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
-      attention: "interrupt",
-      operationId: acquisitionId,
-      taskSubject:
-        input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId,
-      ...(this.taskTitles.get(
-        input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId
-      )
-        ? {
-            taskTitle: this.taskTitles.get(
-              input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId
-            )!,
-          }
-        : {}),
-      securityIdentity: requestKey,
-      semanticFamily: "task.rules",
-      sourcesShown: lineage
-        .filter((item) => item.startsWith("source:"))
-        .map((item) => item.slice("source:".length))
-        .sort(),
-      repeatReason: "new-source",
-      ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
-      requesterCategory: "agent",
-      dedupKey: requestKey,
-      capability: input.snapshot.capability,
-      title: "Extend this chat's permissions?",
-      description: `This chat has read outside content: ${source}. Extend these permissions to cover it?`,
-      resource: { type: "outside-source", label: "New source", value: source },
-      grantResourceKey: source,
-      operation: {
-        kind: "unknown",
-        verb: "extend chat permissions",
-        object: { type: "outside-source", label: "New source", value: source },
-      },
-      cardType: "task.rules",
-      allowedDecisions: ["task", "deny"],
-      authorityRow: currentGrant
-        ? grantAuthorityRow(currentGrant)
-        : authorityRowForAcquisition(input),
-      authorityFacets: facets.map((facet) => ({
-        selectionKey: facet.selectionKey,
-        defaultSelected:
-          (facet.capability === input.snapshot.capability &&
-            resourceKeyOfScope(facet.resource) === input.snapshot.resourceKey) ||
-          capabilityNotability({ capability: facet.capability, tier: "gated" }) === "everyday",
-        capability: facet.capability,
-        title: facet.row.action,
+    const taskSubject =
+      input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId;
+    const sourceSummary = outsideSourceSummary(newSources);
+    void (async () => {
+      const taskTitle = this.deps.resolveTaskTitle
+        ? await this.taskTitleFor(taskSubject)
+        : undefined;
+      const taskName = taskTitle ? `“${taskTitle}”` : "this task";
+      const currentFacet = facets.find(
+        (facet) =>
+          facet.capability === input.snapshot.capability &&
+          resourceKeyOfScope(facet.resource) === input.snapshot.resourceKey
+      );
+      const currentRow = currentFacet ? authorityRowForAcquisition(input) : facets[0]?.row;
+      const handle = requestWithHandle.call(this.deps.approvalQueue, {
+        kind: "capability",
+        callerId: input.caller.runtime.id,
+        callerKind: approvalCallerKind(input.caller.runtime.kind),
+        repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
+        effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
+        attention: "interrupt",
+        operationId: acquisitionId,
+        taskSubject,
+        ...(taskTitle ? { taskTitle } : {}),
+        securityIdentity: requestKey,
+        semanticFamily: "task.rules",
+        sourcesShown: [...newSources],
+        repeatReason: "new-source",
+        ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
+        requesterCategory: "agent",
+        dedupKey: requestKey,
+        capability: input.snapshot.capability,
+        title: `Allow ${taskName} to use content from ${sourceSummary}?`,
+        description:
+          !currentGrant && currentRow
+            ? `${taskName} is waiting to ${currentRow.action}. That action has not been allowed for this task yet; the other listed actions were allowed before it read content from ${sourceSummary}.`
+            : facets.length === 1 && currentRow
+              ? `${taskName} is waiting to ${currentRow.action}. That action was allowed before it read this outside content.`
+              : `${taskName} has read content from ${sourceSummary} since these actions were allowed. Choose which actions may use it.`,
         resource: {
-          type: facet.resource.kind,
-          label: "Where",
-          value: resourceKeyOfScope(facet.resource),
+          type: "outside-source",
+          label: "New outside content",
+          value: sourceSummary,
         },
-        row: facet.row,
-      })),
-    });
-    void handle.resolution
+        grantResourceKey: newSources.join("\n") || "outside-content",
+        operation: {
+          kind: "unknown",
+          verb: "use new outside content",
+          object: {
+            type: "outside-source",
+            label: "New outside content",
+            value: sourceSummary,
+          },
+        },
+        cardType: "task.rules",
+        allowedDecisions: ["task", "deny"],
+        authorityRow: currentGrant
+          ? authorityRowForAcquisition(input)
+          : (facets[0]?.row ?? authorityRowForAcquisition(input)),
+        authorityFacets: facets.map((facet) => {
+          const isCurrent =
+            facet.capability === input.snapshot.capability &&
+            resourceKeyOfScope(facet.resource) === input.snapshot.resourceKey;
+          const row = isCurrent ? authorityRowForAcquisition(input) : facet.row;
+          return {
+            selectionKey: facet.selectionKey,
+            defaultSelected: isCurrent,
+            capability: facet.capability,
+            title: row.action,
+            resource: { type: facet.resource.kind, label: "Where", value: row.resource },
+            row,
+          };
+        }),
+      });
+      return handle.resolution;
+    })()
       .then(({ decision, selectedAuthorityFacetKeys, resolver }) => {
         if (this.byId.get(acquisitionId) !== entry) return;
         const selected = new Set(selectedAuthorityFacetKeys ?? []);
@@ -936,7 +1020,10 @@ export class AcquisitionCoordinator {
           this.deps.grantStore.transaction(() => {
             for (const facet of facets) {
               if (!selected.has(facet.selectionKey)) continue;
-              const grant = facet.grant;
+              const grant = facet.grants[0];
+              for (const duplicate of facet.grants) {
+                if (duplicate.id) this.deps.grantStore.revoke(duplicate.id);
+              }
               this.deps.grantStore.issue({
                 effect: "allow",
                 capability: facet.capability,
@@ -944,9 +1031,13 @@ export class AcquisitionCoordinator {
                 subject: grant?.subject ?? input.snapshot.taskAuthority!,
                 constraints: {
                   ...(grant?.constraints ?? {}),
-                  ...(!grant && input.snapshot.taskRef ? { taskRef: input.snapshot.taskRef } : {}),
                   lineageAtConsent: [
-                    ...new Set([...(grant?.constraints?.lineageAtConsent ?? []), ...lineage]),
+                    ...new Set([
+                      ...facet.grants.flatMap(
+                        (duplicate) => duplicate.constraints?.lineageAtConsent ?? []
+                      ),
+                      ...lineage,
+                    ]),
                   ],
                 },
                 issuedBy: resolver
@@ -961,10 +1052,12 @@ export class AcquisitionCoordinator {
             }
           });
         }
-        const currentSelectionKey = currentGrant
-          ? grantSelectionKey(currentGrant)
-          : acquisitionFacetSelectionKey(input);
-        const currentCovered = selected.has(currentSelectionKey);
+        const currentSelectionKey = facets.find(
+          (facet) =>
+            facet.capability === input.snapshot.capability &&
+            resourceKeyOfScope(facet.resource) === input.snapshot.resourceKey
+        )?.selectionKey;
+        const currentCovered = currentSelectionKey ? selected.has(currentSelectionKey) : false;
         entry.info.pending = false;
         this.finish(entry, {
           state: "decided",
@@ -1167,7 +1260,7 @@ export class AcquisitionCoordinator {
     const allowedDecisions = allowedDecisionsForGroup(inputs);
     const taskSubject =
       input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId;
-    const taskTitle = this.taskTitles.get(taskSubject);
+    const taskTitle = this.deps.resolveTaskTitle ? await this.taskTitleFor(taskSubject) : undefined;
     const requestBase = {
       callerId: input.caller.runtime.id,
       callerKind: approvalCallerKind(input.caller.runtime.kind),
@@ -1484,7 +1577,6 @@ export class AcquisitionCoordinator {
             ? {}
             : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
-          ...(input.snapshot.taskRef ? { taskRef: input.snapshot.taskRef } : {}),
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
@@ -1773,7 +1865,7 @@ function authorityRowForAcquisition(input: AcquisitionRequestInput) {
   return authorityRow({
     capability: input.snapshot.capability,
     resource: input.resource,
-    resourcePhrase: presentation?.resource.value,
+    resourcePhrase: input.target?.title ?? presentation?.resource.value,
     tier: input.tier,
     statement: "prospective",
     provenance: {
@@ -1841,6 +1933,27 @@ function grantAuthorityRow(grant: import("@vibestudio/rpc").AuthorityGrant) {
     flags: {},
     degradeUnknown: true,
   });
+}
+
+function outsideSourceLabel(key: string): string {
+  const separator = key.indexOf(":");
+  const kind = separator < 0 ? "" : key.slice(0, separator);
+  const value = separator < 0 ? key : key.slice(separator + 1);
+  if (kind === "web") return value || "a website";
+  if (kind === "email") return value ? `email from ${value}` : "email";
+  if (kind === "channel") return "another conversation";
+  if (kind === "api") return value ? `${value} data` : "outside service data";
+  return "an outside source";
+}
+
+function outsideSourceSummary(keys: readonly string[]): string {
+  const labels = [...new Set(keys.map(outsideSourceLabel))];
+  if (labels.length === 0) return "new outside content";
+  if (labels.length === 1) return labels[0]!;
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, 2).join(", ")}, and ${labels.length - 2} other ${
+    labels.length - 2 === 1 ? "source" : "sources"
+  }`;
 }
 
 function grantSelectionKey(grant: import("@vibestudio/rpc").AuthorityGrant): string {

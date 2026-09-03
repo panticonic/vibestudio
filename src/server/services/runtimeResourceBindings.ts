@@ -198,7 +198,7 @@ export async function prepareRuntimeResourceBindings(
           ? [
               {
                 capability: "panel.inspect",
-                resource: { kind: "exact", key: "panel.inspect" },
+                resource: { kind: "exact", key: binding.resource.id },
                 subject: codePrincipal(record.source),
                 scope: "session",
                 constraints: {
@@ -208,7 +208,7 @@ export async function prepareRuntimeResourceBindings(
               },
               {
                 capability: "panel.inspect",
-                resource: { kind: "exact", key: "panel.inspect" },
+                resource: { kind: "exact", key: binding.resource.id },
                 subject: `agent:${record.id}@${record.contextId}`,
                 scope: "agent",
                 constraints: { lineageAtConsent: [...LINEAGE_CLASSES] },

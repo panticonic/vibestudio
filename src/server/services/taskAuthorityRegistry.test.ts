@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionAdmissionFact } from "@vibestudio/rpc";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import { TaskAuthorityRegistry, taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
 
 function execution(runtimeId: string, taskAuthority: `task:${string}`): ExecutionAdmissionFact {
@@ -59,6 +60,45 @@ function activate(cache: EntityCache, id: string, parentId?: string): void {
 }
 
 describe("TaskAuthorityRegistry", () => {
+  it("retains the authenticated channel coordinates behind an opaque task principal", () => {
+    const registry = new TaskAuthorityRegistry();
+    const coordinates = {
+      workspaceId: "workspace:one",
+      contextId: "context:one",
+      channelId: "channel:one",
+    };
+    const taskAuthority = taskAuthorityPrincipal(coordinates);
+    registry.bindPrincipal(taskAuthority, coordinates);
+    expect(registry.bindingFor(taskAuthority)).toEqual(coordinates);
+  });
+
+  it("does not reinterpret a descendant execution context as the task origin", () => {
+    const registry = new TaskAuthorityRegistry();
+    const coordinates = {
+      workspaceId: "workspace:one",
+      contextId: "context:one",
+      channelId: "channel:one",
+    };
+    const taskAuthority = taskAuthorityPrincipal(coordinates);
+    registry.bindPrincipal(taskAuthority, coordinates);
+    registry.bindExecution({
+      ...execution("eval:child", taskAuthority),
+      contextId: "context:child-execution",
+    });
+    expect(registry.bindingFor(taskAuthority)).toEqual(coordinates);
+  });
+
+  it("rejects coordinates that do not mint the claimed task principal", () => {
+    const registry = new TaskAuthorityRegistry();
+    expect(() =>
+      registry.bindPrincipal("task:not-the-binding", {
+        workspaceId: "workspace:one",
+        contextId: "context:one",
+        channelId: "channel:one",
+      })
+    ).toThrow(/does not match/);
+  });
+
   it("resolves only descendants of a live admitted execution root", () => {
     const cache = new EntityCache();
     const registry = new TaskAuthorityRegistry();
@@ -100,6 +140,102 @@ describe("TaskAuthorityRegistry", () => {
     registry.inheritRuntime("panel:child", { runtime: { id: "eval:root", kind: "do" } }, cache);
     active = false;
     expect(registry.resolveRuntime("panel:child", cache)).toBeNull();
+  });
+
+  it("retains descendant authority only for a verified causal invocation", () => {
+    const cache = new EntityCache();
+    let active = true;
+    const registry = new TaskAuthorityRegistry({ executionIsActive: () => active });
+    const coordinates = {
+      workspaceId: "workspace:one",
+      contextId: "context:one",
+      channelId: "channel:one",
+    };
+    const taskAuthority = taskAuthorityPrincipal(coordinates);
+    registry.bindPrincipal(taskAuthority, coordinates);
+    activate(cache, "eval:root");
+    registry.bindExecution(execution("eval:root", taskAuthority));
+    activate(cache, "do:subagent", "eval:root");
+    registry.inheritRuntime("do:subagent", { runtime: { id: "eval:root", kind: "do" } }, cache);
+
+    active = false;
+    expect(registry.resolveRuntime("do:subagent", cache)).toBeNull();
+    expect(
+      registry.resolveCausalBinding(
+        { entityId: "do:subagent", channelId: "channel:one" },
+        channelTrajectoryFor("channel:one"),
+        cache
+      )
+    ).toBe(taskAuthority);
+    expect(
+      registry.resolveCausalBinding(
+        { entityId: "do:subagent", channelId: "channel:one" },
+        channelTrajectoryFor("channel:other"),
+        cache
+      )
+    ).toBeNull();
+  });
+
+  it("binds an authenticated task origin so its later child can inherit", () => {
+    const cache = new EntityCache();
+    const registry = new TaskAuthorityRegistry();
+    const binding = {
+      entityId: "do:agent",
+      workspaceId: "workspace:one",
+      contextId: "context:one",
+      channelId: "channel:one",
+    };
+    const authority = taskAuthorityPrincipal(binding);
+    activate(cache, binding.entityId);
+    registry.bindPrincipal(authority, binding);
+    registry.bindCausalOrigin(authority, binding, channelTrajectoryFor(binding.channelId), cache);
+    activate(cache, "do:child", binding.entityId);
+
+    expect(
+      registry.inheritRuntime(
+        "do:child",
+        { runtime: { id: binding.entityId, kind: "do" }, taskAuthority: authority },
+        cache
+      )
+    ).toBe(authority);
+    expect(() =>
+      registry.bindCausalOrigin(
+        authority,
+        { ...binding, channelId: "channel:other" },
+        channelTrajectoryFor("channel:other"),
+        cache
+      )
+    ).toThrow(/does not belong/);
+  });
+
+  it("allows an inactive provisional creation snapshot to be replaced but freezes it on activation", () => {
+    const cache = new EntityCache();
+    const registry = new TaskAuthorityRegistry();
+    const target = "do:preparing-child";
+
+    expect(
+      registry.inheritRuntime(
+        target,
+        { runtime: { id: "agent:first", kind: "do" }, taskAuthority: "task:first" },
+        cache
+      )
+    ).toBe("task:first");
+    expect(
+      registry.inheritRuntime(
+        target,
+        { runtime: { id: "agent:second", kind: "do" }, taskAuthority: "task:second" },
+        cache
+      )
+    ).toBe("task:second");
+
+    activate(cache, target);
+    expect(() =>
+      registry.inheritRuntime(
+        target,
+        { runtime: { id: "agent:first", kind: "do" }, taskAuthority: "task:first" },
+        cache
+      )
+    ).toThrow(/already bound/);
   });
 
   it("does not move existing descendants when a warm execution starts another task", () => {

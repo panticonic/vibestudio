@@ -1032,7 +1032,12 @@ export function shouldShowOperationSubstance(
   if (!substance) return false;
   if (substance.detail?.trim() || substance.facts?.length) return true;
   const target = approval.resource?.value.trim();
-  if (!target || isOpaqueId(target) || /^(?:do|worker|panel|app|extension):/iu.test(target)) {
+  if (
+    !target ||
+    target === approval.capability ||
+    isOpaqueId(target) ||
+    /^(?:do|worker|panel|app|extension):/iu.test(target)
+  ) {
     return false;
   }
   const normalizedTarget = target.toLocaleLowerCase();

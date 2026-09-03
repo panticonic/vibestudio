@@ -12,6 +12,7 @@ import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import { taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
 import { receiverAuthorityPolicy } from "@vibestudio/shared/authority/receiverAuthorityPolicy";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
 
@@ -21,6 +22,7 @@ export function createAuthorityService(deps: {
   authorityPlans?: AuthorityPlanStore;
   executionAdmissions?: AgentExecutionSessionRegistry;
   grants?: CapabilityGrantStore;
+  taskAuthorities?: TaskAuthorityRegistry;
   workspaceId?: string;
   resolveCodeIdentity?: (runtimeId: string) => VerifiedCodeIdentity | null;
 }): ServiceDefinition {
@@ -30,19 +32,6 @@ export function createAuthorityService(deps: {
     authority: { principals: ["host", "user", "code", "session", "mission"] },
     methods: authorityMethods,
     handler: defineServiceHandler("authority", authorityMethods, {
-      setTaskTitle: (ctx, [input]) => {
-        requireWorkspaceMember(ctx, "Task title registration");
-        const workspaceId = requireDependency(deps.workspaceId, "Task title registration");
-        deps.acquisitions.setTaskTitle(
-          taskAuthorityPrincipal({
-            workspaceId,
-            contextId: input.contextId,
-            channelId: input.channelId,
-          }),
-          input.title
-        );
-        return null;
-      },
       listTaskRules: (ctx, [input]) => {
         requireWorkspaceMember(ctx, "Task rule inspection");
         const workspaceId = requireDependency(deps.workspaceId, "Task rule inspection");
@@ -238,10 +227,7 @@ export function createAuthorityService(deps: {
             review: leaf.review,
           });
         }
-        deps.acquisitions.requestTaskRulesForTarget(
-          plannedRules,
-          ctx.caller.agentBinding?.channelId ?? ctx.caller.executionSession?.taskRef
-        );
+        deps.acquisitions.requestTaskRulesForTarget(plannedRules);
         const requests = deps.acquisitions.targetRequestsFor(
           targetSubject,
           input.authorityPlanDigest
@@ -351,6 +337,14 @@ export function createAuthorityService(deps: {
               }
             : null,
         });
+        const taskAuthorities = requireDependency(deps.taskAuthorities, "Execution admission");
+        taskAuthorities.bindPrincipal(taskAuthority, {
+          workspaceId,
+          contextId: input.contextId,
+          channelId:
+            input.executor.kind === "agent-turn" ? input.executor.channelId : input.taskRef,
+        });
+        taskAuthorities.bindExecution(fact);
         return { authoritySessionId: fact.authoritySessionId, nonce: fact.nonce };
       },
       finishExecution: (ctx, [input]) => {

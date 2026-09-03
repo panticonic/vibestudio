@@ -702,13 +702,16 @@ export function createEvalService(deps: {
     const eventSinkNonce = randomUUID();
     const taskRef = agentBinding?.channelId ?? `eval:${ownerId}:${runId}`;
     const ownerUser = `user:${ctx.caller.subject.userId}` as const;
-    const taskAuthority =
-      deps.taskAuthorities.resolveCaller(ctx.caller, store.cache) ??
-      taskAuthorityPrincipal({
-        workspaceId: deps.workspaceId,
-        contextId: owner.contextId,
-        channelId: taskRef,
-      });
+    const inheritedTaskAuthority = deps.taskAuthorities.resolveCaller(ctx.caller, store.cache);
+    const taskBinding = {
+      workspaceId: deps.workspaceId,
+      contextId: owner.contextId,
+      channelId: taskRef,
+    };
+    const taskAuthority = inheritedTaskAuthority ?? taskAuthorityPrincipal(taskBinding);
+    if (!inheritedTaskAuthority) {
+      deps.taskAuthorities.bindPrincipal(taskAuthority, taskBinding);
+    }
     const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
         controllerRuntimeId: ctx.caller.runtime.id,

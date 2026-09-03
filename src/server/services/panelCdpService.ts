@@ -188,7 +188,11 @@ function cdpBoundaryAuthority(method: string) {
   const capability = method === "getCdpEndpoint" ? "panel.inspect" : `service:panelCdp.${method}`;
   return {
     requirement: requirementForPrincipals(["code", "user", "host"], capability),
-    resource: { kind: "literal" as const, key: capability },
+    resource: {
+      kind: "argument" as const,
+      index: 0,
+      presentation: { type: "panel", label: "Panel" },
+    },
     prepared: {
       resolver: `panelCdp.${method}.contextBoundary`,
       leaves: [

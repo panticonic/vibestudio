@@ -47,7 +47,11 @@ export const PANEL_CONTEXT_BOUNDARY_RESOLVER = "panelContext.describe.contextBou
  */
 const describeAuthority = {
   requirement: requirementForPrincipals(["code", "user", "host"], "panel.inspect"),
-  resource: { kind: "literal" as const, key: "panel.inspect" },
+  resource: {
+    kind: "argument" as const,
+    index: 0,
+    presentation: { type: "panel", label: "Panel" },
+  },
   prepared: {
     resolver: PANEL_CONTEXT_BOUNDARY_RESOLVER,
     leaves: [

@@ -222,7 +222,7 @@ describe("panelCdpService", () => {
   });
 
   it("asks once when an agent needs both panel inspection and cross-context authority", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("once");
     const endpoint = { wsEndpoint: "ws://server/cdp/target", token: "t" };
     const service = cdpService({
       approvalQueue,

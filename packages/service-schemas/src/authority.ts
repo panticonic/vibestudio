@@ -119,28 +119,6 @@ const leafSchema = z
   .strict();
 
 export const authorityMethods = defineServiceMethods({
-  setTaskTitle: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "grant-authority",
-      family: "authority.control",
-      rationale: "Presentation metadata grants no authority and is scoped to one visible chat.",
-    },
-    description: "Register the current human title for a chat-bound authority task.",
-    args: z.tuple([
-      z
-        .object({
-          contextId: z.string().min(1),
-          channelId: z.string().min(1),
-          title: z.string().trim().min(1).max(120),
-        })
-        .strict(),
-    ]),
-    returns: z.null(),
-    authority: EVERY_ORIGIN,
-    access: { sensitivity: "write" },
-  },
   listTaskRules: {
     tier: {
       tier: "open",

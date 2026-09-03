@@ -65,7 +65,6 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `authority.setTaskTitle` | Register the current human title for a chat-bound authority task. |
 | `authority.listTaskRules` | List the active reusable rules for one chat-bound agent task. |
 | `authority.resetTaskRules` | Revoke every reusable rule attached to one chat-bound agent task. |
 | `authority.awaitDecision` | Wait without a deadline for one acquisition owned by this session. |

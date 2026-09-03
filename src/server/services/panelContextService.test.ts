@@ -153,7 +153,11 @@ describe("panelContext.describe", () => {
     const { definition } = makeService();
     const schema = definition.methods["describe"];
     expect(schema?.capability).toBe("panel.inspect");
-    const authority = schema?.authority as { prepared?: { resolver?: string; leaves?: unknown[] } };
+    const authority = schema?.authority as {
+      resource?: { kind?: string; index?: number };
+      prepared?: { resolver?: string; leaves?: unknown[] };
+    };
+    expect(authority.resource).toMatchObject({ kind: "argument", index: 0 });
     expect(authority.prepared?.resolver).toBe("panelContext.describe.contextBoundary");
     expect(definition.authorityPreparation?.["panelContext.describe.contextBoundary"]).toBeTypeOf(
       "function"

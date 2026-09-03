@@ -782,8 +782,8 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     prefix: "workspace.runtime-state.manage",
     authorityCategory: { domain: "automation", verb: "manage" },
     title: "Manage running apps and tasks",
-    action: "manage apps, panels, and scheduled tasks that are currently running",
-    description: "Start, stop, or check on apps and tasks running in your workspace",
+    action: "start, stop, or inspect running apps, panels, and scheduled tasks",
+    description: "This can affect anything currently running in your workspace",
     group: "workspace",
   },
   {

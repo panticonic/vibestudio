@@ -739,6 +739,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "authority.listTaskRules": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "An authenticated workspace member may inspect the rules attached to a visible chat.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "authority.preflight": {
     tier: {
       tier: "open",
@@ -747,6 +759,17 @@ export const HOST_AUTHORITY_METHODS = {
       family: "authority.control",
       rationale:
         "Pure authority inspection; it neither prompts, mints, consumes, nor invokes a handler",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "authority.resetTaskRules": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale: "Reset only removes authority attached to the named visible chat.",
     },
     capability: null,
     presentation: null,
@@ -6084,6 +6107,27 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "shellApproval.resolveTaskRules": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale:
+        "The trusted approval surface returns only keys offered by the pending rules card.",
+    },
+    capability: "approvals.decide",
+    presentation: {
+      title: "Choose permissions for this chat",
+      action: "choose permissions for this chat",
+      description: "Allow only the selected planned actions.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+  },
   "shellApproval.submitClientConfig": {
     tier: {
       tier: "open",
@@ -8258,6 +8302,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "shellApproval.resolve": ["approvals.decide"],
   "shellApproval.resolveBootstrap": ["approvals.decide"],
   "shellApproval.resolveInstallReview": ["approvals.decide"],
+  "shellApproval.resolveTaskRules": ["approvals.decide"],
   "shellApproval.submitClientConfig": ["protected-input.submit"],
   "shellApproval.submitCredentialInput": ["protected-input.submit"],
   "shellApproval.submitSecretInput": ["protected-input.submit"],

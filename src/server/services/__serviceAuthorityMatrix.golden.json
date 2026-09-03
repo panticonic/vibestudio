@@ -539,6 +539,29 @@
         "capability": null,
         "presentation": null
       },
+      "listTaskRules": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code",
+            "session",
+            "mission"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "grant-authority",
+          "family": "authority.control",
+          "rationale": "An authenticated workspace member may inspect the rules attached to a visible chat."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "preflight": {
         "authority": {
           "principals": [
@@ -558,6 +581,29 @@
           "residency": "grant-authority",
           "family": "authority.control",
           "rationale": "Pure authority inspection; it neither prompts, mints, consumes, nor invokes a handler"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "resetTaskRules": {
+        "authority": {
+          "principals": [
+            "host",
+            "user",
+            "code",
+            "session",
+            "mission"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "grant-authority",
+          "family": "authority.control",
+          "rationale": "Reset only removes authority attached to the named visible chat."
         },
         "capability": null,
         "presentation": null
@@ -7105,8 +7151,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "service:panelCdp.consoleHistory"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelCdp.consoleHistory.contextBoundary",
@@ -7243,8 +7293,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "service:panelCdp.evaluate"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelCdp.evaluate.contextBoundary",
@@ -7381,8 +7435,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "panel.inspect"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelCdp.getCdpEndpoint.contextBoundary",
@@ -7615,8 +7673,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "service:panelCdp.reload"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelCdp.reload.contextBoundary",
@@ -7753,8 +7815,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "service:panelCdp.screenshot"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelCdp.screenshot.contextBoundary",
@@ -7891,8 +7957,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "service:panelCdp.stop"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelCdp.stop.contextBoundary",
@@ -8040,8 +8110,12 @@
             ]
           },
           "resource": {
-            "kind": "literal",
-            "key": "panel.inspect"
+            "kind": "argument",
+            "index": 0,
+            "presentation": {
+              "type": "panel",
+              "label": "Panel"
+            }
           },
           "prepared": {
             "resolver": "panelContext.describe.contextBoundary",
@@ -11640,6 +11714,129 @@
           "title": "Add or update parts of this workspace",
           "action": "add or update parts of this workspace",
           "description": "Review and accept or cancel new parts arriving in your workspace.",
+          "group": "approvals",
+          "authorityCategory": {
+            "domain": "safety",
+            "verb": "manage"
+          }
+        }
+      },
+      "resolveTaskRules": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.decide"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.decide"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.decide",
+            "leaves": [
+              {
+                "capability": "approvals.decide",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "shellApproval.read",
+          "rationale": "The trusted approval surface returns only keys offered by the pending rules card."
+        },
+        "capability": "approvals.decide",
+        "presentation": {
+          "title": "Choose permissions for this chat",
+          "action": "choose permissions for this chat",
+          "description": "Allow only the selected planned actions.",
           "group": "approvals",
           "authorityCategory": {
             "domain": "safety",

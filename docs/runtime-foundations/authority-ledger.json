@@ -7013,6 +7013,54 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:authority.listTaskRules",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "listTaskRules",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.control",
+      "reviewRationale": "An authenticated workspace member may inspect the rules attached to a visible chat.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.listTaskRules"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "session",
+        "mission"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:authority.listTaskRules),allOf(capability(user,service:authority.listTaskRules),workspace-member),allOf(capability(code,service:authority.listTaskRules),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:authority.listTaskRules",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:authority.preflight",
       "rpcPlane": "host-service",
       "owner": "authority",
@@ -7058,6 +7106,54 @@
         "change": null
       },
       "capability": "service:authority.preflight",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:authority.resetTaskRules",
+      "rpcPlane": "host-service",
+      "owner": "authority",
+      "method": "resetTaskRules",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "grant-authority",
+      "mechanismFamily": "authority.control",
+      "reviewRationale": "Reset only removes authority attached to the named visible chat.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:authority.resetTaskRules"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user",
+        "code",
+        "session",
+        "mission"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:authority.resetTaskRules),allOf(capability(user,service:authority.resetTaskRules),workspace-member),allOf(capability(code,service:authority.resetTaskRules),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:authority.resetTaskRules",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -19986,8 +20082,12 @@
       "mechanismFamily": "cdp.transport",
       "reviewRationale": "Returns a bounded observation from the exact authenticated native CDP provider",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelCdp.consoleHistory"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -20078,8 +20178,12 @@
       "mechanismFamily": "cdp.native-effect",
       "reviewRationale": "Runs one bounded expression in the exact native view selected by receiver-bound target authority",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelCdp.evaluate"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -20170,8 +20274,12 @@
       "mechanismFamily": "cdp.transport",
       "reviewRationale": "Mints one short-lived authenticated endpoint for the exact already-authorized native CDP target",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "panel.inspect"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -20397,8 +20505,12 @@
       "mechanismFamily": "cdp.native-effect",
       "reviewRationale": "Reloads the exact receiver-bound panel generation without exposing its host lease mechanics",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelCdp.reload"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -20489,8 +20601,12 @@
       "mechanismFamily": "cdp.native-effect",
       "reviewRationale": "Force-paints and captures the exact native view selected by receiver-bound target authority",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelCdp.screenshot"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -20581,8 +20697,12 @@
       "mechanismFamily": "cdp.native-effect",
       "reviewRationale": "Stops loading in the exact native webContents selected by the receiver-bound target",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelCdp.stop"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -20673,8 +20793,12 @@
       "mechanismFamily": "panel-context.identity",
       "reviewRationale": "Bounded identity and lease projection for one exact panel target; conversation content and console bodies stay behind the separately gated CDP tools",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "panel.inspect"
+        "kind": "argument",
+        "index": 0,
+        "presentation": {
+          "type": "panel",
+          "label": "Panel"
+        }
       },
       "authorityPrincipals": [
         "code",
@@ -24994,6 +25118,96 @@
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
       "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
+      "capability": "approvals.decide",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.decide"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.resolveTaskRules",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveTaskRules",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The trusted approval surface returns only keys offered by the pending rules card.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "approvals.decide"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellApproval.resolveTaskRules",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.resolveTaskRules#capability:approvals.decide",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveTaskRules",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The trusted approval surface returns only keys offered by the pending rules card.",
       "capability": "approvals.decide",
       "resourceDerivation": {
         "kind": "prepared",

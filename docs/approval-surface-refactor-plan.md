@@ -1451,11 +1451,14 @@ without adding a correlation table or a second authority path:
   decision observation. The post-grant re-evaluation no longer emits a second
   `granted` event, and a composed operation no longer emits one pair per leaf.
   Leaf detail remains on the one approval surface and its governance snapshot.
-- The chat panel registers its current human title against the
-  workspace-qualified task subject. The title is presentation metadata only:
-  it is explicitly excluded from the task-principal hash. Ordinary task
-  decisions can now say `Covers this action in “{chat title}” until you reset
-  this chat's permissions.`
+- The authenticated task registry retains the workspace/context/channel
+  coordinates used to mint the opaque task subject. Approval presentation
+  resolves the current title directly from that channel's durable config and
+  verifies the channel still belongs to the bound context. No mounted chat
+  panel, client callback, or authority RPC is involved. The title remains
+  presentation metadata and is explicitly excluded from the task-principal
+  hash. Ordinary task decisions can now say `Covers this action in “{chat
+  title}” until you reset this chat's permissions.`
 - A person-addressed `notify` can no longer be downgraded to `alert: none`.
   Human addressees have an inbox floor; channel-only messages remain available
   by addressing the channel. This made the scheduled-automation check observe
@@ -1494,3 +1497,173 @@ lifecycle does not exist yet:
 
 These are missing domain primitives, not UI omissions. No flag, heuristic
 association, panel-unmount cleanup, or alias endpoint was added around them.
+
+### 18.6 Approval comprehension and task-title follow-up (2026-09-03)
+
+Review of the live Flowboard session exposed several presentation defects that
+were security defects in practice: the source-delta card exposed an opaque
+`lineage-set` digest, described a newly requested action as already allowed,
+listed duplicate historical grants, selected unrelated “everyday” permissions,
+and rendered a checklist even when there was only one decision. The subsequent
+ordinary card then looked like a duplicate request because neither card stated
+its distinct purpose clearly. Capability cards also used the generic globe even
+when the requester had a resolved unit icon, and runtime-state copy repeated the
+same effect in its title, summary, and detail block.
+
+The implementation now follows these rules:
+
+- A source-delta card expands verified aggregate lineage through the context
+  integrity store and shows only exact sources not present at consent. Aggregate
+  hashes never become user copy. If expansion fails, presentation stays generic
+  rather than exposing the identifier or guessing a source.
+- A capability/resource pair is one choice even if legacy activity left more
+  than one active grant. Selecting that choice revokes the duplicates and
+  issues one consolidated task grant with the updated consent lineage.
+- The currently blocked action is the only default selection. Install-review
+  notability (`headline` versus `everyday`) remains useful for disclosure
+  layout, but it does not predict consent on a later source-delta decision.
+- When the current invocation has no existing task grant, it is added as a real
+  selectable row and the copy says that it has not yet been allowed. Accepting
+  it therefore settles the waiting invocation as an approval rather than a
+  synthetic denial.
+- A one-row task-rules card is a direct yes/no question: no checklist framing,
+  no checkbox, and an `Allow` action. Multi-row cards retain explicit selection
+  and `Allow selected`.
+- Capability cards use the resolved requester icon when one exists. Generic
+  category art remains the fallback, never the preferred identity.
+- Operation substance is suppressed when its only “detail” is the capability
+  key already represented by the card. Runtime-state copy now separates the
+  action from its consequence instead of repeating one phrase three times.
+- `panel.inspect` is resource-scoped to argument zero for panel context and all
+  native CDP operations. Agent-to-panel resource bindings mint grants for the
+  exact bound panel slot, and the UI receives the resolved target title. A grant
+  for one panel is no longer universal developer-tools authority.
+
+Task titles now have one durable path. The agent's `set_title` tool updates the
+pubsub channel config directly. The host retains the authenticated coordinates
+only where a task authority is originally minted, and approval presentation
+reads that channel config after verifying its context. A mounted chat panel is
+neither the source nor a relay. Descendant evals inherit task membership but do
+not rebind the task origin; conflating those concepts was caught by the first
+managed `chat-task-permission-reuse` run when a child eval correctly had a
+different execution context.
+
+Deterministic coverage includes source expansion/difference, first-use
+selection, duplicate consolidation, task-title lookup and context mismatch,
+origin-preserving descendant admission, exact panel resources, single-row card
+rendering, requester icons, copy suppression, the reviewed service-authority
+census, host and userland type checks, and generated agent documentation. The
+managed agentic rerun passed with no tool failures:
+`chat-task-permission-reuse` (`st_403bee1dc8c14b4093a11c5cbdf1a675`).
+
+### 18.7 Parent/subagent task-authority inheritance (2026-09-03)
+
+The parent/subagent approval-fatigue follow-up is implemented. Its governing
+rule is deliberately narrower than delegation: a runtime created by an
+authenticated causal task member joins the same opaque task principal. It does
+not receive a copy of the parent's grants, a standing agent grant, or authority
+to create a broader principal. Consequently, a task-scoped approval can be
+used by the parent and its genuine subagent descendants without asking the
+person to approve the same effect once per chat channel.
+
+The investigation found three distinct identity boundaries that had previously
+been conflated:
+
+1. `TaskAuthorityRegistry` already snapshotted task membership onto runtime
+   descendants, but the bound parent agent was not itself registered as the
+   task origin. There was therefore no authenticated membership from which a
+   newly created subagent could inherit.
+2. `spawn_subagent` received an invocation-scoped causal RPC client but discarded
+   it and performed lifecycle calls through the vessel's ambient client. That
+   erased the admitted invocation from the creation edge.
+3. Runtime preparation may activate a canonical child asynchronously through
+   the trusted `server` principal. Recording inheritance only after activation
+   was too late. Once both of those defects were repaired, diagnostics showed
+   parent and child using the same opaque `task:` subject, but the grant matcher
+   still split the approval by `taskRef`, which is the per-channel coordinate.
+   A channel constraint on an already opaque task subject was a second identity
+   system and produced duplicate grants for members of one task.
+
+The resulting implementation has one authority path:
+
+- The host retains the authenticated workspace/context/channel binding behind
+  each opaque task principal and binds the originating agent only after its
+  live entity, context, and exact channel trajectory all agree.
+- A causal child invocation can resolve inherited membership only when its
+  exact bound channel trajectory and active runtime agree with a member created
+  by that authenticated origin. Ambient or forged coordinates cannot establish
+  membership.
+- `spawn_subagent` uses its admitted invocation RPC for context creation,
+  runtime creation, channel/fork subscription, and child settings. The causal
+  identity is therefore continuous across the full lifecycle operation.
+- Runtime creation snapshots inherited membership before asynchronous
+  preparation can activate the target as `server`. A provisional snapshot may
+  be replaced only while the target remains inactive; membership is immutable
+  once the runtime is active.
+- Task grants are keyed by their opaque `task:` subject and no longer carry a
+  redundant `taskRef` constraint. The chat coordinates remain host-held proof
+  and presentation metadata, not an independently matching grant boundary.
+
+This sharing preserves the independent security ceilings. A child must still
+be declared by the installed manifest, may use only the exact approved
+capability/resource, remains subject to source and context-integrity checks,
+and cannot inherit critical confirmation or standing version/agent authority
+from the task grant. Non-causal background egress continues through the runtime
+resolution path and requires a live admitted execution root; membership alone
+does not turn a descendant into an autonomous background principal. Unrelated
+agents in the same visible conversation, sibling task subjects, inactive
+runtimes, and callers presenting only a parent ID do not qualify.
+
+Deterministic verification covers binding/principal agreement, causal-coordinate
+mismatch, origin membership, descendant use after the parent's individual turn
+expires, inactive provisional replacement, active membership immutability, task
+grant issuance without channel constraints, runtime lifecycle inheritance, RPC
+admission, authorization, and the agent-vessel spawn path. The focused host run
+passed 311 tests; the focused Base run passed 162 tests; host and userland type
+checks passed.
+
+The fresh managed agentic fixture `subagent-task-permission-reuse` then made one
+protected `serverLog.stats` call as the parent, spawned a fresh child which made
+the same call through its own causal channel, and inspected the final permission
+inventory. It passed only after observing a successful child report and exactly
+one task-scoped `server-logs.read` grant: run
+`st_99a80e0a884a4eb0b7ac5309aab538bb` (no tool failures). This proves approval
+reuse rather than merely successful auto-approval of a duplicate prompt.
+
+### 18.8 Subagent model-selection ergonomics (2026-09-03)
+
+A later live session supplied `config.model: "openai-codex:gpt-5.3-codex"`
+while spawning an ordinary Pi child. The current runtime could not materialize
+that ref and correctly rejected it before creating a context or runtime. The
+stored prompt and tool invocation establish that no host component injected
+the value: it was present in the model-authored tool arguments. The prompt did
+not require a model choice, but the tool description framed omission as a
+special intentional case, while `skills/sandbox/EVAL.md` still instructed an
+agent to read and pass its model to obtain inheritance. Those instructions made
+an unnecessary, stale model choice appear prudent.
+
+The canonical behavior was already automatic inheritance: when a Pi spawn
+omits `config`, `runDeferredSpawn` resolves the parent's effective model,
+thinking level, fallback policy, approval behavior, response policy, and prompt
+settings and writes those exact settings into the child's creation state. This
+is now also the unambiguous agent-facing contract. The base system prompt and
+`spawn_subagent` schema say to omit `config` for ordinary delegation and never
+guess or restate the parent model. `config.model` remains available only for an
+intentional different-model child using an exact currently available catalog
+ref; an explicit unavailable override continues to fail rather than silently
+changing the requested execution environment. The sandbox documentation now
+distinguishes automatic subagent inheritance from direct creation of an
+independent headless agent.
+
+Regression coverage verifies both halves of the contract: an omitted config
+inherits the complete effective parent configuration, and the model-visible
+tool schema/system prompt present omission as the default while keeping
+`config` structurally optional. Existing coverage continues to verify that an
+explicit unavailable model fails before any child lifecycle state is minted.
+The stricter managed fixture also rejects an ordinary spawn which supplies any
+`config`. Its fresh rerun is temporarily blocked at workspace bootstrap because
+the concurrently authored, uncommitted `panels/kanban-board` and
+`workers/kanban-store` paths are not yet present in the Base template manifest;
+the bootstrap validator correctly refuses that incomplete snapshot. The failed
+instance was stopped, and no compatibility entry or temporary manifest edit was
+introduced around another agent's unfinished work.

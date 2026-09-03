@@ -376,6 +376,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   const recoveryChains = new Map<string, Promise<RuntimeExecutionRecoveryResult>>();
   let recoveryAttemptCount = 0;
 
+  function inheritTaskAuthority(
+    runtimeId: string,
+    actors: RuntimeCreationActors
+  ): import("@vibestudio/rpc").TaskGrantPrincipal | null {
+    return (
+      deps.taskAuthorities.inheritRuntime(runtimeId, actors.lifecycleCaller, store.cache) ??
+      deps.taskAuthorities.inheritRuntime(runtimeId, actors.initiatingCaller, store.cache)
+    );
+  }
+
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
     return caller.runtime.kind === "shell" || caller.runtime.kind === "server";
   }
@@ -813,7 +823,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           }
         : {}),
     });
-    deps.taskAuthorities.inheritRuntime(record.id, actors.initiatingCaller, store.cache);
+    inheritTaskAuthority(record.id, actors);
     // An implicit reservation is the semantic creation boundary for its
     // derived lifecycle context. Register it immediately, before activation
     // can boot panel code that creates descendants. Deferring this until the
@@ -1001,6 +1011,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       className: spec.kind === "do" ? spec.className : undefined,
       key,
     });
+    // Runtime preparation may activate the canonical entity through a trusted
+    // server supervisor before this caller resumes. Snapshot the authenticated
+    // task now, at the creation boundary, so that asynchronous activation
+    // cannot replace the initiating task with the server principal.
+    inheritTaskAuthority(canonicalId, actors);
     if (spec.execution.surface === "external" && !isOpenPanelBrowserUrl(spec.execution.url)) {
       throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
     }
@@ -1101,7 +1116,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerUserId: actors.initiatingCaller.subject?.userId,
     };
     const record = await store.activate(activateInput);
-    deps.taskAuthorities.inheritRuntime(record.id, actors.initiatingCaller, store.cache);
+    inheritTaskAuthority(record.id, actors);
     if (record.kind === "do") {
       await deps.hooks.onDurableObjectActivated?.(record);
     }

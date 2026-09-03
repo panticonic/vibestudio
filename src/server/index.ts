@@ -1016,6 +1016,11 @@ async function main() {
     };
   });
   let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
+  const { createTaskTitleResolver } = await import("./services/taskTitleResolver.js");
+  const resolveTaskTitle = createTaskTitleResolver({
+    taskAuthorities,
+    getDispatch: () => resolvedDoDispatchForTitles,
+  });
   let presentationDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
   let workspacePresentationRevision = 0;
   const dispatchWorkspacePresentation = (method: string, args: unknown[]): Promise<unknown> => {
@@ -1081,6 +1086,8 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     targetRequests: targetAuthorityRequests,
+    expandLineageKeys: (keys) => keys.flatMap((key) => contextIntegrityStore.expandLineageKey(key)),
+    resolveTaskTitle,
     notifyOwner: async (ownerRuntimeId, acquisitionId) => {
       const ref = parseDoTargetId(ownerRuntimeId);
       const doDispatch = resolvedDoDispatchForTitles;
@@ -3403,6 +3410,7 @@ async function main() {
         authorityPlans: authorityPlanStore,
         executionAdmissions: agentExecutionSessions,
         grants: capabilityGrantStore,
+        taskAuthorities,
         workspaceId,
         resolveCodeIdentity: (runtimeId) => resolveCodeIdentity(entityCache, runtimeId),
       })
@@ -5006,6 +5014,9 @@ async function main() {
           );
           if (!fact) return null;
           const user = fact.initiatingUserId ? userStore.getUser(fact.initiatingUserId) : null;
+          const inheritedTaskAuthority = binding
+            ? taskAuthorities.resolveCausalBinding(binding, parent, entityCache)
+            : null;
           return {
             initiatingUser:
               user && user.revokedAt === undefined
@@ -5013,11 +5024,18 @@ async function main() {
                 : null,
             taskAuthority:
               user && user.revokedAt === undefined && fact.active && binding
-                ? taskAuthorityPrincipal({
-                    workspaceId,
-                    contextId: binding.contextId,
-                    channelId: binding.channelId,
-                  })
+                ? (inheritedTaskAuthority ??
+                  (() => {
+                    const coordinates = {
+                      workspaceId,
+                      contextId: binding.contextId,
+                      channelId: binding.channelId,
+                    };
+                    const authority = taskAuthorityPrincipal(coordinates);
+                    taskAuthorities.bindPrincipal(authority, coordinates);
+                    taskAuthorities.bindCausalOrigin(authority, binding, parent, entityCache);
+                    return authority;
+                  })())
                 : null,
           };
         },

@@ -98,11 +98,13 @@ describe("runtime resource bindings", () => {
         expect.objectContaining({
           subject: "code:workers/agent-worker@ev-agent",
           capability: "panel.inspect",
+          resource: { kind: "exact", key: "slot-a" },
           constraints: expect.objectContaining({ sessionId: "channel-a" }),
         }),
         expect.objectContaining({
           subject: `agent:${record.id}@${record.contextId}`,
           capability: "panel.inspect",
+          resource: { kind: "exact", key: "slot-a" },
           scope: "agent",
         }),
         expect.objectContaining({ capability: "context.boundary" }),

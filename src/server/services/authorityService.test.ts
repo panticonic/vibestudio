@@ -4,38 +4,6 @@ import { createAuthorityService } from "./authorityService.js";
 import { taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
 
 describe("authorityService", () => {
-  it("registers a chat title against the workspace-qualified task subject", async () => {
-    const setTaskTitle = vi.fn();
-    const service = createAuthorityService({
-      dispatcher: {} as never,
-      acquisitions: { setTaskTitle } as never,
-      workspaceId: "workspace:one",
-    });
-    const ctx = {
-      caller: createVerifiedCaller("panel:chat", "panel", null, null, {
-        userId: "alice",
-        handle: "alice",
-      }),
-    } as never;
-    await expect(
-      service.handler(ctx, "setTaskTitle", [
-        {
-          contextId: "context:agent",
-          channelId: "channel:task",
-          title: "Trello-style task board",
-        },
-      ])
-    ).resolves.toBeNull();
-    expect(setTaskTitle).toHaveBeenCalledWith(
-      taskAuthorityPrincipal({
-        workspaceId: "workspace:one",
-        contextId: "context:agent",
-        channelId: "channel:task",
-      }),
-      "Trello-style task board"
-    );
-  });
-
   it("lists and resets rules by the workspace-qualified chat binding", async () => {
     const subject = taskAuthorityPrincipal({
       workspaceId: "workspace:one",
