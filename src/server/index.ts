@@ -105,13 +105,13 @@ function developmentRootTemplateSelection(): {
   const rawCheckout = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]?.trim();
   const rawWriteback = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]?.trim();
   if (!rawPin && !rawCheckout && !rawWriteback) return null;
-  if (process.env["NODE_ENV"] !== "development") {
-    throw new Error("Local root-template selection is available only in development launches");
-  }
   if (!rawPin || !rawCheckout) {
     throw new Error("Local root-template selection requires both an exact pin and checkout path");
   }
-  if (rawWriteback && process.env["VIBESTUDIO_SOURCE_INSTANCE"] !== "1") {
+  if (
+    rawWriteback &&
+    (process.env["NODE_ENV"] !== "development" || process.env["VIBESTUDIO_SOURCE_INSTANCE"] !== "1")
+  ) {
     throw new Error("Base checkout write-back is restricted to the source development instance");
   }
   const checkout = fs.realpathSync(path.resolve(rawCheckout));

@@ -6,6 +6,7 @@ import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/work
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 
 export const BASE_TEMPLATE_RELEASE_ARTIFACT = "base-template-release.json" as const;
+export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE" as const;
 
 const BaseTemplateReleaseArtifactSchema = z
   .object({
@@ -62,12 +63,28 @@ export function readBaseTemplateRelease(appRoot: string): ParsedBaseTemplateRele
  */
 export function readWorkspaceCreationTemplate(
   appRoot: string,
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
+  options: { allowInitialOverride?: boolean } = {}
 ): WorkspaceTemplatePin {
-  const developmentPin = environment["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
-  if (!developmentPin) return readBaseTemplateRelease(appRoot).baseTemplate;
-  if (environment["NODE_ENV"] !== "development") {
-    throw new Error("A development Base may only select workspace creation in development mode");
+  const initialPin = environment[INITIAL_WORKSPACE_TEMPLATE_ENV]?.trim();
+  if (initialPin && options.allowInitialOverride) {
+    return WorkspaceTemplatePinSchema.parse(JSON.parse(initialPin));
   }
-  return WorkspaceTemplatePinSchema.parse(JSON.parse(developmentPin));
+  const developmentPin = readDevelopmentWorkspaceTemplate(environment);
+  if (developmentPin && environment["NODE_ENV"] === "development") {
+    return developmentPin;
+  }
+  return readBaseTemplateRelease(appRoot).baseTemplate;
+}
+
+/**
+ * Read the exact pin supplied with a local checkout acquisition source.
+ * The presence of this source does not itself select the pin for creation;
+ * callers use it only to satisfy or validate an independently selected intent.
+ */
+export function readDevelopmentWorkspaceTemplate(
+  environment: NodeJS.ProcessEnv = process.env
+): WorkspaceTemplatePin | null {
+  const raw = environment["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
+  return raw ? WorkspaceTemplatePinSchema.parse(JSON.parse(raw)) : null;
 }

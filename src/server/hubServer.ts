@@ -12,6 +12,8 @@ import {
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
 import {
+  INITIAL_WORKSPACE_TEMPLATE_ENV,
+  readDevelopmentWorkspaceTemplate,
   readWorkspaceCreationTemplate,
   sameWorkspaceTemplatePin,
 } from "@vibestudio/workspace/baseTemplateRelease";
@@ -387,8 +389,8 @@ export function selectWorkspaceCreationRootTemplate(input: {
   const environment = input.environment ?? process.env;
   if (!input.requested) return readWorkspaceCreationTemplate(input.appRoot, environment);
 
-  if (environment["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim()) {
-    const developmentRoot = readWorkspaceCreationTemplate(input.appRoot, environment);
+  const developmentRoot = readDevelopmentWorkspaceTemplate(environment);
+  if (developmentRoot) {
     if (!sameWorkspaceTemplatePin(input.requested, developmentRoot)) {
       throw new Error("Requested workspace template does not match the selected development Base");
     }
@@ -1206,10 +1208,25 @@ async function handleInternalRoute(
     if (route === "workspace/creation-complete") {
       WorkspaceChildCreationCompleteInputSchema.parse(rawBody);
       const workspaceName = requireWorkspaceName(state, boundWorkspaceId);
+      const completed = isWorkspaceEphemeral(state, workspaceName)
+        ? false
+        : state.centralData.completeWorkspaceCreation(boundWorkspaceId);
+      if (
+        completed &&
+        process.env["NODE_ENV"] !== "development" &&
+        process.env[INITIAL_WORKSPACE_TEMPLATE_ENV]
+      ) {
+        // The local checkout is only an acquisition source for the first
+        // source-desktop workspace. Once that intent is durable, a detached
+        // hub must no longer depend on the launcher's temporary checkpoint or
+        // offer it as the template for later workspace creation.
+        delete process.env[INITIAL_WORKSPACE_TEMPLATE_ENV];
+        delete process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"];
+        delete process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"];
+        delete process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"];
+      }
       sendJson(res, 200, {
-        completed: isWorkspaceEphemeral(state, workspaceName)
-          ? false
-          : state.centralData.completeWorkspaceCreation(boundWorkspaceId),
+        completed,
       });
       return;
     }

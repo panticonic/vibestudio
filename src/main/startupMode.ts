@@ -254,7 +254,10 @@ export function resolveLocalStartupMode(
       createIfMissing ||
       shouldCreateExplicitWorkspaceIfMissing();
     if (!mayCreate) throw new Error(`Workspace "${name}" is not registered`);
-    entry = centralData.addWorkspaceCreation(name, readWorkspaceCreationTemplate(getAppRoot()));
+    entry = centralData.addWorkspaceCreation(
+      name,
+      readWorkspaceCreationTemplate(getAppRoot(), process.env, { allowInitialOverride: true })
+    );
     log.info(`[Workspace] Recorded pending creation for "${name}" (${entry.workspaceId})`);
   } else {
     centralData.touchWorkspace(name);
