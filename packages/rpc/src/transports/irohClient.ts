@@ -749,7 +749,10 @@ class ClientPipe implements IrohClientPipe {
     });
     void this.readControl(control).catch((error) => this.failPipe(asError(error)));
     void this.acceptStreams().catch((error) => this.failPipe(asError(error)));
-    void this.connection.closed().then((reason) => this.failPipe(new Error(reason)));
+    void this.connection.closed().then(
+      (reason) => this.failPipe(new Error(reason)),
+      (error) => this.failPipe(asError(error))
+    );
     await this.helloPromise;
     this.setStatus("connected");
   }

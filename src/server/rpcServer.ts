@@ -5148,7 +5148,9 @@ export class RpcServer {
 
     void controlLoop().catch(fail);
     void streamLoop().catch(fail);
-    void connection.closed().then(closeAll);
+    void connection
+      .closed()
+      .then(closeAll, (error) => closeAll(error instanceof Error ? error.message : String(error)));
   }
 
   /** Handle an HTTP POST /rpc from the gateway (in-process dispatch). */

@@ -104,10 +104,17 @@ export function startIrohIngress<
       });
       void connection
         .closed()
-        .then((reason) =>
-          options.log?.(
-            `Iroh peer closed endpoint=${connection.peerEndpointId.slice(0, 12)} reason=${reason}`
-          )
+        .then(
+          (reason) =>
+            options.log?.(
+              `Iroh peer closed endpoint=${connection.peerEndpointId.slice(0, 12)} reason=${reason}`
+            ),
+          (error) =>
+            options.log?.(
+              `Iroh peer lost endpoint=${connection.peerEndpointId.slice(0, 12)} reason=${
+                error instanceof Error ? error.message : String(error)
+              }`
+            )
         )
         .finally(() => {
           unsubscribeDiagnostics?.();
