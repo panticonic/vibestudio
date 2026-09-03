@@ -42,6 +42,7 @@ import {
   bindingForLiveAgentEntity,
   ownerForLiveAgentEntity,
 } from "../hostCore/auth/agentEntity.js";
+import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
 
 export const RefreshShellBodySchema = z
   .object({
@@ -78,6 +79,29 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function mobileBootstrapTransport(
+  req: IncomingMessage,
+  tokenManager: TokenManager
+): DeviceTransportBinding {
+  const endpointHeader = req.headers[MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER];
+  if (endpointHeader === undefined) return { kind: "local" };
+  const endpointId = Array.isArray(endpointHeader) ? endpointHeader[0] : endpointHeader;
+  const authorization = req.headers.authorization;
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
+  if (
+    !endpointId ||
+    !/^[0-9a-f]{64}$/u.test(endpointId) ||
+    !tokenManager.validateAdminToken(bearer)
+  ) {
+    throw authError(
+      "INVALID_BOOTSTRAP_TRANSPORT_ATTESTATION",
+      "Invalid mobile bootstrap transport attestation",
+      401
+    );
+  }
+  return { kind: "iroh", endpointId };
 }
 
 function sendJson(
@@ -573,7 +597,11 @@ export function createAuthService(deps: {
             return;
           }
           const body = MobileAppBootstrapBodySchema.parse(await readJson(req));
-          deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken, { kind: "local" });
+          deps.deviceAuthStore.validateRefresh(
+            body.deviceId,
+            body.refreshToken,
+            mobileBootstrapTransport(req, deps.tokenManager)
+          );
           const readiness = await deps.ensureMobileAppReady?.(body.source ?? null);
           if (readiness && !readiness.ready) {
             const approvalRequired = readiness.approvalRequired === true;

@@ -18,7 +18,10 @@ const tcpPatch = readFileSync(
   new URL("../patches/react-native-tcp-socket.patch", import.meta.url),
   "utf8"
 );
-const facade = readFileSync(join(exactUserlandRoot, "apps/mobile/src/services/panelAssetFacade.ts"), "utf8");
+const facade = readFileSync(
+  join(exactUserlandRoot, "apps/mobile/src/services/panelAssetFacade.ts"),
+  "utf8"
+);
 
 describe("native mobile asset store contract", () => {
   it.each([
@@ -36,7 +39,7 @@ describe("native mobile asset store contract", () => {
     ]) {
       expect(source).toContain(method);
     }
-    expect(source).toContain("serverIdentity");
+    expect(source).toContain("serverEndpointId");
     expect(source).toContain("workspaceIdentity");
     expect(source).toContain("vibestudio-panel-assets");
     expect(source).toContain("vibestudio-asset-v1:");

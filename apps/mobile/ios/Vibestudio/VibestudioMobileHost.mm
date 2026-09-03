@@ -528,8 +528,8 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
 
 - (NSString *)validatedAssetNamespace:(NSDictionary *)namespace
 {
-  NSString *server = [namespace[@"serverIdentity"] isKindOfClass:NSString.class]
-    ? [namespace[@"serverIdentity"] lowercaseString] : nil;
+  NSString *server = [namespace[@"serverEndpointId"] isKindOfClass:NSString.class]
+    ? [namespace[@"serverEndpointId"] lowercaseString] : nil;
   NSString *workspace = [namespace[@"workspaceIdentity"] isKindOfClass:NSString.class]
     ? namespace[@"workspaceIdentity"] : nil;
   if (![self isAssetDigest:server]) {

@@ -50,6 +50,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
+import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
 import {
   GZIP_MARKER_HEADER,
   RESUMABLE_GZIP_HEADER,
@@ -244,6 +245,8 @@ function trustedMobileBootstrapTarget(
 export function createGatewayFetchService(deps: {
   /** Resolved loopback gateway port (lazy — finalized only after gateway start). */
   getGatewayPort: () => number;
+  /** Host-only credential used to attest the Iroh binding across loopback HTTP. */
+  getAdminToken?: () => string;
 }): ServiceDefinition {
   const serviceName = "gateway";
 
@@ -267,6 +270,7 @@ export function createGatewayFetchService(deps: {
     handler: defineServiceHandler(serviceName, gatewayFetchMethods, {
       fetch: async (ctx, [descriptor]) => {
         const trustedTarget = trustedMobileBootstrapTarget(ctx, descriptor);
+        let forwardedDescriptor = descriptor;
 
         // AUTHORITATIVE panel-origin path allowlist (defense in depth — see
         // assetPathPolicy). This service is reachable from the panel/loopback
@@ -297,6 +301,35 @@ export function createGatewayFetchService(deps: {
           target = decision.target;
         }
 
+        if (trustedTarget) {
+          // Authorization may project an invocation caller, but the concrete
+          // authenticated session remains the authoritative transport owner.
+          const remoteEndpointId = ctx.wsClient?.authenticated
+            ? ctx.wsClient.caller.remoteEndpointId
+            : undefined;
+          const adminToken = deps.getAdminToken?.();
+          if (!remoteEndpointId || !adminToken) {
+            throw new ServiceError(
+              serviceName,
+              "fetch",
+              "mobile bootstrap requires an authenticated Iroh transport",
+              "EACCES"
+            );
+          }
+          // The refresh credential remains endpoint-bound even though this RPC
+          // service crosses an internal loopback HTTP boundary. The management
+          // bearer makes this endpoint assertion host-attested; neither header
+          // value is accepted from or returned to the remote caller.
+          forwardedDescriptor = {
+            ...descriptor,
+            headers: {
+              ...descriptor.headers,
+              authorization: `Bearer ${adminToken}`,
+              [MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER]: remoteEndpointId,
+            },
+          };
+        }
+
         if (!target) {
           throw new ServiceError(
             serviceName,
@@ -324,16 +357,16 @@ export function createGatewayFetchService(deps: {
         // size limit, and the request body (`ctx.body`) streams in on the same
         // bidirectional request. A buffered base64 body in either direction would
         // exceed that limit for real payloads (MB).
-        const requestHasRange = hasRangeRequestHeader(descriptor.headers);
+        const requestHasRange = hasRangeRequestHeader(forwardedDescriptor.headers);
         const resumableGzip =
-          descriptor.gzip === true &&
-          requestHeader(descriptor.headers, RESUMABLE_GZIP_HEADER) === "1";
+          forwardedDescriptor.gzip === true &&
+          requestHeader(forwardedDescriptor.headers, RESUMABLE_GZIP_HEADER) === "1";
         const response =
-          descriptor.gzip && (!requestHasRange || resumableGzip)
-            ? await rawLoopbackFetch(port, target, descriptor, ctx.body)
+          forwardedDescriptor.gzip && (!requestHasRange || resumableGzip)
+            ? await rawLoopbackFetch(port, target, forwardedDescriptor, ctx.body)
             : await fetch(url, {
-                method: descriptor.method ?? "GET",
-                headers: descriptor.headers,
+                method: forwardedDescriptor.method ?? "GET",
+                headers: forwardedDescriptor.headers,
                 ...(ctx.body
                   ? // undici requires half-duplex to be declared for stream bodies.
                     { body: ctx.body, duplex: "half" }
@@ -346,7 +379,7 @@ export function createGatewayFetchService(deps: {
         const hasRangeSemantics =
           requestHasRange || response.status === 206 || response.headers.has("content-range");
         if (
-          descriptor.gzip &&
+          forwardedDescriptor.gzip &&
           response.ok &&
           response.body &&
           (!hasRangeSemantics || resumableGzip)

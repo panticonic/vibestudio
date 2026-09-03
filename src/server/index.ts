@@ -6517,6 +6517,7 @@ async function main() {
     container.registerRpc(
       createGatewayFetchService({
         getGatewayPort: () => getResolvedGatewayPort("gateway.fetch"),
+        getAdminToken: () => adminToken,
       })
     );
   }

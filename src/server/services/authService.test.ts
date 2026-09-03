@@ -25,6 +25,7 @@ import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
+import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
 
 function makePanelRecord(id: string): EntityRecord {
   return {
@@ -493,18 +494,84 @@ describe("auth service connection grants", () => {
       await gateway.stop();
     }
   });
+
+  it("validates Iroh-bound mobile bootstrap refreshes against host-attested transport", async () => {
+    const tokenManager = new TokenManager();
+    tokenManager.setAdminToken("admin-secret");
+    const routeRegistry = new RouteRegistry();
+    const identity = makeIdentity({ withRoot: true });
+    const endpointId = "ab".repeat(32);
+    const issued = identity.deviceAuthStore.issueDevice({
+      transport: { kind: "iroh", endpointId },
+      userId: identity.rootId!,
+      label: "Phone",
+      platform: "mobile",
+    });
+    const authService = createAuthService({
+      resolveUser: testResolveUser,
+      tokenManager,
+      deviceAuthStore: identity.deviceAuthStore,
+      roleOf: (userId) => identity.userStore.getUser(userId)?.role ?? null,
+      getServerBootId: () => "boot_mobile_iroh",
+      getWorkspaceId: () => "workspace_mobile_iroh",
+      getConnectionInfo,
+      getMobileAppBootstrap: () => null,
+    });
+    routeRegistry.registerHttpServiceRoutes(authService.routes ?? []);
+    const gateway = new Gateway({
+      externalHost: "127.0.0.1",
+      bindHost: "127.0.0.1",
+      workerdPort: 9,
+      routeRegistry,
+      adminToken: "admin-secret",
+      tokenManager,
+    });
+    try {
+      const port = await gateway.start(0);
+      const body = { deviceId: issued.deviceId, refreshToken: issued.refreshToken };
+      const valid = await postLocal<{ code: string }>(
+        port,
+        "/_r/s/auth/mobile-app-bootstrap",
+        body,
+        "admin-secret",
+        { [MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER]: endpointId }
+      );
+      expect(valid.status).toBe(404);
+      expect(valid.body.code).toBe("MOBILE_APP_UNAVAILABLE");
+
+      for (const [bearer, attestedEndpoint] of [
+        [undefined, endpointId],
+        ["wrong-admin-token", endpointId],
+        ["admin-secret", "malformed"],
+        ["admin-secret", "cd".repeat(32)],
+      ] as const) {
+        const rejected = await postLocal<{ code: string }>(
+          port,
+          "/_r/s/auth/mobile-app-bootstrap",
+          body,
+          bearer,
+          { [MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER]: attestedEndpoint }
+        );
+        expect(rejected.status).toBe(401);
+      }
+    } finally {
+      await gateway.stop();
+    }
+  });
 });
 async function postLocal<T>(
   port: number,
   pathname: string,
   body: unknown,
-  bearer?: string
+  bearer?: string,
+  extraHeaders: Record<string, string> = {}
 ): Promise<{ status: number; body: T }> {
   const response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+      ...extraHeaders,
     },
     body: JSON.stringify(body),
   });

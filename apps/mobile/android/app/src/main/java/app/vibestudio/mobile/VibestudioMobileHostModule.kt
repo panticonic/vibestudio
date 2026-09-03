@@ -757,7 +757,7 @@ class VibestudioMobileHostModule(
     }
 
     private fun validateAssetNamespace(namespace: ReadableMap): String {
-        val server = namespace.getString("serverIdentity")?.lowercase()
+        val server = namespace.getString("serverEndpointId")?.lowercase()
             ?: throw IllegalArgumentException("Asset namespace is missing server identity")
         val workspace = namespace.getString("workspaceIdentity")
             ?: throw IllegalArgumentException("Asset namespace is missing workspace identity")
