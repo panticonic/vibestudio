@@ -2,7 +2,7 @@
   "type": "module",
   "name": "@panticonic/vibestudio",
   "productName": "Vibestudio",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "private": true,
   "description": "A horizontally stacked panel app built with Electron and TypeScript",
   "main": "dist/main.cjs",

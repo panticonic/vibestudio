@@ -251,16 +251,13 @@ describe("authorityService", () => {
         { authorityPlanDigest: "b".repeat(64) },
       ])
     ).resolves.toEqual({ requestIds: [], grantIds: [], denialIds: [] });
-    expect(requestTaskRulesForTarget).toHaveBeenCalledWith(
-      [
-        expect.objectContaining({
-          targetSubject: task,
-          sourceUser: "user:alice",
-          capability: "notification.show",
-        }),
-      ],
-      undefined
-    );
+    expect(requestTaskRulesForTarget).toHaveBeenCalledWith([
+      expect.objectContaining({
+        targetSubject: task,
+        sourceUser: "user:alice",
+        capability: "notification.show",
+      }),
+    ]);
   });
 
   it("replays acquisition from the durable target owner after the launching execution ends", async () => {

@@ -12,3 +12,7 @@
 # Hermes
 -keep class com.facebook.hermes.unicode.** { *; }
 -keep class com.facebook.jni.** { *; }
+
+# JNA exposes desktop-only window helpers whose signatures reference AWT.
+# Android never calls those helpers and does not ship java.awt.
+-dontwarn java.awt.Component
