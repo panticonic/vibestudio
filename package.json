@@ -196,6 +196,7 @@
     "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/browser-contracts": "workspace:*",
     "@vibestudio/browser-import": "workspace:*",
+    "@vibestudio/browser-import-archive": "workspace:*",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
