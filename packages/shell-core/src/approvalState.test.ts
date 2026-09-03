@@ -15,7 +15,7 @@ function approval(approvalId: string): PendingApproval {
     repoPath: "panels/test",
     effectiveVersion: "ev",
     requestedAt: 1,
-    capability: "workspace-main-advance",
+    capability: "git.publish",
     title: "Write files",
     resource: { type: "git-repo", label: "Repository", value: "panels/test" },
   };

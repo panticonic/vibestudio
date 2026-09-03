@@ -411,7 +411,7 @@ describe("compositional authority", () => {
         resourceKey: RESOURCE,
         grants: [
           grant(session, "fs.write", "allow", {
-            lineageAtConsent: ["web", "external"],
+            lineageAtConsent: ["web", "external", "source:web:example.com", "source:api:github"],
           }),
         ],
         now: 100,

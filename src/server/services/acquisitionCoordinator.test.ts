@@ -61,6 +61,178 @@ function reviewedPresentation() {
 }
 
 describe("AcquisitionCoordinator", () => {
+  it("presents planned task rules once and persists only selected rows", async () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-task-rules-"));
+    const grantStore = new CapabilityGrantStore({ statePath });
+    const targetRequests = new TargetAuthorityRequestStore({ statePath });
+    const requestWithHandle = vi.fn((request) => ({
+      approvalId: "approval:rules",
+      decision: Promise.resolve("task" as const),
+      resolution: Promise.resolve({
+        decision: "task" as const,
+        selectedAuthorityFacetKeys: [request.authorityFacets[0].selectionKey],
+        resolver: { subject: { userId: "alice", handle: "alice" }, via: "shell" as const },
+      }),
+    }));
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { requestWithHandle } as never,
+      grantStore,
+      targetRequests,
+    });
+    const targetSubject = `task:${"a".repeat(64)}` as const;
+    coordinator.setTaskTitle(targetSubject, "Trello-style task board");
+    const common = {
+      targetSubject,
+      authorityPlanDigest: "b".repeat(64),
+      tier: "gated" as const,
+      sourceUser: "user:alice" as const,
+    };
+    coordinator.requestTaskRulesForTarget([
+      {
+        ...common,
+        operationKey: "notifications",
+        capability: "notification.show",
+        capabilityDefinitionDigest: "c".repeat(64),
+        resource: { kind: "exact", key: "user:alice" },
+        renderedAction: "show a notification",
+        review: {
+          action: "show a notification",
+          domain: "people",
+          verb: "act",
+          declaredBy: "host:notification.showToUser",
+        },
+      },
+      {
+        ...common,
+        operationKey: "inspect",
+        capability: "panel.inspect",
+        capabilityDefinitionDigest: "d".repeat(64),
+        resource: { kind: "exact", key: "panel:task-board" },
+        renderedAction: "inspect a panel",
+        review: {
+          action: "inspect a panel",
+          domain: "computer",
+          verb: "see",
+          declaredBy: "host:panel.inspect",
+        },
+      },
+    ]);
+    expect(requestWithHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationId: expect.stringMatching(/^preflight:/),
+        taskSubject: targetSubject,
+        taskTitle: "Trello-style task board",
+        semanticFamily: "task.rules",
+      })
+    );
+
+    await vi.waitFor(() =>
+      expect(grantStore.grantsForSubjects([targetSubject], "notification.show")).toHaveLength(1)
+    );
+    expect(requestWithHandle).toHaveBeenCalledTimes(1);
+    expect(requestWithHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ cardType: "task.rules", authorityFacets: expect.any(Array) })
+    );
+    expect(grantStore.grantsForSubjects([targetSubject], "panel.inspect")).toEqual([]);
+    targetRequests.close();
+    grantStore.close();
+  });
+
+  it("adds a first-use ask while extending chat rules for an exact new outside source", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-source-delta-")),
+    });
+    const task = `task:${"e".repeat(64)}` as const;
+    for (const [capability, key] of [["notification.show", "user:alice"]] as const) {
+      grantStore.issue({
+        effect: "allow",
+        capability,
+        resource: { kind: "exact", key },
+        subject: task,
+        constraints: { lineageAtConsent: ["none"] },
+        issuedBy: "user:alice",
+        provenance: "acquisition",
+        scope: "task",
+      });
+    }
+    let resolveReview!: (value: { decision: "task"; selectedAuthorityFacetKeys: string[] }) => void;
+    const resolution = new Promise<{
+      decision: "task";
+      selectedAuthorityFacetKeys: string[];
+    }>((resolve) => {
+      resolveReview = resolve;
+    });
+    const requestWithHandle = vi.fn(
+      (request: {
+        authorityFacets: Array<{ selectionKey: string; capability: string }>;
+        description: string;
+      }) => ({
+        approvalId: "approval:source",
+        decision: resolution.then((value) => value.decision),
+        resolution,
+        request,
+      })
+    );
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { requestWithHandle } as never,
+      grantStore,
+    });
+    const snap = {
+      ...snapshot(),
+      capability: "panel.inspect",
+      resourceKey: "panel:task-board",
+      taskAuthority: task,
+      lineageClasses: ["web", "source:web:https://trello.com/board/one"],
+      contextLineage: {
+        class: "external" as const,
+        latchEpoch: 1,
+        externalKeys: ["web:https://trello.com/board/one"],
+      },
+    };
+    const outcome = coordinator.requestAndWait({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller: createVerifiedCaller("agent:source", "agent", null),
+      renderedAction: "inspect the task board",
+      resource: { kind: "exact", key: "panel:task-board" },
+      presentation: reviewedPresentation(),
+    });
+    const card = requestWithHandle.mock.calls[0]![0];
+    expect(card).toMatchObject({ cardType: "task.rules" });
+    expect(card.description).toContain("trello.com/board/one");
+    expect(card.authorityFacets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ capability: "panel.inspect", defaultSelected: true }),
+        expect.objectContaining({ capability: "notification.show", defaultSelected: false }),
+      ])
+    );
+    resolveReview({
+      decision: "task",
+      selectedAuthorityFacetKeys: [
+        card.authorityFacets.find((facet) => facet.capability === "panel.inspect")!.selectionKey,
+      ],
+    });
+    await expect(outcome).resolves.toMatchObject({ state: "decided", decision: "task" });
+    await vi.waitFor(() =>
+      expect(
+        grantStore
+          .grantsForSubjects([task], "panel.inspect")
+          .some((grant) =>
+            grant.constraints?.lineageAtConsent?.includes("source:web:https://trello.com/board/one")
+          )
+      ).toBe(true)
+    );
+    expect(
+      grantStore
+        .grantsForSubjects([task], "notification.show")
+        .some((grant) =>
+          grant.constraints?.lineageAtConsent?.includes("source:web:https://trello.com/board/one")
+        )
+    ).toBe(false);
+    grantStore.close();
+  });
+
   it("settles a durable task-target request as a reusable task grant", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-acq-task-target-"));
     const grantStore = new CapabilityGrantStore({ statePath });
@@ -301,7 +473,7 @@ describe("AcquisitionCoordinator", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-user-")),
     });
-    const request = vi.fn(async () => "session" as const);
+    const request = vi.fn(async () => "once" as const);
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { request } as never,
       grantStore,
@@ -619,6 +791,10 @@ describe("AcquisitionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
+        operationId: expect.stringMatching(/^acq:/),
+        taskSubject: "task:closure-chat-1",
+        securityIdentity: expect.any(String),
+        semanticFamily: "network",
         operation: expect.objectContaining({ kind: "network", verb: "read from" }),
       })
     );
@@ -749,6 +925,71 @@ describe("AcquisitionCoordinator", () => {
         constraints: expect.objectContaining({
           invocationDigest: invocationSnapshotDigest(snap),
         }),
+      }),
+    ]);
+    grantStore.close();
+  });
+
+  it("exercises chat-scoped test approval by minting the ordinary reusable task grant", () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-test-task-policy-")),
+    });
+    const request = vi.fn();
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+    });
+    const taskAuthority = `task:${"7".repeat(64)}` as const;
+    const snap = {
+      ...snapshot(),
+      taskAuthority,
+      taskRef: "chat:task-policy",
+      executionMode: "test" as const,
+      testPolicyId: "test:task-policy",
+    };
+    const caller = {
+      ...createVerifiedCaller("do:test-runner", "do"),
+      testPolicy: {
+        policyId: "test:task-policy",
+        kind: "case" as const,
+        orchestratorPolicyId: "test:orchestrator",
+        case: {
+          testId: "chat-task-permission-reuse",
+          agent: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2 as const,
+            fallback: "disabled" as const,
+          },
+          authority: [
+            {
+              ruleId: "chat-task-permissions-read",
+              capability: { kind: "exact" as const, key: snap.capability },
+              resource: { kind: "exact" as const, key: snap.resourceKey },
+              tier: "gated" as const,
+              decision: "task" as const,
+            },
+          ],
+          unexpectedPrompts: "fail" as const,
+        },
+      },
+    };
+
+    expect(
+      coordinator.request({
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "gated",
+        caller,
+        renderedAction: "list permissions",
+        resource: { kind: "exact", key: snap.resourceKey },
+      })
+    ).toMatchObject({ pending: false, preauthorized: true });
+    expect(request).not.toHaveBeenCalled();
+    expect(grantStore.grantsForSubjects([taskAuthority], snap.capability)).toEqual([
+      expect.objectContaining({
+        subject: taskAuthority,
+        scope: "task",
+        constraints: expect.objectContaining({ taskRef: "chat:task-policy" }),
       }),
     ]);
     grantStore.close();
@@ -1061,7 +1302,7 @@ describe("AcquisitionCoordinator", () => {
   });
 
   it("presents and persists every authority leaf for one operation as one decision", async () => {
-    const request = vi.fn(async () => "session" as const);
+    const request = vi.fn(async () => "once" as const);
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-composed-")),
     });
@@ -1126,7 +1367,7 @@ describe("AcquisitionCoordinator", () => {
   });
 
   it("does not deduplicate the same snapshot across authenticated runtimes", () => {
-    const request = vi.fn(() => new Promise<"session">(() => {}));
+    const request = vi.fn(() => new Promise<"once">(() => {}));
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-")),
     });
@@ -1274,7 +1515,7 @@ describe("AcquisitionCoordinator", () => {
     vi.useRealTimers();
   });
 
-  it("presents every concurrent acquisition without interruption throttling", async () => {
+  it("gives only the first concurrent ordinary acquisition foreground attention", async () => {
     const request = vi.fn(async () => "deny" as const);
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-attention-")),
@@ -1317,7 +1558,7 @@ describe("AcquisitionCoordinator", () => {
     ]);
 
     expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({ attention: "interrupt" }));
-    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ attention: "interrupt" }));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ attention: "queue" }));
     grantStore.close();
   });
 
@@ -1356,9 +1597,11 @@ describe("AcquisitionCoordinator", () => {
 
     expect(notifyOwner).toHaveBeenCalledOnce();
     expect(notifyOwner).toHaveBeenCalledWith(caller.runtime.id, expect.stringMatching(/^acq:/));
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(caller.runtime.id),
-      "owner is restarting"
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(caller.runtime.id),
+        "owner is restarting"
+      )
     );
     warn.mockRestore();
     grantStore.close();

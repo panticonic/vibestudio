@@ -114,7 +114,7 @@ describe("createMainAdvanceApprovalGate", () => {
         }),
       }),
       expect.objectContaining({
-        capability: "workspace-main-advance",
+        capability: "git.publish",
         resourceKey: "workspace-source-change:publication:publication:next",
       })
     );
@@ -144,7 +144,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
       expect.objectContaining({ authorityAcquisition: "wait" }),
       expect.objectContaining({
-        capability: "workspace-main-advance",
+        capability: "git.publish",
         resourceKey: "workspace-source-change:publication:publication:next",
         challenge: expect.objectContaining({
           installReview: expect.objectContaining({
@@ -308,7 +308,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
       expect.objectContaining({ authorityAcquisition: "wait" }),
       expect.objectContaining({
-        capability: "workspace-main-advance",
+        capability: "git.publish",
         challenge: expect.objectContaining({
           dedupKey: "workspace-semantic-advance:event:after",
           title: "Advance workspace history",
@@ -405,7 +405,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).not.toHaveBeenCalled();
   });
 
-  it("forwards the diff-review payload onto the workspace-main-advance prompt", async () => {
+  it("forwards the diff-review payload onto the git.publish prompt", async () => {
     const deps = gateDeps({ decision: "once" });
     const gate = createMainAdvanceApprovalGate(deps);
     const signal = new AbortController().signal;
@@ -502,7 +502,7 @@ describe("createMainAdvanceApprovalGate", () => {
       );
     });
 
-    it("uses a capability distinct from ordinary workspace-main-advance", async () => {
+    it("uses a capability distinct from ordinary git.publish", async () => {
       const deps = gateDeps({ decision: "deny" });
       const gate = createMainAdvanceApprovalGate(deps);
 
@@ -946,7 +946,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
       expect(deps.authorizeEffect).toHaveBeenCalledTimes(1);
       const effect = deps.authorizeEffect.mock.calls.at(-1)![1] as HostAuthorityEffect;
-      expect(effect.capability).toBe("workspace-main-advance");
+      expect(effect.capability).toBe("git.publish");
       expect(effect.tier).toBe("gated");
       expect(effect.challenge?.severity).toBeUndefined();
       const review = reviewOf(deps).installReview!;

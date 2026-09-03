@@ -151,7 +151,8 @@ export const HOST_APPROVAL_COPY = {
       once: { label: "Allow once", description: "Allow this one time." },
       session: {
         label: "Allow for now",
-        description: "Keep allowing until you close Vibestudio. You can change this in Permissions.",
+        description:
+          "Keep allowing until you close Vibestudio. You can change this in Permissions.",
       },
       deny: "Don't allow this.",
     },
@@ -698,14 +699,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "workspace",
   },
   {
-    prefix: "workspace-units.publish",
-    authorityCategory: { domain: "sharing", verb: "act" },
-    title: "Publish workspace apps",
-    action: "publish apps, panels, and services from your workspace",
-    description: "Make parts of your workspace available outside it",
-    group: "workspace",
-  },
-  {
     prefix: "extensions.reload",
     authorityCategory: { domain: "automation", verb: "manage" },
     title: "Reload extensions",
@@ -858,14 +851,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "files",
   },
   {
-    prefix: "workspace.history.write",
-    authorityCategory: { domain: "files", verb: "act" },
-    title: "Save to version history",
-    action: "save changes to your project's history",
-    description: "Create or advance your project's saved history",
-    group: "files",
-  },
-  {
     prefix: "process.execute",
     authorityCategory: { domain: "computer", verb: "act" },
     title: "Run programs on your device",
@@ -874,7 +859,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "host",
   },
   {
-    prefix: "network.fetch",
+    prefix: "network.response.read",
     authorityCategory: { domain: "web", verb: "act" },
     title: "Use the internet",
     action: "connect to the internet",
@@ -970,14 +955,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "credentials",
   },
   {
-    prefix: "external-browser-open",
-    authorityCategory: { domain: "sharing", verb: "act" },
-    title: "Open your browser",
-    action: "open a web page in your browser",
-    description: "Open a reviewed web address in your browser",
-    group: "network",
-  },
-  {
     prefix: "internal-model-runtime.use",
     authorityCategory: { domain: "automation", verb: "act" },
     title: "Use local AI models",
@@ -985,14 +962,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     description:
       "Use the local AI model managed by Vibestudio on this device; this does not allow other internet access",
     group: "runtime",
-  },
-  {
-    prefix: "workspace-main-advance",
-    authorityCategory: { domain: "sharing", verb: "act" },
-    title: "Update shared history",
-    action: "save reviewed changes to your project's main history",
-    description: "Save reviewed changes to a protected part of your project's history",
-    group: "files",
   },
   {
     prefix: "workspace-repo-delete",

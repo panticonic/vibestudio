@@ -67,6 +67,12 @@ describe("runtime context-boundary authority", () => {
     };
 
     expect(AgentExecutionTestPolicySpecSchema.parse(spec)).toEqual(spec);
+    expect(
+      AgentExecutionTestPolicySpecSchema.parse({
+        ...spec,
+        authority: [{ ...spec.authority[0], decision: "task" }],
+      }).authority[0]?.decision
+    ).toBe("task");
     expect(() =>
       AgentExecutionTestPolicySpecSchema.parse({
         ...spec,

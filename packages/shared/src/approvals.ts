@@ -308,6 +308,20 @@ export interface PendingApprovalBase {
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
+  /** Canonical acquisition operation that owns this one human decision. */
+  operationId?: string;
+  /** Host-authenticated chat/mission authority subject, when one exists. */
+  taskSubject?: string;
+  /** Human chat title registered by the workspace's chat surface. */
+  taskTitle?: string;
+  /** Consent-equivalence identity used to explain and measure repeats. */
+  securityIdentity?: string;
+  /** Prompt-registry family, not free-form visible copy. */
+  semanticFamily?: string;
+  /** Exact outside-source keys visible when the decision was made. */
+  sourcesShown?: readonly string[];
+  /** Why an otherwise related decision was presented again. */
+  repeatReason?: import("./governance/types.js").ApprovalRepeatReason;
   /** Validation lifecycle for publication reviews; ordinary approvals are immediately ready. */
   lifecycle?: {
     state: "preparing" | "ready" | "failed" | "cancelled";
@@ -331,7 +345,7 @@ export interface PendingApprovalBase {
   operation?: ApprovalOperationDescriptor;
   /**
    * Host-computed diff-review payload (provenance-aware-diff-merge-plan §9). Attached by
-   * the main-advance approval gate to workspace-main-advance / repo
+   * the main-advance approval gate to git.publish / repo
    * deletion / restore prompts; absent on every other approval. Content hashes
    * only — the approval card fetches the trusted blobs lazily by hash.
    */
@@ -421,6 +435,8 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
    * facet retains its own capability, resource, and durable grant semantics.
    */
   authorityFacets?: Array<{
+    selectionKey: string;
+    defaultSelected?: boolean;
     capability: string;
     title: string;
     description?: string;

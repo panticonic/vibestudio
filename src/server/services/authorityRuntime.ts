@@ -102,7 +102,7 @@ export function testPolicyAuthorityDecision(
     tier: "gated" | "critical";
     irreversible?: boolean;
   }
-): { ruleId: string; decision: "once" | "deny" } | null {
+): { ruleId: string; decision: "once" | "task" | "deny" } | null {
   const policy =
     authorization?.testPolicy ?? caller.testPolicy ?? caller.executionSession?.testPolicy;
   if (!policy) return null;
@@ -129,7 +129,7 @@ export function testPolicyAllowsGatedInvocation(
     testPolicyAuthorityDecision(caller, authorization, {
       ...input,
       tier: "gated",
-    })?.decision === "once"
+    })?.decision !== "deny"
   );
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveExactCausalInvocation, trajectoryTurnTaskRef } from "./workspaceSourceProvider.js";
+import { resolveExactCausalInvocation } from "./workspaceSourceProvider.js";
 
 describe("resolveExactCausalInvocation", () => {
   it("returns the recorded turn that owns an exact trajectory invocation", async () => {
@@ -32,7 +32,6 @@ describe("resolveExactCausalInvocation", () => {
     ).resolves.toEqual({
       active: true,
       initiatingUserId: "user-1",
-      taskRef: '["branch:channel:chat-1","branch:channel:chat-1","turn-1"]',
     });
   });
 
@@ -66,19 +65,6 @@ describe("resolveExactCausalInvocation", () => {
     ).resolves.toEqual({
       active: false,
       initiatingUserId: "user-1",
-      taskRef: '["branch:channel:chat-1","branch:channel:chat-1","turn-1"]',
     });
-  });
-
-  it("keeps equal turn ids on different trajectory branches in different tasks", () => {
-    const parent = {
-      kind: "trajectory-invocation" as const,
-      logId: "trajectory:chat-1",
-      head: "main",
-      invocationId: "call-1",
-    };
-    expect(trajectoryTurnTaskRef(parent, "turn-1")).not.toBe(
-      trajectoryTurnTaskRef({ ...parent, head: "fork-1" }, "turn-1")
-    );
   });
 });

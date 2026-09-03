@@ -2812,7 +2812,7 @@ async function main() {
           : "system";
         approvalQueue.beginPreparation?.({
           kind: "capability",
-          capability: "workspace-main-advance",
+          capability: "git.publish",
           dedupKey: `workspace-publication:${candidate.publicationId}`,
           callerId: candidate.caller.runtime.id,
           callerKind,
@@ -4992,7 +4992,7 @@ async function main() {
         // workspace source provider lazily at the first provenance-bearing ingress, then
         // prove the exact invocation node exists before any service or relay
         // can persist the asserted causal edge.
-        resolveExactCausalInvocation: async (parent) => {
+        resolveExactCausalInvocation: async (parent, binding) => {
           const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
           const { createWorkspaceSemanticPort, resolveExactCausalInvocation } =
             await import("./workspaceSourceProvider.js");
@@ -5012,11 +5012,11 @@ async function main() {
                 ? { userId: user.id, handle: user.handle }
                 : null,
             taskAuthority:
-              user && user.revokedAt === undefined && fact.taskRef && fact.active
+              user && user.revokedAt === undefined && fact.active && binding
                 ? taskAuthorityPrincipal({
                     workspaceId,
-                    ownerUser: `user:${user.id}`,
-                    taskRef: fact.taskRef,
+                    contextId: binding.contextId,
+                    channelId: binding.channelId,
                   })
                 : null,
           };

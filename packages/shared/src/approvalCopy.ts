@@ -93,15 +93,6 @@ function networkTrustLabel(approval: PendingApproval): string {
   return HOST_APPROVAL_COPY.trust.versionWithNetworkLabel;
 }
 
-function corsTrustLabel(approval: PendingApproval): string {
-  if (isIdentityScopedVersionApproval(approval)) {
-    return identityTrustKind(approval) === "agent"
-      ? HOST_APPROVAL_COPY.trust.agentIdentityWithCorsLabel
-      : HOST_APPROVAL_COPY.trust.serviceIdentityWithCorsLabel;
-  }
-  return HOST_APPROVAL_COPY.trust.versionWithCorsLabel;
-}
-
 export type ApprovalRiskTone = "standard" | "caution" | "danger";
 
 export function getRequesterCategoryLabel(category: ApprovalRequesterCategory): string {
@@ -237,7 +228,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
     return INSTALL_REVIEW_CATEGORY[approval.mode];
   }
 
-  if (approval.capability === "workspace-main-advance") {
+  if (approval.capability === "git.publish") {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
     );
@@ -248,16 +239,13 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
       ? HOST_APPROVAL_COPY.categories.configEdit
       : HOST_APPROVAL_COPY.categories.writeRequest;
   }
-  if (approval.capability === "workspace-shared-git-remote") {
+  if (approval.capability === "git.remotes.manage") {
     return HOST_APPROVAL_COPY.categories.remoteConfig;
   }
   if (approval.capability === "workspace-project-import") {
     return HOST_APPROVAL_COPY.categories.projectImport;
   }
   if (approval.capability === "network.response.read") {
-    return HOST_APPROVAL_COPY.categories.networkAccess;
-  }
-  if (approval.capability === "cors-response-read") {
     return HOST_APPROVAL_COPY.categories.networkAccess;
   }
   if (approval.capability === "workerd.inspector") {
@@ -360,7 +348,9 @@ export function getStandardApprovalDecisionActions(
     {
       decision: "task",
       label: "Allow for this task",
-      description: "Allow while this app works on the current task.",
+      description: approval.taskTitle
+        ? `Covers this action in “${approval.taskTitle}” until you reset this chat's permissions.`
+        : "Allow in this chat until you reset this chat's permissions.",
     },
     {
       decision: "mission",
@@ -466,7 +456,7 @@ const CAPABILITY_ACTION_HANDLERS: Record<
   string,
   (approval: PendingCapabilityApproval) => ApprovalActionCopy | null
 > = {
-  "workspace-main-advance"(approval) {
+  "git.publish"(approval) {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
     );
@@ -504,7 +494,7 @@ const CAPABILITY_ACTION_HANDLERS: Record<
         : HOST_APPROVAL_COPY.actions.workspaceWrite.deny,
     };
   },
-  "workspace-shared-git-remote"(approval) {
+  "git.remotes.manage"(approval) {
     return {
       once: HOST_APPROVAL_COPY.actions.sharedRemote.once,
       session: HOST_APPROVAL_COPY.actions.sharedRemote.session,
@@ -539,21 +529,6 @@ const CAPABILITY_ACTION_HANDLERS: Record<
         description: `Allow ${exactTrustSubject(approval)} to use the internet without asking for each site.`,
       },
       denyDescription: `Do not connect to ${destination}.`,
-    };
-  },
-  "cors-response-read"(approval) {
-    const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
-    return {
-      once: HOST_APPROVAL_COPY.actions.cors.once,
-      session: {
-        label: HOST_APPROVAL_COPY.actions.cors.originLabel,
-        description: `Allow reading data from ${destination} until you close Vibestudio.`,
-      },
-      version: {
-        label: corsTrustLabel(approval),
-        description: `Allow ${exactTrustSubject(approval)} to read data from other sites without asking for each one.`,
-      },
-      denyDescription: `Do not read responses from ${destination}.`,
     };
   },
 };
@@ -875,7 +850,7 @@ const CAPABILITY_COPY_HANDLERS: Record<
       summary: `Allow ${caller} to read messages and send replies in ${conversation}.`,
     };
   },
-  "workspace-main-advance"(approval) {
+  "git.publish"(approval) {
     const destination = approval.resource?.value ?? "this repository";
     if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
       return HOST_APPROVAL_COPY.headlines.workspaceSourceUpdate(destination);
@@ -885,7 +860,7 @@ const CAPABILITY_COPY_HANDLERS: Record<
     }
     return HOST_APPROVAL_COPY.headlines.repositoryWrite(destination);
   },
-  "workspace-shared-git-remote"(approval) {
+  "git.remotes.manage"(approval) {
     const destination = approval.resource?.value ?? "this repository";
     const operation =
       approval.details?.find((detail) => detail.label === "Operation")?.value ??
@@ -901,11 +876,6 @@ const CAPABILITY_COPY_HANDLERS: Record<
   "network.response.read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
-    return { title: fallback.title, summary: approvalDescription(approval) ?? fallback.summary };
-  },
-  "cors-response-read"(approval) {
-    const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
-    const fallback = HOST_APPROVAL_COPY.headlines.corsRead(destination);
     return { title: fallback.title, summary: approvalDescription(approval) ?? fallback.summary };
   },
   "workerd.inspector"(approval) {
@@ -1074,7 +1044,7 @@ export function shouldShowOperationSubstance(
 }
 
 function isBrowserOpenApproval(approval: PendingCapabilityApproval): boolean {
-  return approval.capability === "external-browser-open" || approval.capability === "open-url";
+  return approval.capability === "external.open" || approval.capability === "open-url";
 }
 
 function genericCapabilityTarget(approval: PendingCapabilityApproval): string {

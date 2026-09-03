@@ -171,7 +171,7 @@ const testPolicySchema = z.discriminatedUnion("kind", [
                 capability: testCapabilitySchema,
                 resource: AuthorityResourceScopeSchema,
                 tier: z.enum(["gated", "critical"]),
-                decision: z.enum(["once", "deny"]),
+                decision: z.enum(["once", "task", "deny"]),
               })
               .strict()
           ),

@@ -243,13 +243,7 @@ export function createWorkspaceSourceProviderV1(
 
 export interface ExactCausalInvocationFact {
   initiatingUserId: string | null;
-  taskRef: string | null;
   active: boolean;
-}
-
-/** Complete branch-local coordinate for one trajectory turn. */
-export function trajectoryTurnTaskRef(parent: RpcCausalParent, turnId: string): string {
-  return JSON.stringify([parent.logId, parent.head, turnId]);
 }
 
 export async function resolveExactCausalInvocation(
@@ -269,9 +263,7 @@ export async function resolveExactCausalInvocation(
       row.invocation_id === parent.invocationId
   );
   if (!row) return null;
-  const turnId = typeof row.turn_id === "string" && row.turn_id.length > 0 ? row.turn_id : null;
   return {
-    taskRef: turnId ? trajectoryTurnTaskRef(parent, turnId) : null,
     active:
       row.status === "started" &&
       row.terminal_outcome == null &&

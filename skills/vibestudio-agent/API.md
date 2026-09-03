@@ -65,6 +65,9 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 
 | Method | Description |
 |--------|-------------|
+| `authority.setTaskTitle` | Register the current human title for a chat-bound authority task. |
+| `authority.listTaskRules` | List the active reusable rules for one chat-bound agent task. |
+| `authority.resetTaskRules` | Revoke every reusable rule attached to one chat-bound agent task. |
 | `authority.awaitDecision` | Wait without a deadline for one acquisition owned by this session. |
 | `authority.preflight` | Dry-run a service method's complete authority contract without prompting or consuming authority. |
 
@@ -533,6 +536,7 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `shellApproval.resolve` | Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request. |
 | `shellApproval.resolveInstallReview` | Accept a pending install review, allowing the selected parts and permissions now, or cancel it. |
+| `shellApproval.resolveTaskRules` | Resolve a chat-rules card with the exact rows selected by the user. |
 | `shellApproval.resolveBootstrap` | Convergently resolve a snapshot of pending startup-app approvals. IDs already settled by an earlier partial attempt are reported as not pending so the remaining decisions can continue. |
 | `shellApproval.submitClientConfig` | Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request. |
 | `shellApproval.submitCredentialInput` | Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request. |

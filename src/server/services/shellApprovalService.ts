@@ -158,6 +158,41 @@ export function createShellApprovalService(deps: {
         // way, which is what an absent `landing` means.
         return result;
       },
+      resolveTaskRules: async (ctx, [approvalId, resolution]) => {
+        const pending = approvalQueue
+          .listPending()
+          .find((approval) => approval.approvalId === approvalId);
+        if (!pending || pending.kind !== "capability" || pending.cardType !== "task.rules") {
+          throw new ServiceError(
+            serviceName,
+            "resolveTaskRules",
+            "No pending chat-rules review found",
+            "ENOENT"
+          );
+        }
+        const resolver = resolverFrom(ctx, deviceLabelFor);
+        if (!resolver) {
+          throw new ServiceError(
+            serviceName,
+            "resolveTaskRules",
+            "Choosing chat permissions requires an authenticated human",
+            "EACCES"
+          );
+        }
+        if (!approvalQueue.resolveTaskRules) {
+          throw new ServiceError(
+            serviceName,
+            "resolveTaskRules",
+            "Chat-rules resolution is unavailable",
+            "ENOSYS"
+          );
+        }
+        await approvalQueue.resolveTaskRules(approvalId, resolution, resolver);
+        metrics.recordApprovalResolved({
+          decision: resolution.decision,
+          source: ctx.caller.runtime.kind,
+        });
+      },
       resolveBootstrap: async (ctx, [approvalIds, decision]) => {
         const results: Array<{
           approvalId: string;

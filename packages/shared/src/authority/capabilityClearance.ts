@@ -73,7 +73,6 @@ const CONTEXTUAL_KEYS: readonly string[] = [
  * all — is the widened reach §6.2 keeps contextual.
  */
 const SCOPE_WIDENED_EGRESS: readonly string[] = [
-  "network.fetch",
   "network.response.read",
   "workspace.gateway.access",
 ];

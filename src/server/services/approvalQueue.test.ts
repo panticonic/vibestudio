@@ -41,12 +41,91 @@ function unitInstallReviewRequest(
 }
 
 describe("approvalQueue", () => {
+  it("coalesces browser site consent across panel incarnations", () => {
+    const { queue } = createQueue();
+    const common = {
+      kind: "browser-permission" as const,
+      callerId: "panel:browser",
+      callerKind: "panel" as const,
+      repoPath: "panels/browser",
+      effectiveVersion: "version",
+      ownerUserId: "alice",
+      workspaceId: "workspace",
+      environmentKey: "profile:alice",
+      origin: "https://example.com",
+      topLevelUrl: "https://example.com/page",
+      capabilities: ["camera" as const],
+      deviceLabel: "This device",
+    };
+    void queue.requestBrowserPermission!({ ...common, panelId: "panel:one" });
+    void queue.requestBrowserPermission!({ ...common, panelId: "panel:two" });
+    expect(queue.listPending()).toHaveLength(1);
+  });
+
+  it("settles task rules with only server-offered selected row keys", async () => {
+    const { queue } = createQueue();
+    const row = {
+      capability: "workspace.storage",
+      domain: "computer" as const,
+      verb: "act" as const,
+      action: "Use task storage",
+      resource: "Task storage",
+      resourceScope: { kind: "exact" as const, key: "task-storage" },
+      tier: "gated" as const,
+      statement: "prospective" as const,
+      provenance: { source: "receiver" as const },
+      flags: {},
+    };
+    const handle = queue.requestWithHandle!({
+      kind: "capability",
+      callerId: "agent:task",
+      callerKind: "do",
+      repoPath: "workers/agent",
+      effectiveVersion: "version",
+      capability: "workspace.storage",
+      title: "Allow planned actions?",
+      cardType: "task.rules",
+      allowedDecisions: ["task", "deny"],
+      authorityRow: row,
+      authorityFacets: [
+        {
+          selectionKey: "storage",
+          defaultSelected: true,
+          capability: "workspace.storage",
+          title: "Use task storage",
+          row,
+        },
+        {
+          selectionKey: "inspect",
+          defaultSelected: true,
+          capability: "panel.inspect",
+          title: "Inspect a panel",
+          row: { ...row, capability: "panel.inspect", action: "Inspect a panel" },
+        },
+      ],
+    });
+    await expect(
+      queue.resolveTaskRules!(handle.approvalId, {
+        decision: "accept",
+        selected: ["storage", "forged"],
+      })
+    ).rejects.toThrow(/not offered/);
+    await queue.resolveTaskRules!(handle.approvalId, {
+      decision: "accept",
+      selected: ["storage"],
+    });
+    await expect(handle.resolution).resolves.toMatchObject({
+      decision: "task",
+      selectedAuthorityFacetKeys: ["storage"],
+    });
+  });
+
   it("atomically advances one publication approval from preparing to ready", async () => {
     const { queue } = createQueue();
     const dedupKey = "workspace-publication:event-1";
     const approvalId = queue.beginPreparation!({
       kind: "capability",
-      capability: "workspace-main-advance",
+      capability: "git.publish",
       dedupKey,
       callerId: "panel-1",
       callerKind: "panel",
@@ -101,7 +180,7 @@ describe("approvalQueue", () => {
     const dedupKey = "workspace-publication:event-failed";
     const approvalId = queue.beginPreparation!({
       kind: "capability",
-      capability: "workspace-main-advance",
+      capability: "git.publish",
       dedupKey,
       callerId: "panel-1",
       callerKind: "panel",
@@ -249,7 +328,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
       resource: {
         type: "url-origin",
@@ -261,7 +340,7 @@ describe("approvalQueue", () => {
     expect(queue.listPending()[0]).toMatchObject({
       kind: "capability",
       title: "Open external browser",
-      capability: "external-browser-open",
+      capability: "external.open",
     });
     queue.resolve(queue.listPending()[0]!.approvalId, "once");
     await expect(promise).resolves.toBe("once");
@@ -333,7 +412,7 @@ describe("approvalQueue", () => {
       callerKind: "do",
       repoPath: "vibestudio/internal",
       effectiveVersion: "internal",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
     });
 
@@ -497,7 +576,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
     });
 
@@ -519,7 +598,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
     });
     const approvalId = queue.listPending()[0]!.approvalId;
@@ -540,7 +619,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
     });
     await queue.resolve(queue.listPending()[0]!.approvalId, "dismiss");
@@ -556,7 +635,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "workspace-main-advance",
+      capability: "git.publish",
       title: "Write project files",
       resource: {
         type: "git-repo",
@@ -571,7 +650,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "workspace-main-advance",
+      capability: "git.publish",
       title: "Write project files",
       resource: {
         type: "git-repo",
@@ -599,7 +678,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
       resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
     });
@@ -609,7 +688,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
       resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
     });
@@ -1126,9 +1205,15 @@ describe("approvalQueue", () => {
         callerKind: "panel" as const,
         repoPath: "panels/example",
         effectiveVersion: "hash-1",
-        capability: "external-browser-open",
+        capability: "external.open",
         title: "Open external browser",
         resource: { type: "url" as const, label: "URL", value: "https://example.com" },
+        operationId: "acq:open-example",
+        taskSubject: "task:chat-one",
+        securityIdentity: "security:open-example",
+        semanticFamily: "external.open",
+        sourcesShown: ["https://example.com"],
+        repeatReason: "new-source" as const,
         ...(requestedByUserId ? { requestedByUserId } : {}),
       };
     }
@@ -1177,8 +1262,19 @@ describe("approvalQueue", () => {
         resolvedBy: { userId: "usr_2", handle: "alice", deviceId: "dev-1" },
         resolvedVia: "shell",
         requestedBy: { callerId: "panel-1", callerKind: "panel", userId: "usr_req" },
-        resource: { capability: "external-browser-open", value: "https://example.com" },
+        resource: { capability: "external.open", value: "https://example.com" },
         grantScopeStored: "version",
+        operationId: "acq:open-example",
+        taskSubject: "task:chat-one",
+        securityIdentity: "security:open-example",
+        semanticFamily: "external.open",
+        sourcesShown: ["https://example.com"],
+        repeatReason: "new-source",
+        surface: {
+          title: "Open external browser",
+          description: "",
+          rows: [],
+        },
       });
       expect(recordProvenance.mock.calls[0]![0]).not.toHaveProperty("workspaceId");
       // The entry is gone by the time the queue settles (no re-prompt lingering).

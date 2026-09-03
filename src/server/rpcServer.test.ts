@@ -1202,7 +1202,11 @@ describe("RpcServer relay behavior", () => {
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
-    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, {
+      entityId: binding.entityId,
+      contextId: binding.contextId,
+      channelId: binding.channelId,
+    });
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     const relayed = JSON.parse(String(init.body)) as { message: { causalParent?: unknown } };
     expect(relayed.message.causalParent).toEqual(causalParent);
@@ -3839,7 +3843,11 @@ describe("RpcServer caller identity", () => {
     await expect(resolveCausalParent(missing, caller, { causalParent })).rejects.toThrow(
       /does not exist/
     );
-    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, {
+      entityId: binding.entityId,
+      contextId: binding.contextId,
+      channelId: binding.channelId,
+    });
   });
 
   it("rejects nonexistent causal parents before unary and streaming service dispatch", async () => {
@@ -4425,7 +4433,7 @@ describe("RpcServer caller identity", () => {
       "@workspace-extensions/tools",
       "request:agent-tool"
     );
-    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+    expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, null);
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toMatchObject({
       caller: {

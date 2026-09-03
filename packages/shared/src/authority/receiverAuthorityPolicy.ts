@@ -32,7 +32,6 @@ const AGENT_SCOPE_OFFERABLE = new Set<string>([
   "workspace.dependencies.install",
   "git.remotes.manage",
   "git.project.import",
-  "git.publish",
   "git.pull",
   "mobile.provision",
   "panel.inspect",
@@ -42,7 +41,7 @@ const AGENT_SCOPE_OFFERABLE = new Set<string>([
   "context.relationships.record",
   "context.materialize",
   "workspace.configure",
-  "workspace-units.publish",
+  "git.publish",
   "workspace-units.manage",
   "workspace-panels.manage",
 ]);

@@ -87,6 +87,26 @@ export const ApprovalRecordSchema = z
       .enum(["task", "agent", "lock", "session", "version", "always", "block", "mission"])
       .nullable()
       .optional(),
+    operationId: z.string().min(1).optional(),
+    taskSubject: z.string().min(1).optional(),
+    securityIdentity: z.string().min(1).optional(),
+    semanticFamily: z.string().min(1).optional(),
+    sourcesShown: z.array(z.string().min(1)).optional(),
+    repeatReason: z
+      .enum([
+        "none",
+        "new-source",
+        "new-resource",
+        "new-actor",
+        "changed-effect",
+        "restart-undecided",
+        "duplicate",
+      ])
+      .optional(),
+    surface: z
+      .object({ title: z.string(), description: z.string(), rows: z.array(z.string()) })
+      .strict()
+      .optional(),
   })
   .strict();
 

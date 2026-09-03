@@ -50,9 +50,8 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "protected-input.submit", notability: "headline" },
 
   // ── Publishing & sending ───────────────────────────────────────────────────
-  { key: "external.open", notability: "headline" },
   { key: "open-external", notability: "headline" },
-  { key: "external-browser-open", notability: "headline" },
+  { key: "external.open", notability: "headline" },
   { key: "git.publish", notability: "headline" },
   { key: "git.remotes.manage", notability: "headline" },
   { key: "git.project.import", notability: "headline" },
@@ -63,7 +62,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "notifications", notability: "everyday" },
 
   // ── The web ────────────────────────────────────────────────────────────────
-  { key: "network.fetch", notability: "headline" },
   { key: "network.response.read", notability: "headline" },
   { key: "workspace.gateway.access", notability: "headline" },
   { key: "browser-data.read", notability: "headline" },
@@ -190,7 +188,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "subagents.create", notability: "headline" },
   { key: "extensions.reload", notability: "headline" },
   { key: "workspace-units.manage", notability: "headline" },
-  { key: "workspace-units.publish", notability: "headline" },
   { key: "workspace-host.manage", notability: "headline" },
   { key: "workspaces.create", notability: "headline" },
   { key: "workspaces.delete", notability: "headline" },
@@ -210,11 +207,9 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // ── Your files & work ──────────────────────────────────────────────────────
   { key: "workspace.files.read", notability: "everyday" },
   { key: "workspace.files.write", notability: "everyday" },
-  { key: "workspace.history.write", notability: "everyday" },
   { key: "workspace.graph.delete", notability: "headline" },
   { key: "workspace.storage.materialize", notability: "everyday" },
   { key: "workspace.storage.delete", notability: "headline" },
-  { key: "workspace-main-advance", notability: "headline" },
   { key: "workspace-repo-delete", notability: "headline" },
   { key: "settings.read", notability: "everyday" },
   { key: "context.boundary", notability: "everyday" },

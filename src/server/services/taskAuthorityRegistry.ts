@@ -88,8 +88,8 @@ export class TaskAuthorityRegistry {
 /** Mint a stable opaque principal from host-attested task coordinates. */
 export function taskAuthorityPrincipal(input: {
   workspaceId: string;
-  ownerUser: `user:${string}`;
-  taskRef: string;
+  contextId: string;
+  channelId: string;
 }): TaskGrantPrincipal {
   const digest = createHash("sha256")
     .update(TASK_AUTHORITY_DOMAIN)

@@ -84,7 +84,7 @@ function requestCapability(queue: ReturnType<typeof createQueue>) {
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
-    capability: "external-browser-open",
+    capability: "external.open",
     title: "Open external browser",
     resource: {
       type: "url-origin",
@@ -179,7 +179,7 @@ function requestDoCapability(queue: ReturnType<typeof createQueue>) {
     callerKind: "do",
     repoPath: "workers/example",
     effectiveVersion: "hash-1",
-    capability: "external-browser-open",
+    capability: "external.open",
     title: "Open external browser",
     resource: {
       type: "url-origin",

@@ -22,6 +22,7 @@ import type {
 import type { InstallReviewSelectionStore } from "./installReviewSelections.js";
 import { reviewedUnitPart, unresolvedOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
 import {
+  INSTALL_BEHAVIOR_COPY,
   reviewedUserlandDefinitions,
   summarizeParts,
   type InstallReviewOrigin,
@@ -118,6 +119,13 @@ interface ApprovalQueueRequestBase {
   requestedByUserId?: string;
   requesterCategory?: ApprovalRequesterCategory;
   operation?: ApprovalOperationDescriptor;
+  operationId?: string;
+  taskSubject?: string;
+  taskTitle?: string;
+  securityIdentity?: string;
+  semanticFamily?: string;
+  sourcesShown?: readonly string[];
+  repeatReason?: import("@vibestudio/shared/governance/types").ApprovalRepeatReason;
   /**
    * Host-computed diff-review payload (provenance-aware-diff-merge-plan §9), forwarded
    * verbatim onto the pending approval. Set by the main-advance gate for
@@ -605,6 +613,11 @@ export interface ApprovalQueue {
     resolution: TemplateInstallResolution,
     resolver?: ApprovalResolver
   ): Promise<InstallReviewResolution>;
+  resolveTaskRules?(
+    approvalId: string,
+    resolution: { decision: "accept"; selected: string[] } | { decision: "cancel" },
+    resolver?: ApprovalResolver
+  ): Promise<void>;
   /**
    * Say how an accepted operation went, from the site that performed it.
    *
@@ -655,6 +668,8 @@ export interface ApprovalQueueRequestHandle<
 
 export interface ApprovalQueueResolution<Decision extends string = ApprovalQueueDecision> {
   decision: Decision;
+  /** Exact offered rows selected on a task.rules card. */
+  selectedAuthorityFacetKeys?: readonly string[];
   /** Host-verified human resolver. Absent only for lifecycle/system settlement. */
   resolver?: ApprovalResolver;
 }
@@ -856,6 +871,25 @@ export function createApprovalQueue(deps: {
     }
   }
 
+  function surfaceAudit(approval: PendingApproval) {
+    const rows =
+      approval.kind === "capability"
+        ? (approval.authorityFacets?.map((facet) => facet.row.action) ??
+          (approval.authorityRow ? [approval.authorityRow.action] : []))
+        : approval.kind === "unit-install-review"
+          ? approval.parts.flatMap((part) =>
+              [...part.notableRows, ...part.everydayRows].map((row) =>
+                row.kind === "permission" ? row.row.action : INSTALL_BEHAVIOR_COPY[row.fact].action
+              )
+            )
+          : [];
+    return {
+      title: "title" in approval ? approval.title : (approval.operation?.verb ?? approval.kind),
+      description: "description" in approval ? (approval.description ?? "") : "",
+      rows,
+    };
+  }
+
   /**
    * The SINGLE settlement coordinator (WP5 §6) every human resolve/submit path
    * funnels through — it fixes the delete-before-emit bug by snapshotting and
@@ -923,6 +957,19 @@ export function createApprovalQueue(deps: {
           ...(resolution.grantScopeStored !== undefined
             ? { grantScopeStored: resolution.grantScopeStored }
             : {}),
+          ...(entry.approval.operationId ? { operationId: entry.approval.operationId } : {}),
+          ...(entry.approval.taskSubject ? { taskSubject: entry.approval.taskSubject } : {}),
+          ...(entry.approval.securityIdentity
+            ? { securityIdentity: entry.approval.securityIdentity }
+            : {}),
+          ...(entry.approval.semanticFamily
+            ? { semanticFamily: entry.approval.semanticFamily }
+            : {}),
+          ...(entry.approval.sourcesShown
+            ? { sourcesShown: [...entry.approval.sourcesShown] }
+            : {}),
+          ...(entry.approval.repeatReason ? { repeatReason: entry.approval.repeatReason } : {}),
+          surface: surfaceAudit(entry.approval),
         };
       }
 
@@ -1005,7 +1052,6 @@ export function createApprovalQueue(deps: {
         req.ownerUserId,
         req.workspaceId,
         req.environmentKey,
-        req.panelId,
         req.origin,
         ...req.capabilities.slice().sort(),
       ]);
@@ -1129,16 +1175,13 @@ export function createApprovalQueue(deps: {
           }
         : undefined;
       if (
-        req.capability === "workspace-main-advance" ||
+        req.capability === "git.publish" ||
         req.capability === "workspace-project-import" ||
-        req.capability === "workspace-shared-git-remote"
+        req.capability === "git.remotes.manage"
       ) {
         return { kind: "workspace", verb: req.title, ...(object ? { object } : {}) };
       }
       if (req.capability === "network.response.read") {
-        return { kind: "network", verb: req.title, ...(object ? { object } : {}) };
-      }
-      if (req.capability === "cors-response-read") {
         return { kind: "network", verb: req.title, ...(object ? { object } : {}) };
       }
       if (req.capability === "workerd.inspector") {
@@ -1147,7 +1190,7 @@ export function createApprovalQueue(deps: {
       if (req.capability === "client-config-delete") {
         return { kind: "service-setup", verb: req.title, ...(object ? { object } : {}) };
       }
-      if (req.capability === "external-browser-open" || req.capability === "open-url") {
+      if (req.capability === "external.open" || req.capability === "open-url") {
         return { kind: "browser", verb: req.title, ...(object ? { object } : {}) };
       }
       return { kind: "unknown", verb: req.title, ...(object ? { object } : {}) };
@@ -1201,6 +1244,13 @@ export function createApprovalQueue(deps: {
       repoPath: req.repoPath,
       effectiveVersion: req.effectiveVersion,
       requestedAt: Date.now(),
+      ...(req.operationId ? { operationId: req.operationId } : {}),
+      ...(req.taskSubject ? { taskSubject: req.taskSubject } : {}),
+      ...(req.taskTitle ? { taskTitle: req.taskTitle } : {}),
+      ...(req.securityIdentity ? { securityIdentity: req.securityIdentity } : {}),
+      ...(req.semanticFamily ? { semanticFamily: req.semanticFamily } : {}),
+      ...(req.sourcesShown ? { sourcesShown: [...req.sourcesShown] } : {}),
+      ...(req.repeatReason ? { repeatReason: req.repeatReason } : {}),
       lifecycle: { state: "ready" as const },
       ...(req.attention ? { attention: req.attention } : {}),
       ...(callerTitle !== undefined ? { callerTitle } : {}),
@@ -1438,7 +1488,8 @@ export function createApprovalQueue(deps: {
   function settleDecisionEntry(
     entry: QueueEntry,
     decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision,
-    resolver?: ApprovalResolver
+    resolver?: ApprovalResolver,
+    selectedAuthorityFacetKeys?: readonly string[]
   ): void {
     removeEntry(entry);
     for (const waiter of entry.waiters.values()) {
@@ -1446,7 +1497,11 @@ export function createApprovalQueue(deps: {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
       }
       waiter.resolve(decision);
-      waiter.resolveWithProvenance({ decision, ...(resolver ? { resolver } : {}) });
+      waiter.resolveWithProvenance({
+        decision,
+        ...(selectedAuthorityFacetKeys ? { selectedAuthorityFacetKeys } : {}),
+        ...(resolver ? { resolver } : {}),
+      });
     }
     entry.waiters.clear();
     for (const waiter of entry.fieldInputWaiters.values()) {
@@ -1826,6 +1881,9 @@ export function createApprovalQueue(deps: {
       if (entry.approval.kind === "unit-install-review") {
         throw new Error("Unit install reviews must be resolved through resolveInstallReview");
       }
+      if (entry.approval.kind === "capability" && entry.approval.cardType === "task.rules") {
+        throw new Error("Chat-rules reviews must be resolved through resolveTaskRules");
+      }
       if (
         (entry.approval.kind === "capability" || entry.approval.kind === "credential") &&
         decision !== "dismiss" &&
@@ -1866,6 +1924,35 @@ export function createApprovalQueue(deps: {
           resolver,
         },
         (e) => settleDecisionEntry(e, granted, resolver)
+      );
+    },
+
+    async resolveTaskRules(approvalId, resolution, resolver) {
+      const entry = entriesById.get(approvalId);
+      if (
+        !entry ||
+        entry.approval.kind !== "capability" ||
+        entry.approval.cardType !== "task.rules"
+      ) {
+        throw new Error("No pending chat-rules approval found");
+      }
+      const offered = new Set(
+        (entry.approval.authorityFacets ?? []).map((facet) => facet.selectionKey)
+      );
+      const selected = resolution.decision === "accept" ? [...new Set(resolution.selected)] : [];
+      if (selected.some((key) => !offered.has(key))) {
+        throw new Error("Chat-rules resolution contains a row that was not offered");
+      }
+      const decision = resolution.decision === "accept" && selected.length > 0 ? "task" : "deny";
+      await settle(
+        entry,
+        {
+          decision,
+          granted: decision === "task",
+          grantScopeStored: decision === "task" ? "task" : null,
+          resolver,
+        },
+        (current) => settleDecisionEntry(current, decision, resolver, selected)
       );
     },
 

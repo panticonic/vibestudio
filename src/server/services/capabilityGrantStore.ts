@@ -36,20 +36,6 @@ export interface IssueAuthorityGrantInput {
   capabilityDefinitionDigest?: string;
 }
 
-export interface PreauthorizationEnvelopeInput {
-  envelopeId?: string;
-  sessionId: string;
-  taskRef: string;
-  missionSubject?: `mission:${string}@${string}`;
-  createdBy: `user:${string}`;
-  createdAt?: number;
-  rules: readonly {
-    capability: string;
-    resource: ResourceScope;
-    worstCaseSeverity: "routine" | "sensitive";
-  }[];
-}
-
 export class CapabilityGrantStore {
   private readonly db: DatabaseSync;
   private readonly agentGrantWithdrawalListeners = new Set<
@@ -92,11 +78,11 @@ export class CapabilityGrantStore {
         `INSERT INTO authority_grants (
           id, effect, capability, capability_definition_digest,
           resource_key, resource_scope, subject,
-          session_id, invocation_digest, provider_execution_digest, mission_subject, envelope_id,
+          session_id, invocation_digest, provider_execution_digest, mission_subject,
           agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
           decided_by, decision_surface, task_ref
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -110,7 +96,6 @@ export class CapabilityGrantStore {
         constraints.invocationDigest ?? null,
         constraints.providerExecutionDigest ?? null,
         constraints.missionSubject ?? null,
-        constraints.envelopeId ?? null,
         constraints.agentBindingId ?? null,
         canonicalJson([...(constraints.lineageAtConsent ?? [])].sort()),
         input.issuedBy,
@@ -612,99 +597,6 @@ export class CapabilityGrantStore {
     for (const listener of this.agentGrantWithdrawalListeners) listener(grant, at);
   }
 
-  createEnvelope(input: PreauthorizationEnvelopeInput): string {
-    if (input.rules.some((rule) => rule.worstCaseSeverity === ("critical" as string))) {
-      throw new Error("Critical worst-case rules cannot enter a preauthorization envelope");
-    }
-    const envelopeId = input.envelopeId ?? ulid(input.createdAt);
-    const createdAt = input.createdAt ?? Date.now();
-    this.transaction(() => {
-      this.db
-        .prepare(
-          `INSERT INTO preauth_envelopes
-           (envelope_id, session_id, task_ref, mission_subject, state, created_by, created_at, closed_at)
-           VALUES (?, ?, ?, ?, 'active', ?, ?, NULL)`
-        )
-        .run(
-          envelopeId,
-          input.sessionId,
-          input.taskRef,
-          input.missionSubject ?? null,
-          input.createdBy,
-          createdAt
-        );
-      const insert = this.db.prepare(
-        `INSERT INTO envelope_rules
-         (envelope_id, capability, resource_key, resource_scope, worst_case_severity)
-         VALUES (?, ?, ?, ?, ?)`
-      );
-      for (const rule of input.rules) {
-        insert.run(
-          envelopeId,
-          rule.capability,
-          resourceKeyOf(rule.resource),
-          rule.resource.kind,
-          rule.worstCaseSeverity
-        );
-      }
-    });
-    return envelopeId;
-  }
-
-  envelopeAllows(input: {
-    envelopeId: string;
-    sessionId: string;
-    taskRef: string;
-    missionSubject?: `mission:${string}@${string}`;
-    capability: string;
-    resourceKey: string;
-  }): boolean {
-    const rows = this.db
-      .prepare(
-        `SELECT r.* FROM envelope_rules r
-         JOIN preauth_envelopes e ON e.envelope_id = r.envelope_id
-         WHERE e.envelope_id = ? AND e.state = 'active' AND e.session_id = ? AND e.task_ref = ?
-           AND ((e.mission_subject IS NULL AND ? IS NULL) OR e.mission_subject = ?)`
-      )
-      .all(
-        input.envelopeId,
-        input.sessionId,
-        input.taskRef,
-        input.missionSubject ?? null,
-        input.missionSubject ?? null
-      ) as EnvelopeRuleRow[];
-    return rows.some(
-      (row) =>
-        capabilityPatternCovers(String(row["capability"]), input.capability) &&
-        scopeCovers(
-          scopeFromRow(String(row["resource_scope"]), String(row["resource_key"])),
-          input.resourceKey
-        )
-    );
-  }
-
-  closeEnvelope(envelopeId: string, now = Date.now()): boolean {
-    let changed = false;
-    this.transaction(() => {
-      changed =
-        Number(
-          this.db
-            .prepare(
-              "UPDATE preauth_envelopes SET state = 'closed', closed_at = ? WHERE envelope_id = ? AND state = 'active'"
-            )
-            .run(now, envelopeId).changes
-        ) === 1;
-      if (changed) {
-        this.db
-          .prepare(
-            "UPDATE authority_grants SET revoked_at = ? WHERE envelope_id = ? AND revoked_at IS NULL"
-          )
-          .run(now, envelopeId);
-      }
-    });
-    return changed;
-  }
-
   transaction<T>(work: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -719,7 +611,6 @@ export class CapabilityGrantStore {
 }
 
 type GrantRow = Record<string, SQLOutputValue>;
-type EnvelopeRuleRow = Record<string, SQLOutputValue>;
 
 function rowToGrant(row: GrantRow): AuthorityGrant {
   const subject = String(row["subject"]) as AuthorityGrantSubject;
@@ -745,7 +636,6 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     ...(row["agent_binding_id"] === null
       ? {}
       : { agentBindingId: String(row["agent_binding_id"]) }),
-    ...(row["envelope_id"] === null ? {} : { envelopeId: String(row["envelope_id"]) }),
     ...(row["task_ref"] === null ? {} : { taskRef: String(row["task_ref"]) }),
     lineageAtConsent: lineage,
   };

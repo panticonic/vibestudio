@@ -341,11 +341,14 @@ describe("building rows from a declaration", () => {
   it("keeps a unit's own declared origin ordinary while any-site egress asks at use", () => {
     const declared = installReviewRows({
       requests: [
-        request("network.fetch", "gated", { kind: "origin", origin: "https://news.example" }),
+        request("network.response.read", "gated", {
+          kind: "origin",
+          origin: "https://news.example",
+        }),
       ],
     });
     const anySite = installReviewRows({
-      requests: [request("network.fetch", "gated", { kind: "network", value: "*" })],
+      requests: [request("network.response.read", "gated", { kind: "network", value: "*" })],
     });
 
     expect(declared.notableRows[0]?.timing).toBe("on-add");
@@ -518,7 +521,10 @@ describe("building rows from a declaration", () => {
     ).toBe(true);
 
     const widened = installReviewRows({
-      requests: [...stable, request("network.fetch", "gated", { kind: "network", value: "*" })],
+      requests: [
+        ...stable,
+        request("network.response.read", "gated", { kind: "network", value: "*" }),
+      ],
       previousRequests: stable,
     });
     expect(widened.notableRows.map((r) => r.change)).toEqual(["added"]);

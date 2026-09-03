@@ -40,7 +40,7 @@ describe("capability clearance", () => {
   it("separates a declared origin from reaching any site at all", () => {
     expect(
       isInstallClearable({
-        capability: "network.fetch",
+        capability: "network.response.read",
         resource: { kind: "domain", domain: "news.example" },
         tier: "gated",
         reviewed: true,
@@ -48,7 +48,7 @@ describe("capability clearance", () => {
     ).toBe(true);
     expect(
       isInstallClearable({
-        capability: "network.fetch",
+        capability: "network.response.read",
         resource: { kind: "network", value: "*" },
         tier: "gated",
         reviewed: true,

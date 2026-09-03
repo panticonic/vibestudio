@@ -227,8 +227,8 @@ describe("authority request presentation", () => {
     expect(describeCapability("workspace-units.manage")).toMatchObject({
       action: "manage apps, panels, background tasks, and extensions",
     });
-    expect(describeCapability("workspace-units.publish")).toMatchObject({
-      action: "publish apps, panels, and services from your workspace",
+    expect(describeCapability("git.publish")).toMatchObject({
+      action: "publish workspace changes",
     });
     expect(describeCapability("extensions.reload")).toMatchObject({
       action: "reload workspace extensions after changes",

@@ -12,6 +12,8 @@ import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import { taskAuthorityPrincipal } from "./taskAuthorityRegistry.js";
 import { receiverAuthorityPolicy } from "@vibestudio/shared/authority/receiverAuthorityPolicy";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { describeCapability } from "@vibestudio/shared/authorityPresentation";
+import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
 
 export function createAuthorityService(deps: {
   dispatcher: ServiceDispatcher;
@@ -28,6 +30,62 @@ export function createAuthorityService(deps: {
     authority: { principals: ["host", "user", "code", "session", "mission"] },
     methods: authorityMethods,
     handler: defineServiceHandler("authority", authorityMethods, {
+      setTaskTitle: (ctx, [input]) => {
+        requireWorkspaceMember(ctx, "Task title registration");
+        const workspaceId = requireDependency(deps.workspaceId, "Task title registration");
+        deps.acquisitions.setTaskTitle(
+          taskAuthorityPrincipal({
+            workspaceId,
+            contextId: input.contextId,
+            channelId: input.channelId,
+          }),
+          input.title
+        );
+        return null;
+      },
+      listTaskRules: (ctx, [input]) => {
+        requireWorkspaceMember(ctx, "Task rule inspection");
+        const workspaceId = requireDependency(deps.workspaceId, "Task rule inspection");
+        const grants = requireDependency(deps.grants, "Task rule inspection");
+        const subject = taskAuthorityPrincipal({ workspaceId, ...input });
+        return grants
+          .listActiveAuthorityGrants()
+          .filter(
+            (grant) =>
+              grant.effect === "allow" &&
+              grant.scope === "task" &&
+              (grant.subject === subject || grant.constraints?.taskRef === input.channelId)
+          )
+          .map((grant) => ({
+            id: grant.id,
+            capability: grant.capability,
+            action: describeCapability(grant.capability).action,
+            resource: resourcePhrase(grant.resource),
+            decidedAt: grant.createdAt,
+          }));
+      },
+      resetTaskRules: (ctx, [input]) => {
+        requireWorkspaceMember(ctx, "Task rule reset");
+        const workspaceId = requireDependency(deps.workspaceId, "Task rule reset");
+        const grants = requireDependency(deps.grants, "Task rule reset");
+        const subject = taskAuthorityPrincipal({ workspaceId, ...input });
+        const subjects = new Set(
+          grants
+            .listActiveAuthorityGrants()
+            .filter(
+              (grant) =>
+                grant.scope === "task" &&
+                (grant.subject === subject || grant.constraints?.taskRef === input.channelId)
+            )
+            .map((grant) => grant.subject)
+        );
+        subjects.add(subject);
+        let revokedGrantCount = 0;
+        grants.transaction(() => {
+          for (const current of subjects) revokedGrantCount += grants.revokeSubject(current);
+        });
+        return { revokedGrantCount };
+      },
       awaitDecision: (ctx, [input]) => {
         return deps.acquisitions.awaitDecision({
           acquisitionId: input.acquisitionId,
@@ -156,11 +214,12 @@ export function createAuthorityService(deps: {
           );
         }
         const sourceUser = attributedUser(ctx);
+        const plannedRules = [];
         for (const leaf of artifact.leaves) {
           // Open calls need no grant. Critical consent is invocation-specific
           // and therefore cannot honestly be pre-acquired for a future turn.
           if (leaf.tier === "open" || leaf.tier === "critical") continue;
-          deps.acquisitions.requestForTarget({
+          plannedRules.push({
             targetSubject,
             authorityPlanDigest: input.authorityPlanDigest,
             operationKey: canonicalJson({
@@ -179,6 +238,10 @@ export function createAuthorityService(deps: {
             review: leaf.review,
           });
         }
+        deps.acquisitions.requestTaskRulesForTarget(
+          plannedRules,
+          ctx.caller.agentBinding?.channelId ?? ctx.caller.executionSession?.taskRef
+        );
         const requests = deps.acquisitions.targetRequestsFor(
           targetSubject,
           input.authorityPlanDigest
@@ -248,8 +311,9 @@ export function createAuthorityService(deps: {
         }
         const taskAuthority = taskAuthorityPrincipal({
           workspaceId,
-          ownerUser: registered.ownerUser,
-          taskRef: input.taskRef,
+          contextId: input.contextId,
+          channelId:
+            input.executor.kind === "agent-turn" ? input.executor.channelId : input.taskRef,
         });
         const fact = executionAdmissions.admitExecution({
           controllerRuntimeId: ctx.caller.runtime.id,
@@ -349,4 +413,15 @@ function attributedUser(ctx: Parameters<ServiceDefinition["handler"]>[0]): `user
     });
   }
   return resolved;
+}
+
+function requireWorkspaceMember(
+  ctx: Parameters<ServiceDefinition["handler"]>[0],
+  operation: string
+): void {
+  if (!ctx.caller.subject || ctx.caller.subject.userId === "system") {
+    throw Object.assign(new Error(`${operation} requires an authenticated workspace member`), {
+      code: "EACCES",
+    });
+  }
 }

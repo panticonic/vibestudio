@@ -248,7 +248,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "capability",
-        capability: "workspace-main-advance",
+        capability: "git.publish",
         grantResourceKey: "workspace-source-change:panels/spectrolite:main",
         title: "Update workspace source",
         resource: {
@@ -523,8 +523,18 @@ describe("approvalCopy", () => {
       title: "Inspect a panel with developer tools",
       authorityRow: inspection,
       authorityFacets: [
-        { capability: "panel.inspect", title: "Inspect a panel", row: inspection },
-        { capability: "context.boundary", title: "Cross a workspace branch", row: boundary },
+        {
+          selectionKey: "panel",
+          capability: "panel.inspect",
+          title: "Inspect a panel",
+          row: inspection,
+        },
+        {
+          selectionKey: "context",
+          capability: "context.boundary",
+          title: "Cross a workspace branch",
+          row: boundary,
+        },
       ],
     });
 
@@ -663,6 +673,14 @@ describe("approvalCopy", () => {
     };
 
     expect(getRecommendedStandardDecision(approval)).toBe("task");
+    expect(
+      getStandardApprovalDecisionActions({
+        ...approval,
+        taskTitle: "Trello-style task board",
+      }).find((action) => action.decision === "task")?.description
+    ).toBe(
+      "Covers this action in “Trello-style task board” until you reset this chat's permissions."
+    );
   });
 
   it("keeps runtime ids out of caller copy and standing-action labels", () => {

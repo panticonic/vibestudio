@@ -22,6 +22,7 @@ import {
 } from "./capabilityGrantStore.js";
 import { createHash } from "node:crypto";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
+import { capabilityNotability } from "@vibestudio/shared/authority/capabilityNotability";
 import { testPolicyAuthorityDecision } from "./authorityRuntime.js";
 import type {
   DurableTargetAuthorityRequest,
@@ -116,7 +117,9 @@ export class AcquisitionCoordinator {
     { until: number; dismissals: number; lastDismissedAt: number }
   >();
   private readonly presentingTargetRequests = new Set<string>();
+  private readonly presentingTaskRuleGroups = new Set<string>();
   private readonly targetJoins = new Map<string, Map<string, TargetRequestJoin>>();
+  private readonly taskTitles = new Map<string, string>();
 
   constructor(
     private readonly deps: {
@@ -126,6 +129,12 @@ export class AcquisitionCoordinator {
       notifyOwner?: (ownerRuntimeId: string, acquisitionId: string) => Promise<void> | void;
     }
   ) {}
+
+  setTaskTitle(taskSubject: string, title: string): void {
+    const normalized = title.trim();
+    if (normalized) this.taskTitles.set(taskSubject, normalized);
+    else this.taskTitles.delete(taskSubject);
+  }
 
   requestForTarget(input: {
     targetSubject: import("@vibestudio/rpc").AuthorityGrantSubject;
@@ -143,6 +152,125 @@ export class AcquisitionCoordinator {
     const durable = store.ensure(input);
     if (durable.state === "pending") this.presentTargetRequest(durable, input.renderedAction);
     return durable;
+  }
+
+  requestTaskRulesForTarget(
+    inputs: readonly Parameters<AcquisitionCoordinator["requestForTarget"]>[0][],
+    taskRef?: string
+  ): DurableTargetAuthorityRequest[] {
+    const first = inputs[0];
+    if (!first) return [];
+    if (
+      inputs.some(
+        (input) =>
+          input.targetSubject !== first.targetSubject ||
+          input.authorityPlanDigest !== first.authorityPlanDigest ||
+          input.tier === "critical"
+      )
+    ) {
+      throw new Error("A task rules card requires one target, one plan, and no critical rows");
+    }
+    const requests = inputs.map((input) => this.requireTargetRequests().ensure(input));
+    this.presentTaskRuleRequests(
+      requests.filter((request) => request.state === "pending"),
+      first.sourceUser,
+      taskRef
+    );
+    return requests;
+  }
+
+  private presentTaskRuleRequests(
+    requests: readonly DurableTargetAuthorityRequest[],
+    sourceUser: `user:${string}`,
+    taskRef?: string
+  ): void {
+    const first = requests[0];
+    if (!first) return;
+    const groupKey = `${first.targetSubject}:${first.authorityPlanDigest}`;
+    if (this.presentingTaskRuleGroups.has(groupKey)) return;
+    const requestWithHandle = this.deps.approvalQueue.requestWithHandle;
+    if (!requestWithHandle) {
+      throw new Error("Task rules require typed approval resolution support");
+    }
+    this.presentingTaskRuleGroups.add(groupKey);
+    const handle = requestWithHandle.call(this.deps.approvalQueue, {
+      kind: "capability",
+      callerId: targetRequestCallerId(groupKey),
+      callerKind: "system",
+      repoPath: "vibestudio/authority",
+      effectiveVersion: first.authorityPlanDigest,
+      attention: "interrupt",
+      operationId: `preflight:${groupKey}`,
+      taskSubject: first.targetSubject,
+      ...(this.taskTitles.get(first.targetSubject)
+        ? { taskTitle: this.taskTitles.get(first.targetSubject)! }
+        : {}),
+      securityIdentity: groupKey,
+      semanticFamily: "task.rules",
+      sourcesShown: [],
+      repeatReason: "none",
+      requestedByUserId: sourceUser.slice("user:".length),
+      requesterCategory: "agent",
+      dedupKey: `task-rules:${groupKey}`,
+      capability: first.capability,
+      title: "Allow these planned actions for this chat?",
+      description:
+        "This agent plans to use these actions. Allow them now so it won't interrupt you later?",
+      resource: { type: "chat", label: "Chat", value: first.targetSubject },
+      grantResourceKey: first.targetSubject,
+      operation: {
+        kind: "unknown",
+        verb: "allow planned actions",
+        object: { type: "chat", label: "Chat", value: first.targetSubject },
+      },
+      cardType: "task.rules",
+      allowedDecisions: ["task", "deny"],
+      authorityRow: targetRequestAuthorityRow(first),
+      authorityFacets: requests.map((request) => ({
+        selectionKey: request.requestId,
+        defaultSelected: true,
+        capability: request.capability,
+        title: request.review.action,
+        resource: {
+          type: request.resource.kind,
+          label: "Where",
+          value:
+            request.resource.kind === "exact"
+              ? request.resource.key
+              : canonicalJson(request.resource),
+        },
+        row: targetRequestAuthorityRow(request),
+      })),
+    });
+    void handle.resolution
+      .then(({ decision, selectedAuthorityFacetKeys, resolver }) => {
+        const selected = new Set(selectedAuthorityFacetKeys ?? []);
+        for (const request of requests) {
+          const live = this.requireTargetRequests().get(request.requestId);
+          if (!live || live.state !== "pending") continue;
+          if (decision === "task" && selected.has(request.requestId)) {
+            const grantId = this.persistTargetDecision(
+              live,
+              "allow",
+              resolver ? `user:${resolver.subject.userId}` : sourceUser,
+              taskRef
+            );
+            this.requireTargetRequests().settle(request.requestId, "granted", grantId);
+            this.settleTargetJoiners(request.requestId, {
+              state: "decided",
+              decision: "task",
+              grantId,
+            });
+          } else {
+            this.requireTargetRequests().settle(request.requestId, "cancelled");
+            this.settleTargetJoiners(request.requestId, { state: "closed" });
+          }
+        }
+      })
+      .catch((error) => {
+        console.error("[AuthorityAcquisition] task rules presentation failed:", error);
+      })
+      .finally(() => this.presentingTaskRuleGroups.delete(groupKey));
   }
 
   resumeTargetRequests(): void {
@@ -313,7 +441,8 @@ export class AcquisitionCoordinator {
   private persistTargetDecision(
     request: DurableTargetAuthorityRequest,
     effect: "allow" | "deny",
-    issuedBy: `user:${string}`
+    issuedBy: `user:${string}`,
+    taskRef?: string
   ): string | undefined {
     const missionSubject = request.targetSubject.startsWith("mission:")
       ? (request.targetSubject as `mission:${string}@${string}`)
@@ -326,6 +455,7 @@ export class AcquisitionCoordinator {
       subject: request.targetSubject,
       constraints: {
         ...(missionSubject ? { missionSubject } : {}),
+        ...(taskRef ? { taskRef } : {}),
         lineageAtConsent: [],
       },
       issuedBy,
@@ -466,6 +596,11 @@ export class AcquisitionCoordinator {
       return { ...completed.info };
     }
 
+    const sourceDelta = this.sourceDeltaFor(input);
+    if (sourceDelta) {
+      return this.requestSourceDelta(input, sourceDelta.grants, sourceDelta.lineage, continuation);
+    }
+
     const testPolicy = input.caller.testPolicy ?? input.caller.executionSession?.testPolicy ?? null;
     if (input.snapshot.executionMode === "test") {
       if (!testPolicy) {
@@ -518,6 +653,14 @@ export class AcquisitionCoordinator {
       } else {
         inputs.forEach((facet, index) => {
           const rule = rules[index]!;
+          const taskSubject = rule.decision === "task" ? facet.snapshot.taskAuthority : null;
+          if (rule.decision === "task" && (!taskSubject || facet.tier === "critical")) {
+            throw testPolicyIntegrityError(
+              "ETESTPOLICYMISMATCH",
+              "Task-scoped test authority requires a gated invocation with attested task authority",
+              facet
+            );
+          }
           this.deps.grantStore.issue({
             effect: rule.decision === "deny" ? "deny" : "allow",
             capability: facet.snapshot.capability,
@@ -527,21 +670,27 @@ export class AcquisitionCoordinator {
             // grant to the exact principal the immutable snapshot evaluated; keep
             // the execution/session identity as a constraint, never as a substitute
             // principal.
-            subject: facet.snapshot.callerPrincipal,
-            constraints: {
-              sessionId: facet.snapshot.sessionId,
-              ...(facet.snapshot.agentBindingId
-                ? { agentBindingId: facet.snapshot.agentBindingId }
-                : {}),
-              invocationDigest: facet.snapshotDigest,
-              lineageAtConsent: [...(facet.snapshot.lineageClasses ?? ["none"])],
-            },
+            subject: taskSubject ?? facet.snapshot.callerPrincipal,
+            constraints:
+              rule.decision === "task"
+                ? {
+                    ...(facet.snapshot.taskRef ? { taskRef: facet.snapshot.taskRef } : {}),
+                    lineageAtConsent: [...(facet.snapshot.lineageClasses ?? ["none"])],
+                  }
+                : {
+                    sessionId: facet.snapshot.sessionId,
+                    ...(facet.snapshot.agentBindingId
+                      ? { agentBindingId: facet.snapshot.agentBindingId }
+                      : {}),
+                    invocationDigest: facet.snapshotDigest,
+                    lineageAtConsent: [...(facet.snapshot.lineageClasses ?? ["none"])],
+                  },
             issuedBy: `host:${facet.snapshot.testPolicyId}:${rule.ruleId}`,
             provenance:
               facet.tier === "critical" && rule.decision === "once"
                 ? "critical-confirmation"
                 : "preauthorization",
-            scope: "once",
+            scope: rule.decision === "task" ? "task" : "once",
           });
         });
         const info: AcquisitionInfo = {
@@ -576,11 +725,16 @@ export class AcquisitionCoordinator {
         cooldownUntil: cooldown.until,
       };
     }
-    // Every actionable acquisition is presented immediately. `attention` is
-    // still carried by the approval protocol for producer-selected external
-    // notification policy, but the coordinator no longer rate-limits prompts
-    // by silently moving concurrent work into a background queue.
-    const attention = "interrupt" as const;
+    const ordinaryInterruptActive = [...this.byId.values()].some(
+      (pending) => pending.info.tier === "gated" && pending.info.pending
+    );
+    // Critical confirmation is never hidden behind a routine ask. Ordinary
+    // permission requests share one interruption budget; additional work stays
+    // visible in the queue chip without producing another attention pulse.
+    const attention =
+      tierForGroup(inputs) === "critical" || !ordinaryInterruptActive
+        ? ("interrupt" as const)
+        : ("queue" as const);
 
     const cardType = cardTypeForGroup(inputs);
     let settle!: (outcome: AcquisitionOutcome) => void;
@@ -617,6 +771,212 @@ export class AcquisitionCoordinator {
       console.error("[AuthorityAcquisition] approval presentation failed:", error);
     });
     return { ...info };
+  }
+
+  private sourceDeltaFor(input: AcquisitionRequestInput): {
+    grants: import("@vibestudio/rpc").AuthorityGrant[];
+    lineage: string[];
+  } | null {
+    const subject = input.snapshot.taskAuthority;
+    const lineage = [...(input.snapshot.lineageClasses ?? [])];
+    if (!subject || !lineage.some((entry) => entry.startsWith("source:"))) return null;
+    const grants = this.deps.grantStore
+      .listActiveAuthorityGrants()
+      .filter(
+        (grant) =>
+          grant.subject === subject &&
+          grant.effect === "allow" &&
+          grant.scope === "task" &&
+          lineage.some((entry) => !(grant.constraints?.lineageAtConsent ?? []).includes(entry))
+      );
+    return grants.length > 0 ? { grants, lineage } : null;
+  }
+
+  private requestSourceDelta(
+    input: AcquisitionRequestInput,
+    grants: readonly import("@vibestudio/rpc").AuthorityGrant[],
+    lineage: readonly string[],
+    continuation: PendingAcquisition["continuation"]
+  ): AcquisitionInfo {
+    const currentGrant = grants.find(
+      (grant) =>
+        grant.capability === input.snapshot.capability &&
+        resourceKeyOfScope(grant.resource) === input.snapshot.resourceKey
+    );
+    const facets: Array<{
+      selectionKey: string;
+      grant: import("@vibestudio/rpc").AuthorityGrant | null;
+      capability: string;
+      resource: ResourceScope;
+      row: ReturnType<typeof authorityRowForAcquisition>;
+    }> = grants.map((grant) => ({
+      selectionKey: grantSelectionKey(grant),
+      grant,
+      capability: grant.capability,
+      resource: grant.resource,
+      row: grantAuthorityRow(grant),
+    }));
+    if (!currentGrant) {
+      facets.push({
+        selectionKey: acquisitionFacetSelectionKey(input),
+        grant: null,
+        capability: input.snapshot.capability,
+        resource: input.resource,
+        row: authorityRowForAcquisition(input),
+      });
+    }
+    const requestKey = canonicalKey([
+      "task-source-delta-v1",
+      input.snapshot.taskAuthority ?? "",
+      ...lineage.filter((entry) => entry.startsWith("source:")).sort(),
+      ...facets.map((facet) => facet.selectionKey).sort(),
+    ]);
+    const existing = this.byRequestKey.get(requestKey);
+    if (existing) return { ...existing.info, pending: true };
+    const acquisitionId = acquisitionIdFor(requestKey);
+    let settle!: (outcome: AcquisitionOutcome) => void;
+    const outcome = new Promise<AcquisitionOutcome>((resolve) => {
+      settle = resolve;
+    });
+    const info: AcquisitionInfo = {
+      acquisitionId,
+      ownerRuntimeId: input.caller.runtime.id,
+      snapshotDigest: input.snapshotDigest,
+      capability: input.snapshot.capability,
+      resourceKey: input.snapshot.resourceKey,
+      tier: "gated",
+      cardType: "task.rules",
+      renderedAction: input.renderedAction,
+      pending: false,
+    };
+    const entry: PendingAcquisition = {
+      requestKey,
+      info,
+      sessionId: input.snapshot.sessionId,
+      agentBindingId: input.snapshot.agentBindingId ?? null,
+      resource: input.resource,
+      requestedAt: Date.now(),
+      outcome,
+      settle,
+      continuation,
+    };
+    this.byRequestKey.set(requestKey, entry);
+    this.byId.set(acquisitionId, entry);
+    entry.info.pending = true;
+    const requestWithHandle = this.deps.approvalQueue.requestWithHandle;
+    if (!requestWithHandle)
+      throw new Error("Source deltas require typed approval resolution support");
+    const source =
+      lineage.find((entry) => entry.startsWith("source:"))?.slice(7) ?? "outside content";
+    const handle = requestWithHandle.call(this.deps.approvalQueue, {
+      kind: "capability",
+      callerId: input.caller.runtime.id,
+      callerKind: approvalCallerKind(input.caller.runtime.kind),
+      repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
+      effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
+      attention: "interrupt",
+      operationId: acquisitionId,
+      taskSubject:
+        input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId,
+      ...(this.taskTitles.get(
+        input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId
+      )
+        ? {
+            taskTitle: this.taskTitles.get(
+              input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId
+            )!,
+          }
+        : {}),
+      securityIdentity: requestKey,
+      semanticFamily: "task.rules",
+      sourcesShown: lineage
+        .filter((item) => item.startsWith("source:"))
+        .map((item) => item.slice("source:".length))
+        .sort(),
+      repeatReason: "new-source",
+      ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
+      requesterCategory: "agent",
+      dedupKey: requestKey,
+      capability: input.snapshot.capability,
+      title: "Extend this chat's permissions?",
+      description: `This chat has read outside content: ${source}. Extend these permissions to cover it?`,
+      resource: { type: "outside-source", label: "New source", value: source },
+      grantResourceKey: source,
+      operation: {
+        kind: "unknown",
+        verb: "extend chat permissions",
+        object: { type: "outside-source", label: "New source", value: source },
+      },
+      cardType: "task.rules",
+      allowedDecisions: ["task", "deny"],
+      authorityRow: currentGrant
+        ? grantAuthorityRow(currentGrant)
+        : authorityRowForAcquisition(input),
+      authorityFacets: facets.map((facet) => ({
+        selectionKey: facet.selectionKey,
+        defaultSelected:
+          (facet.capability === input.snapshot.capability &&
+            resourceKeyOfScope(facet.resource) === input.snapshot.resourceKey) ||
+          capabilityNotability({ capability: facet.capability, tier: "gated" }) === "everyday",
+        capability: facet.capability,
+        title: facet.row.action,
+        resource: {
+          type: facet.resource.kind,
+          label: "Where",
+          value: resourceKeyOfScope(facet.resource),
+        },
+        row: facet.row,
+      })),
+    });
+    void handle.resolution
+      .then(({ decision, selectedAuthorityFacetKeys, resolver }) => {
+        if (this.byId.get(acquisitionId) !== entry) return;
+        const selected = new Set(selectedAuthorityFacetKeys ?? []);
+        if (decision === "task") {
+          this.deps.grantStore.transaction(() => {
+            for (const facet of facets) {
+              if (!selected.has(facet.selectionKey)) continue;
+              const grant = facet.grant;
+              this.deps.grantStore.issue({
+                effect: "allow",
+                capability: facet.capability,
+                resource: facet.resource,
+                subject: grant?.subject ?? input.snapshot.taskAuthority!,
+                constraints: {
+                  ...(grant?.constraints ?? {}),
+                  ...(!grant && input.snapshot.taskRef ? { taskRef: input.snapshot.taskRef } : {}),
+                  lineageAtConsent: [
+                    ...new Set([...(grant?.constraints?.lineageAtConsent ?? []), ...lineage]),
+                  ],
+                },
+                issuedBy: resolver
+                  ? `user:${resolver.subject.userId}`
+                  : (grant?.issuedBy ??
+                    (input.caller.subject
+                      ? `user:${input.caller.subject.userId}`
+                      : "host:approval")),
+                provenance: "acquisition",
+                scope: "task",
+              });
+            }
+          });
+        }
+        const currentSelectionKey = currentGrant
+          ? grantSelectionKey(currentGrant)
+          : acquisitionFacetSelectionKey(input);
+        const currentCovered = selected.has(currentSelectionKey);
+        entry.info.pending = false;
+        this.finish(entry, {
+          state: "decided",
+          decision: decision === "task" && currentCovered ? "task" : "deny",
+        });
+      })
+      .catch((error) => {
+        console.error("[AuthorityAcquisition] source delta presentation failed:", error);
+        entry.info.pending = false;
+        this.finish(entry, { state: "closed" });
+      });
+    return { ...info, pending: true };
   }
 
   async requestAndWait(
@@ -805,12 +1165,28 @@ export class AcquisitionCoordinator {
     const presentation = input.presentation;
     const signal = combineAcquisitionSignals(invocationSignal, inputs);
     const allowedDecisions = allowedDecisionsForGroup(inputs);
+    const taskSubject =
+      input.snapshot.taskAuthority ?? input.snapshot.taskRef ?? input.snapshot.sessionId;
+    const taskTitle = this.taskTitles.get(taskSubject);
     const requestBase = {
       callerId: input.caller.runtime.id,
       callerKind: approvalCallerKind(input.caller.runtime.kind),
       repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
       effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
       attention,
+      operationId: entry.info.acquisitionId,
+      taskSubject,
+      ...(taskTitle ? { taskTitle } : {}),
+      securityIdentity: entry.requestKey,
+      semanticFamily:
+        input.presentation?.operation?.kind && input.presentation.operation.kind !== "unknown"
+          ? input.presentation.operation.kind
+          : entry.info.cardType,
+      sourcesShown: (input.snapshot.lineageClasses ?? [])
+        .filter((item) => item.startsWith("source:"))
+        .map((item) => item.slice("source:".length))
+        .sort(),
+      repeatReason: "none" as const,
       ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
       requesterCategory: input.caller.agentBinding
         ? ("agent" as const)
@@ -824,94 +1200,108 @@ export class AcquisitionCoordinator {
       ...(presentation?.diffReview ? { diffReview: [...presentation.diffReview] } : {}),
       ...(signal ? { signal } : {}),
     };
-    const decision = presentation?.installReview
-      ? await this.deps.approvalQueue.request({
-          ...requestBase,
-          kind: "unit-install-review",
-          dedupKey: presentation.dedupKey ?? entry.info.acquisitionId,
-          mode: presentation.installReview.mode,
-          ...(presentation.installReview.reportsLanding ? { reportsLanding: true } : {}),
-          ...(presentation.installReview.landingToken
-            ? { landingToken: presentation.installReview.landingToken }
-            : {}),
-          title: presentation.title,
-          description:
-            presentation.description ?? `Requests permission to ${input.renderedAction}.`,
-          units: [...presentation.installReview.units],
-          ...(presentation.installReview.template
-            ? { template: presentation.installReview.template }
-            : {}),
-          unchangedPartCount: presentation.installReview.unchangedPartCount ?? 0,
-          ...(presentation.installReview.previousRequests
-            ? { previousRequests: presentation.installReview.previousRequests }
-            : {}),
-          ...(presentation.installReview.previouslyCleared
-            ? { previouslyCleared: presentation.installReview.previouslyCleared }
-            : {}),
-          ...(presentation.installReview.origins
-            ? { origins: presentation.installReview.origins }
-            : {}),
-          ...(presentation.installReview.identityKeys
-            ? { identityKeys: presentation.installReview.identityKeys }
-            : {}),
-          ...(installReviewSections(presentation.installReview)
-            ? { sections: installReviewSections(presentation.installReview)! }
-            : {}),
-          configWrite: presentation.installReview.configWrite ?? null,
-        })
-      : await this.deps.approvalQueue.request({
-          ...requestBase,
-          kind: "capability",
-          capability: input.snapshot.capability,
-          dedupKey: presentation?.dedupKey ?? entry.info.acquisitionId,
-          severity:
-            inputs.some((facet) => facet.presentation?.severity === "severe") ||
-            tierForGroup(inputs) === "critical"
-              ? "severe"
-              : (presentation?.severity ?? "standard"),
-          title: presentation?.title ?? authorityActionTitle(input.renderedAction),
-          description:
-            presentation?.description ??
-            (tierForGroup(inputs) === "critical"
-              ? "This action can't be undone. Check the details before confirming."
-              : `Requests permission to ${input.renderedAction}.`),
-          resource: presentation?.resource ?? {
-            type: "authority-resource",
-            label: "Where",
-            value: input.snapshot.resourceKey,
-          },
-          grantResourceKey: input.snapshot.resourceKey,
-          resourceScope: approvalScopeForAuthorityResource(input.resource),
-          operation: presentation?.operation ?? {
-            kind: "unknown",
-            verb: input.renderedAction,
-            groupKey:
+    const queueResolution = presentation?.installReview
+      ? {
+          decision: await this.deps.approvalQueue.request({
+            ...requestBase,
+            kind: "unit-install-review",
+            dedupKey: presentation.dedupKey ?? entry.info.acquisitionId,
+            mode: presentation.installReview.mode,
+            ...(presentation.installReview.reportsLanding ? { reportsLanding: true } : {}),
+            ...(presentation.installReview.landingToken
+              ? { landingToken: presentation.installReview.landingToken }
+              : {}),
+            title: presentation.title,
+            description:
+              presentation.description ?? `Requests permission to ${input.renderedAction}.`,
+            units: [...presentation.installReview.units],
+            ...(presentation.installReview.template
+              ? { template: presentation.installReview.template }
+              : {}),
+            unchangedPartCount: presentation.installReview.unchangedPartCount ?? 0,
+            ...(presentation.installReview.previousRequests
+              ? { previousRequests: presentation.installReview.previousRequests }
+              : {}),
+            ...(presentation.installReview.previouslyCleared
+              ? { previouslyCleared: presentation.installReview.previouslyCleared }
+              : {}),
+            ...(presentation.installReview.origins
+              ? { origins: presentation.installReview.origins }
+              : {}),
+            ...(presentation.installReview.identityKeys
+              ? { identityKeys: presentation.installReview.identityKeys }
+              : {}),
+            ...(installReviewSections(presentation.installReview)
+              ? { sections: installReviewSections(presentation.installReview)! }
+              : {}),
+            configWrite: presentation.installReview.configWrite ?? null,
+          }),
+          selectedAuthorityFacetKeys: undefined,
+        }
+      : await (() => {
+          const request = {
+            ...requestBase,
+            kind: "capability",
+            capability: input.snapshot.capability,
+            dedupKey: presentation?.dedupKey ?? entry.info.acquisitionId,
+            severity:
+              inputs.some((facet) => facet.presentation?.severity === "severe") ||
               tierForGroup(inputs) === "critical"
-                ? `confirm:${input.snapshotDigest}`
-                : `acquire:${input.snapshot.sessionId}`,
-          },
-          ...(presentation?.details ? { details: [...presentation.details] } : {}),
-          snapshot: input.snapshot,
-          cardType: entry.info.cardType,
-          allowedDecisions: [...allowedDecisions],
-          authorityRow: authorityRowForAcquisition(input),
-          ...(inputs.length > 1
-            ? {
-                authorityFacets: inputs.map((facet) => ({
-                  capability: facet.snapshot.capability,
-                  title: facet.presentation?.title ?? authorityActionTitle(facet.renderedAction),
-                  ...(facet.presentation?.description
-                    ? { description: facet.presentation.description }
-                    : {}),
-                  ...(facet.presentation?.resource
-                    ? { resource: facet.presentation.resource }
-                    : {}),
-                  row: authorityRowForAcquisition(facet),
-                })),
-              }
-            : {}),
-          ...(input.substance ? { operationSubstance: input.substance } : {}),
-        });
+                ? "severe"
+                : (presentation?.severity ?? "standard"),
+            title: presentation?.title ?? authorityActionTitle(input.renderedAction),
+            description:
+              presentation?.description ??
+              (tierForGroup(inputs) === "critical"
+                ? "This action can't be undone. Check the details before confirming."
+                : `Requests permission to ${input.renderedAction}.`),
+            resource: presentation?.resource ?? {
+              type: "authority-resource",
+              label: "Where",
+              value: input.snapshot.resourceKey,
+            },
+            grantResourceKey: input.snapshot.resourceKey,
+            resourceScope: approvalScopeForAuthorityResource(input.resource),
+            operation: presentation?.operation ?? {
+              kind: "unknown",
+              verb: input.renderedAction,
+              groupKey:
+                tierForGroup(inputs) === "critical"
+                  ? `confirm:${input.snapshotDigest}`
+                  : `acquire:${input.snapshot.sessionId}`,
+            },
+            ...(presentation?.details ? { details: [...presentation.details] } : {}),
+            snapshot: input.snapshot,
+            cardType: entry.info.cardType,
+            allowedDecisions: [...allowedDecisions],
+            authorityRow: authorityRowForAcquisition(input),
+            ...(inputs.length > 1
+              ? {
+                  authorityFacets: inputs.map((facet) => ({
+                    selectionKey: acquisitionFacetSelectionKey(facet),
+                    defaultSelected: facet.snapshot.capability !== "context.boundary",
+                    capability: facet.snapshot.capability,
+                    title: facet.presentation?.title ?? authorityActionTitle(facet.renderedAction),
+                    ...(facet.presentation?.description
+                      ? { description: facet.presentation.description }
+                      : {}),
+                    ...(facet.presentation?.resource
+                      ? { resource: facet.presentation.resource }
+                      : {}),
+                    row: authorityRowForAcquisition(facet),
+                  })),
+                }
+              : {}),
+            ...(input.substance ? { operationSubstance: input.substance } : {}),
+          } satisfies CapabilityApprovalQueueRequest;
+          return this.deps.approvalQueue.requestWithHandle
+            ? this.deps.approvalQueue.requestWithHandle(request).resolution
+            : this.deps.approvalQueue.request(request).then((decision) => ({
+                decision,
+                selectedAuthorityFacetKeys: undefined,
+              }));
+        })();
+    const decision = queueResolution.decision;
 
     if (this.byId.get(entry.info.acquisitionId) !== entry) return;
     // ApprovalQueue resolves an aborted waiter as deny so callers are never
@@ -946,7 +1336,13 @@ export class AcquisitionCoordinator {
     ) {
       throw new Error(`Authority presentation returned disallowed decision '${decision}'`);
     }
+    const selectedFacetKeys = queueResolution.selectedAuthorityFacetKeys
+      ? new Set(queueResolution.selectedAuthorityFacetKeys)
+      : null;
     const grantIds = inputs
+      .filter(
+        (facet) => !selectedFacetKeys || selectedFacetKeys.has(acquisitionFacetSelectionKey(facet))
+      )
       .map((facet) => this.persistDecision(facet, authorityDecision))
       .filter((grantId): grantId is string => grantId !== undefined);
     entry.info.pending = false;
@@ -1074,32 +1470,6 @@ export class AcquisitionCoordinator {
       });
       return;
     }
-    if (decision === "session") {
-      this.deps.grantStore.issue({
-        effect: "allow",
-        capability: input.snapshot.capability,
-        resource: input.resource,
-        subject: sessionSubject,
-        constraints: {
-          sessionId: input.snapshot.sessionId,
-          ...(input.snapshot.agentBindingId
-            ? { agentBindingId: input.snapshot.agentBindingId }
-            : {}),
-          ...(input.snapshot.missionSubject === "-"
-            ? {}
-            : { missionSubject: input.snapshot.missionSubject }),
-          lineageAtConsent,
-        },
-        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
-        provenance: "acquisition",
-        ...capabilityDefinition,
-        scope: "session",
-        ...(input.presentation?.grantExpiresAt
-          ? { expiresAt: input.presentation.grantExpiresAt }
-          : {}),
-      });
-      return;
-    }
     if (decision === "task") {
       if (!input.snapshot.taskAuthority) {
         throw new Error("Task approval requires an attested task authority");
@@ -1114,6 +1484,7 @@ export class AcquisitionCoordinator {
             ? {}
             : { missionSubject: input.snapshot.missionSubject }),
           lineageAtConsent,
+          ...(input.snapshot.taskRef ? { taskRef: input.snapshot.taskRef } : {}),
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
@@ -1427,6 +1798,71 @@ function authorityRowForAcquisition(input: AcquisitionRequestInput) {
   });
 }
 
+function targetRequestAuthorityRow(request: DurableTargetAuthorityRequest) {
+  return authorityRow({
+    capability: request.capability,
+    resource: request.resource,
+    tier: request.tier,
+    statement: "prospective",
+    provenance: { source: "receiver", surface: `declared by ${request.review.declaredBy}` },
+    flags: {},
+    category: { domain: request.review.domain, verb: request.review.verb },
+    reviewedAction: request.review.action,
+  });
+}
+
+function resourceKeyOfScope(resource: ResourceScope): string {
+  switch (resource.kind) {
+    case "exact":
+      return resource.key;
+    case "prefix":
+      return resource.prefix;
+    case "origin":
+      return resource.origin;
+    case "domain":
+      return resource.domain;
+    case "network":
+      return resource.value;
+  }
+}
+
+function grantAuthorityRow(grant: import("@vibestudio/rpc").AuthorityGrant) {
+  return authorityRow({
+    capability: grant.capability,
+    resource: grant.resource,
+    tier: "gated",
+    statement: "allowed",
+    provenance: {
+      source: "approval",
+      decidedAt: grant.createdAt,
+      decidedBy: grant.issuedBy,
+      lineageClasses: grant.constraints?.lineageAtConsent,
+    },
+    flags: {},
+    degradeUnknown: true,
+  });
+}
+
+function grantSelectionKey(grant: import("@vibestudio/rpc").AuthorityGrant): string {
+  return (
+    grant.id ??
+    canonicalJson({
+      subject: grant.subject,
+      capability: grant.capability,
+      resource: grant.resource,
+      createdAt: grant.createdAt,
+    })
+  );
+}
+
+function acquisitionFacetSelectionKey(input: AcquisitionRequestInput): string {
+  return canonicalJson({
+    capability: input.snapshot.capability,
+    resource: input.resource,
+    capabilityDefinitionDigest: input.snapshot.capabilityDefinitionDigest,
+  });
+}
+
 function combineAcquisitionSignals(
   invocationSignal: AbortSignal | undefined,
   inputs: readonly AcquisitionRequestInput[]
@@ -1463,7 +1899,6 @@ function decisionsForOrigin(
   if (input.snapshot.callerPrincipal.startsWith("session:")) {
     return [
       "once",
-      "session",
       "task",
       ...(input.snapshot.missionSubject === "-" ? [] : (["mission"] as const)),
       ...(input.snapshot.agentBindingId && input.snapshot.agentScopeEligible
@@ -1527,7 +1962,6 @@ function isAuthorityAcquisitionDecision(
 ): decision is AuthorityAcquisitionDecision {
   return (
     decision === "once" ||
-    decision === "session" ||
     decision === "task" ||
     decision === "mission" ||
     decision === "agent" ||

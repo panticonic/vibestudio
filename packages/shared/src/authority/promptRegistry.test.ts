@@ -12,6 +12,7 @@ describe("authority prompt registry", () => {
       "confirm.critical",
       "permission.gated",
       "permission.outside",
+      "task.rules",
       "template.add",
       "template.remove",
       "template.suggest",

@@ -1,6 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
@@ -11,8 +12,22 @@ function store(label: string): CapabilityGrantStore {
 }
 
 describe("CapabilityGrantStore agent authority", () => {
-  it("reopens the current version-6 store without invalidating existing grants", () => {
-    const statePath = mkdtempSync(join(tmpdir(), "authority-grants-reopen-v6-"));
+  it("rejects an old schema version instead of migrating authority state", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-grants-no-compat-"));
+    const current = new CapabilityGrantStore({ statePath });
+    const databasePath = current.databasePath;
+    current.close();
+    const old = new DatabaseSync(databasePath);
+    old.exec("PRAGMA user_version = 6");
+    old.close();
+
+    expect(() => new CapabilityGrantStore({ statePath })).toThrow(
+      /cannot be loaded without risking data loss.*schema version is 6, expected 7/iu
+    );
+  });
+
+  it("reopens the current version-7 store without invalidating existing grants", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "authority-grants-reopen-v7-"));
     const first = new CapabilityGrantStore({ statePath });
     const issued = first.issue({
       effect: "allow",

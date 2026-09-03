@@ -168,6 +168,23 @@ const pendingApprovalBaseShape = {
   repoPath: z.string(),
   effectiveVersion: z.string(),
   requestedAt: z.number(),
+  operationId: z.string().optional(),
+  taskSubject: z.string().optional(),
+  taskTitle: z.string().optional(),
+  securityIdentity: z.string().optional(),
+  semanticFamily: z.string().optional(),
+  sourcesShown: z.array(z.string()).readonly().optional(),
+  repeatReason: z
+    .enum([
+      "none",
+      "new-source",
+      "new-resource",
+      "new-actor",
+      "changed-effect",
+      "restart-undecided",
+      "duplicate",
+    ])
+    .optional(),
   lifecycle: z
     .object({
       state: z.enum(["preparing", "ready", "failed", "cancelled"]),
@@ -723,6 +740,8 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
         .array(
           z
             .object({
+              selectionKey: z.string().min(1),
+              defaultSelected: z.boolean().optional(),
               capability: z.string(),
               title: z.string(),
               description: z.string().optional(),
@@ -956,6 +975,35 @@ export const shellApprovalMethods = defineServiceMethods({
     authority: approvalDecisionAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { decision: "cancel" }] }],
+  },
+  resolveTaskRules: {
+    capability: "approvals.decide",
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale:
+        "The trusted approval surface returns only keys offered by the pending rules card.",
+    },
+    presentation: {
+      title: "Choose permissions for this chat",
+      action: "choose permissions for this chat",
+      description: "Allow only the selected planned actions.",
+      group: "approvals",
+      authorityCategory: { domain: "safety", verb: "manage" },
+    },
+    description: "Resolve a chat-rules card with the exact rows selected by the user.",
+    args: z.tuple([
+      z.string(),
+      z.discriminatedUnion("decision", [
+        z.object({ decision: z.literal("accept"), selected: z.array(z.string().min(1)) }).strict(),
+        z.object({ decision: z.literal("cancel") }).strict(),
+      ]),
+    ]),
+    returns: z.void(),
+    authority: approvalDecisionAuthority,
+    access: RESOLVE_ACCESS,
   },
   resolveBootstrap: {
     capability: "approvals.decide",

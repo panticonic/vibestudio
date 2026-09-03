@@ -85,7 +85,7 @@ describe("capability notability", () => {
   it("marks the things a person would want to know before adding a part", () => {
     for (const capability of [
       "credential.use",
-      "network.fetch",
+      "network.response.read",
       "push.send",
       "process.execute",
       "permissions.revoke",

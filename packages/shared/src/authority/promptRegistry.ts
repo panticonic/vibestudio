@@ -2,6 +2,7 @@ export const AUTHORITY_PROMPT_CARD_TYPES = [
   "permission.gated",
   "permission.outside",
   "confirm.critical",
+  "task.rules",
   "template.add",
   "template.update",
   "template.remove",
@@ -29,6 +30,12 @@ export const AUTHORITY_PROMPT_REGISTRY = {
     body: "This action can't be undone. Check the details before confirming.",
     actions: ["Confirm", "Don't allow"],
     push: "none",
+  },
+  "task.rules": {
+    title: "Allow these actions for this chat?",
+    body: "Choose which planned actions this agent may use without interrupting you again.",
+    actions: ["Allow selected", "Don't allow"],
+    push: "permission",
   },
   "template.add": {
     title: "Add this template?",

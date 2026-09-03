@@ -814,7 +814,10 @@ export class RpcServer {
        * canonical trajectory projection. Causal parents fail closed when this
        * dependency is absent, rejects, or reports that the node does not exist.
        */
-      resolveExactCausalInvocation?: (parent: RpcCausalParent) => Promise<{
+      resolveExactCausalInvocation?: (
+        parent: RpcCausalParent,
+        binding: import("@vibestudio/shared/runtime/entitySpec").RuntimeAgentBinding | null
+      ) => Promise<{
         initiatingUser: UserSubject | null;
         taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
       } | null>;
@@ -1277,17 +1280,22 @@ export class RpcServer {
     ) {
       throw createRelayError("Invalid causal parent coordinate", "RPC_PROTOCOL_ERROR");
     }
+    const extensionInvocation =
+      !presented && caller.runtime.kind === "extension" && message.parentRequestId
+        ? this.deps.resolveExtensionInvocation?.(caller.runtime.id, message.parentRequestId)
+        : null;
+    const bindingCaller = extensionInvocation?.authorizingCaller ?? caller;
+    const binding =
+      bindingCaller.agentBinding ??
+      (bindingCaller.runtime.kind === "worker" || bindingCaller.runtime.kind === "do"
+        ? this.deps.entityCache?.resolveActive(bindingCaller.runtime.id)?.agentBinding
+        : undefined);
     if (presented) {
       // Agent credentials carry their binding directly. Agent vessels running
       // as a worker/DO authenticate with their runtime principal instead, so
       // their equally host-owned binding lives on the active entity record.
       // Resolve both forms here at the transport boundary; downstream services
       // must never have to reinterpret a valid causal coordinate as unbound.
-      const binding =
-        caller.agentBinding ??
-        (caller.runtime.kind === "worker" || caller.runtime.kind === "do"
-          ? this.deps.entityCache?.resolveActive(caller.runtime.id)?.agentBinding
-          : undefined);
       if (!binding) {
         throw createRelayError("Causal parent requires a host-bound agent trajectory", "EACCES");
       }
@@ -1299,6 +1307,10 @@ export class RpcServer {
         );
       }
     }
+    const inheritedTaskAuthority = extensionInvocation?.authorizingCaller.taskAuthority ?? null;
+    if (!binding && !inheritedTaskAuthority) {
+      throw createRelayError("Causal parent requires a host-bound agent trajectory", "EACCES");
+    }
 
     const resolver = this.deps.resolveExactCausalInvocation;
     if (!resolver) {
@@ -1309,7 +1321,7 @@ export class RpcServer {
       taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
     } | null;
     try {
-      resolved = await resolver(causalParent);
+      resolved = await resolver(causalParent, binding ?? null);
     } catch (error) {
       throw createRelayError(
         `Exact causal invocation verification failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1321,6 +1333,9 @@ export class RpcServer {
         `Causal invocation does not exist: ${causalParent.invocationId}`,
         "EACCES"
       );
+    }
+    if (!resolved.taskAuthority && inheritedTaskAuthority) {
+      resolved = { ...resolved, taskAuthority: inheritedTaskAuthority };
     }
     return {
       parent: causalParent,

@@ -179,7 +179,7 @@ export interface AgentExecutionTestAuthorityRule {
   capability: AgentExecutionTestCapabilityScope;
   resource: ResourceScope;
   tier: "gated" | "critical";
-  decision: "once" | "deny";
+  decision: "once" | "task" | "deny";
 }
 
 export interface AgentExecutionTestAgentPolicy {
@@ -324,7 +324,6 @@ export interface AuthorityGrantConstraints {
    */
   providerExecutionDigest?: string;
   missionSubject?: `mission:${string}@${string}`;
-  envelopeId?: string;
   lineageAtConsent?: readonly string[];
   taskRef?: string;
   taskAuthority?: TaskGrantPrincipal;
@@ -455,6 +454,7 @@ export interface AcquisitionInfo {
     | "permission.gated"
     | "permission.outside"
     | "confirm.critical"
+    | "task.rules"
     | "template.add"
     | "template.update"
     | "template.remove"
@@ -538,6 +538,7 @@ export interface AuthorityPreflightResult {
       | "permission.gated"
       | "permission.outside"
       | "confirm.critical"
+      | "task.rules"
       | "template.add"
       | "template.update"
       | "template.remove"

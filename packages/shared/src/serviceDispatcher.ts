@@ -1201,7 +1201,8 @@ export class ServiceDispatcher {
     args: unknown[],
     preflight: boolean,
     baseline?: AuthorityAssessmentBaseline,
-    acquisitionCollector?: CollectedAuthorityAcquisition[]
+    acquisitionCollector?: CollectedAuthorityAcquisition[],
+    suppressGrantedObservations = false
   ): Promise<void | AuthorityPreflightResult> {
     const assessmentBaseline = baseline ?? captureAuthorityAssessmentBaseline(ctx);
     if (baseline) restoreAuthorityAssessmentBaseline(ctx, baseline);
@@ -1241,22 +1242,36 @@ export class ServiceDispatcher {
         const acquisitionInputs = collected.map(({ input }) => input);
         const canAcquireMany = this.authorityAcquirer.canAcquireMany?.(acquisitionInputs) ?? true;
         if (!canAcquireMany) {
-          // The route can enforce every leaf, but cannot bind one signed
-          // decision to the complete set. Preserve independent acquisition.
-        } else {
-          for (const { input, context } of collected) {
-            this.observeAuthority(context, "authority-requested", {
+          console.error("[ServiceDispatcher] authority composition unavailable", {
+            service,
+            method,
+            route: "canAcquireMany",
+            leaves: acquisitionInputs.map((input) => ({
               capability: input.snapshot.capability,
               resourceKey: input.snapshot.resourceKey,
-              tier: input.tier,
-              snapshotDigest: input.snapshotDigest,
-            });
+            })),
+          });
+          throw new ServiceAccessError(
+            service,
+            method,
+            "This operation requires authority leaves that cannot be reviewed together",
+            "EAUTHORITYCOMPOSITION"
+          );
+        } else {
+          for (const { input, context } of collected) {
             this.authorityAcquirer.invalidate(
               input.snapshotDigest,
               input.caller.runtime.id,
               context.authorizingOrigin.principal
             );
           }
+          const operation = collected[0]!;
+          this.observeAuthority(operation.context, "authority-requested", {
+            capability: operation.input.snapshot.capability,
+            resourceKey: operation.input.snapshot.resourceKey,
+            tier: operation.input.tier,
+            snapshotDigest: operation.input.snapshotDigest,
+          });
           const waitForDecision =
             ctx.authorityAcquisition === "wait" ||
             collected.some(({ context }) => context.authorizingOrigin.kind !== "code");
@@ -1264,9 +1279,21 @@ export class ServiceDispatcher {
             (waitForDecision && !this.authorityAcquirer.acquireMany) ||
             (!waitForDecision && !this.authorityAcquirer.requestMany)
           ) {
-            // This transport has not implemented atomic composed acquisition.
-            // Fall through to its existing single-leaf path without weakening a
-            // requirement or pretending the leaves were reviewed together.
+            console.error("[ServiceDispatcher] authority composition unavailable", {
+              service,
+              method,
+              route: waitForDecision ? "acquireMany" : "requestMany",
+              leaves: acquisitionInputs.map((input) => ({
+                capability: input.snapshot.capability,
+                resourceKey: input.snapshot.resourceKey,
+              })),
+            });
+            throw new ServiceAccessError(
+              service,
+              method,
+              "This authority transport cannot review the operation as one decision",
+              "EAUTHORITYCOMPOSITION"
+            );
           } else {
             const outcome = waitForDecision
               ? await this.authorityAcquirer.acquireMany!(acquisitionInputs, ctx.signal)
@@ -1275,19 +1302,26 @@ export class ServiceDispatcher {
               outcome?.info ??
               (outcome ? undefined : this.authorityAcquirer.requestMany!(acquisitionInputs));
             if (outcome || info?.preauthorized) {
-              for (const { input, context } of collected) {
-                this.observeAuthority(context, "authority-decided", {
-                  capability: input.snapshot.capability,
-                  resourceKey: input.snapshot.resourceKey,
-                  tier: input.tier,
-                  decision: outcome?.decision ?? "preauthorized",
-                  acquisitionId: info?.acquisitionId,
-                  snapshotDigest: input.snapshotDigest,
-                });
-              }
+              this.observeAuthority(operation.context, "authority-decided", {
+                capability: operation.input.snapshot.capability,
+                resourceKey: operation.input.snapshot.resourceKey,
+                tier: operation.input.tier,
+                decision: outcome?.decision ?? "preauthorized",
+                acquisitionId: info?.acquisitionId,
+                snapshotDigest: operation.input.snapshotDigest,
+              });
             }
             if (outcome?.state === "decided" || info?.preauthorized) {
-              return this.assessAuthority(ctx, service, method, args, false, assessmentBaseline);
+              return this.assessAuthority(
+                ctx,
+                service,
+                method,
+                args,
+                false,
+                assessmentBaseline,
+                undefined,
+                true
+              );
             }
             const first = collected[0]!.input;
             const failure = preview.leaves.find(
@@ -1549,7 +1583,11 @@ export class ServiceDispatcher {
       undefined,
       undefined,
       preparedState.target,
-      preflight
+      preflight,
+      undefined,
+      undefined,
+      undefined,
+      suppressGrantedObservations
     );
     if (primary) {
       preflightLeaves.push(primary.leaf);
@@ -1578,7 +1616,10 @@ export class ServiceDispatcher {
         undefined,
         preparedState.target,
         preflight,
-        additional.tier
+        additional.tier,
+        undefined,
+        undefined,
+        suppressGrantedObservations
       );
       if (result) {
         preflightLeaves.push(result.leaf);
@@ -1603,7 +1644,8 @@ export class ServiceDispatcher {
         preflight,
         tier,
         undefined,
-        selection.receiverAuthority
+        selection.receiverAuthority,
+        suppressGrantedObservations
       );
       if (result) {
         preflightLeaves.push(result.leaf);
@@ -1687,7 +1729,8 @@ export class ServiceDispatcher {
       resourceType: string;
       provider: string;
       providerExecutionDigest: string;
-    }
+    },
+    suppressGrantedObservations = false
   ): Promise<{
     leaf: AuthorityPreflightLeaf;
     wouldPrompt?: AuthorityPreflightResult["wouldPrompt"];
@@ -1756,6 +1799,7 @@ export class ServiceDispatcher {
       });
 
     let preauthorizedRetry = false;
+    let acquisitionDecisionObserved = false;
     for (;;) {
       const resolved = await resolveLive();
       if (!preflight) {
@@ -1949,7 +1993,11 @@ export class ServiceDispatcher {
       });
       const decision = evaluated;
       if (decision.allowed) {
-        if (reviewedTier !== "open") {
+        if (
+          reviewedTier !== "open" &&
+          !acquisitionDecisionObserved &&
+          !suppressGrantedObservations
+        ) {
           this.observeAuthority(resolved.context, "authority-decided", {
             capability,
             resourceKey,
@@ -1957,6 +2005,7 @@ export class ServiceDispatcher {
             decision: decision.consumable ? "consumable-once" : "granted",
             snapshotDigest,
           });
+          acquisitionDecisionObserved = true;
         }
         if (preflight) {
           return {
@@ -2140,6 +2189,7 @@ export class ServiceDispatcher {
             acquisitionId: outcome.info?.acquisitionId,
             snapshotDigest,
           });
+          acquisitionDecisionObserved = true;
           if (outcome.state === "decided" && outcome.decision !== "deny") continue;
           presented = outcome.info;
           if (outcome.state === "decided" && outcome.decision === "deny") {

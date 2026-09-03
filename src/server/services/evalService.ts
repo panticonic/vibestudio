@@ -704,7 +704,11 @@ export function createEvalService(deps: {
     const ownerUser = `user:${ctx.caller.subject.userId}` as const;
     const taskAuthority =
       deps.taskAuthorities.resolveCaller(ctx.caller, store.cache) ??
-      taskAuthorityPrincipal({ workspaceId: deps.workspaceId, ownerUser, taskRef });
+      taskAuthorityPrincipal({
+        workspaceId: deps.workspaceId,
+        contextId: owner.contextId,
+        channelId: taskRef,
+      });
     const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
         controllerRuntimeId: ctx.caller.runtime.id,

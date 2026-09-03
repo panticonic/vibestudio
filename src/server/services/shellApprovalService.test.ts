@@ -353,7 +353,7 @@ describe("shellApprovalService", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "external-browser-open",
+      capability: "external.open",
       title: "Open external browser",
     });
     const approvalId = approvalQueue.listPending()[0]!.approvalId;

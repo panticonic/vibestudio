@@ -217,7 +217,6 @@ describe("evaluated-run authority ceiling", () => {
     expect(observer.mock.calls.map(([observed]) => observed.kind)).toEqual([
       "authority-requested",
       "authority-decided",
-      "authority-decided",
     ]);
 
     release();

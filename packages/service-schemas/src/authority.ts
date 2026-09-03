@@ -119,6 +119,71 @@ const leafSchema = z
   .strict();
 
 export const authorityMethods = defineServiceMethods({
+  setTaskTitle: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale: "Presentation metadata grants no authority and is scoped to one visible chat.",
+    },
+    description: "Register the current human title for a chat-bound authority task.",
+    args: z.tuple([
+      z
+        .object({
+          contextId: z.string().min(1),
+          channelId: z.string().min(1),
+          title: z.string().trim().min(1).max(120),
+        })
+        .strict(),
+    ]),
+    returns: z.null(),
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "write" },
+  },
+  listTaskRules: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "An authenticated workspace member may inspect the rules attached to a visible chat.",
+    },
+    description: "List the active reusable rules for one chat-bound agent task.",
+    args: z.tuple([
+      z.object({ contextId: z.string().min(1), channelId: z.string().min(1) }).strict(),
+    ]),
+    returns: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          capability: z.string().min(1),
+          action: z.string().min(1),
+          resource: z.string().min(1),
+          decidedAt: z.number(),
+        })
+        .strict()
+    ),
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "read" },
+  },
+  resetTaskRules: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale: "Reset only removes authority attached to the named visible chat.",
+    },
+    description: "Revoke every reusable rule attached to one chat-bound agent task.",
+    args: z.tuple([
+      z.object({ contextId: z.string().min(1), channelId: z.string().min(1) }).strict(),
+    ]),
+    returns: z.object({ revokedGrantCount: z.number().int().nonnegative() }).strict(),
+    authority: EVERY_ORIGIN,
+    access: { sensitivity: "write" },
+  },
   awaitDecision: {
     tier: {
       tier: "open",

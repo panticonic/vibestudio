@@ -142,7 +142,6 @@ for (const row of authorityLedger.rows) {
 const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
   ["context.boundary", "critical"],
   ["clipboard", "gated"],
-  ["external-browser-open", "gated"],
   ["network.response.read", "gated"],
   ["incoming-pair-links", "gated"],
   ["internal-model-runtime.use", "gated"],
@@ -152,7 +151,6 @@ const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
   ["open-external", "gated"],
   ["panel-hosting", "gated"],
   ["window-management", "gated"],
-  ["workspace-main-advance", "gated"],
   ["workspace-repo-delete", "critical"],
 ]);
 for (const [capability, tier] of REVIEWED_INTRINSIC_CAPABILITIES) {

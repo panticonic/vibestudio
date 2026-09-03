@@ -667,6 +667,10 @@ export function lineageClasses(
           : prefix
         : "external"
     );
+    // A source class explains the risk; the exact source preserves the consent
+    // boundary. Reading a second website or channel therefore requires a
+    // visible delta even when it belongs to the same broad class.
+    classes.add(`source:${key}`);
   }
   return [...classes].sort();
 }

@@ -121,11 +121,11 @@ describe("TaskAuthorityRegistry", () => {
   it("mints stable opaque principals from attested task coordinates", () => {
     const input = {
       workspaceId: "workspace:one",
-      ownerUser: "user:alice" as const,
-      taskRef: "channel:one",
+      contextId: "agent:one",
+      channelId: "channel:one",
     };
     expect(taskAuthorityPrincipal(input)).toBe(taskAuthorityPrincipal(input));
-    expect(taskAuthorityPrincipal({ ...input, taskRef: "channel:two" })).not.toBe(
+    expect(taskAuthorityPrincipal({ ...input, channelId: "channel:two" })).not.toBe(
       taskAuthorityPrincipal(input)
     );
   });

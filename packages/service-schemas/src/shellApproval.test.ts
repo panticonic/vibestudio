@@ -64,6 +64,7 @@ describe("shellApproval service contract", () => {
       authorityRow: inspection,
       authorityFacets: [
         {
+          selectionKey: "panel.inspect:flowboard",
           capability: "panel.inspect",
           title: "Inspect a panel with developer tools",
           resource: { type: "panel", label: "Panel", value: "Rich Flowboard Store" },

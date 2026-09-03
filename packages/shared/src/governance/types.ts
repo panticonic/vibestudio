@@ -85,6 +85,21 @@ export interface ApprovalResource {
   subjectId?: string;
 }
 
+export type ApprovalRepeatReason =
+  | "none"
+  | "new-source"
+  | "new-resource"
+  | "new-actor"
+  | "changed-effect"
+  | "restart-undecided"
+  | "duplicate";
+
+export interface ApprovalSurfaceAudit {
+  title: string;
+  description: string;
+  rows: readonly string[];
+}
+
 /**
  * One record per approval-queue resolution (§5), appended to the host
  * governance log. Grant matching stays code-identity-scoped — this record is
@@ -103,6 +118,13 @@ export interface ApprovalProvenanceRecord {
   requestedBy: ApprovalRequestedBy;
   resource?: ApprovalResource;
   grantScopeStored?: GrantScopeStored;
+  operationId?: string;
+  taskSubject?: string;
+  securityIdentity?: string;
+  semanticFamily?: string;
+  sourcesShown?: readonly string[];
+  repeatReason?: ApprovalRepeatReason;
+  surface?: ApprovalSurfaceAudit;
 }
 
 /**
