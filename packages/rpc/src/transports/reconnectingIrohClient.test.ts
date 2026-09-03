@@ -114,6 +114,27 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("opens on runtimes such as Hermes that do not implement crypto.randomUUID", async () => {
+    const originalCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", {
+      getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto),
+    });
+    try {
+      const pipe = new FakePipe();
+      const owner = createReconnectingIrohClientPipe({
+        peerEndpointId: pipe.peerEndpointId,
+        dial: vi.fn().mockResolvedValue(pipe),
+        closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const session = owner.openSession({ connectionId: "hermes", getToken: () => "credential" });
+      await expect(session.ready?.()).resolves.toBeUndefined();
+      await owner.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("preserves an arbitrarily long routing ID without exposing it as session identity", async () => {
     const first = new FakePipe();
     const second = new FakePipe();

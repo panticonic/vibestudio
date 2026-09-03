@@ -54,6 +54,21 @@ const IROH_PROTOCOL_CLOSE_CODE = 0x200n;
 const IROH_SESSION_CLOSE_CODE = 0x201n;
 const IROH_CANCEL_CODE = 0x202n;
 
+/**
+ * A request-owned QUIC stream was established, but the peer did not produce a
+ * response head within its caller-supplied bound. The physical connection can
+ * still be healthy, so higher-level idempotent operations may retry without
+ * tearing down unrelated sessions.
+ */
+export class IrohResponseHeadTimeoutError extends Error {
+  readonly code = "IROH_RESPONSE_HEAD_TIMEOUT";
+
+  constructor(readonly timeoutMs: number) {
+    super(`Iroh streaming response head not received within ${timeoutMs}ms`);
+    this.name = "IrohResponseHeadTimeoutError";
+  }
+}
+
 function randomId(): string {
   return (
     globalThis.crypto?.randomUUID?.() ??
@@ -470,10 +485,7 @@ class ClientSession implements IrohClientSession {
       new Promise<never>((_, reject) => {
         if (!Number.isFinite(headTimeoutMs) || headTimeoutMs <= 0) return;
         timeout = setTimeout(
-          () =>
-            reject(
-              new Error(`Iroh streaming response head not received within ${headTimeoutMs}ms`)
-            ),
+          () => reject(new IrohResponseHeadTimeoutError(headTimeoutMs)),
           headTimeoutMs
         );
         (timeout as unknown as { unref?: () => void }).unref?.();

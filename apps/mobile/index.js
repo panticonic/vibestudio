@@ -158,6 +158,12 @@ async function pairViaIroh(pairing) {
     smokePhase("embedded-pairing-complete");
     return workspaceConnection;
   } catch (error) {
+    smokePhase("embedded-pairing-failed");
+    console.error(
+      `[VibestudioMobileHost] secure pairing failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     const stored = await loadShellCredential().catch(() => null);
     if (stored?.endpointIdentityId !== identity.identityId) {
       await deleteMobileIrohIdentity(identity.identityId).catch(() => undefined);

@@ -28,7 +28,7 @@ import {
   IROH_SESSION_OPEN_RESULT,
 } from "../protocol/irohSession.js";
 import type { RpcEnvelope, RpcRequest } from "../types.js";
-import { createIrohClientPipe } from "./irohClient.js";
+import { createIrohClientPipe, IrohResponseHeadTimeoutError } from "./irohClient.js";
 
 const { SecretKey } = loadIrohNodeBinding();
 
@@ -45,6 +45,15 @@ describe("Iroh RPC client over real local QUIC", () => {
     endpoints.add(endpoint);
     return endpoint;
   }
+
+  it("exposes response-head timeouts as a structured transient transport error", () => {
+    const error = new IrohResponseHeadTimeoutError(20_000);
+    expect(error).toMatchObject({
+      code: "IROH_RESPONSE_HEAD_TIMEOUT",
+      timeoutMs: 20_000,
+      name: "IrohResponseHeadTimeoutError",
+    });
+  });
 
   it("authenticates one session and completes a unary request on its own QUIC stream", async () => {
     const serverEndpoint = await bind();

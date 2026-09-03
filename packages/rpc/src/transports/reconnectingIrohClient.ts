@@ -41,6 +41,13 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function randomLogicalId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `iroh-session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function workspaceServerUnavailableError(): Error & { code: string; errorKind: "transport" } {
   return Object.assign(new Error("Workspace server is temporarily unavailable"), {
     code: SESSION_CONNECTION_LOST_CODE,
@@ -49,7 +56,11 @@ function workspaceServerUnavailableError(): Error & { code: string; errorKind: "
 }
 
 class ReconnectingSession implements IrohClientSession {
-  private readonly logicalId = crypto.randomUUID();
+  // Hermes only gains getRandomValues from react-native-get-random-values; it
+  // does not implement randomUUID. This ID is local diagnostic identity, not a
+  // credential, so use the same collision-resistant compatibility fallback as
+  // the other RPC client transports.
+  private readonly logicalId = randomLogicalId();
   private inner: IrohClientSession | null = null;
   private activation: Promise<IrohClientSession> | null = null;
   private generation = 0;
@@ -201,9 +212,7 @@ class ReconnectingSession implements IrohClientSession {
     if (terminalError) throw terminalError;
     if (this.closed || this.generation !== generation || this.owner.generation() !== generation) {
       await inner.close().catch(() => undefined);
-      throw new Error(
-        `Iroh session ${this.logicalId} opened on a stale connection generation`
-      );
+      throw new Error(`Iroh session ${this.logicalId} opened on a stale connection generation`);
     }
     this.inner = inner;
     this.authenticatedCallerId = inner.callerId();
