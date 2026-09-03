@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { DEFAULT_ANDROID_AVD, ensureAndroidAvd } from "./lib/android-avd.mjs";
 
 function parseArgs(argv) {
   const options = {
     platform: "android",
-    avd: process.env.VIBESTUDIO_ANDROID_AVD ?? "Vibestudio_Test",
+    avd: null,
     simulator: process.env.VIBESTUDIO_IOS_SIMULATOR ?? "iPhone 16",
     help: false,
     passthroughArgs: [],
@@ -19,7 +20,7 @@ function parseArgs(argv) {
     } else if (arg === "--platform") {
       options.platform = argv[++i] ?? options.platform;
     } else if (arg === "--avd") {
-      options.avd = argv[++i] ?? options.avd;
+      options.avd = argv[++i] ?? null;
     } else if (arg === "--simulator") {
       options.simulator = argv[++i] ?? options.simulator;
     } else if (arg === "--help") {
@@ -44,7 +45,8 @@ Usage:
   vibestudio mobile emulator -- <extra emulator args>
 
 Defaults:
-  Android AVD: Vibestudio_Test
+  Android AVD: ${DEFAULT_ANDROID_AVD} (reuses an installed AVD or provisions
+               this standard AVD from an installed system image)
   iOS simulator: iPhone 16
 
 Set VIBESTUDIO_ANDROID_AVD=<name> or VIBESTUDIO_IOS_SIMULATOR=<name> to change
@@ -65,15 +67,16 @@ function run(command, args, options = {}) {
 
 async function launchAndroid(options) {
   const command = process.env.ANDROID_EMULATOR ?? "emulator";
+  const avd = await ensureAndroidAvd({ requestedAvd: options.avd, emulatorCommand: command });
   const args = [
     "-avd",
-    options.avd,
+    avd,
     "-no-snapshot",
     "-no-audio",
     "-no-boot-anim",
     ...options.passthroughArgs,
   ];
-  console.log(`[mobile-emulator] Launching windowed AVD: ${options.avd}`);
+  console.log(`[mobile-emulator] Launching windowed AVD: ${avd}`);
   console.log(`[mobile-emulator] ${command} ${args.join(" ")}`);
   await run(command, args);
 }

@@ -22,6 +22,12 @@ import {
 } from "./lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
 import { buildAndroidApp } from "./lib/mobile-native-android.mjs";
+import {
+  androidEmulatorSerial,
+  ensureAndroidAvd,
+  parseReadyAndroidDevices,
+  selectReadyAndroidDevice,
+} from "./lib/android-avd.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -132,8 +138,9 @@ Usage:
 
 Runner options:
   --platform <name>   android or ios. Defaults to android.
-  --avd <name>        Start this AVD if no adb device is connected.
-  --device <serial>   Target a specific adb device serial.
+  --avd <name>        Start this AVD if no adb device is connected. If omitted,
+                       reuse or provision the standard Vibestudio emulator.
+  --device <serial>   Target this specific adb device; never fall back to an AVD.
   --package <id>      App package. Defaults to ${defaultPackage}.
   --activity <class>  Main activity class. Defaults to ${defaultActivity}.
   --no-build          Use the existing internal APK without rebuilding.
@@ -537,13 +544,90 @@ async function ensureDeviceInteractive(device) {
   await adbCapture(device, "shell", "cmd", "statusbar", "collapse").catch(() => null);
 }
 
-async function hasAdbDevice(device) {
-  try {
-    await adbCapture(device, "get-state");
-    return true;
-  } catch {
-    return false;
+async function resolveReadyAdbDevice(requestedDevice = null) {
+  const { stdout } = await adbCapture(null, "devices");
+  return selectReadyAndroidDevice(parseReadyAndroidDevices(stdout), requestedDevice);
+}
+
+async function waitForReadyAdbDevice(requestedDevice, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const device = await resolveReadyAdbDevice(requestedDevice);
+    if (device) return device;
+    await sleep(1_000);
   }
+  throw new Error("Timed out waiting for an Android device to become ready");
+}
+
+async function createEmulatorPortReporter(timeoutMs) {
+  let socket = null;
+  let settled = false;
+  let resolveReport;
+  let rejectReport;
+  const reportedPort = new Promise((resolve, reject) => {
+    resolveReport = resolve;
+    rejectReport = reject;
+  });
+  const server = net.createServer((connection) => {
+    if (socket) {
+      connection.destroy();
+      return;
+    }
+    socket = connection;
+    let output = "";
+    connection.setEncoding("utf8");
+    connection.on("data", (chunk) => {
+      output += chunk;
+    });
+    connection.once("end", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        resolveReport(androidEmulatorSerial(output.trim()));
+      } catch (error) {
+        rejectReport(error);
+      }
+      server.close();
+    });
+    connection.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectReport(error);
+      server.close();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Could not allocate an emulator console-report socket");
+  }
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    rejectReport(new Error("Timed out waiting for the Android emulator to report its adb port"));
+    socket?.destroy();
+    server.close();
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    argument: `tcp:${address.port},max=${Math.max(1, Math.ceil(timeoutMs / 1_000))}`,
+    reportedDevice: reportedPort,
+    close() {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        rejectReport(new Error("Android emulator console reporter closed"));
+      }
+      socket?.destroy();
+      server.close();
+    },
+  };
 }
 
 async function waitForAndroidBoot(device, timeoutMs = 180_000) {
@@ -629,6 +713,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     } else if (
       line.includes("ReactNativeJS") ||
       line.includes("VibestudioMobileHost") ||
+      line.includes("VibestudioIroh") ||
       line.includes("[InlineUiMessage]") ||
       (line.includes("AndroidRuntime") && /FATAL EXCEPTION|Process:/.test(line))
     ) {
@@ -654,9 +739,18 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     stderr += `${error.message}\n`;
   });
 
+  const throwIfTerminalFailure = () => {
+    if (!phases.has("embedded-pairing-failed")) return;
+    const recent = recentLines.length
+      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
+      : "";
+    throw new Error(`The mobile app reported a terminal pairing failure${recent}`);
+  };
+
   const waitForPhase = async (phase, phaseDeadlineMs = deadlineMs) => {
     while (Date.now() < phaseDeadlineMs) {
       if (phases.has(phase)) return;
+      throwIfTerminalFailure();
       if (child.exitCode != null) {
         throw new Error(`adb logcat exited before phase ${phase}\n${stderr}`.trim());
       }
@@ -676,6 +770,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     const occurrenceDeadlineMs = Date.now() + timeoutMs;
     while (Date.now() < occurrenceDeadlineMs) {
       if (phaseCount(phase) > previousCount) return;
+      throwIfTerminalFailure();
       if (child.exitCode != null) {
         throw new Error(`adb logcat exited before a new ${phase} phase\n${stderr}`.trim());
       }
@@ -691,6 +786,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     while (Date.now() < phaseDeadlineMs) {
       const observed = candidates.find((candidate) => phases.has(candidate));
       if (observed) return observed;
+      throwIfTerminalFailure();
       if (child.exitCode != null) {
         throw new Error(
           `adb logcat exited before any of: ${candidates.join(", ")}\n${stderr}`.trim()
@@ -733,9 +829,14 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (logcat.hasPhase(phase)) return;
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
-      const reviewedUnits = await tapOptionalButtonByText(device, "Add to workspace", 500);
+      const xml = await dumpWindowXml(device);
+      const reviewedUnits = await tapVisibleNodeByResourceId(
+        device,
+        xml,
+        "approval-action-accept-install-review"
+      );
       if (reviewedUnits) console.log("[mobile-smoke] Approved cold-start workspace units");
-      const approvedLaunch = await tapOptionalButtonByText(device, "Start", 500);
+      const approvedLaunch = reviewedUnits ? false : await tapVisibleNode(device, xml, "Start");
       if (approvedLaunch) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
     }
     await sleep(250);
@@ -753,15 +854,26 @@ async function settleWorkspaceStartupApprovals(device, deadlineMs) {
   const discoveryDeadlineMs = Math.min(deadlineMs, Date.now() + 8_000);
   let resolved = 0;
   while (Date.now() < deadlineMs) {
-    const added = await tapOptionalButtonByText(device, "Add to workspace", 500);
-    const allowed = added ? false : await tapOptionalButtonByText(device, "Use once", 500);
+    const xml = await dumpWindowXml(device);
+    // Address the action itself, not its enabled-looking text child. React
+    // Native leaves that child enabled while the parent button is disabled and
+    // marked busy during installation; tapping/logging the child repeatedly
+    // falsely claimed that the review had been accepted again.
+    const added = await tapVisibleNodeByResourceId(
+      device,
+      xml,
+      "approval-action-accept-install-review"
+    );
+    const allowed = added
+      ? false
+      : await tapVisibleNode(device, xml, "Use once", { labelPrefix: true });
     if (added || allowed) {
       resolved += 1;
       console.log("[mobile-smoke] Approved cold-start workspace units");
       await sleep(750);
       continue;
     }
-    const labels = collectWindowLabels(await dumpWindowXml(device));
+    const labels = collectWindowLabels(xml);
     if (hasVisibleApprovalPrompt(labels)) {
       await sleep(250);
       continue;
@@ -896,6 +1008,40 @@ async function tapVisibleNode(device, xml, text, options = {}) {
   if (!bounds) return false;
   await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
   return true;
+}
+
+async function tapVisibleNodeByResourceId(device, xml, resourceId) {
+  const pattern = /<node\b[^>]*>/g;
+  let match;
+  while ((match = pattern.exec(xml))) {
+    const node = match[0];
+    if (readXmlAttribute(node, "resource-id") !== resourceId) continue;
+    if (
+      readXmlAttribute(node, "enabled") === "false" ||
+      readXmlAttribute(node, "clickable") !== "true"
+    ) {
+      return false;
+    }
+    const boundsMatch = node.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+    if (!boundsMatch) return false;
+    const left = Number(boundsMatch[1]);
+    const top = Number(boundsMatch[2]);
+    const right = Number(boundsMatch[3]);
+    const bottom = Number(boundsMatch[4]);
+    if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) {
+      return false;
+    }
+    await adb(
+      device,
+      "shell",
+      "input",
+      "tap",
+      String(Math.round((left + right) / 2)),
+      String(Math.round((top + bottom) / 2))
+    );
+    return true;
+  }
+  return false;
 }
 
 function collectWindowLabels(xml) {
@@ -1663,22 +1809,48 @@ async function main() {
   });
 
   try {
-    if (!(await hasAdbDevice(options.device))) {
-      if (!options.avd) {
+    const requestedDevice = options.device;
+    options.device = await resolveReadyAdbDevice(requestedDevice);
+    if (!options.device) {
+      if (requestedDevice) {
         throw new Error(
-          "No Android device/emulator detected. Start one first or pass --avd <name>."
+          `Requested Android device ${JSON.stringify(requestedDevice)} is not connected and ready.`
         );
       }
+      const avd = await ensureAndroidAvd({ requestedAvd: options.avd });
+      const reporter = await createEmulatorPortReporter(options.timeoutMs);
       emulatorChild = spawnManaged(
         process.env.ANDROID_EMULATOR ?? "emulator",
-        ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"],
+        [
+          "-avd",
+          avd,
+          "-no-snapshot",
+          "-no-audio",
+          "-no-boot-anim",
+          "-no-window",
+          "-report-console",
+          reporter.argument,
+        ],
         { label: "emulator" }
       );
-      await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
-      children.push(emulatorChild);
+      try {
+        await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
+        children.push(emulatorChild);
+        const exited = new Promise((_, reject) => {
+          emulatorChild.once("exit", (code, signal) => {
+            reject(
+              new Error(`Android emulator exited before reporting its adb port (${signal ?? code})`)
+            );
+          });
+        });
+        const ownedDevice = await Promise.race([reporter.reportedDevice, exited]);
+        options.device = await waitForReadyAdbDevice(ownedDevice, options.timeoutMs);
+      } finally {
+        reporter.close();
+      }
     }
 
-    await waitForAndroidBoot(options.device);
+    await waitForAndroidBoot(options.device, options.timeoutMs);
     await ensureDeviceInteractive(options.device);
 
     if (!options.noInstall) {
@@ -1779,6 +1951,7 @@ async function main() {
     const phases = [
       "embedded-deep-link-received",
       "embedded-usb-provisioning-approved",
+      "embedded-pairing-failed",
       "embedded-pairing-complete",
       "embedded-workspace-selected",
       "embedded-host-target-approval-required",
@@ -1835,24 +2008,33 @@ async function main() {
     // budget (and a build cannot consume the managed client's connection
     // budget). A stuck phase still fails within the configured timeout.
     for (const phase of ["embedded-bundle-activate-start", "embedded-bundle-activate-complete"]) {
-      const phaseDeadlineMs = Date.now() + options.pairingTimeoutMs;
+      // Activation includes the clean managed React Native build, dependency
+      // projection, and artifact transfer. Those are build/startup work, not
+      // network pairing, and legitimately use the runner's build timeout.
+      const phaseDeadlineMs = Date.now() + options.timeoutMs;
       await waitForPhaseTappingApprovals(options.device, logcat, phase, phaseDeadlineMs);
     }
-    const managedLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
+    const managedConnectionDeadlineMs = Date.now() + options.pairingTimeoutMs;
     await waitForPhaseTappingApprovals(
       options.device,
       logcat,
       "workspace-connected",
-      managedLaunchDeadlineMs
+      managedConnectionDeadlineMs
     );
     if (!options.noTap) {
-      await settleWorkspaceStartupApprovals(options.device, managedLaunchDeadlineMs);
+      // Installation reviews can fan out as the selected template reconciles.
+      // They are workspace startup work, not transport pairing, and receive an
+      // independent build/startup budget just like managed bundle activation.
+      await settleWorkspaceStartupApprovals(options.device, Date.now() + options.timeoutMs);
     }
+    // Panel creation/materialization is another independent lifecycle. Do not
+    // let connection or approval work consume its deadline.
+    const managedPanelDeadlineMs = Date.now() + options.timeoutMs;
     // The product no longer creates an onboarding panel during workspace
     // startup. Exercise the default user path instead of relying on hidden
     // fixture state: open the standard new-panel launcher directly.
     if (!options.noTap) {
-      await tapButtonByText(options.device, "Create new panel", managedLaunchDeadlineMs);
+      await tapButtonByText(options.device, "Create new panel", managedPanelDeadlineMs);
       console.log("[mobile-smoke] Created a panel through the mobile app chrome");
     }
     for (const phase of [
@@ -1861,7 +2043,7 @@ async function main() {
       "workspace-panel-webview-loaded",
       "workspace-panel-ready",
     ]) {
-      await waitForPhaseTappingApprovals(options.device, logcat, phase, managedLaunchDeadlineMs);
+      await waitForPhaseTappingApprovals(options.device, logcat, phase, managedPanelDeadlineMs);
     }
 
     // Start a real chat from the launcher with intentionally vague wording.
@@ -1881,7 +2063,7 @@ async function main() {
         options.device,
         options.packageName,
         "Help me get started",
-        managedLaunchDeadlineMs
+        managedPanelDeadlineMs
       );
       // about/new navigates its existing managed panel to panels/chat, so this
       // is a WebView route transition rather than a second panel activation.
@@ -1899,7 +2081,7 @@ async function main() {
         options.device,
         options.packageName,
         "Help me get started",
-        managedLaunchDeadlineMs
+        managedPanelDeadlineMs
       );
       console.log("[mobile-smoke] Started a chat through the new-panel launcher");
     }
@@ -1969,8 +2151,6 @@ async function main() {
     );
 
     const serverRestartRecoveryCount = logcat.phaseCount("workspace-recovery-complete");
-    const serverRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
-    const serverRestartPanelReadyCount = logcat.phaseCount("workspace-panel-ready");
     const serverExit = new Promise((resolve) => serverChild.once("exit", resolve));
     serverChild.kill("SIGTERM");
     await Promise.race([serverExit, sleep(10_000)]);
@@ -2008,16 +2188,11 @@ async function main() {
       serverRestartRecoveryCount,
       options.pairingTimeoutMs
     );
-    await logcat.waitForPhaseAfter(
-      "workspace-panel-webview-loaded",
-      serverRestartPanelCount,
-      options.pairingTimeoutMs
-    );
-    await logcat.waitForPhaseAfter(
-      "workspace-panel-ready",
-      serverRestartPanelReadyCount,
-      options.pairingTimeoutMs
-    );
+    // A server restart must recover the existing shell and panel transports;
+    // it must not recreate the still-live WebView. The load/ready phases are
+    // document lifecycle signals and correctly do not recur here. Assert the
+    // shell recovery signal, the still-rendered chat below, and the absence of
+    // cacheable pipe misses instead.
     await waitForChatPanelRendered(
       options.device,
       options.packageName,

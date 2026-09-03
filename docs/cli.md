@@ -391,13 +391,18 @@ vibestudio mobile doctor
 Run a clean installed-app pairing smoke against an emulator or attached device:
 
 ```sh
-vibestudio mobile smoke
+vibestudio mobile smoke # reuses or provisions an emulator when no device is ready
 vibestudio mobile smoke --avd Pixel_8
 ```
 
 Useful flags:
 
-- `--device <adb-serial>` targets a specific Android device.
+- `--device <adb-serial>` targets a specific Android device and never falls back
+  to an emulator when that device is unavailable.
+- Without `--device`, the smoke uses any ready Android target, then an explicitly
+  selected `--avd`/`VIBESTUDIO_ANDROID_AVD`, then the standard `Vibestudio_Test`
+  AVD. If needed, it reuses an installed AVD or provisions the standard AVD from
+  an installed Android SDK system image.
 - `--platform android|ios` selects the mobile target. iOS requires macOS + Xcode.
 - `--port <port>` chooses the local pairing server port.
 - `--relay-url <https-url>` adds an explicit Iroh relay; repeat to define order.

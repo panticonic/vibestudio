@@ -55,5 +55,14 @@ describe("Iroh product E2E entry points", () => {
       expect(mobile).toContain(marker);
     }
     expect(mobile).toContain("endpoint=${parsedLink.endpointId}");
+    expect(mobile).toContain("ensureAndroidAvd");
+    expect(mobile).toContain("never fall back to an AVD");
+    expect(mobile).toContain("embedded-pairing-failed");
+    expect(mobile).toContain("approval-action-accept-install-review");
+    expect(mobile).toContain('readXmlAttribute(node, "enabled") === "false"');
+    expect(mobile).toContain("managedConnectionDeadlineMs");
+    expect(mobile).toContain("managedPanelDeadlineMs");
+    expect(mobile).toContain("must not recreate the still-live WebView");
+    expect(source("apps/mobile/index.js")).toContain("embedded-pairing-failed");
   });
 });
