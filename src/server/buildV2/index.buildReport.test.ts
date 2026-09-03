@@ -264,6 +264,19 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(typecheckCalls).toBe(typechecksAfterFirst);
   }, 15_000);
 
+  it("exposes only completed cached reports to runtime recovery surfaces", async () => {
+    env = await loadWithMocks();
+    const { buildSystem } = env;
+
+    expect(buildSystem.peekBuildReport?.("panels/app", CANDIDATE_VIEW)).toBeNull();
+
+    const report = await buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+
+    expect(buildSystem.peekBuildReport?.("panels/app", CANDIDATE_VIEW)).toBe(report);
+    expect(buildSystem.peekBuildReport?.("@workspace-panels/app", CANDIDATE_VIEW)).toBe(report);
+    expect(buildSystem.peekBuildReport?.("panels/app", BASE_VIEW)).toBeNull();
+  });
+
   it("checks authority at executable boundaries, not library package boundaries", async () => {
     env = await loadWithMocks();
 

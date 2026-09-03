@@ -4825,7 +4825,13 @@ async function main() {
             }
           );
         },
-        resolveWorkspaceDirectAuthority: async ({ source, className, objectKey, method }) => {
+        resolveWorkspaceDirectAuthority: async ({
+          caller,
+          source,
+          className,
+          objectKey,
+          method,
+        }) => {
           const { isHostIntrinsicDirectMethod } =
             await import("@vibestudio/shared/authority/hostIntrinsicDirectMethods");
           const authoritiesFrom = async (
@@ -4858,6 +4864,33 @@ async function main() {
                 : undefined;
             const hostIntrinsic = isHostIntrinsicDirectMethod(method);
             if (!catalogMethod && !hostIntrinsic) {
+              const callerContextId = entityCache.resolveContext(caller.runtime.id);
+              let candidateStateHash: string | null = null;
+              let candidateBuildKey: string | null = null;
+              let candidateDeclaresMethod = false;
+              if (callerContextId) {
+                try {
+                  candidateStateHash = await workspaceVcs.resolveContextState(callerContextId);
+                  const candidateReport = buildSystem?.peekBuildReport?.(
+                    source,
+                    candidateStateHash
+                  );
+                  candidateBuildKey =
+                    candidateReport?.builds.find((entry) => entry.target === "runtime")?.buildKey ??
+                    null;
+                  const candidateBuild = candidateBuildKey
+                    ? buildSystem?.getBuildByKey(candidateBuildKey)
+                    : null;
+                  candidateDeclaresMethod =
+                    candidateBuild?.metadata.kind === "worker" &&
+                    candidateBuild.metadata.workspaceRpcCatalog?.some(
+                      (entry) => entry.className === className && entry.name === method
+                    ) === true;
+                } catch {
+                  // Recovery evidence is best-effort. Authorization remains
+                  // determined exclusively by the exact active build above.
+                }
+              }
               throw new WorkspaceRpcMethodUndeclaredError({
                 source,
                 className,
@@ -4865,6 +4898,11 @@ async function main() {
                 method,
                 serviceName: matches[0]?.name,
                 activeBuildKey: active?.activeBuildKey ?? null,
+                activeEffectiveVersion: active?.source.effectiveVersion ?? null,
+                callerContextId,
+                candidateStateHash,
+                candidateBuildKey,
+                candidateDeclaresMethod,
                 declaredMethods:
                   build && "metadata" in build && build.metadata.kind === "worker"
                     ? (build.metadata.workspaceRpcCatalog ?? [])

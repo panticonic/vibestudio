@@ -488,6 +488,13 @@ export interface BuildSystemV2 {
     options?: { priority?: "interactive" | "background" | "speculative" }
   ): Promise<UnitBuildReport>;
 
+  /**
+   * Side-effect-free lookup of a previously completed exact-state report.
+   * Used by recovery surfaces to compare a verified candidate with a live
+   * runtime without starting compilation from an authorization path.
+   */
+  peekBuildReport?(unitNameOrPath: string, stateHash: string): UnitBuildReport | null;
+
   /** Most recent structured build diagnostics for a unit, if any were captured. */
   getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null;
 
@@ -2793,6 +2800,18 @@ export async function initBuildSystemV2(
         });
       buildReportFlights.set(cacheKey, flight);
       return flight;
+    },
+
+    peekBuildReport(unitNameOrPath: string, stateHash: string): UnitBuildReport | null {
+      for (const report of buildReportCache.values()) {
+        if (
+          report.stateHash === stateHash &&
+          (report.repoPath === unitNameOrPath || report.unitName === unitNameOrPath)
+        ) {
+          return report;
+        }
+      }
+      return null;
     },
 
     getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
