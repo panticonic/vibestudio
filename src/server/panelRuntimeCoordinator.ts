@@ -1437,10 +1437,26 @@ export class PanelRuntimeCoordinator {
     attempt: PanelAttempt,
     state: { revision: number; rounds: number; valid: number; unobservable: number }
   ): Promise<void> {
+    // The probe observes one precise lifecycle revision. Its I/O may outlive
+    // that revision (most importantly, a renderer can report ready while the
+    // host probe is still pending), so its result must never be applied to a
+    // newer or terminal attempt.
+    const probedRevision = attempt.revision;
     let observed = false;
     if (this.attemptProbe) {
       try {
         const report = await this.attemptProbe(asPanelSlotId(attempt.slotId));
+        const current = this.attempts.get(attemptId);
+        if (
+          !current ||
+          current.revision !== probedRevision ||
+          current.phase === "ready" ||
+          current.phase === "failed" ||
+          current.phase === "stopped"
+        ) {
+          if (current) this.resetSupervisionProgress(current);
+          return;
+        }
         // A probe that answers with no boot record is a renderer that isn't
         // talking, not a valid observation — count it on the unobservable side.
         observed = report?.boot.kind === "observed";
@@ -1464,7 +1480,7 @@ export class PanelRuntimeCoordinator {
       }
     }
     const current = this.attempts.get(attemptId);
-    if (!current || current.revision > state.revision) {
+    if (!current || current.revision !== probedRevision) {
       if (current) this.resetSupervisionProgress(current);
       return;
     }

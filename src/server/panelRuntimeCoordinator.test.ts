@@ -300,6 +300,52 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     });
   });
 
+  it("discards a pending probe result after the renderer makes the attempt ready", async () => {
+    vi.useFakeTimers();
+    const { coordinator, attempt, onError } = resident();
+    let finishProbe!: (report: {
+      url: string;
+      loading: boolean;
+      boot: { kind: "observed"; observation: { phase: "failed"; message: string } };
+    }) => void;
+    coordinator.setAttemptProbe(
+      () =>
+        new Promise((resolve) => {
+          finishProbe = resolve;
+        })
+    );
+    coordinator.reportView("panel:nav-a", "route-a", {
+      url: "http://panel/",
+      loading: true,
+      boot: { kind: "observed", observation: { phase: "booting" } },
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    coordinator.reportView("panel:nav-a", "route-a", {
+      url: "http://panel/",
+      loading: false,
+      boot: { kind: "observed", observation: { phase: "ready" } },
+    });
+    finishProbe({
+      url: "http://panel/",
+      loading: false,
+      boot: {
+        kind: "observed",
+        observation: { phase: "failed", message: "stale host observation" },
+      },
+    });
+    await vi.runAllTimersAsync();
+
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({ kind: "report", attempt: { phase: "ready" } });
+    expect(coordinator.reportedViewForSlot("panel:tree/a")?.observation.boot).toMatchObject({
+      kind: "observed",
+      observation: { phase: "ready" },
+    });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("stops a released materialization and mints a fresh attempt on reacquisition", () => {
     const { coordinator, attempt } = resident();
     coordinator.reportView("panel:nav-a", "route-a", {
