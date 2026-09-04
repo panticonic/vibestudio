@@ -86,6 +86,44 @@ const catalog = {
 };
 
 describe("userland authority fold", () => {
+  it("admits an explicitly reviewed factory service family with a dynamic object key", async () => {
+    const { root, project } = programFor(`
+      declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };
+      export async function notesFor(projectId: string) {
+        return workers.resolveService("example.notes.v1", projectId);
+      }
+    `);
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:exact",
+      services: [{ ...binding, target: { ...binding.target, defaultObjectKey: null } }],
+      resolveCatalog: async () => catalog,
+    });
+
+    const diagnostics = await authorityDiagnosticsForProgram({
+      project,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: [{ name: "consumer", relativePath: "." }],
+      manifest: {
+        authority: {
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          requests: [
+            {
+              capability: "workspace-service:notes",
+              resource: { kind: "prefix", prefix: "do:workers/notes:NotesDO:" },
+              tier: "gated",
+              evidence: "bounded-dynamic",
+            },
+          ],
+          provides: [],
+        },
+      },
+      environment,
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
   it("reports an actionable diagnostic when a consumed service lacks review metadata", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string): Promise<unknown> };

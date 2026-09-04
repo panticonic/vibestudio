@@ -546,7 +546,12 @@ export function analyzeWorkspaceServiceCalls(
               channelProperty && ts.isPropertyAssignment(channelProperty)
                 ? abstractString(checker, channelProperty.initializer, resolveString, seen)
                 : { kind: "not-applicable" },
-            client: true,
+            // connectViaRpc returns the local PubSubClient transport facade,
+            // not the provider's RPC stub. Its methods (ready, send, close,
+            // etc.) must not be interpreted as provider method names. The
+            // service resolution itself carries the channel authority; the
+            // trusted pubsub package owns the underlying provider calls.
+            client: false,
           };
         }
         const factoryName = callCalleeName(current);

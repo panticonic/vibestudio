@@ -71,25 +71,22 @@ describe("userland authority facts", () => {
     expect(facts).toEqual([]);
   });
 
-  it("recognizes the public connectViaRpc service client by symbol identity", () => {
+  it("recognizes connectViaRpc as a service resolution without treating facade methods as provider RPC", () => {
     const facts = analyze(`
       declare module "@workspace/pubsub" {
-        export function connectViaRpc(options: { protocol: string; channel: string }): { call(method: string, ...args: unknown[]): Promise<unknown> };
+        export function connectViaRpc(options: { protocol: string; channel: string }): { ready(): Promise<void>; send(message: string): Promise<void> };
       }
       import { connectViaRpc } from "@workspace/pubsub";
       async function run() {
         const client = connectViaRpc({ protocol: "example.notes.v1", channel: "notes" });
-        await client.call("deleteNote");
+        await client.ready();
+        await client.send("hello");
       }
     `);
-    expect(facts).toHaveLength(2);
+    expect(facts).toHaveLength(1);
     expect(facts[0]?.serviceQueries).toMatchObject({
       kind: "literals",
       values: new Set(["example.notes.v1"]),
-    });
-    expect(facts[1]?.methods).toMatchObject({
-      kind: "literals",
-      values: new Set(["deleteNote"]),
     });
   });
 

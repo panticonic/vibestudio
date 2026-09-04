@@ -392,10 +392,14 @@ export async function authorityDiagnosticsForProgram(input: {
       }
       if (fact.kind === "resolution") {
         const operation = operationResource(service, fact.objectKeys);
-        if (operation.unbounded) {
+        if (
+          fact.objectKeys.kind === "not-applicable" &&
+          service.binding.target.kind === "durable-object" &&
+          !service.binding.target.defaultObjectKey
+        ) {
           addDiagnostic(
             fact,
-            `The workspace service '${service.binding.name}' requires a bounded Durable Object object key for static authority analysis.`
+            `The workspace service '${service.binding.name}' is a Durable Object factory and requires an explicit object key.`
           );
         }
         addEffect(fact, {
