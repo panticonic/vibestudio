@@ -22,6 +22,7 @@ import type { ScopedServerCaller, ServerClient } from "./serverClient.js";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type { PanelOperationClients } from "@vibestudio/shell-core/panelManager";
 import {
+  createPanelMetadataClient,
   createRuntimeClient,
   createWorkspaceStateClient,
 } from "@vibestudio/shell-core/createShellCore";
@@ -250,6 +251,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return {
       workspaceState: createWorkspaceStateClient(call),
       runtime: createRuntimeClient(call),
+      panelMetadata: createPanelMetadataClient(call),
     };
   }
 

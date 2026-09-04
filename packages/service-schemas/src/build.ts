@@ -17,6 +17,7 @@ import type {
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
 import { AuthorityResourceScopeSchema, authorityRowSchema } from "./authority.js";
+import { PanelPlacementHintSchema } from "./panel.js";
 
 export { AuthorityResourceScopeSchema } from "./authority.js";
 
@@ -583,6 +584,7 @@ export const panelMetadataSchema = z
     hiddenInLauncher: z.boolean(),
     stateArgs: z.unknown().optional(),
     autoArchiveWhenEmpty: z.boolean().optional(),
+    placement: PanelPlacementHintSchema.optional(),
   })
   .strict();
 

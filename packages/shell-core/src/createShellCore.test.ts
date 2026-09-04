@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRuntimeClient, createWorkspaceStateClient } from "./createShellCore.js";
+import {
+  createPanelMetadataClient,
+  createRuntimeClient,
+  createWorkspaceStateClient,
+} from "./createShellCore.js";
 
 describe("shared shell service adapters", () => {
   it("routes bounded panel-tree pages through workspace state", async () => {
@@ -43,6 +47,22 @@ describe("shared shell service adapters", () => {
     expect(call.mock.calls).toEqual([
       ["runtime", "reserveEntity", [spec]],
       ["runtime", "activateReservedEntity", [spec]],
+    ]);
+  });
+
+  it("resolves panel manifests through the exact-state build contract", async () => {
+    const call = vi.fn(async () => ({
+      source: "panels/hello-svelte",
+      title: "Hello Svelte",
+      hiddenInLauncher: false,
+    }));
+    const client = createPanelMetadataClient(call);
+
+    await client.getPanelMetadata("panels/hello-svelte", "ctx:examples");
+
+    expect(call).toHaveBeenCalledWith("build", "getPanelMetadata", [
+      "panels/hello-svelte",
+      "ctx:examples",
     ]);
   });
 });

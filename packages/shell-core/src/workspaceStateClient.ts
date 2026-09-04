@@ -131,6 +131,18 @@ export interface RuntimeClient {
   retireEntity(id: string): Promise<void>;
 }
 
+export interface PanelMetadata {
+  source: string;
+  title: string;
+  stateArgs?: unknown;
+  autoArchiveWhenEmpty?: boolean;
+  placement?: import("@vibestudio/shared/types").PanelPlacementHint;
+}
+
+export interface PanelMetadataClient {
+  getPanelMetadata(source: string, ref?: string): Promise<PanelMetadata | null>;
+}
+
 export type ShellServiceCall = (
   service: string,
   method: string,
@@ -170,5 +182,12 @@ export function createRuntimeClient(callService: ShellServiceCall): RuntimeClien
     reserveEntity: (spec) => call("reserveEntity", [spec]),
     activateReservedEntity: (spec) => call("activateReservedEntity", [spec]),
     retireEntity: (id) => call("retireEntity", [{ id }]),
+  };
+}
+
+export function createPanelMetadataClient(callService: ShellServiceCall): PanelMetadataClient {
+  return {
+    getPanelMetadata: (source, ref) =>
+      callService("build", "getPanelMetadata", [source, ref]) as Promise<PanelMetadata | null>,
   };
 }

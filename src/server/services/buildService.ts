@@ -1,4 +1,5 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { PanelPlacementHint } from "@vibestudio/shared/types";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
@@ -18,6 +19,7 @@ export interface ResolvedPanelMetadata {
   hiddenInLauncher: boolean;
   stateArgs?: unknown;
   autoArchiveWhenEmpty?: boolean;
+  placement?: PanelPlacementHint;
 }
 
 /** Resolve panel identity from the same exact workspace coordinate as its code. */
@@ -45,6 +47,7 @@ export async function resolvePanelMetadata(
     hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
     stateArgs: node.manifest.stateArgs,
     autoArchiveWhenEmpty: node.manifest.autoArchiveWhenEmpty,
+    placement: node.manifest.placement,
   };
 }
 

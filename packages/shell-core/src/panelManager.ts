@@ -28,6 +28,7 @@ import {
   getCurrentSnapshot,
   getPanelContextId,
   getPanelOptions,
+  getPanelRef,
   getPanelSource,
   getPanelStateArgs,
   updatePanelNavigationState,
@@ -37,6 +38,7 @@ import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/idValue
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
+  PanelMetadataClient,
   RuntimeClient,
   SlotHistoryRow,
   WorkspaceStateClient,
@@ -159,6 +161,8 @@ export interface PanelManagerDeps {
   registry: PanelRegistry;
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
+  /** Exact-state panel manifests supplied by the workspace build graph. */
+  panelMetadata?: PanelMetadataClient;
   activationClient?: ActivationClient;
   viewState?: LocalPanelViewStateStore;
   serverInfo: PanelManagerServerInfo;
@@ -176,6 +180,7 @@ export interface PanelManagerDeps {
 export interface PanelOperationClients {
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
+  panelMetadata: PanelMetadataClient;
 }
 
 // =============================================================================
@@ -201,6 +206,7 @@ export class PanelManager {
   private readonly registry: PanelRegistry;
   private readonly workspaceState: WorkspaceStateClient;
   private readonly runtime: RuntimeClient;
+  private readonly panelMetadata?: PanelMetadataClient;
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
   private readonly serverInfo: PanelManagerServerInfo;
@@ -208,6 +214,16 @@ export class PanelManager {
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
   private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
+  private readonly manifestCache = new Map<
+    string,
+    {
+      title: string;
+      stateArgs?: unknown;
+      autoArchiveWhenEmpty?: boolean;
+      privileged?: boolean;
+      placement?: PanelPlacementHint;
+    }
+  >();
 
   private readonly collapsedIds = new Set<string>();
   private currentTheme: "light" | "dark" = "dark";
@@ -235,6 +251,7 @@ export class PanelManager {
     this.registry = deps.registry;
     this.workspaceState = deps.workspaceState;
     this.runtime = deps.runtime;
+    this.panelMetadata = deps.panelMetadata;
     this.activationClient = deps.activationClient;
     this.viewState = deps.viewState;
     this.serverInfo = deps.serverInfo;
@@ -369,9 +386,14 @@ export class PanelManager {
     if (opts?.parentId) await this.requireStoredPanel(opts.parentId);
     const workspaceState = clients?.workspaceState ?? this.workspaceState;
     const runtime = clients?.runtime ?? this.runtime;
-    const { relativePath, absolutePath } = resolveSource(source, this.workspacePath);
+    const { relativePath } = resolveSource(source, this.workspacePath);
     const allowMissing = Boolean(opts?.contextId) || this.allowMissingManifests;
-    const manifest = this.resolveManifest(absolutePath, relativePath, allowMissing);
+    const manifest = await this.resolveManifest(
+      relativePath,
+      allowMissing,
+      opts?.ref,
+      clients?.panelMetadata ?? this.panelMetadata
+    );
     const validatedStateArgs = this.validateManifestStateArgs(
       relativePath,
       manifest.stateArgs,
@@ -794,13 +816,13 @@ export class PanelManager {
     updates: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const panel = await this.requireStoredPanel(slotId);
-    const schema = this.loadPanelSchema(panel);
+    const schema = await this.loadPanelSchema(panel);
     const merged = Object.fromEntries(
       Object.entries({ ...(getPanelStateArgs(panel) ?? {}), ...updates }).filter(
         ([, value]) => value !== null
       )
     );
-    const validation = validateStateArgs(merged, schema);
+    const validation = validateStateArgs(merged, schema as never);
     if (!validation.success) {
       throw new Error(`Invalid stateArgs: ${validation.error}`);
     }
@@ -868,7 +890,12 @@ export class PanelManager {
       stateArgs: nextStateArgs,
     };
     if (updates.source) {
-      const manifest = this.tryResolveManifestForSource(updates.source);
+      const manifest = await this.resolveManifest(
+        updates.source,
+        true,
+        getPanelRef(panel),
+        this.panelMetadata
+      );
       if (manifest?.autoArchiveWhenEmpty) nextSnapshot.autoArchiveWhenEmpty = true;
       else delete nextSnapshot.autoArchiveWhenEmpty;
       if (manifest?.privileged) nextSnapshot.privileged = true;
@@ -887,7 +914,8 @@ export class PanelManager {
     const workspaceState = clients?.workspaceState ?? this.workspaceState;
     const runtime = clients?.runtime ?? this.runtime;
     const panel = await this.requireStoredPanel(slotId);
-    const nextSnapshot = this.createNavigationSnapshot(panel, source, opts);
+    const metadataClient = clients?.panelMetadata ?? this.panelMetadata;
+    const nextSnapshot = await this.createNavigationSnapshot(panel, source, opts, metadataClient);
     const title = this.titleFor(slotId, nextSnapshot.source);
 
     const previousEntityId = await this.resolveCurrentEntityIdForSlot(slotId);
@@ -1001,7 +1029,12 @@ export class PanelManager {
       {
         slotId,
         expectedCurrentEntityId: currentEntityId,
-        title: this.titleFor(slotId, targetSnapshot.source),
+        title: await this.resolveTitle(
+          slotId,
+          targetSnapshot.source,
+          targetSnapshot.options.ref,
+          clients?.panelMetadata ?? this.panelMetadata
+        ),
         mutation: { kind: "select", entryKey: targetEntryKey },
       }
     );
@@ -1359,11 +1392,12 @@ export class PanelManager {
   // Private — manifest / validation
   // ===========================================================================
 
-  private createNavigationSnapshot(
+  private async createNavigationSnapshot(
     panel: Panel,
     source: string,
-    opts?: NavigatePanelOptions
-  ): PanelSnapshot {
+    opts?: NavigatePanelOptions,
+    panelMetadata = this.panelMetadata
+  ): Promise<PanelSnapshot> {
     const browserSource = browserNavigationSource(source);
     if (browserSource) {
       const currentSnapshot = getCurrentSnapshot(panel);
@@ -1374,8 +1408,13 @@ export class PanelManager {
       });
     }
 
-    const { relativePath, absolutePath } = resolveSource(source, this.workspacePath);
-    const manifest = this.resolveManifest(absolutePath, relativePath, this.allowMissingManifests);
+    const { relativePath } = resolveSource(source, this.workspacePath);
+    const manifest = await this.resolveManifest(
+      relativePath,
+      this.allowMissingManifests,
+      opts?.ref,
+      panelMetadata
+    );
     const validatedStateArgs = this.validateManifestStateArgs(
       relativePath,
       manifest.stateArgs,
@@ -1397,25 +1436,46 @@ export class PanelManager {
     return snapshot;
   }
 
-  private resolveManifest(
-    absolutePath: string,
+  private async resolveManifest(
     relativePath: string,
-    allowMissing: boolean
-  ): {
+    allowMissing: boolean,
+    ref?: string,
+    panelMetadata = this.panelMetadata
+  ): Promise<{
     title: string;
     stateArgs?: unknown;
     autoArchiveWhenEmpty?: boolean;
     privileged?: boolean;
     placement?: PanelPlacementHint;
-  } {
+  }> {
+    if (panelMetadata) {
+      const metadata = await panelMetadata.getPanelMetadata(relativePath, ref);
+      if (metadata) {
+        const manifest = {
+          title: metadata.title,
+          stateArgs: metadata.stateArgs,
+          autoArchiveWhenEmpty: metadata.autoArchiveWhenEmpty,
+          placement: metadata.placement,
+          privileged: isAboutSource(relativePath),
+        };
+        this.manifestCache.set(this.manifestCacheKey(relativePath, ref), manifest);
+        return manifest;
+      }
+      if (allowMissing) return { title: path.basename(relativePath) };
+      throw new Error(`Failed to load manifest for ${relativePath}: panel unit not found`);
+    }
+
     try {
+      const { absolutePath } = resolveSource(relativePath, this.workspacePath);
       const manifest = loadPanelManifest(absolutePath);
-      return {
+      const resolved = {
         ...manifest,
         // Privileged is gated purely by location: any unit under about/. (No `shell`
         // flag — an about page is a normal panel that lives in about/.)
         privileged: isAboutSource(relativePath),
       };
+      this.manifestCache.set(this.manifestCacheKey(relativePath, ref), resolved);
+      return resolved;
     } catch (error) {
       if (allowMissing) {
         return { title: path.basename(relativePath) };
@@ -1428,8 +1488,16 @@ export class PanelManager {
     }
   }
 
+  private manifestCacheKey(source: string, ref?: string): string {
+    return `${source}\u0000${ref ?? ""}`;
+  }
+
   private tryResolveManifestForSource(source: string) {
     if (source.startsWith("browser:")) return null;
+    const cached = [...this.manifestCache.entries()].find(([key]) =>
+      key.startsWith(`${source}\u0000`)
+    )?.[1];
+    if (cached) return cached;
     try {
       const { absolutePath } = resolveSource(source, this.workspacePath);
       const manifest = loadPanelManifest(absolutePath);
@@ -1441,6 +1509,20 @@ export class PanelManager {
     } catch {
       return null;
     }
+  }
+
+  private async resolveTitle(
+    slotId: PanelSlotId,
+    source: string,
+    ref?: string,
+    panelMetadata = this.panelMetadata
+  ): Promise<string> {
+    if (!source.startsWith("browser:")) {
+      const manifest = await this.resolveManifest(source, true, ref, panelMetadata);
+      const title = normalizePanelTitle(manifest.title);
+      if (title) return title;
+    }
+    return this.titleFor(slotId, source);
   }
 
   private validateManifestStateArgs(
@@ -1456,13 +1538,11 @@ export class PanelManager {
     return validation.data as Record<string, unknown>;
   }
 
-  private loadPanelSchema(panel: Panel) {
-    try {
-      const absolutePath = path.resolve(this.workspacePath, getPanelSource(panel));
-      return loadPanelManifest(absolutePath).stateArgs;
-    } catch {
-      return undefined;
-    }
+  private async loadPanelSchema(panel: Panel): Promise<unknown> {
+    const source = getPanelSource(panel);
+    if (source.startsWith("browser:")) return undefined;
+    return (await this.resolveManifest(source, true, getPanelRef(panel), this.panelMetadata))
+      .stateArgs;
   }
 
   private async requireStoredPanel(slotId: PanelSlotId, forceRefresh = false): Promise<Panel> {
