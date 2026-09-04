@@ -99,7 +99,7 @@ declare const __filename: string;
 function developmentRootTemplateSelection(): {
   pin: WorkspaceTemplatePin;
   checkout: string;
-  writeback: string | null;
+  writeback: { root: string; repositories: string[] } | null;
 } | null {
   const rawPin = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
   const rawCheckout = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]?.trim();
@@ -115,17 +115,46 @@ function developmentRootTemplateSelection(): {
     throw new Error("Base checkout write-back is restricted to the source development instance");
   }
   const checkout = fs.realpathSync(path.resolve(rawCheckout));
-  const writeback = rawWriteback ? fs.realpathSync(path.resolve(rawWriteback)) : null;
+  let writeback: { root: string; repositories: string[] } | null = null;
+  if (rawWriteback) {
+    const descriptor = JSON.parse(rawWriteback) as unknown;
+    const descriptorRecord =
+      descriptor !== null && typeof descriptor === "object" && !Array.isArray(descriptor)
+        ? (descriptor as Record<string, unknown>)
+        : null;
+    const rawRepositories = descriptorRecord?.["repositories"];
+    if (
+      descriptorRecord === null ||
+      typeof descriptorRecord["root"] !== "string" ||
+      !Array.isArray(rawRepositories) ||
+      !rawRepositories.every(
+        (repository: unknown): repository is string =>
+          typeof repository === "string" && repository.length > 0
+      )
+    ) {
+      throw new Error("Base checkout write-back descriptor is invalid");
+    }
+    const repositories = rawRepositories;
+    if (new Set(repositories).size !== repositories.length) {
+      throw new Error("Base checkout write-back descriptor contains duplicate repositories");
+    }
+    writeback = {
+      root: fs.realpathSync(path.resolve(descriptorRecord["root"])),
+      repositories: [...repositories],
+    };
+  }
   if (writeback) {
-    const gitMarker = path.join(writeback, ".git");
+    const gitMarker = path.join(writeback.root, ".git");
     let marker: fs.Stats;
     try {
       marker = fs.lstatSync(gitMarker);
     } catch {
-      throw new Error(`Base checkout write-back target is not a Git checkout: ${writeback}`);
+      throw new Error(`Base checkout write-back target is not a Git checkout: ${writeback.root}`);
     }
     if (!marker.isDirectory() && !marker.isFile()) {
-      throw new Error(`Base checkout write-back target has invalid Git metadata: ${writeback}`);
+      throw new Error(
+        `Base checkout write-back target has invalid Git metadata: ${writeback.root}`
+      );
     }
   }
   return {
@@ -1980,14 +2009,16 @@ async function main() {
   //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
   //  - any change invalidates the tree scanner cache
-  //  - the default pnpm dev instance persists protected publications back to
-  //    its configured Base checkout through an exact previous-state guard
+  //  - the default pnpm dev instance persists Base-owned publications back to
+  //    its configured checkout through an exact previous-state guard; imported
+  //    templates and workspace-created repositories remain outside that mirror
   const developmentCheckoutObserver = developmentRootTemplate?.writeback
     ? createDevelopmentCheckoutPublicationObserver({
-        destinationRoot: developmentRootTemplate.writeback,
+        destinationRoot: developmentRootTemplate.writeback.root,
+        ownedRepositories: developmentRootTemplate.writeback.repositories,
         inspectRepository: async (repoPath) => {
           const repositoryRoot = path.join(
-            developmentRootTemplate.writeback!,
+            developmentRootTemplate.writeback!.root,
             ...repoPath.split("/")
           );
           try {
@@ -2085,14 +2116,28 @@ async function main() {
     if (developmentCheckoutObserver) {
       try {
         const result = await developmentCheckoutObserver.observe(event);
-        if (result.conflicts.length > 0) {
+        if (result.rejectedRepositories.length > 0) {
+          console.warn(
+            "[DevelopmentCheckout] Publication spans Base-owned and non-Base repositories; " +
+              "no part was written back:",
+            {
+              baseRepositories: result.rejectedRepositories,
+              outsideRepositories: result.excludedRepositories,
+            }
+          );
+        } else if (result.conflicts.length > 0) {
           console.warn(
             "[DevelopmentCheckout] Publication was not written back because the Base checkout has overlapping edits:",
             result.conflicts
           );
         } else if (result.changedPathCount > 0) {
           console.log(
-            `[DevelopmentCheckout] Wrote ${result.changedPathCount} published path(s) back to ${developmentRootTemplate!.writeback}`
+            `[DevelopmentCheckout] Wrote ${result.changedPathCount} published path(s) back to ${developmentRootTemplate!.writeback!.root}`
+          );
+        } else if (result.excludedRepositories.length > 0) {
+          console.log(
+            "[DevelopmentCheckout] Kept non-Base publication out of Base write-back:",
+            result.excludedRepositories
           );
         }
       } catch (error) {

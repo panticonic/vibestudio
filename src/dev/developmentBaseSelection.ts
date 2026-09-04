@@ -7,6 +7,7 @@ import type { ExactGitSnapshot } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
 import { WORKSPACE_CONFIG_PATH } from "@vibestudio/workspace/configParser";
+import { parseTemplateManifestContent } from "@vibestudio/workspace/templateManifest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { inspectRootTemplateCheckout } from "../server/acquireRootTemplateSnapshot.js";
 import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
@@ -23,6 +24,8 @@ export interface DevelopmentBaseSelection {
   temporary: boolean;
   changedPaths: readonly string[];
   untrackedPaths: readonly string[];
+  /** Semantic repositories whose protected publications may write back here. */
+  writebackRepositories: readonly string[];
 }
 
 function assertDevelopmentBaseCompatibility(
@@ -95,7 +98,18 @@ export async function resolveDevelopmentBaseSelection(input: {
     validateSnapshot: (snapshot) =>
       assertDevelopmentBaseCompatibility(snapshot, checkpoint.sourceCheckout),
   });
-  return { ...checkpoint, ...inspected };
+  const templateManifest = parseTemplateManifestContent(
+    fs.readFileSync(path.join(checkpoint.checkout, "meta/template.yml"), "utf8"),
+    WORKSPACE_SYSTEM_EPOCH
+  );
+  if (templateManifest.dependencies.length > 0) {
+    throw new Error(`Development Base checkout ${checkpoint.sourceCheckout} is not root-capable`);
+  }
+  return {
+    ...checkpoint,
+    ...inspected,
+    writebackRepositories: ["meta", ...templateManifest.inventory.repositories],
+  };
 }
 
 /**

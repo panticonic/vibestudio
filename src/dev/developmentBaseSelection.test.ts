@@ -43,6 +43,12 @@ function fixture(systemEpoch: number): { host: string; base: string; checkpoint:
   );
   fs.mkdirSync(path.join(base, "meta"), { recursive: true });
   fs.writeFileSync(path.join(base, "meta", "vibestudio.yml"), `systemEpoch: ${systemEpoch}\n`);
+  fs.writeFileSync(
+    path.join(base, "meta", "template.yml"),
+    `systemEpoch: ${systemEpoch}\ntemplate:\n  repositories:\n    - packages/base\n  files: []\n`
+  );
+  fs.mkdirSync(path.join(base, "packages", "base"), { recursive: true });
+  fs.writeFileSync(path.join(base, "packages", "base", "package.json"), "{}\n");
   git(base, "init", "-b", "main");
   git(base, "add", ".");
   git(base, "commit", "-m", "fixture");
@@ -63,7 +69,11 @@ describe("resolveDevelopmentBaseSelection", () => {
         checkpointTarget: checkpoint,
         explicitCheckout: base,
       })
-    ).resolves.toMatchObject({ sourceCheckout: base, temporary: false });
+    ).resolves.toMatchObject({
+      sourceCheckout: base,
+      temporary: false,
+      writebackRepositories: ["meta", "packages/base"],
+    });
   });
 
   it("rejects an incompatible Base before creating a workspace runtime", async () => {

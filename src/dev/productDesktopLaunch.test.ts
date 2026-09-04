@@ -16,6 +16,7 @@ const base = {
   temporary: true,
   changedPaths: [],
   untrackedPaths: [],
+  writebackRepositories: ["meta", "packages/base"],
 };
 const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 
