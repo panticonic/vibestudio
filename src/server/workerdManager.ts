@@ -3578,7 +3578,9 @@ export class WorkerdManager {
         descriptor.version < 1 ||
         typeof descriptor.freshSchemaFingerprint !== "string"
       ) {
-        throw new Error(`${source}:${className} returned a malformed schema descriptor`);
+        throw new Error(
+          `${source}:${className} returned a malformed schema descriptor: ${JSON.stringify(descriptor)}`
+        );
       }
       return descriptor;
     } finally {
