@@ -1455,7 +1455,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, getBytes, putBootstrapBytes } =
+  const { collectTreeReachableDigests, getBytes, mirrorWorktreeTree, putBootstrapBytes } =
     await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
@@ -2387,7 +2387,12 @@ async function main() {
   });
 
   const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
-  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(workspaceId, workspacePath);
+  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(workspaceId, workspacePath, {
+    putFile: (bytes) => putBootstrapBytes(layout.blobsDir, bytes),
+    putTree: async (files, stateHash) => {
+      await mirrorWorktreeTree(layout.blobsDir, [...files], { expectStateHash: stateHash });
+    },
+  });
   // Capture the source identity before any semantic service can publish into
   // the live workspace projection. All later bootstrap references use this
   // immutable value; they must not rediscover the mutable source directory.

@@ -1,9 +1,16 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  collectTreeReachableDigests,
+  ensureLayout,
+  mirrorWorktreeTree,
+  putBootstrapBytes,
+} from "../services/blobstoreService.js";
 import { BootstrapWorkspaceSource } from "./bootstrapWorkspaceSource.js";
 
 const temporaryRoots: string[] = [];
@@ -31,6 +38,48 @@ describe("BootstrapWorkspaceSource execution identity", () => {
       snapshotHash: stateHash,
     });
     expect(source.executionStateForContent(`state:${"0".repeat(64)}`)).toBeNull();
+  });
+
+  it("mirrors the sealed execution source exactly once", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
+    temporaryRoots.push(root);
+    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/root"}\n');
+    const putFile = vi.fn(async (bytes: Buffer) => ({
+      digest: createHash("sha256").update(bytes).digest("hex"),
+    }));
+    const putTree = vi.fn(async () => {});
+    const source = new BootstrapWorkspaceSource("workspace:test", root, { putFile, putTree });
+
+    const first = await source.seal();
+    await source.seal();
+    await first.assertUnchanged();
+
+    expect(putFile).toHaveBeenCalledOnce();
+    expect(putTree).toHaveBeenCalledOnce();
+    expect(putTree).toHaveBeenCalledWith(
+      [expect.objectContaining({ path: "package.json" })],
+      first.stateHash
+    );
+  });
+
+  it("makes the sealed execution source reconstructible by content GC", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
+    temporaryRoots.push(root);
+    const sourceRoot = path.join(root, "source");
+    const blobsDir = path.join(root, "blobs");
+    await fs.mkdir(sourceRoot);
+    ensureLayout(blobsDir);
+    await fs.writeFile(path.join(sourceRoot, "package.json"), '{"name":"@workspace/root"}\n');
+    const source = new BootstrapWorkspaceSource("workspace:test", sourceRoot, {
+      putFile: (bytes) => putBootstrapBytes(blobsDir, bytes),
+      putTree: async (files, stateHash) => {
+        await mirrorWorktreeTree(blobsDir, [...files], { expectStateHash: stateHash });
+      },
+    });
+
+    const snapshot = await source.seal();
+
+    await expect(collectTreeReachableDigests(blobsDir, snapshot.stateHash)).resolves.not.toBeNull();
   });
 
   it("keeps the sealed state addressable after the live source is published", async () => {

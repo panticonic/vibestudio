@@ -11,6 +11,14 @@ import type { BuildRecord, WorkspaceStateSource } from "./stateTrigger.js";
 
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
+export interface BootstrapWorkspaceContentMirror {
+  putFile(bytes: Buffer): Promise<{ digest: string }>;
+  putTree(
+    files: readonly { path: string; contentHash: string; mode: number }[],
+    stateHash: string
+  ): Promise<void>;
+}
+
 /**
  * The immutable identity captured before semantic workspace initialization.
  *
@@ -43,7 +51,8 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
 
   constructor(
     readonly workspaceId: string,
-    private readonly sourceRoot: string
+    private readonly sourceRoot: string,
+    private readonly contentMirror?: BootstrapWorkspaceContentMirror
   ) {}
 
   /** Capture the exact source identity once for the bootstrap lifecycle. */
@@ -52,7 +61,7 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
     if (this.sealFlight) return this.sealFlight;
 
     this.sealFlight = (async () => {
-      const snapshot = await this.readSnapshot();
+      const snapshot = await this.readSnapshot(true);
       this.snapshot = snapshot;
       const publicSnapshot: BootstrapWorkspaceSnapshot = Object.freeze({
         stateHash: snapshot.stateHash,
@@ -168,7 +177,7 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
     return this.snapshot;
   }
 
-  private async readSnapshot() {
+  private async readSnapshot(mirror = false) {
     const files: Array<{ path: string; contentHash: string; mode: number }> = [];
     const visit = async (directory: string, relativeDirectory: string): Promise<void> => {
       const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -196,15 +205,28 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
           fs.readFile(absolutePath),
           fs.stat(absolutePath),
         ]);
+        const contentHash = createHash("sha256").update(content).digest("hex");
+        if (mirror && this.contentMirror) {
+          const stored = await this.contentMirror.putFile(content);
+          if (stored.digest !== contentHash) {
+            throw new Error(
+              `Bootstrap workspace content mirror changed ${relativePath}: expected ${contentHash}, stored ${stored.digest}`
+            );
+          }
+        }
         files.push({
           path: relativePath,
-          contentHash: createHash("sha256").update(content).digest("hex"),
+          contentHash,
           mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
         });
       }
     };
     await visit(this.sourceRoot, "");
-    return buildWorktreeManifest(files);
+    const snapshot = buildWorktreeManifest(files);
+    if (mirror && this.contentMirror) {
+      await this.contentMirror.putTree(files, snapshot.stateHash);
+    }
+    return snapshot;
   }
 }
 
