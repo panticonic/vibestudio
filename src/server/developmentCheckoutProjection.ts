@@ -24,12 +24,15 @@ export interface DevelopmentCheckoutProjectionConflict {
 
 export interface DevelopmentCheckoutProjectionResult {
   appliedRepositories: string[];
+  excludedRepositories: string[];
+  rejectedRepositories: string[];
   changedPathCount: number;
   conflicts: DevelopmentCheckoutProjectionConflict[];
 }
 
 interface ProjectDevelopmentCheckoutPublicationOptions {
   destinationRoot: string;
+  ownedRepositories: readonly string[];
   publication: ProtectedPublicationEvent;
   inspectRepository(repoPath: string): Promise<DevelopmentCheckoutRepositoryInspection>;
   readState(stateHash: string): Promise<DevelopmentCheckoutTreeFile[]>;
@@ -50,6 +53,8 @@ export function createDevelopmentCheckoutPublicationObserver(
 ): DevelopmentCheckoutPublicationObserver {
   let tail = Promise.resolve<DevelopmentCheckoutProjectionResult>({
     appliedRepositories: [],
+    excludedRepositories: [],
+    rejectedRepositories: [],
     changedPathCount: 0,
     conflicts: [],
   });
@@ -62,6 +67,8 @@ export function createDevelopmentCheckoutPublicationObserver(
       // failure; the caller still observes this publication's rejection.
       tail = next.catch(() => ({
         appliedRepositories: [],
+        excludedRepositories: [],
+        rejectedRepositories: [],
         changedPathCount: 0,
         conflicts: [],
       }));
@@ -81,7 +88,8 @@ interface RepositoryPlan {
 function isWorkspaceInstalledMetadata(repoPath: string, filePath: string): boolean {
   return (
     repoPath === "meta" &&
-    (filePath === "templates.state.yml" ||
+    (filePath === "vibestudio.yml" ||
+      filePath === "templates.state.yml" ||
       filePath === "templates.lock.yml" ||
       filePath.startsWith("templates/"))
   );
@@ -211,22 +219,56 @@ async function stateFiles(
 }
 
 /**
- * Three-way persistence for one protected publication:
+ * Ownership-gated three-way persistence for one protected publication:
  *
  *   base    = the repository state before the app publication
  *   current = the developer checkout now
  *   next    = the repository state published by the app
  *
- * App-only changes are applied, checkout-only changes are preserved, identical
- * changes coalesce, and overlapping/structurally incompatible changes reject
- * the complete publication before any file is touched. Platform metadata such
- * as nested `.git` directories remains outside all three semantic trees.
+ * Only repositories intrinsically owned by the destination template may enter
+ * the merge. App-only changes are applied, checkout-only changes are preserved,
+ * identical changes coalesce, and mixed ownership or overlapping/structurally
+ * incompatible changes reject the complete mirror before any file is touched.
+ * Platform and generated metadata remains outside all three semantic trees.
  */
 export async function projectDevelopmentCheckoutPublication(
   options: ProjectDevelopmentCheckoutPublicationOptions
 ): Promise<DevelopmentCheckoutProjectionResult> {
+  const ownedRepositories = new Set(options.ownedRepositories);
+  const ownedPublicationRepositories = options.publication.repositories.filter((repository) =>
+    ownedRepositories.has(repository.repoPath)
+  );
+  const excludedRepositories = options.publication.repositories
+    .filter((repository) => !ownedRepositories.has(repository.repoPath))
+    .map((repository) => repository.repoPath)
+    .sort();
+
+  // One protected publication is atomic. Mirroring only its Base-owned half
+  // would manufacture a checkout state that never existed in the workspace,
+  // so a mixed-owner publication does not write any of its repositories.
+  if (ownedPublicationRepositories.length > 0 && excludedRepositories.length > 0) {
+    return {
+      appliedRepositories: [],
+      excludedRepositories,
+      rejectedRepositories: ownedPublicationRepositories
+        .map((repository) => repository.repoPath)
+        .sort(),
+      changedPathCount: 0,
+      conflicts: [],
+    };
+  }
+  if (ownedPublicationRepositories.length === 0) {
+    return {
+      appliedRepositories: [],
+      excludedRepositories,
+      rejectedRepositories: [],
+      changedPathCount: 0,
+      conflicts: [],
+    };
+  }
+
   const prepared = await Promise.all(
-    options.publication.repositories.map(async (repository) => {
+    ownedPublicationRepositories.map(async (repository) => {
       const current = await options.inspectRepository(repository.repoPath);
       return {
         repository,
@@ -292,7 +334,13 @@ export async function projectDevelopmentCheckoutPublication(
     });
   }
   if (conflicts.length > 0) {
-    return { appliedRepositories: [], changedPathCount: 0, conflicts };
+    return {
+      appliedRepositories: [],
+      excludedRepositories: [],
+      rejectedRepositories: [],
+      changedPathCount: 0,
+      conflicts,
+    };
   }
 
   const blobs = new Map<string, Buffer>();
@@ -339,6 +387,8 @@ export async function projectDevelopmentCheckoutPublication(
 
   return {
     appliedRepositories: plans.map((plan) => plan.repoPath),
+    excludedRepositories: [],
+    rejectedRepositories: [],
     changedPathCount: new Set(
       plans.flatMap((plan) => [
         ...plan.removes.map((file) => `${plan.repoPath}/${file.path}`),

@@ -7,6 +7,7 @@ export interface DevelopmentBaseEnvironmentSelection {
   pin: unknown;
   checkout: string;
   sourceCheckout: string;
+  writebackRepositories: readonly string[];
 }
 
 /** Closed developer launch environment: ambient Base selectors never survive. */
@@ -43,7 +44,12 @@ export function developmentInstanceEnvironment(input: {
           VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(input.base.pin),
           VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: input.base.checkout,
           ...(input.sourceCoupled
-            ? { VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: input.base.sourceCheckout }
+            ? {
+                VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: JSON.stringify({
+                  root: input.base.sourceCheckout,
+                  repositories: input.base.writebackRepositories,
+                }),
+              }
             : {}),
         }
       : {}),

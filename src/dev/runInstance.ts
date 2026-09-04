@@ -372,7 +372,7 @@ async function main(): Promise<void> {
       }
       if (id === "source" && !disposable) {
         console.log(
-          `[instance:${id}] Base write-back: protected publications -> ${developmentBase.sourceCheckout}`
+          `[instance:${id}] Base write-back: ${developmentBase.writebackRepositories.length} Base-owned repositories -> ${developmentBase.sourceCheckout}; imported templates are read-only`
         );
       }
     }

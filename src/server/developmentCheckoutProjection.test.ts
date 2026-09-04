@@ -63,6 +63,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
 
     const result = await projectDevelopmentCheckoutPublication({
       destinationRoot: root!,
+      ownedRepositories: ["packages/pushed"],
       publication: publication([repository("state:before", "state:after")]),
       inspectRepository: async () => ({
         files: [file("index.ts", "before\n"), file("local.ts", "local edit\n")],
@@ -74,6 +75,8 @@ describe("projectDevelopmentCheckoutPublication", () => {
 
     expect(result).toEqual({
       appliedRepositories: ["packages/pushed"],
+      excludedRepositories: [],
+      rejectedRepositories: [],
       changedPathCount: 1,
       conflicts: [],
     });
@@ -98,6 +101,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
 
     const result = await projectDevelopmentCheckoutPublication({
       destinationRoot: root!,
+      ownedRepositories: ["packages/pushed"],
       publication: publication([repository("state:before", "state:after")]),
       inspectRepository: async () => ({
         files: [file("index.ts", "concurrent edit\n")],
@@ -127,6 +131,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
 
     const result = await projectDevelopmentCheckoutPublication({
       destinationRoot: root!,
+      ownedRepositories: ["packages/pushed"],
       publication: publication([repository("state:before", "state:after")]),
       inspectRepository: async () => ({
         files: [file("foo/base.ts", "base\n"), file("foo/local.ts", "local\n")],
@@ -154,6 +159,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
     await expect(
       projectDevelopmentCheckoutPublication({
         destinationRoot: root!,
+        ownedRepositories: ["packages/pushed"],
         publication: publication([repository("state:before", "state:after")]),
         inspectRepository: async () => ({
           files: [file("index.ts", "before\n")],
@@ -181,6 +187,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
     await expect(
       projectDevelopmentCheckoutPublication({
         destinationRoot: root!,
+        ownedRepositories: ["packages/pushed"],
         publication: publication([repository("state:before", "state:after")]),
         inspectRepository: async () => ({
           files: [file("first.ts", "before\n")],
@@ -199,17 +206,24 @@ describe("projectDevelopmentCheckoutPublication", () => {
     const { blobs, states, publication } = await setup();
     await fsp.mkdir(path.join(root!, "meta"), { recursive: true });
     await fsp.writeFile(path.join(root!, "meta/template.yml"), "before\n");
+    await fsp.writeFile(path.join(root!, "meta/vibestudio.yml"), "generated before\n");
     blobs.set(digest("after\n"), Buffer.from("after\n"));
     blobs.set(digest("installed\n"), Buffer.from("installed\n"));
-    states.set("state:before", [file("template.yml", "before\n")]);
+    blobs.set(digest("generated after\n"), Buffer.from("generated after\n"));
+    states.set("state:before", [
+      file("template.yml", "before\n"),
+      file("vibestudio.yml", "generated before\n"),
+    ]);
     states.set("state:after", [
       file("template.yml", "after\n"),
+      file("vibestudio.yml", "generated after\n"),
       file("templates.state.yml", "installed\n"),
       file("templates/workspace.yml", "installed\n"),
     ]);
 
     const result = await projectDevelopmentCheckoutPublication({
       destinationRoot: root!,
+      ownedRepositories: ["meta"],
       publication: publication([
         {
           repoPath: "meta",
@@ -219,7 +233,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
         },
       ]),
       inspectRepository: async () => ({
-        files: [file("template.yml", "before\n")],
+        files: [file("template.yml", "before\n"), file("vibestudio.yml", "generated before\n")],
         skippedPaths: [],
       }),
       readState: async (stateHash) => states.get(stateHash) ?? [],
@@ -228,6 +242,87 @@ describe("projectDevelopmentCheckoutPublication", () => {
 
     expect(result.changedPathCount).toBe(1);
     expect(await fsp.readFile(path.join(root!, "meta/template.yml"), "utf8")).toBe("after\n");
-    expect(await fsp.readdir(path.join(root!, "meta"))).toEqual(["template.yml"]);
+    expect(await fsp.readFile(path.join(root!, "meta/vibestudio.yml"), "utf8")).toBe(
+      "generated before\n"
+    );
+    expect(await fsp.readdir(path.join(root!, "meta"))).toEqual(["template.yml", "vibestudio.yml"]);
+  });
+
+  it("keeps imported-template repositories out of the Base checkout", async () => {
+    const { blobs, states, publication } = await setup();
+    blobs.set(digest("template source\n"), Buffer.from("template source\n"));
+    states.set("state:template", [file("index.ts", "template source\n")]);
+
+    const result = await projectDevelopmentCheckoutPublication({
+      destinationRoot: root!,
+      ownedRepositories: ["meta", "packages/base"],
+      publication: publication([
+        {
+          repoPath: "panels/imported",
+          previousStateHash: null,
+          nextStateHash: "state:template",
+          fileChanges: [],
+        },
+      ]),
+      inspectRepository: async () => {
+        throw new Error("an excluded repository must never be inspected in Base");
+      },
+      readState: async (stateHash) => states.get(stateHash) ?? [],
+      readBlob: async (hash) => blobs.get(hash) ?? null,
+    });
+
+    expect(result).toEqual({
+      appliedRepositories: [],
+      excludedRepositories: ["panels/imported"],
+      rejectedRepositories: [],
+      changedPathCount: 0,
+      conflicts: [],
+    });
+    await expect(fsp.stat(path.join(root!, "panels", "imported"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects mixed-owner publications instead of mirroring a non-atomic subset", async () => {
+    const { blobs, states, publication } = await setup();
+    await fsp.mkdir(path.join(root!, "packages", "base"), { recursive: true });
+    await fsp.writeFile(path.join(root!, "packages/base/index.ts"), "before\n");
+    blobs.set(digest("after\n"), Buffer.from("after\n"));
+    states.set("state:before", [file("index.ts", "before\n")]);
+    states.set("state:after", [file("index.ts", "after\n")]);
+    states.set("state:template", [file("index.ts", "template\n")]);
+
+    const result = await projectDevelopmentCheckoutPublication({
+      destinationRoot: root!,
+      ownedRepositories: ["meta", "packages/base"],
+      publication: publication([
+        {
+          repoPath: "packages/base",
+          previousStateHash: "state:before",
+          nextStateHash: "state:after",
+          fileChanges: [],
+        },
+        {
+          repoPath: "panels/imported",
+          previousStateHash: null,
+          nextStateHash: "state:template",
+          fileChanges: [],
+        },
+      ]),
+      inspectRepository: async () => {
+        throw new Error("mixed ownership must reject before inspecting the checkout");
+      },
+      readState: async (stateHash) => states.get(stateHash) ?? [],
+      readBlob: async (hash) => blobs.get(hash) ?? null,
+    });
+
+    expect(result).toEqual({
+      appliedRepositories: [],
+      excludedRepositories: ["panels/imported"],
+      rejectedRepositories: ["packages/base"],
+      changedPathCount: 0,
+      conflicts: [],
+    });
+    expect(await fsp.readFile(path.join(root!, "packages/base/index.ts"), "utf8")).toBe("before\n");
   });
 });

@@ -156,6 +156,7 @@ describe("WorkspaceVcs protected publication notification", () => {
     );
     const observer = createDevelopmentCheckoutPublicationObserver({
       destinationRoot: checkout,
+      ownedRepositories: ["packages/demo"],
       inspectRepository: async () => {
         const inspected = await vcs.contentProjection.localState(repositoryRoot, { exact: true });
         return {

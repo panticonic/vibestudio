@@ -5,6 +5,7 @@ const base = {
   pin: { commit: "candidate" },
   checkout: "/private/checkpoint",
   sourceCheckout: "/visible/base",
+  writebackRepositories: ["meta", "packages/base"],
 };
 const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 
@@ -21,7 +22,10 @@ describe("development instance environment", () => {
     expect(env).toMatchObject({
       VIBESTUDIO_SOURCE_INSTANCE: "1",
       VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: "/private/checkpoint",
-      VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: "/visible/base",
+      VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: JSON.stringify({
+        root: "/visible/base",
+        repositories: ["meta", "packages/base"],
+      }),
     });
   });
 
@@ -35,6 +39,24 @@ describe("development instance environment", () => {
       templates,
     });
     expect(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]).toBe(JSON.stringify(templates));
+  });
+
+  it("keeps optional templates read-only in the source-coupled instance", () => {
+    const env = developmentInstanceEnvironment({
+      parent: {},
+      repoRoot: "/host",
+      instanceRoot: "/instance",
+      instanceId: "source",
+      sourceCoupled: true,
+      base,
+      templates,
+    });
+
+    expect(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]).toBe(JSON.stringify(templates));
+    expect(JSON.parse(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]!)).toEqual({
+      root: "/visible/base",
+      repositories: ["meta", "packages/base"],
+    });
   });
 
   it.each([
