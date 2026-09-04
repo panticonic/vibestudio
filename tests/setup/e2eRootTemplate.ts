@@ -5,7 +5,7 @@
  * descriptor naming the exact external root it was made from, plus the
  * materialization of that root. The suite therefore resolves the developer's
  * Base checkout into the same immutable pin the product uses (`pnpm dev` takes
- * the identical path through `prepareDevelopmentBaseCheckpoint`), materializes
+ * the identical path through `prepareDevelopmentTemplateCheckpoint`), materializes
  * it once per run, and lets every case copy that already-materialized tree.
  *
  * Resolution is asynchronous and Git-bound, so it happens once in

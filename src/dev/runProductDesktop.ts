@@ -11,6 +11,8 @@ import {
   assertProductDesktopArguments,
   productDesktopEnvironment,
 } from "./productDesktopLaunch.js";
+import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
+import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -37,7 +39,8 @@ function profileHasWorkspace(): boolean {
 }
 
 async function main(): Promise<void> {
-  const forwarded = process.argv.slice(2);
+  const templateOptions = extractDevelopmentTemplateCheckoutArguments(process.argv.slice(2));
+  const forwarded = templateOptions.forwarded;
   assertProductDesktopArguments(forwarded);
 
   const repoRoot = fs.realpathSync(process.cwd());
@@ -55,11 +58,16 @@ async function main(): Promise<void> {
         "The first source launch needs the linked development Base. Run `pnpm dev:base setup`."
       );
     }
+    const developmentTemplates = await resolveDevelopmentTemplateSelections({
+      checkouts: templateOptions.checkouts,
+      checkpointRoot: path.join(temporaryRoot, "template-checkpoints"),
+    });
 
     const env = productDesktopEnvironment({
       parent: process.env,
       repoRoot,
       ...(initialBase ? { initialBase } : {}),
+      ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
     await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], env);
     await run(process.execPath, ["scripts/ensure-host-build.mjs"], env);

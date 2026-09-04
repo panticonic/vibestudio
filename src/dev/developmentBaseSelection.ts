@@ -9,7 +9,7 @@ import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelea
 import { WORKSPACE_CONFIG_PATH } from "@vibestudio/workspace/configParser";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { inspectRootTemplateCheckout } from "../server/acquireRootTemplateSnapshot.js";
-import { prepareDevelopmentBaseCheckpoint } from "./developmentBaseCheckpoint.js";
+import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
 import { selectDevelopmentBaseCheckout } from "./developmentBaseConfig.js";
 
 export interface DevelopmentBaseSelection {
@@ -76,7 +76,7 @@ export async function resolveDevelopmentBaseSelection(input: {
   if (!selected) return null;
 
   const gitClient = new GitClient();
-  const checkpoint = await prepareDevelopmentBaseCheckpoint({
+  const checkpoint = await prepareDevelopmentTemplateCheckpoint({
     checkout: fs.realpathSync(path.resolve(selected)),
     target: input.checkpointTarget,
     gitClient,

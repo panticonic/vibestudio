@@ -11,6 +11,7 @@
     "./configParser": "./src/configParser.ts",
     "./configComposition": "./src/configComposition.ts",
     "./contextProjections": "./src/contextProjections.ts",
+    "./developmentTemplateSources": "./src/developmentTemplateSources.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./hostLaunchRecord": "./src/hostLaunchRecord.ts",
     "./loader": "./src/loader.ts",

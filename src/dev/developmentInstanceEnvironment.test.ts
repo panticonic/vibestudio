@@ -6,6 +6,7 @@ const base = {
   checkout: "/private/checkpoint",
   sourceCheckout: "/visible/base",
 };
+const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 
 describe("development instance environment", () => {
   it("gives only the source-coupled instance the visible checkout write-back target", () => {
@@ -22,6 +23,18 @@ describe("development instance environment", () => {
       VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: "/private/checkpoint",
       VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: "/visible/base",
     });
+  });
+
+  it("passes exact optional-template acquisition sources and replaces ambient values", () => {
+    const env = developmentInstanceEnvironment({
+      parent: { VIBESTUDIO_DEV_TEMPLATE_SOURCES: "stale" },
+      repoRoot: "/host",
+      instanceRoot: "/instance",
+      instanceId: "isolated",
+      sourceCoupled: false,
+      templates,
+    });
+    expect(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]).toBe(JSON.stringify(templates));
   });
 
   it.each([

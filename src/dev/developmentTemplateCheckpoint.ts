@@ -18,7 +18,7 @@ function copyWorktreePath(sourceRoot: string, targetRoot: string, relativePath: 
     path.relative(sourceRoot, source).startsWith("..") ||
     path.relative(targetRoot, target).startsWith("..")
   ) {
-    throw new Error(`Development Base status contains an invalid path: ${relativePath}`);
+    throw new Error(`Development template status contains an invalid path: ${relativePath}`);
   }
   fs.rmSync(target, { recursive: true, force: true });
   let stat: fs.Stats;
@@ -34,7 +34,7 @@ function copyWorktreePath(sourceRoot: string, targetRoot: string, relativePath: 
     return;
   }
   if (!stat.isFile()) {
-    throw new Error(`Development Base path is not a regular file: ${relativePath}`);
+    throw new Error(`Development template path is not a regular file: ${relativePath}`);
   }
   fs.copyFileSync(source, target);
   fs.chmodSync(target, stat.mode & 0o777);
@@ -44,30 +44,22 @@ function isDependencyArtifactPath(relativePath: string): boolean {
   return relativePath.split(/[\\/]/u).includes("node_modules");
 }
 
-export interface DevelopmentBaseCheckpoint {
+export interface DevelopmentTemplateCheckpoint {
   checkout: string;
   sourceCheckout: string;
   changedPaths: readonly string[];
   temporary: boolean;
 }
 
-/**
- * Turn the visible developer worktree into an exact, instance-owned Git tree.
- *
- * Production acquisition still consumes one immutable commit. Development
- * satisfies that contract without mutating the developer's branch, index, or
- * worktree: a private local clone receives the current tracked and untracked
- * source files and owns the synthetic commit. Package-manager dependency trees
- * are never template source, even when a checkout lacks a local ignore rule.
- */
-export async function prepareDevelopmentBaseCheckpoint(input: {
+/** Seal the visible worktree into an instance-owned immutable Git commit. */
+export async function prepareDevelopmentTemplateCheckpoint(input: {
   checkout: string;
   target: string;
   gitClient: GitClient;
-}): Promise<DevelopmentBaseCheckpoint> {
+}): Promise<DevelopmentTemplateCheckpoint> {
   const sourceCheckout = fs.realpathSync(path.resolve(input.checkout));
   const status = await input.gitClient.status(sourceCheckout);
-  if (!status.commit) throw new Error(`Local Base checkout ${sourceCheckout} has no commit`);
+  if (!status.commit) throw new Error(`Local template checkout ${sourceCheckout} has no commit`);
   if (!status.dirty) {
     return { checkout: sourceCheckout, sourceCheckout, changedPaths: [], temporary: false };
   }
@@ -87,16 +79,13 @@ export async function prepareDevelopmentBaseCheckpoint(input: {
     }
   );
   git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", status.commit]);
-  for (const relativePath of changedPaths) {
-    copyWorktreePath(sourceCheckout, target, relativePath);
-  }
+  for (const relativePath of changedPaths) copyWorktreePath(sourceCheckout, target, relativePath);
   git(target, ["add", "-A"]);
   try {
     git(target, ["diff", "--cached", "--quiet"]);
   } catch (error) {
-    const statusCode = (error as { status?: number }).status;
-    if (statusCode !== 1) throw error;
-    const identity = {
+    if ((error as { status?: number }).status !== 1) throw error;
+    git(target, ["commit", "--no-gpg-sign", "-m", "Vibestudio development checkpoint"], {
       ...process.env,
       GIT_AUTHOR_NAME: "Vibestudio Development",
       GIT_AUTHOR_EMAIL: "development@vibestudio.invalid",
@@ -104,8 +93,7 @@ export async function prepareDevelopmentBaseCheckpoint(input: {
       GIT_COMMITTER_NAME: "Vibestudio Development",
       GIT_COMMITTER_EMAIL: "development@vibestudio.invalid",
       GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
-    };
-    git(target, ["commit", "--no-gpg-sign", "-m", "Vibestudio development checkpoint"], identity);
+    });
   }
   return { checkout: target, sourceCheckout, changedPaths, temporary: true };
 }
