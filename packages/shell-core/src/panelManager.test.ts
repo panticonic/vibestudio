@@ -498,6 +498,54 @@ function makeManagerDeps(workspacePath: string) {
 }
 
 describe("PanelManager", () => {
+  it("opens panels installed into exact workspace state without requiring a disk checkout", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/path/with/no/installed/panels");
+    const getPanelMetadata = vi.fn(async (source: string, _ref?: string) =>
+      source === "panels/hello-svelte"
+        ? {
+            source,
+            title: "Hello Svelte",
+            stateArgs: {
+              type: "object",
+              properties: { greeting: { type: "string" } },
+              required: ["greeting"],
+              additionalProperties: false,
+            },
+            autoArchiveWhenEmpty: true,
+            placement: { disposition: "split-below" as const, preferredWidth: 480 },
+          }
+        : null
+    );
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      panelMetadata: { getPanelMetadata },
+    });
+
+    const created = await manager.create("panels/hello-svelte", {
+      isRoot: true,
+      addAsRoot: true,
+      ref: "ctx:examples",
+      stateArgs: { greeting: "hello" },
+    });
+
+    expect(getPanelMetadata).toHaveBeenCalledWith("panels/hello-svelte", "ctx:examples");
+    expect(created).toMatchObject({
+      source: "panels/hello-svelte",
+      title: "Hello Svelte",
+      stateArgs: { greeting: "hello" },
+      autoArchiveWhenEmpty: true,
+    });
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!)).toMatchObject({
+      placement: { disposition: "split-below", preferredWidth: 480 },
+      options: {
+        ref: "ctx:examples",
+        placement: { disposition: "split-below", preferredWidth: 480 },
+      },
+    });
+  });
+
   it("queries durable roots by source without depending on the local registry mirror", async () => {
     const registry = new PanelRegistry({});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");

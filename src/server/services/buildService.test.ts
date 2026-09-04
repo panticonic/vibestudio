@@ -93,7 +93,10 @@ function makeBuildSystem(): BuildSystemV2 {
         kind: "panel",
         stateHash: "state:panel",
         effectiveVersion: "ev-panel",
-        manifest: { title: "Hello Svelte" },
+        manifest: {
+          title: "Hello Svelte",
+          placement: { disposition: "split-below", preferredWidth: 480 },
+        },
       },
     ]),
     getGraph: vi.fn(() => ({
@@ -269,6 +272,7 @@ describe("build service extension diagnostics", () => {
     ).resolves.toMatchObject({
       source: "panels/hello-svelte",
       title: "Hello Svelte",
+      placement: { disposition: "split-below", preferredWidth: 480 },
     });
     expect(buildSystem.listBuildUnits).toHaveBeenCalledWith("ctx:feature", ["panel"]);
   });

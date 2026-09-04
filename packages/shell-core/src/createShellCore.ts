@@ -6,11 +6,16 @@ import {
   type PanelManagerServerInfo,
 } from "./panelManager.js";
 import type { ShellServiceCall } from "./workspaceStateClient.js";
-import { createRuntimeClient, createWorkspaceStateClient } from "./workspaceStateClient.js";
+import {
+  createPanelMetadataClient,
+  createRuntimeClient,
+  createWorkspaceStateClient,
+} from "./workspaceStateClient.js";
 import type { WorkspaceStateClient } from "./workspaceStateClient.js";
 
 export {
   createRuntimeClient,
+  createPanelMetadataClient,
   createWorkspaceStateClient,
   type ShellServiceCall,
 } from "./workspaceStateClient.js";
@@ -42,6 +47,7 @@ export function createShellCore(deps: {
       registry: deps.registry,
       workspaceState,
       runtime,
+      panelMetadata: createPanelMetadataClient(deps.call),
       activationClient: {
         markPanelActive: (panelId) => call<void>("presence", "markPanelActive", [panelId]),
       },
