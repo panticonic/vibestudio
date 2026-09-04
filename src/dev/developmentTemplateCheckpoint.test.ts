@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { GitClient } from "@vibestudio/git";
-import { prepareDevelopmentBaseCheckpoint } from "./developmentBaseCheckpoint.js";
+import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
 
 function git(directory: string, args: string[]): string {
   return execFileSync("git", ["-C", directory, ...args], {
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function repository(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-base-checkpoint-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-template-checkpoint-"));
   temporaryRoots.add(root);
   git(root, ["init", "-b", "main"]);
   fs.writeFileSync(path.join(root, "tracked.txt"), "committed\n");
@@ -38,10 +38,10 @@ function repository(): string {
   return root;
 }
 
-describe("development Base checkpoint", () => {
+describe("development template checkpoint", () => {
   it("uses a clean checkout directly", async () => {
     const checkout = repository();
-    const result = await prepareDevelopmentBaseCheckpoint({
+    const result = await prepareDevelopmentTemplateCheckpoint({
       checkout,
       target: path.join(checkout, "..", "unused-checkpoint"),
       gitClient: new GitClient(),
@@ -65,7 +65,7 @@ describe("development Base checkpoint", () => {
     const target = path.join(path.dirname(checkout), `${path.basename(checkout)}-checkpoint`);
     temporaryRoots.add(target);
 
-    const result = await prepareDevelopmentBaseCheckpoint({
+    const result = await prepareDevelopmentTemplateCheckpoint({
       checkout,
       target,
       gitClient: new GitClient(),
@@ -89,7 +89,7 @@ describe("development Base checkpoint", () => {
     const target = path.join(path.dirname(checkout), `${path.basename(checkout)}-checkpoint`);
     temporaryRoots.add(target);
 
-    const result = await prepareDevelopmentBaseCheckpoint({
+    const result = await prepareDevelopmentTemplateCheckpoint({
       checkout,
       target,
       gitClient: new GitClient(),

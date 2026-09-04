@@ -214,6 +214,22 @@ pnpm dev:base clear              # require setup again; use dev:production for t
 `--base-checkout PATH` and `VIBESTUDIO_USERLAND_ROOT=PATH` remain explicit,
 single-command overrides. They do not change the stored selection.
 
+Optional workspace templates can likewise be tested from unpublished local
+worktrees. Pass `--template-checkout PATH` once per contribution template:
+
+```bash
+pnpm dev --template-checkout ../vibestudio-template-examples
+pnpm server:live --template-checkout ../vibestudio-template-examples
+pnpm start --template-checkout ../vibestudio-template-examples
+```
+
+The launcher derives the template's canonical identity from its `origin`,
+snapshots tracked and untracked non-ignored worktree changes into a private
+exact commit, and makes that commit available to the ordinary catalog/direct
+URL installation flow. The normal template composition, approval, build, and
+provenance path is unchanged. Repeat the option to develop multiple templates
+together. Private checkpoints are removed when the owning launcher exits.
+
 See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
 `pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)
 

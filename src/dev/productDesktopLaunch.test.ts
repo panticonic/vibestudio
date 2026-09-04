@@ -17,6 +17,7 @@ const base = {
   changedPaths: [],
   untrackedPaths: [],
 };
+const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
 
 describe("product desktop source launch", () => {
   it.each([
@@ -73,5 +74,21 @@ describe("product desktop source launch", () => {
     });
     expect(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]).toBeUndefined();
     expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]).toBeUndefined();
+  });
+
+  it("keeps production runtime semantics while explicitly enabling local template acquisition", () => {
+    const env = productDesktopEnvironment({
+      parent: {
+        VIBESTUDIO_DEV_TEMPLATE_SOURCES: "stale",
+        VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED: "stale",
+      },
+      repoRoot: "/host",
+      templates,
+    });
+    expect(env).toMatchObject({
+      NODE_ENV: "production",
+      VIBESTUDIO_DEV_TEMPLATE_SOURCES: JSON.stringify(templates),
+      VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED: "1",
+    });
   });
 });

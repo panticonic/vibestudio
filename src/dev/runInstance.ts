@@ -18,6 +18,8 @@ import {
 } from "./instanceRegistry.js";
 import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
+import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
+import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
 import {
   EPHEMERAL_DEV_WORKSPACE_NAME,
   EPHEMERAL_WORKSPACE_ARG,
@@ -279,7 +281,8 @@ async function main(): Promise<void> {
   }
   const mode: Mode = rawMode;
   const repoRoot = fs.realpathSync(process.cwd());
-  const parsed = extractInstance(process.argv.slice(3));
+  const templateOptions = extractDevelopmentTemplateCheckoutArguments(process.argv.slice(3));
+  const parsed = extractInstance(templateOptions.forwarded);
   if (mode === "server" && hasFlag(parsed.forwarded, "--help")) {
     console.log(`Developer instance options:
   --instance <id>  Use a named persistent isolated instance (default: source)
@@ -287,6 +290,8 @@ async function main(): Promise<void> {
                    to give parallel CLI commands a stable target
   --base-checkout <path>
                    Boot from the checkout's visible worktree via a private checkpoint
+  --template-checkout <path>
+                   Use an optional template's visible worktree (repeatable)
   --production-base Ignore the configured checkout and boot the pinned Base release
 `);
     const env = { ...process.env, NODE_ENV: "development" };
@@ -312,6 +317,11 @@ async function main(): Promise<void> {
     startedAt: Date.now(),
   });
   const checkpointTarget = path.join(root, "development-base-checkpoints", instance.generationId);
+  const templateCheckpointRoot = path.join(
+    root,
+    "development-template-checkpoints",
+    instance.generationId
+  );
   try {
     const developmentBase =
       (await resolveDevelopmentBaseSelection({
@@ -326,6 +336,10 @@ async function main(): Promise<void> {
           "or select the shipped release explicitly with `pnpm dev:production`."
       );
     }
+    const developmentTemplates = await resolveDevelopmentTemplateSelections({
+      checkouts: templateOptions.checkouts,
+      checkpointRoot: templateCheckpointRoot,
+    });
     const sourceCoupled = id === "source" && !disposable;
     const env = developmentInstanceEnvironment({
       parent: process.env,
@@ -334,6 +348,7 @@ async function main(): Promise<void> {
       instanceId: id,
       sourceCoupled,
       ...(developmentBase ? { base: developmentBase } : {}),
+      ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;
     process.env["VIBESTUDIO_INSTANCE"] = id;
@@ -361,6 +376,16 @@ async function main(): Promise<void> {
         );
       }
     }
+    for (const template of developmentTemplates) {
+      console.log(
+        `[instance:${id}] Template candidate: ${template.pin.url}@${template.pin.commit} from ${template.sourceCheckout}`
+      );
+      if (template.temporary) {
+        console.log(
+          `[instance:${id}] Template development checkpoint includes ${template.changedPaths.length} worktree change(s).`
+        );
+      }
+    }
     if (!disposable) {
       await prunePersistentInstanceBuildCache(root, id);
     }
@@ -371,6 +396,7 @@ async function main(): Promise<void> {
   } finally {
     if (!disposable) await prunePersistentInstanceBuildCache(root, id);
     fs.rmSync(checkpointTarget, { recursive: true, force: true });
+    fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });
     const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
     if (cleanupError) {
       // Preserve the registry record and root together: the stale supervisor

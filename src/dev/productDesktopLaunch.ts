@@ -1,6 +1,10 @@
 import type { DevelopmentBaseSelection } from "./developmentBaseSelection.js";
 import { INITIAL_WORKSPACE_TEMPLATE_ENV } from "@vibestudio/workspace/baseTemplateRelease";
 import {
+  DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
+  DEVELOPMENT_TEMPLATE_SOURCES_ENV,
+} from "@vibestudio/workspace/developmentTemplateSources";
+import {
   EPHEMERAL_WORKSPACE_ARG,
   RESUME_EPHEMERAL_WORKSPACE_ARG,
 } from "@vibestudio/workspace-contracts/ephemeral";
@@ -36,6 +40,7 @@ export function productDesktopEnvironment(input: {
   parent: NodeJS.ProcessEnv;
   repoRoot: string;
   initialBase?: DevelopmentBaseSelection;
+  templates?: ReadonlyArray<{ pin: unknown; checkout: string }>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
   for (const key of [
@@ -46,12 +51,22 @@ export function productDesktopEnvironment(input: {
     "VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT",
     "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK",
     INITIAL_WORKSPACE_TEMPLATE_ENV,
+    DEVELOPMENT_TEMPLATE_SOURCES_ENV,
+    DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
   ]) {
     delete env[key];
   }
   Object.assign(env, {
     NODE_ENV: "production",
     VIBESTUDIO_APP_ROOT: input.repoRoot,
+    ...(input.templates?.length
+      ? {
+          [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(
+            input.templates.map(({ pin, checkout }) => ({ pin, checkout }))
+          ),
+          [DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV]: "1",
+        }
+      : {}),
     ...(input.initialBase
       ? {
           [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(input.initialBase.pin),
