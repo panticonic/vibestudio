@@ -9,7 +9,10 @@ import type {
   OAuthLoopbackRedirectStrategy,
   UrlAudience,
 } from "@vibestudio/credential-client/types";
-import { findMatchingUrlAudience } from "@vibestudio/credential-client/urlAudience";
+import {
+  findMatchingUrlAudience,
+  urlMatchesAudience,
+} from "@vibestudio/credential-client/urlAudience";
 import type { CredentialInjection } from "@vibestudio/credential-client/urlAudience";
 
 export interface ProviderConnectPreset {
@@ -179,14 +182,21 @@ export function isTemplatedBaseUrl(baseUrl: string): boolean {
 }
 
 /**
- * A model is quick-connectable when its provider has a preset and its base URL
- * is concrete (not templated). Authoritative per-model connectability.
+ * A model can offer quick-connect when its concrete base URL overlaps the
+ * preset audience. SDKs may append versioned paths beneath their base URL.
+ * This is setup eligibility; credential injection still checks each request
+ * against the unchanged preset audience.
  */
 export function modelIsConnectable(providerId: string, baseUrl: string): boolean {
   const preset = getProviderConnectPreset(providerId);
   if (!preset || isTemplatedBaseUrl(baseUrl)) return false;
   try {
-    return findMatchingUrlAudience(baseUrl, preset.credentialAudience) !== null;
+    return (
+      findMatchingUrlAudience(baseUrl, preset.credentialAudience) !== null ||
+      preset.credentialAudience.some((audience) =>
+        urlMatchesAudience(audience.url, { url: baseUrl, match: "path-prefix" })
+      )
+    );
   } catch {
     return false;
   }
