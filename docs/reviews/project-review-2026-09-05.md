@@ -96,8 +96,16 @@ content warrants an explicit, contextual confirmation that still permits it.
 During direct review evals, nested browser-data writes could require a separate
 user approval because the nested request lacked initiating-task attribution.
 Only the exact requests to add and remove the review bookmark were approved.
-This is a provenance/approval UX observation to investigate; it does not justify
-bypassing the authority layer or granting blanket permissions.
+Follow-up repair: extension ingress now carries the verified parent task even
+when the call has no trajectory coordinate. Nested Durable Object ingress also
+inherits task membership from its exact active authority parent. Both paths keep
+the deputy's own code identity, manifest, and execution admission; no permanent
+membership is added to shared services or connections. Ordinary and streaming
+relay regressions exercise real task-grant evaluation, and negative cases cover
+unapproved resources, missing declarations, concurrent tasks, unrelated calls,
+and expired or wrong-receiver parent tokens. The focused RPC, authority, eval,
+and runtime suites pass 355 tests. This verification is deterministic transport
+and permission coverage; it does not claim a new native UI or agentic run.
 
 Native OS download execution, physical mobile interaction, real external Google
 account operations, push delivery, and every optional template UI were not

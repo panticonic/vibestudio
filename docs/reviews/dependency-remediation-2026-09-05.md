@@ -68,9 +68,10 @@ Primary compatibility references:
 
 [Sharp 0.35 changes](https://sharp.pixelplumbing.com/changelog/v0.35.0/)
 explain the image-processing compatibility issue.
-The executable-download and nested-approval questions in the initial review
-remain separate product/design discussions; none was used to defer ordinary
-compatible dependency fixes.
+The executable-download question remains a separate product/design discussion.
+The nested task-attribution defect was subsequently repaired; see the follow-up
+in the initial review. Neither issue was used to defer ordinary compatible
+dependency fixes.
 
 ## Commits and conventional verification
 

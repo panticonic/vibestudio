@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { evaluateAuthority, requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { CapabilityGrantStore } from "./services/capabilityGrantStore.js";
 import { mintUnitClearanceGrants } from "./services/unitClearanceGrants.js";
 import { WebSocket } from "ws";
@@ -19,6 +21,7 @@ import {
   type ServiceContext,
   type ServiceDispatcher,
 } from "@vibestudio/shared/serviceDispatcher";
+import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
@@ -1211,6 +1214,118 @@ describe("RpcServer relay behavior", () => {
     const relayed = JSON.parse(String(init.body)) as { message: { causalParent?: unknown } };
     expect(relayed.message.causalParent).toEqual(causalParent);
   });
+
+  it.each(["request", "stream-request"] as const)(
+    "reuses a task grant for a nested extension-to-DO %s without causal metadata",
+    async (type) => {
+      const targetId = "do:workers/browser-data:BrowserDataDO:workspace";
+      const capability = "workspace-service:browser-data";
+      const grantStore = createTestGrantStore();
+      grantStore.issue({
+        effect: "allow",
+        capability,
+        resource: { kind: "exact", key: targetId },
+        subject: "task:bookmark-review",
+        constraints: { lineageAtConsent: ["none"] },
+        issuedBy: "user:user-1",
+        provenance: "acquisition",
+        scope: "task",
+        createdAt: Date.now(),
+      });
+      const initiator = {
+        ...createVerifiedCaller("eval:bookmarks", "do"),
+        taskAuthority: "task:bookmark-review" as const,
+      };
+      const extensionCode: NonNullable<ServiceContext["caller"]["code"]> = {
+        callerId: "@workspace-extensions/browser-data",
+        callerKind: "extension",
+        repoPath: "extensions/browser-data",
+        effectiveVersion: "ev-browser-data",
+        executionDigest: "b".repeat(64),
+        requested: [{ capability, resource: { kind: "exact", key: targetId } }],
+      };
+      const { server, entityCache } = createServer({
+        capabilityGrantStore: grantStore,
+        resolveExtensionCodeIdentity: () => extensionCode,
+        resolveExtensionInvocation: (_extension, requestId) =>
+          requestId === "live-bookmark-operation"
+            ? {
+                caller: { callerId: initiator.runtime.id, callerKind: "do" },
+                authorizingCaller: initiator,
+                causalParent: null,
+              }
+            : null,
+        resolveWorkspaceDirectAuthority: async () => [
+          {
+            capability,
+            serviceBinding: "consent",
+            methodEffect: {
+              kind: "host-capability",
+              capability,
+              resource: { kind: "receiver-object" },
+            },
+            methodCapability: capability,
+            methodTier: "gated",
+            principals: ["code"],
+            presentation: { domain: "computer", verb: "manage" },
+            title: "Browser data",
+            action: "update bookmarks",
+            declaredBy: "workers/browser-data",
+          },
+        ],
+      });
+      entityCache._onActivate(makeRecord(targetId, "do", { repoPath: "workers/browser-data" }));
+      server.setWorkerdUrl("http://127.0.0.1:1111");
+      server.setWorkerdGatewayToken("gateway-token");
+      const client = createClient("@workspace-extensions/browser-data");
+      client.caller = createVerifiedCaller(client.caller.runtime.id, "extension", extensionCode);
+      registerClient(server, client);
+      const envelopes: RpcEnvelope[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const envelope = JSON.parse(String(init.body)) as RpcEnvelope;
+          envelopes.push(envelope);
+          return new Response(
+            JSON.stringify(
+              responseEnvelopeFor(
+                envelope,
+                { callerId: targetId, callerKind: "do" },
+                { type: "response", requestId: "bookmark-result", result: { id: "bookmark-1" } }
+              )
+            ),
+            { headers: { "content-type": "application/json" } }
+          );
+        })
+      );
+      const request: RpcMessage = {
+        type,
+        fromId: client.caller.runtime.id,
+        requestId: "bookmark-operation",
+        method: "addBookmark",
+        args: [{ title: "Review", url: "https://example.com" }],
+        parentRequestId: "live-bookmark-operation",
+      };
+      await testServer(server).handleRoute(
+        client,
+        targetId,
+        request,
+        undefined,
+        clientEnvelope(client, targetId, request)
+      );
+      await vi.waitFor(() => expect(envelopes).toHaveLength(1));
+      expect(
+        (envelopes[0]!.delivery.caller as AttestedCaller).authorization?.context
+      ).toMatchObject({
+        session: { taskAuthority: "task:bookmark-review" },
+        authorizingOrigin: {
+          kind: "code",
+          principal: "code:extensions/browser-data@ev-browser-data",
+        },
+      });
+      expect(client.caller.taskAuthority).toBeUndefined();
+    }
+  );
 
   it("projects the host-verified account subject into DO caller attribution", async () => {
     const { server, entityCache } = createServer();
@@ -3135,6 +3250,132 @@ describe("RpcServer relay behavior", () => {
     expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
   });
 
+  it("keeps nested task attribution scoped to the active DO invocation", async () => {
+    const { server, entityCache } = createServer();
+    const receiver = "do:workers/bookmarks:BookmarksDO:shared";
+    const capability = "service:test.write";
+    const resourceKey = "bookmark:approved";
+    entityCache._onActivate(
+      makeRecord(receiver, "do", {
+        repoPath: "workers/bookmarks",
+        activeAuthority: {
+          provides: [],
+          requests: [
+            {
+              capability,
+              resource: { kind: "prefix", prefix: "bookmark:" },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+        },
+      })
+    );
+    const grants = createTestGrantStore();
+    grants.issue({
+      effect: "allow",
+      capability,
+      resource: { kind: "exact", key: resourceKey },
+      subject: "task:one",
+      constraints: { lineageAtConsent: ["none"] },
+      issuedBy: "user:alice",
+      provenance: "acquisition",
+      scope: "task",
+      createdAt: 100,
+    });
+    const decisionFor = (caller: ServiceContext["caller"], key = resourceKey) => {
+      const resolved = authorizeVerifiedCaller(caller, {
+        workspaceId: "test-workspace",
+        workspaceMember: true,
+        sessionId: receiver,
+        audience: "service:test",
+        capability,
+        resourceKey: key,
+        grantStore: grants,
+        now: 101,
+      });
+      return evaluateAuthority({
+        context: resolved.context,
+        requirement: requirementForPrincipals(["code"], capability),
+        resourceKey: key,
+        grants: resolved.grants,
+        now: 101,
+      });
+    };
+    const contexts: ServiceContext[] = [];
+    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+      contexts.push(ctx);
+    });
+    const invoke = (nonce?: string, callerId = receiver) => {
+      const request: InternalRpcRequest = {
+        type: "request",
+        requestId: "nested-write",
+        fromId: callerId,
+        method: "test.write",
+        args: [],
+        ...(nonce ? { authorityParentNonce: nonce } : {}),
+      };
+      return testServer(server).handleEnvelopeRequest(
+        callerId,
+        "do",
+        undefined,
+        envelopeFromMessage({
+          selfId: callerId,
+          from: callerId,
+          target: "main",
+          callerKind: "do",
+          message: request,
+        }),
+        request,
+        new AbortController().signal
+      );
+    };
+    const releases = ["one", "two"].map((task) =>
+      testServer(server).beginAuthorityParent(
+        receiver,
+        {
+          nonce: `host-minted-task-${task}`,
+          method: "write",
+          context: {},
+        } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+        { ...createVerifiedCaller(`eval:${task}`, "do"), taskAuthority: `task:${task}` }
+      )
+    );
+    try {
+      await Promise.all([invoke("host-minted-task-one"), invoke("host-minted-task-two")]);
+      expect(contexts.map((ctx) => ctx.caller.taskAuthority)).toEqual(["task:one", "task:two"]);
+      for (const ctx of contexts) {
+        expect(ctx.caller.runtime.id).toBe(receiver);
+        expect(ctx.caller.code?.repoPath).toBe("workers/bookmarks");
+        expect(ctx.caller.executionSession).toBeUndefined();
+      }
+      expect(decisionFor(contexts[0]!.caller)).toMatchObject({ allowed: true });
+      expect(decisionFor(contexts[1]!.caller)).toMatchObject({
+        allowed: false,
+        code: "approval-required",
+      });
+      expect(decisionFor(contexts[0]!.caller, "bookmark:unapproved")).toMatchObject({
+        allowed: false,
+      });
+      const admitted = contexts[0]!.caller;
+      expect(
+        decisionFor({ ...admitted, code: { ...admitted.code!, requested: [] } })
+      ).toMatchObject({ allowed: false });
+      await expect(
+        invoke("host-minted-task-one", "do:workers/other:OtherDO:shared")
+      ).rejects.toThrow(/another runtime/);
+      await invoke();
+      expect(contexts.at(-1)?.caller.taskAuthority).toBeUndefined();
+      expect(decisionFor(contexts.at(-1)!.caller)).toMatchObject({
+        allowed: false,
+        code: "approval-required",
+      });
+    } finally {
+      releases.forEach((release) => release());
+    }
+    await expect(invoke("host-minted-task-one")).rejects.toThrow(/not active/);
+  });
+
   it("retains sealed webhook lineage through the exact publisher invocation and nested channel call", async () => {
     const { server, entityCache } = createServer();
     const publisher = "do:workers/github:GithubDO:publisher";
@@ -4386,6 +4627,68 @@ describe("RpcServer caller identity", () => {
     });
     expect(dispatched[0]).not.toHaveProperty("chainCaller");
   });
+
+  it.each(
+    (["request", "stream-request"] as const).flatMap((type) =>
+      (["task", "execution"] as const).map((binding) => ({ type, binding }))
+    )
+  )(
+    "inherits an extension task without a trajectory for $type calls with $binding membership",
+    async ({ type, binding }) => {
+      const initiator = {
+        ...createVerifiedCaller("eval:review", "do"),
+        ...(binding === "task"
+          ? { taskAuthority: "task:review" as const }
+          : {
+              executionSession: {
+                ...createTestExecutionSession({ runtimeId: "eval:review" }),
+                taskAuthority: "task:review" as const,
+              },
+            }),
+      };
+      const resolveExtensionInvocation = vi.fn((_extension: string, requestId: string) =>
+        requestId === "active-eval-call"
+          ? {
+              caller: { callerId: "eval:review", callerKind: "do" as const },
+              authorizingCaller: initiator,
+              causalParent: null,
+            }
+          : null
+      );
+      const { server } = createServer({ resolveExtensionInvocation });
+      const client = createClient("@workspace-extensions/browser-data");
+      client.caller = createVerifiedCaller(client.caller.runtime.id, "extension");
+      const contexts: ServiceContext[] = [];
+      testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+        contexts.push(ctx);
+        return type === "stream-request" ? new Response("ok") : { ok: true };
+      });
+      await handleRpc(server, client, {
+        type,
+        fromId: client.caller.runtime.id,
+        requestId: "nested-call",
+        method: "test.write",
+        args: [],
+        parentRequestId: "active-eval-call",
+      });
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]?.caller.taskAuthority).toBe("task:review");
+      expect(contexts[0]?.caller.runtime).toEqual(client.caller.runtime);
+      expect(contexts[0]?.caller.executionSession).toBeUndefined();
+      expect(contexts[0]?.causalParent).toBeUndefined();
+      expect(client.caller.taskAuthority).toBeUndefined();
+      await handleRpc(server, client, {
+        type,
+        fromId: client.caller.runtime.id,
+        requestId: "unrelated-call",
+        method: "test.write",
+        args: [],
+        parentRequestId: "expired-eval-call",
+      });
+      expect(contexts).toHaveLength(2);
+      expect(contexts[1]?.caller.taskAuthority).toBeUndefined();
+    }
+  );
 
   it("derives a nested extension VCS call's causal parent from its host invocation", async () => {
     const causalParent = {
