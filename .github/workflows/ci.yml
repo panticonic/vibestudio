@@ -40,6 +40,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Install Linux sandbox runtime
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -126,3 +129,47 @@ jobs:
           cd "$checksum_dir"
           shasum -a 256 ./*.dmg > SHA256SUMS-macos
           test "$(wc -l < SHA256SUMS-macos)" -eq 1
+
+  native-isolation:
+    name: Native workspace isolation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install test dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Build Windows LPAC launcher
+        if: runner.os == 'Windows'
+        working-directory: native/isolation
+        run: cargo build --locked --release
+
+      - name: Build shared command host
+        run: pnpm --filter @vibestudio/process-adapter build
+
+      - name: Check native confinement and workspace sharing
+        run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
