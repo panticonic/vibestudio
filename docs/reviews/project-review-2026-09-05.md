@@ -1,5 +1,9 @@
 # Project and workspace review — 2026-09-05
 
+Follow-up: [low-risk dependency remediation](dependency-remediation-2026-09-05.md)
+reduces the production findings recorded here from 57 to 4 and also covers
+development dependencies. The original audit below remains historical evidence.
+
 This review covered the host checkout and the Base, Google, News, Spectrolite,
 and Examples checkouts in `~/vibestudio-release-work`. It combined source review,
 conventional tests, real workspace composition, headless agent tests, and native
