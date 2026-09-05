@@ -14,7 +14,7 @@ import {
   type NativeDevelopmentToolDriver,
   type NativeDevelopmentToolHandle,
 } from "./nativeDevelopmentExecutor.js";
-import { NativeDevelopmentTerminalRegistry } from "./nativeDevelopmentTerminal.js";
+import { NativeTerminalRegistry } from "./nativeTerminal.js";
 
 const execFileAsync = promisify(execFile);
 const GROUP_SETTLE_TIMEOUT_MS = 5_000;
@@ -38,7 +38,7 @@ export async function createLocalClaudeCodeDevelopmentDriver(input: {
   executorId: string;
   candidatePaths?: readonly string[];
   hostClaudeConfigDirectory?: string;
-  terminalRegistry?: NativeDevelopmentTerminalRegistry;
+  terminalRegistry?: NativeTerminalRegistry;
 }): Promise<NativeDevelopmentToolDriver> {
   if (process.platform !== "linux") {
     return new UnavailableNativeDevelopmentToolDriver(
@@ -56,7 +56,7 @@ export async function createLocalClaudeCodeDevelopmentDriver(input: {
         input.hostClaudeConfigDirectory ??
         process.env["CLAUDE_CONFIG_DIR"] ??
         (process.env["HOME"] ? path.join(process.env["HOME"], ".claude") : null),
-      terminalRegistry: input.terminalRegistry ?? new NativeDevelopmentTerminalRegistry(),
+      terminalRegistry: input.terminalRegistry ?? new NativeTerminalRegistry(),
     });
   } catch (error) {
     if (error instanceof NativeDevelopmentExecutorUnavailableError) {
@@ -77,14 +77,14 @@ export async function createLocalClaudeCodeDevelopmentDriver(input: {
 class LocalClaudeCodeDevelopmentDriver implements NativeDevelopmentToolDriver {
   readonly toolId = "claude-code" as const;
   readonly executorId: string;
-  readonly terminalSurface: NativeDevelopmentTerminalRegistry;
+  readonly terminalSurface: NativeTerminalRegistry;
 
   constructor(
     private readonly config: {
       executorId: string;
       executable: ExactClaudeExecutable;
       hostClaudeConfigDirectory: string | null;
-      terminalRegistry: NativeDevelopmentTerminalRegistry;
+      terminalRegistry: NativeTerminalRegistry;
     }
   ) {
     this.executorId = config.executorId;
@@ -187,7 +187,7 @@ class LocalClaudeCodeHandle implements NativeDevelopmentToolHandle {
       startTime: string;
       identity: NativeDevelopmentProcessIdentity;
       exit: Promise<void>;
-      terminalRegistry: NativeDevelopmentTerminalRegistry;
+      terminalRegistry: NativeTerminalRegistry;
       terminalSessionId: string;
       ownerSessionId: string;
       projectionRoot: string;

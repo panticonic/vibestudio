@@ -1,5 +1,7 @@
 # Unified Panel Handles + Approval-Gated CDP/RPC Access — Implementation Plan
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Panel product contracts remain; CDP, principal and document isolation are implemented and accepted through U4.
+
 > Handoff plan for an implementing agent. Vibestudio is pre-release; prefer clean
 > architecture over backward compatibility. All file:line references are anchors, not
 > exact targets — re-confirm before editing.

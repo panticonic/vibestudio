@@ -1,13 +1,12 @@
 /**
  * fs service method schemas — filesystem operations sandboxed to the caller's
- * context folder for context-bound callers. An unchained extension granted the
- * explicit `host-fs-access` capability is the deliberate unrestricted-host
- * exception. Pure-data wire contract shared by the server registration and
+ * context folder. Unchained extension calls are rejected; selected host-file
+ * acquisition belongs to the native receiver. Pure-data wire contract shared by the server registration and
  * typed clients.
  *
  * Caller-kind argument conventions (handled inside FsService):
  * - panel/app/worker/do callers: context resolved from the EntityCache.
- * - extension callers: chained caller context (or explicit host-fs capability).
+ * - extension callers: chained caller context (required).
  * - server/shell callers: explicit contextId as the first argument.
  *
  * `chown` is deliberately absent. `symlink` is restricted to context-local

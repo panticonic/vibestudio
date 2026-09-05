@@ -3488,6 +3488,58 @@ async function main() {
     );
   }
 
+  // Explicit host terminals are native effects, separately approved from shell
+  // extension execution. The receiver owns their lifetime and launch settings.
+  const { createHostTerminalService } = await import("./services/hostTerminalService.js");
+  const hostOs = await import("node:os");
+  const hostAccount = hostOs.userInfo();
+  const hostTerminalEnvironment: NodeJS.ProcessEnv = {};
+  for (const key of [
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "USER",
+    "LOGNAME",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TMP",
+    "TEMP",
+    "TMPDIR",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+    "SSH_AUTH_SOCK",
+  ]) {
+    if (process.env[key] !== undefined) hostTerminalEnvironment[key] = process.env[key];
+  }
+  hostTerminalEnvironment["HOME"] = hostAccount.homedir;
+  hostTerminalEnvironment["USERPROFILE"] = hostAccount.homedir;
+  const hostTerminalService = createHostTerminalService({
+    workspaceId: entryWorkspaceId,
+    host: hostOs.hostname(),
+    shell:
+      process.platform === "win32"
+        ? path.join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "cmd.exe")
+        : hostAccount.shell || "/bin/sh",
+    args: process.platform === "win32" ? [] : ["-l"],
+    cwd: hostAccount.homedir,
+    environment: hostTerminalEnvironment,
+    recordContextIngestion,
+  });
+  container.registerManaged({
+    name: "hostTerminal",
+    start: async () => hostTerminalService,
+    stop: (service: typeof hostTerminalService) => service.stop(),
+    getServiceDefinition: () => hostTerminalService,
+  });
+
   // ── serverLog service (host log inspection + live tail) ──
   {
     const { createServerLogService } = await import("./services/serverLogService.js");
@@ -5659,6 +5711,11 @@ async function main() {
           gitInterop: ["cloneRepo", "remoteDefaultBranch", "reconcileUpstreams"],
         },
         extensionTransport: {
+          attachProcess(proc, credential) {
+            const rpcServer = rpcServerForGateway;
+            if (!rpcServer) throw new Error("RPC server is not initialized");
+            return rpcServer.attachNativeProcess(proc, credential);
+          },
           call(name, method, args, options) {
             const rpcServer = rpcServerForGateway;
             if (!rpcServer) throw new Error("RPC server is not initialized");

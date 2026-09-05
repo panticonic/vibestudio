@@ -237,6 +237,10 @@ interface ExtensionReadyState {
 }
 
 interface ExtensionTransportLike {
+  attachProcess(
+    proc: import("@vibestudio/process-adapter").ProcessAdapter,
+    credential: string
+  ): () => void;
   call(
     name: string,
     method: string,
@@ -322,7 +326,7 @@ export interface ExtensionHostDeps {
   getContextIdForCaller?: (callerId: string) => string | null;
   getGatewayUrl(): string;
   /**
-   * Bridge from the dispatcher to a connected extension's WebSocket. Required
+   * Bridge from the dispatcher to a launch-bound extension process. Required
    * — `invoke` and `handleExtensionHttpRequest` need this to reach the child.
    */
   extensionTransport: ExtensionTransportLike;
@@ -391,6 +395,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
     });
     this.processes = new ExtensionProcessManager({
+      attachProcess: (proc, credential) =>
+        this.deps.extensionTransport.attachProcess(proc, credential),
       onStatus: (name, status, error) => {
         if (status === "running") {
           this.extensionErrorHistory.delete(name);

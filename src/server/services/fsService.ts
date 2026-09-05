@@ -306,7 +306,6 @@ interface FsCallScope {
   root: string;
   panelId: string;
   contextId?: string;
-  unrestricted: boolean;
   exposeHostPaths: boolean;
 }
 
@@ -463,13 +462,7 @@ async function resolveFsPathInfo(
   userPath: string,
   options: ResolveFsPathOptions = {}
 ): Promise<ResolvedFsPath> {
-  if (!scope.unrestricted) {
-    return sandboxPath(scope.root, userPath, options);
-  }
-  if (typeof userPath !== "string" || userPath.length === 0) {
-    throw new Error("Path must be a non-empty string");
-  }
-  return { path: path.resolve(userPath) };
+  return sandboxPath(scope.root, userPath, options);
 }
 
 async function resolveFsPath(
@@ -490,11 +483,7 @@ async function resolveFsFilePathInfo(
   userPath: string,
   options: ResolveFsPathOptions = {}
 ): Promise<ResolvedFsPath> {
-  return resolveFsPathInfo(
-    scope,
-    scope.unrestricted ? userPath : canonicalizeWorkspaceFilePath(userPath),
-    options
-  );
+  return resolveFsPathInfo(scope, canonicalizeWorkspaceFilePath(userPath), options);
 }
 
 async function resolveFsFilePath(
@@ -525,7 +514,6 @@ async function canonicalContextRelativePath(
     : await resolveFsFilePath(scope, userPath, {
         leafMode: preserveLeaf ? "entry" : "follow",
       });
-  if (scope.unrestricted) return resolved;
 
   const realRoot = await fs.realpath(scope.root);
   let probe = preserveLeaf && resolved !== scope.root ? path.dirname(resolved) : resolved;
@@ -564,7 +552,7 @@ async function isLeafSymlink(scope: FsCallScope, userPath: string): Promise<bool
 }
 
 async function ensureDirectWriteParent(scope: FsCallScope, absolutePath: string): Promise<void> {
-  if (scope.unrestricted || absolutePath === scope.root) return;
+  if (absolutePath === scope.root) return;
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
 }
 
@@ -957,7 +945,6 @@ export interface FsCallTelemetry {
 
 export interface FsServiceOptions {
   contextAuthority: FsContextAuthority;
-  hostFsCapableExtensions?: Iterable<string>;
   /** Monotone latch update that must settle before managed read bytes return. */
   recordContextIngestion?: (
     ctx: ServiceContext,
@@ -1727,8 +1714,6 @@ async function grepWithRipgrep(
 export class FsService {
   private readonly contextFolderManager: ContextFolderManager;
   private readonly entityCache: EntityCache;
-  /** Extensions granted explicit unrestricted host-fs access (Phase 3 capability). */
-  private readonly hostFsCapableExtensions?: ReadonlySet<string>;
   /** Explicit semantic-workspace or scratch-only construction authority. */
   private readonly contextAuthority: FsContextAuthority;
   private readonly recordContextIngestion?: FsServiceOptions["recordContextIngestion"];
@@ -1747,9 +1732,6 @@ export class FsService {
   ) {
     this.contextFolderManager = contextFolderManager;
     this.entityCache = entityCache;
-    this.hostFsCapableExtensions = opts.hostFsCapableExtensions
-      ? new Set(opts.hostFsCapableExtensions)
-      : undefined;
     this.contextAuthority = opts.contextAuthority;
     this.recordContextIngestion = opts.recordContextIngestion;
     this.recordContextIngestionBatch = opts.recordContextIngestionBatch;
@@ -1769,7 +1751,7 @@ export class FsService {
   }
 
   private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
-    if (scope.unrestricted || !scope.contextId) return null;
+    if (!scope.contextId) return null;
     return this.contextAuthority.kind === "semantic" ? this.contextAuthority.bridge : null;
   }
 
@@ -1877,7 +1859,7 @@ export class FsService {
   }
 
   private assertScratchOnlyCall(scope: FsCallScope, method: string, args: unknown[]): void {
-    if (scope.unrestricted || !scope.contextId || this.contextAuthority.kind !== "scratch-only") {
+    if (!scope.contextId || this.contextAuthority.kind !== "scratch-only") {
       return;
     }
     const managedPath = authorityPathsForCall(method, args).find(requiresSemanticAuthority);
@@ -1920,7 +1902,7 @@ export class FsService {
    * - panel/app/worker/DO callers: look up contextId from EntityCache
    * - agent callers: use the host-verified connection binding
    * - extension callers inside an invocation: use the chained caller context
-   * - extension callers outside an invocation: unrestricted host fs
+   * - extension callers outside an invocation: rejected; host acquisition is a separate service
    * - server/shell callers: contextId is the first arg (shifted from
    *   the args array). Shell callers must name an existing
    *   context; server callers may create one on the fly.
@@ -1970,26 +1952,12 @@ export class FsService {
           root,
           panelId,
           contextId,
-          unrestricted: false,
           exposeHostPaths: true,
         };
       }
-      // Phase 3: an extension acting on its own behalf (no chainCaller) used to
-      // SILENTLY get unrestricted host filesystem access — conflating two trust
-      // models and escalating privilege without any signal. Host-fs authority is
-      // now an explicit, named capability an extension must hold; otherwise the
-      // call fails loud rather than reading `/`.
-      if (this.extensionHasHostFsCapability(ctx.caller.runtime.id)) {
-        return {
-          root: "",
-          panelId: `extension:${ctx.caller.runtime.id}`,
-          unrestricted: true,
-          exposeHostPaths: true,
-        };
-      }
-      throw new Error(
-        `Extension ${ctx.caller.runtime.id} attempted a filesystem call outside an ` +
-          `on-behalf-of context and without the host-fs-access capability`
+      throw codedError(
+        "EACCES",
+        `Extension ${ctx.caller.runtime.id} filesystem calls require an on-behalf-of context`
       );
     } else {
       // Server / shell callers pass an explicit contextId as the
@@ -2018,21 +1986,8 @@ export class FsService {
       root,
       panelId,
       contextId,
-      unrestricted: false,
       exposeHostPaths: false,
     };
-  }
-
-  /**
-   * Whether an extension holds the explicit `host-fs-access` capability that
-   * grants unrestricted host filesystem access when acting on its own behalf
-   * (no on-behalf-of context). This is a *distinct* grant from native-code
-   * install approval — being native does not imply host-fs authority. The
-   * allowlist is injected via deps (`hostFsCapableExtensions`); empty by default,
-   * so the privileged path is opt-in rather than a silent fallback.
-   */
-  private extensionHasHostFsCapability(extensionId: string): boolean {
-    return this.hostFsCapableExtensions?.has(extensionId) ?? false;
   }
 
   // =========================================================================
@@ -2085,7 +2040,6 @@ export class FsService {
   ): Promise<ContextIngestionDescriptor[]> {
     if (
       !bridge ||
-      scope.unrestricted ||
       !scope.contextId ||
       !ctx.caller.agentBinding ||
       !this.recordContextIngestion ||
@@ -2153,7 +2107,7 @@ export class FsService {
    * Intercept managed single-file reads and mutating fs calls from a sandboxed
    * context caller. Reads resolve the exact working state and return its
    * content-addressed bytes; mutations advance semantic state before materialization.
-   * Scratch/ignored paths and host-fs/unrestricted callers deliberately retain
+   * Scratch/ignored paths deliberately retain
    * the direct-disk implementation.
    */
   private async maybeRouteToVcs(
@@ -2163,7 +2117,7 @@ export class FsService {
     method: string,
     args: unknown[]
   ): Promise<{ handled: boolean; result?: unknown }> {
-    if (!bridge || scope.unrestricted || !scope.contextId) return { handled: false };
+    if (!bridge || !scope.contextId) return { handled: false };
     const contextId = scope.contextId;
     const commandId = `fs:${ctx.idempotencyKey ?? ctx.requestId ?? randomBytes(16).toString("hex")}:${method}`;
     const causalParent = ctx.causalParent ?? null;
@@ -2809,7 +2763,7 @@ export class FsService {
     method: string,
     args: unknown[]
   ): Promise<void> {
-    if (!scope.contextId || scope.unrestricted) return;
+    if (!scope.contextId) return;
     const p = readScopePath(method, args);
     if (p === null) return;
     const fileOrSearchMethod = method !== "readdir" && method !== "glob";
@@ -2867,7 +2821,7 @@ export class FsService {
     // narrowest read intent while the authority still publishes one complete
     // context projection.
     if (method === "ensureMaterialized") {
-      if (scope.contextId && !scope.unrestricted && bridge) {
+      if (scope.contextId && bridge) {
         const arg = args[0];
         let repos: RepoPath[] | "all";
         if (arg === "all") {
@@ -2992,9 +2946,7 @@ export class FsService {
           bridge,
           scope,
           ctx,
-          result.matches.map((match) =>
-            scope.unrestricted ? match.file : path.join(scope.root, match.file.replace(/^\/+/, ""))
-          )
+          result.matches.map((match) => path.join(scope.root, match.file.replace(/^\/+/, "")))
         );
         await this.recordProjectedIngestion(ctx, "fs-grep", ingestion);
         return result;
@@ -3011,9 +2963,7 @@ export class FsService {
           bridge,
           scope,
           ctx,
-          result.files.map((file) =>
-            scope.unrestricted ? file : path.join(scope.root, file.replace(/^\/+/, ""))
-          )
+          result.files.map((file) => path.join(scope.root, file.replace(/^\/+/, "")))
         );
         await this.recordProjectedIngestion(ctx, "fs-glob", ingestion);
         return result;
@@ -3025,7 +2975,7 @@ export class FsService {
         const opts = args[1] as { recursive?: boolean } | undefined;
         const result = await fs.mkdir(p, opts);
         // Return first-created path relative to context root (Node API contract)
-        return result && !scope.unrestricted ? "/" + path.relative(scope.root, result) : result;
+        return result ? "/" + path.relative(scope.root, result) : result;
       }
 
       case "rmdir": {
@@ -3096,7 +3046,7 @@ export class FsService {
       case "realpath": {
         const p = await resolveFsFilePath(scope, args[0] as string);
         const real = await fs.realpath(p);
-        if (scope.unrestricted || scope.exposeHostPaths) return real;
+        if (scope.exposeHostPaths) return real;
         // Return relative to root (panel sees paths relative to context root)
         if (!real.startsWith(scope.root + path.sep) && real !== scope.root) {
           throw new Error("Realpath escapes sandbox");
@@ -3114,7 +3064,6 @@ export class FsService {
       case "readlink": {
         const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
         const target = await fs.readlink(p);
-        if (scope.unrestricted) return target;
         // If the target is absolute, relativize to prevent leaking host paths
         if (path.isAbsolute(target)) {
           const resolved = path.resolve(path.dirname(p), target);
@@ -3131,11 +3080,6 @@ export class FsService {
         const linkPath = args[1] as string;
         const type = args[2] as "file" | "dir" | "junction" | undefined;
         const p = await resolveFsPath(scope, linkPath, { leafMode: "entry" });
-        if (scope.unrestricted) {
-          await ensureDirectWriteParent(scope, p);
-          await fs.symlink(target, p, type);
-          return;
-        }
         const wsRel = await canonicalContextRelativePath(scope, linkPath, { preserveLeaf: true });
         const sourceRoot = wsRel.split("/", 1)[0] ?? "";
         const isWorkspaceSourcePath = bridge
@@ -3272,7 +3216,6 @@ export class FsService {
 
   /** Map an absolute path back to the caller-visible form. */
   private toDisplayPath(scope: FsCallScope, absolutePath: string): string {
-    if (scope.unrestricted) return absolutePath;
     if (absolutePath === scope.root) return "/";
     return "/" + path.relative(scope.root, absolutePath).split(path.sep).join("/");
   }

@@ -1,3 +1,4 @@
+import type { NativeTerminalSnapshot } from "./nativeTerminal.js";
 import {
   developmentNativeMethods,
   type nativeDevelopmentSessionReceiptSchema,
@@ -24,7 +25,6 @@ import type {
   NativeDevelopmentCheckpointReceipt,
   NativeDevelopmentSemanticIngress,
   NativeDevelopmentSessionReceipt,
-  NativeDevelopmentTerminalSnapshot,
   NativeDevelopmentToolId,
 } from "./nativeDevelopmentExecutor.js";
 import type { TemplateRepositoryExchangeExecutor } from "./templateRepositoryExchangeExecutor.js";
@@ -63,8 +63,8 @@ export interface ExactNativeDevelopmentController {
     sessionId: string;
     after?: number;
     maxBytes?: number;
-  }): Promise<NativeDevelopmentTerminalSnapshot>;
-  writeTerminal(input: { sessionId: string; writeId: string; data: string }): Promise<void>;
+  }): Promise<NativeTerminalSnapshot>;
+  writeTerminal(input: { sessionId: string; sequence: number; data: string }): Promise<void>;
   resizeTerminal(input: { sessionId: string; columns: number; rows: number }): Promise<void>;
 }
 

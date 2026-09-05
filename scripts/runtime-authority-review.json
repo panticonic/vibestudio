@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:9275396b343742d054f54e2de2bb2df1d40c053f27639debe5297892b0896324",
+  "censusDigest": "sha256:8cdfe5db5df7b9797882964606fc4912784ac1d0992a402f5f3a73a9869c1239",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -573,6 +573,30 @@
     "host:browserEnvironment.revealDownload": {
       "review": "public-download-capability-admission",
       "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
+    },
+    "host:extensions.streamingMethods": {
+      "review": "admitted-session-extension-metadata",
+      "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
+    },
+    "host:hostTerminal.open": {
+      "review": "fresh-critical-full-host-terminal",
+      "change": "The open method prepares a critical exact-host/workspace leaf before launching a host-selected shell. Every launch consumes fresh invocation-bound critical confirmation; standing grants cannot substitute. Prepared ownership is sealed to the verified user, code and exact live connection and rechecked before spawn. Full host-user authority is an explicit user-approved exception to workspace confinement, without administrator elevation."
+    },
+    "host:hostTerminal.read": {
+      "review": "connection-owned-host-terminal-control",
+      "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+    },
+    "host:hostTerminal.write": {
+      "review": "connection-owned-host-terminal-control",
+      "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+    },
+    "host:hostTerminal.resize": {
+      "review": "connection-owned-host-terminal-control",
+      "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+    },
+    "host:hostTerminal.close": {
+      "review": "connection-owned-host-terminal-control",
+      "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
     }
   }
 }

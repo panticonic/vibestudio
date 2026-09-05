@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import type { ProcessAdapter } from "@vibestudio/process-adapter";
 import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -553,6 +555,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
 
     const client = createClient();
+    registerClient(server, client);
     const sends: Array<{ envelope: RpcEnvelope; frame: StreamFrame }> = [];
     const sendStreamFrame = vi.fn(
       (envelope: RpcEnvelope, frame: StreamFrame): Promise<void> | false => {
@@ -585,6 +588,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
 
     const client = createClient();
+    registerClient(server, client);
     await handleRpc(server, client, streamRequest("sr-1"));
 
     const frames = sentStreamFrames(client);
@@ -609,6 +613,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     );
 
     const client = createClient();
+    registerClient(server, client);
     const gates: Array<() => void> = [];
     const sendStreamFrame = vi.fn((): Promise<void> => {
       return new Promise<void>((resolve) => gates.push(resolve));
@@ -650,6 +655,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     dispatcher.dispatch.mockResolvedValue(new Response(body, { status: 200 }));
 
     const client = createClient();
+    registerClient(server, client);
     const done = handleRpc(server, client, streamRequest("sr-2"));
     await flushAsync();
     // HEAD + first chunk are out; the read loop is now parked on a stalled producer.
@@ -690,7 +696,9 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
     // generation, not the reusable route label.
     const oldClient = createClientWithConnection("panel:nav-a", "conn-stable");
     const replacement = createClientWithConnection("panel:nav-a", "conn-stable");
+    registerClient(server, oldClient);
     const oldDone = handleRpc(server, oldClient, streamRequest("old-stream"));
+    registerClient(server, replacement);
     const replacementDone = handleRpc(server, replacement, streamRequest("new-stream"));
     await flushAsync();
 
@@ -4105,6 +4113,7 @@ describe("RpcServer caller identity", () => {
       userId: "user:one",
     };
     const client = createClient();
+    registerClient(server, client);
     client.caller = createVerifiedCaller("do:agents:Agent:one", "do", null, binding);
     const causalParent = {
       kind: "trajectory-invocation" as const,
@@ -4492,6 +4501,7 @@ describe("RpcServer caller identity", () => {
   it("denies worker callers for shell-only methods", async () => {
     const { server } = createServer();
     const client = createClient("worker-1");
+    registerClient(server, client);
     client.caller = createVerifiedCaller("worker-1", "worker");
     testServer(server).dispatcher.dispatch.mockRejectedValue(
       new Error("Service 'internal' is not accessible to worker callers")
@@ -4508,6 +4518,7 @@ describe("RpcServer caller identity", () => {
   it("dispatches server callers using their own server identity", async () => {
     const { server } = createServer();
     const client = createClient("server");
+    registerClient(server, client);
     client.caller = createVerifiedCaller("server", "server");
     const dispatched: unknown[] = [];
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
@@ -4556,6 +4567,7 @@ describe("RpcServer caller identity", () => {
       })),
     });
     const client = createClient("@workspace-extensions/tools");
+    registerClient(server, client);
     client.caller = createVerifiedCaller("@workspace-extensions/tools", "extension");
     const dispatched: unknown[] = [];
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["extension"] });
@@ -4601,6 +4613,7 @@ describe("RpcServer caller identity", () => {
       })),
     });
     const client = createClient("@workspace-extensions/browser-data");
+    registerClient(server, client);
     client.caller = createVerifiedCaller("@workspace-extensions/browser-data", "extension");
     const dispatched: unknown[] = [];
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["extension"] });
@@ -4657,6 +4670,7 @@ describe("RpcServer caller identity", () => {
       );
       const { server } = createServer({ resolveExtensionInvocation });
       const client = createClient("@workspace-extensions/browser-data");
+      registerClient(server, client);
       client.caller = createVerifiedCaller(client.caller.runtime.id, "extension");
       const contexts: ServiceContext[] = [];
       testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
@@ -4718,6 +4732,7 @@ describe("RpcServer caller identity", () => {
       resolveExactCausalInvocation,
     });
     const client = createClient("@workspace-extensions/tools");
+    registerClient(server, client);
     client.caller = createVerifiedCaller("@workspace-extensions/tools", "extension");
     const dispatched: unknown[] = [];
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["extension"] });
@@ -4751,6 +4766,7 @@ describe("RpcServer caller identity", () => {
   it("propagates an authenticated WebSocket unary cancellation to the service context", async () => {
     const { server } = createServer();
     const client = createClient("panel:cancel-source");
+    registerClient(server, client);
     client.caller = createVerifiedCaller("panel:cancel-source", "panel");
     const dispatcher = testServer(server).dispatcher;
     dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
@@ -5206,6 +5222,7 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     });
 
     const client = createClient();
+    registerClient(server, client);
     const body = bodyStream("upload");
     (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(() =>
       Promise.resolve()
@@ -5266,6 +5283,7 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     dispatcher.getMethodSchema = vi.fn().mockReturnValue(undefined);
 
     const client = createClient();
+    registerClient(server, client);
     const body = bodyStream("proxied-upload");
     (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(() =>
       Promise.resolve()
@@ -5291,6 +5309,7 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
     });
 
     const client = createClient();
+    registerClient(server, client);
     const sends: StreamFrame[] = [];
     (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(
       (_envelope: RpcEnvelope, frame: StreamFrame) => {
@@ -5326,7 +5345,78 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
       return new Response("ok", { status: 200 });
     });
     const client = createClient();
+    registerClient(server, client);
     await handleRpc(server, client, streamRequest("sr-ws", "gateway.fetch", [{ path: "/x" }]));
     expect(seenBody).toBeUndefined();
+  });
+});
+
+describe("RpcServer native process sessions", () => {
+  function processFixture() {
+    const events = new EventEmitter();
+    const proc = Object.assign(events, {
+      postMessage: vi.fn(),
+      kill: vi.fn(() => true),
+      stdout: null,
+      stderr: null,
+      pid: 123,
+    }) as EventEmitter & ProcessAdapter & { postMessage: ReturnType<typeof vi.fn> };
+    return proc;
+  }
+
+  it("binds authentication to the launch and revokes the session even if the process ignores shutdown", async () => {
+    const { server, tokenManager } = createServer();
+    const callerId = "@workspace-extensions/shell";
+    const token = tokenManager.ensureToken(callerId, "extension");
+    const proc = processFixture();
+    try {
+      server.attachNativeProcess(proc, token);
+      proc.emit(
+        "message",
+        JSON.stringify({
+          type: "ws:auth",
+          token,
+          contractVersion: RPC_CONTRACT_VERSION,
+          connectionId: "extension:shell",
+        })
+      );
+      await vi.waitFor(() => expect(server.getConnectionForPrincipal(callerId)).not.toBeNull());
+      expect(
+        proc.postMessage.mock.calls.some(
+          ([raw]) => typeof raw === "string" && JSON.parse(raw).success === true
+        )
+      ).toBe(true);
+      tokenManager.revokeToken(callerId);
+      await vi.waitFor(() => expect(server.getConnectionForPrincipal(callerId)).toBeNull());
+      expect(proc.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "shutdown" }));
+      expect(proc.listenerCount("message")).toBe(0);
+      expect(proc.kill).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects a valid credential belonging to a different launch", async () => {
+    const { server, tokenManager } = createServer();
+    const expected = tokenManager.ensureToken("@workspace-extensions/shell", "extension");
+    const other = tokenManager.ensureToken("@workspace-extensions/other", "extension");
+    const proc = processFixture();
+    try {
+      server.attachNativeProcess(proc, expected);
+      proc.emit(
+        "message",
+        JSON.stringify({ type: "ws:auth", token: other, contractVersion: RPC_CONTRACT_VERSION })
+      );
+      expect(server.getConnectionForPrincipal("@workspace-extensions/other")).toBeNull();
+      expect(proc.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "shutdown",
+          reason: "RPC process credential does not match launch",
+        })
+      );
+      expect(proc.listenerCount("message")).toBe(0);
+    } finally {
+      await server.stop();
+    }
   });
 });

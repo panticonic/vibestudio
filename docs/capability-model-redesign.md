@@ -1,5 +1,7 @@
 # Capability Model Redesign
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Authority vocabulary and receiver requirements remain subordinate detail. Historical trusted-workspace assumptions cannot waive machine, cross-workspace or website isolation.
+
 Status: agreed direction (2026-07-21, revised same day after adversarial review).
 Supersedes the authority model as implemented on `better-provenance`; reconciled against
 the runtime-foundation decisions summarized in this document's §5 (R1–R4) and system-agent spec set

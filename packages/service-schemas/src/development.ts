@@ -624,8 +624,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Destroy a development workspace",
       action: "permanently destroy a development workspace",
-      description:
-        "Permanently remove a development workspace and all its files.",
+      description: "Permanently remove a development workspace and all its files.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -650,8 +649,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Retry development-workspace cleanup",
       action: "retry permanent cleanup of a development workspace",
-      description:
-        "Try again to clean up a development workspace that failed to remove.",
+      description: "Try again to clean up a development workspace that failed to remove.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -738,8 +736,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Review template changes",
       action: "review incoming or outgoing template changes",
-      description:
-        "Compare template changes to see what would be added, updated, or removed.",
+      description: "Compare template changes to see what would be added, updated, or removed.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -770,8 +767,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Apply template changes",
       action: "apply reviewed template changes",
-      description:
-        "Apply the template changes you just reviewed.",
+      description: "Apply the template changes you just reviewed.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -988,8 +984,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Retry a development build",
       action: "retry a reviewed build of the exact workspace source",
-      description:
-        "Run the same reviewed build again after a previous attempt failed.",
+      description: "Run the same reviewed build again after a previous attempt failed.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -1034,8 +1029,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Abandon development-build recovery",
       action: "permanently abandon recovery of a development build",
-      description:
-        "Give up on recovering a failed development build and clean up what's left.",
+      description: "Give up on recovering a failed development build and clean up what's left.",
       group: "runtime",
       authorityCategory: {
         domain: "computer",
@@ -1059,8 +1053,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Abandon development-workspace recovery",
       action: "permanently abandon recovery of a development workspace",
-      description:
-        "Give up on recovering a broken development workspace and clean up what's left.",
+      description: "Give up on recovering a broken development workspace and clean up what's left.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -1138,7 +1131,7 @@ export const developmentMethods = defineReceiverServiceMethods({
           maxBytes: z
             .number()
             .int()
-            .positive()
+            .min(4)
             .max(512 * 1024)
             .optional(),
         })
@@ -1174,7 +1167,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       z
         .object({
           sessionId: nonEmpty,
-          writeId: nonEmpty.max(128),
+          sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
           data: z.string().max(64 * 1024),
         })
         .strict(),

@@ -48,7 +48,6 @@
       "@vibestudio/env-paths": ["./packages/env-paths/src/index.ts"],
       "@vibestudio/extension": ["./packages/extension/src/index.ts"],
       "@vibestudio/extension-host": ["./packages/extension-host/src/index.ts"],
-      "@vibestudio/extension-host/child-runtime": ["./packages/extension-host/src/childRuntime.ts"],
       "@vibestudio/git": ["./packages/git/src/index.ts"],
       "@vibestudio/git/formatting": ["./packages/git/src/formatting.ts"],
       "@vibestudio/module-imports": ["./packages/module-imports/src/index.ts"],

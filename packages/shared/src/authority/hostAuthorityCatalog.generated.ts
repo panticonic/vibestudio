@@ -3363,11 +3363,11 @@ export const HOST_AUTHORITY_METHODS = {
   "extensions.streamingMethods": {
     tier: {
       tier: "open",
-      session: "codeOnly",
+      session: "family",
       residency: "transport",
       family: "extensions.control",
       rationale:
-        "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+        "Streaming-method discovery is required by the extension invocation router and shares its admitted execution-session scope; it returns manifest metadata and grants no invocation authority",
     },
     capability: null,
     presentation: null,
@@ -3834,6 +3834,76 @@ export const HOST_AUTHORITY_METHODS = {
       family: "hostPerformance.read",
       rationale:
         "Bounded read-only host and workerd resource counters; no process control or host filesystem access.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "hostTerminal.close": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "host-terminal.session",
+      rationale:
+        "Controls only a receiver-owned terminal bound to the approved caller and connection",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "hostTerminal.open": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "host-terminal.open",
+      rationale:
+        "Opening always prepares a fresh critical host-terminal authorization before spawning",
+    },
+    capability: "host-terminal.open",
+    presentation: {
+      title: "Open a terminal with full host access",
+      action: "run commands with full host access",
+      description:
+        "Commands can read and change your host files, credentials, processes, network and other workspaces. Closing the terminal cannot undo those effects or guarantee descendant termination.",
+      group: "host",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
+  },
+  "hostTerminal.read": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "host-terminal.session",
+      rationale:
+        "Controls only a receiver-owned terminal bound to the approved caller and connection",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "hostTerminal.resize": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "host-terminal.session",
+      rationale:
+        "Controls only a receiver-owned terminal bound to the approved caller and connection",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "hostTerminal.write": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "host-terminal.session",
+      rationale:
+        "Controls only a receiver-owned terminal bound to the approved caller and connection",
     },
     capability: null,
     presentation: null,
@@ -8283,6 +8353,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "credentials.proxyGitHttp": ["credential.use"],
   "credentials.resolveCredential": ["credential.use"],
   "externalOpen.openExternal": ["external.open"],
+  "hostTerminal.open": ["host-terminal.open"],
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.evaluate": ["context.boundary"],
   "panelCdp.getCdpEndpoint": ["context.boundary"],
@@ -8444,6 +8515,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "governance.read": {
     domain: "safety",
     verb: "see",
+  },
+  "host-terminal.open": {
+    domain: "computer",
+    verb: "act",
   },
   "native.mobile.execute": {
     domain: "people",
@@ -9008,6 +9083,17 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "safety",
       verb: "see",
+    },
+  },
+  "host-terminal.open": {
+    title: "Open a terminal with full host access",
+    action: "run commands with full host access",
+    description:
+      "Commands can read and change your host files, credentials, processes, network and other workspaces. Closing the terminal cannot undo those effects or guarantee descendant termination.",
+    group: "host",
+    authorityCategory: {
+      domain: "computer",
+      verb: "act",
     },
   },
   "native.mobile.execute": {

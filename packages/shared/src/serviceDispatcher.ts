@@ -370,6 +370,9 @@ export type ServiceContext = {
   /** Cancellation owned by the authenticated inbound RPC request. Service
    * handlers pass this through to nested work rather than inventing deadlines. */
   signal?: AbortSignal;
+  /** Host-owned lifetime of this exact admitted connection. Unlike a reusable
+   * connectionId, the signal cannot survive transport replacement/reconnect. */
+  connectionSignal?: AbortSignal;
   /**
    * Lifecycle policy selected by trusted boundary code. Connection-holding
    * callers and non-replayable streams wait at the canonical acquisition

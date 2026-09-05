@@ -122,23 +122,23 @@ describe("createLocalClaudeCodeDevelopmentDriver", () => {
         const terminalSessionId = handle.identity.terminalSessionId!;
         driver.terminalSurface!.write({
           terminalSessionId,
-          writeId: "write-1",
+          sequence: 1,
           data: "hello\\n",
         });
         expect(() =>
           driver.terminalSurface!.write({
             terminalSessionId,
-            writeId: "write-1",
+            sequence: 1,
             data: "hello\\n",
           })
         ).not.toThrow();
         expect(() =>
           driver.terminalSurface!.write({
             terminalSessionId,
-            writeId: "write-1",
+            sequence: 1,
             data: "different\\n",
           })
-        ).toThrow("writeId was reused");
+        ).toThrow("sequence was reused");
         const terminalText = await waitForTerminalText(
           driver.terminalSurface!,
           terminalSessionId,
@@ -157,7 +157,7 @@ describe("createLocalClaudeCodeDevelopmentDriver", () => {
         await handle.retire();
         retired = true;
         expect(() => driver.terminalSurface!.read({ terminalSessionId })).toThrow(
-          "Unknown development terminal"
+          "Unknown native terminal"
         );
       } finally {
         if (handle && !retired) await handle.retire().catch(() => undefined);

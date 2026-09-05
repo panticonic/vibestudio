@@ -1,5 +1,7 @@
 # WP9 — Trust Model Cleanup & Role Attenuation (implementation spec)
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Role/membership requirements remain; native and cross-workspace access must satisfy the canonical isolation invariants.
+
 Companion to `docs/multi-user-workspaces-plan.md` (§5 the reworked trust model), building on
 WP0 (`UserRole`, resolved live per §3.7), WP1 (hub pairing/routing director), WP2 (membership).
 Replaces the current binary "paired = fully trusted" + machine-admin-token-as-root with

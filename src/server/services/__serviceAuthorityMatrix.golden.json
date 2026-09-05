@@ -4927,10 +4927,10 @@
         },
         "tier": {
           "tier": "open",
-          "session": "codeOnly",
+          "session": "family",
           "residency": "transport",
           "family": "extensions.control",
-          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing"
+          "rationale": "Streaming-method discovery is required by the extension invocation router and shares its admitted execution-session scope; it returns manifest metadata and grants no invocation authority"
         },
         "capability": null,
         "presentation": null
@@ -5757,6 +5757,231 @@
           "residency": "observability",
           "family": "hostPerformance.read",
           "rationale": "Bounded read-only host and workerd resource counters; no process control or host filesystem access."
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
+  "hostTerminal": {
+    "service": {
+      "principals": [
+        "user",
+        "code"
+      ]
+    },
+    "methods": {
+      "close": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "host-terminal.session",
+          "rationale": "Controls only a receiver-owned terminal bound to the approved caller and connection"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "open": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "host-terminal.open"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "host-terminal.open"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "host-terminal.open"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "host-terminal.open"
+          },
+          "prepared": {
+            "resolver": "hostTerminal.open",
+            "leaves": [
+              {
+                "capability": "host-terminal.open",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "host-terminal.open"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "host-terminal.open"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "host-terminal.open"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "critical"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "admin",
+          "approval": [
+            {
+              "capability": "host-terminal.open",
+              "tier": "critical",
+              "operation": {
+                "kind": "unknown",
+                "verb": "Open host terminal"
+              },
+              "grantScopes": [
+                "once"
+              ],
+              "severity": "severe",
+              "reason": "Arbitrary commands execute outside workspace confinement with the host user's authority."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "host-terminal.open",
+          "rationale": "Opening always prepares a fresh critical host-terminal authorization before spawning"
+        },
+        "capability": "host-terminal.open",
+        "presentation": {
+          "title": "Open a terminal with full host access",
+          "action": "run commands with full host access",
+          "description": "Commands can read and change your host files, credentials, processes, network and other workspaces. Closing the terminal cannot undo those effects or guarantee descendant termination.",
+          "group": "host",
+          "authorityCategory": {
+            "domain": "computer",
+            "verb": "act"
+          }
+        }
+      },
+      "read": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "host-terminal.session",
+          "rationale": "Controls only a receiver-owned terminal bound to the approved caller and connection"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "resize": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "host-terminal.session",
+          "rationale": "Controls only a receiver-owned terminal bound to the approved caller and connection"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "write": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "host-terminal.session",
+          "rationale": "Controls only a receiver-owned terminal bound to the approved caller and connection"
         },
         "capability": null,
         "presentation": null

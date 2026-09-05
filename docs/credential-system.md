@@ -1,5 +1,7 @@
 # Credential System
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Credential product contracts remain. Protected store placement, scoped use and native-login exchange are governed by U3/U5.
+
 Vibestudio credentials are URL-bound. Userland owns provider-specific setup and
 OAuth semantics; the host stores encrypted credential material and injects it
 only through host-mediated egress when the request URL matches an approved

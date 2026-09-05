@@ -231,8 +231,7 @@ export const developmentNativeMethods = defineServiceMethods({
     presentation: {
       title: "Launch a native development tool",
       action: "launch a native development tool",
-      description:
-        "Run a reviewed development tool in a private workspace copy.",
+      description: "Run a reviewed development tool in a private workspace copy.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -338,8 +337,7 @@ export const developmentNativeMethods = defineServiceMethods({
     presentation: {
       title: "Retire a native development tool",
       action: "retire a native development tool",
-      description:
-        "Stop a running development tool and clean up its private files.",
+      description: "Stop a running development tool and clean up its private files.",
       group: "runtime",
       authorityCategory: { domain: "computer", verb: "manage" },
     },
@@ -373,7 +371,7 @@ export const developmentNativeMethods = defineServiceMethods({
           maxBytes: z
             .number()
             .int()
-            .positive()
+            .min(4)
             .max(512 * 1024)
             .optional(),
         })
@@ -396,7 +394,7 @@ export const developmentNativeMethods = defineServiceMethods({
       z
         .object({
           sessionId: nonEmpty,
-          writeId: nonEmpty.max(128),
+          sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
           data: z.string().max(64 * 1024),
         })
         .strict(),
@@ -458,8 +456,7 @@ export const developmentNativeMethods = defineServiceMethods({
     presentation: {
       title: "Inspect template changes",
       action: "inspect incoming or outgoing template changes",
-      description:
-        "Read and compare template files to prepare a list of changes.",
+      description: "Read and compare template files to prepare a list of changes.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -493,8 +490,7 @@ export const developmentNativeMethods = defineServiceMethods({
     presentation: {
       title: "Apply template changes",
       action: "apply reviewed template changes",
-      description:
-        "Write the reviewed template changes to your workspace or export them.",
+      description: "Write the reviewed template changes to your workspace or export them.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -532,8 +528,7 @@ export const developmentNativeMethods = defineServiceMethods({
     presentation: {
       title: "Build exact workspace source",
       action: "build exact workspace source",
-      description:
-        "Install dependencies and run the reviewed build for your workspace changes.",
+      description: "Install dependencies and run the reviewed build for your workspace changes.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -642,8 +637,7 @@ export const developmentNativeMethods = defineServiceMethods({
     presentation: {
       title: "Retire a development build",
       action: "retire a development build",
-      description:
-        "Clean up a development build's private files after the build is finished.",
+      description: "Clean up a development build's private files after the build is finished.",
       group: "runtime",
       authorityCategory: { domain: "computer", verb: "manage" },
     },

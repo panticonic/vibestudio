@@ -1,3 +1,4 @@
+import type { NativeTerminalSnapshot, NativeTerminalSurface } from "./nativeTerminal.js";
 import { createHash } from "node:crypto";
 import fsSync, { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -68,24 +69,6 @@ export interface NativeDevelopmentProcessIdentity {
   terminalSessionId?: string;
 }
 
-export interface NativeDevelopmentTerminalSnapshot {
-  terminalSessionId: string;
-  cursor: number;
-  text: string;
-  alive: boolean;
-  exit: { code: number; signal?: number } | null;
-}
-
-export interface NativeDevelopmentTerminalSurface {
-  read(input: {
-    terminalSessionId: string;
-    after?: number;
-    maxBytes?: number;
-  }): NativeDevelopmentTerminalSnapshot;
-  write(input: { terminalSessionId: string; writeId: string; data: string }): void;
-  resize(input: { terminalSessionId: string; columns: number; rows: number }): void;
-}
-
 export interface NativeDevelopmentToolHandle {
   readonly identity: NativeDevelopmentProcessIdentity;
   /**
@@ -102,7 +85,7 @@ export interface NativeDevelopmentToolHandle {
 export interface NativeDevelopmentToolDriver {
   readonly toolId: NativeDevelopmentToolId;
   readonly executorId: string;
-  readonly terminalSurface?: NativeDevelopmentTerminalSurface;
+  readonly terminalSurface?: NativeTerminalSurface;
   availability(): Promise<
     | { available: true }
     | {
@@ -326,7 +309,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     sessionId: string;
     after?: number;
     maxBytes?: number;
-  }): Promise<NativeDevelopmentTerminalSnapshot> {
+  }): Promise<NativeTerminalSnapshot> {
     const marker = await this.requireMarker(input.sessionId);
     const terminalSessionId = marker.process?.terminalSessionId;
     if (!terminalSessionId) {
@@ -343,7 +326,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     });
   }
 
-  async writeTerminal(input: { sessionId: string; writeId: string; data: string }): Promise<void> {
+  async writeTerminal(input: { sessionId: string; sequence: number; data: string }): Promise<void> {
     const marker = await this.requireMarker(input.sessionId);
     const terminalSessionId = marker.process?.terminalSessionId;
     if (!terminalSessionId) {
@@ -355,7 +338,7 @@ export class NativeDevelopmentExecutor<TPlan extends NativeDevelopmentSourcePlan
     }
     driver.terminalSurface.write({
       terminalSessionId,
-      writeId: input.writeId,
+      sequence: input.sequence,
       data: input.data,
     });
   }

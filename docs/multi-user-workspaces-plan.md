@@ -1,5 +1,7 @@
 # Multi-User, Multi-Workspace, Multi-Session Server — Architecture Plan
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Delivered account/workspace behavior remains historical evidence. Trusted-user assumptions do not waive confinement of malicious workspace code.
+
 **Status:** IMPLEMENTED design record. The account-backed multi-user workspace
 hub cutover landed in `2a0adeee`; last reconciled 2026-07-13 against
 `92e4aefe`. This document records the delivered architecture and its original
