@@ -1273,7 +1273,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (artifact.integrity) headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
     if (artifact.role === "html") {
       headers["Content-Security-Policy"] =
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
     }
     const identityBody = await readArtifactBytesAsync(build, artifact);
     const requestHeaders = req.headers ?? {};

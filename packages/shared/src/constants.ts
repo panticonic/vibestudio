@@ -73,6 +73,7 @@ export function buildPanelCsp(): string {
   return [
     "default-src 'self' https: data: blob:",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http://localhost:* http://127.0.0.1:*",
+    "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline' https:",
     "img-src 'self' https: data: blob:",
     "font-src 'self' https: data:",
