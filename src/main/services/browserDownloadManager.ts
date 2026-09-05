@@ -23,6 +23,7 @@ interface LiveDownload {
 export class BrowserDownloadManager {
   private readonly records = new Map<string, BrowserDownloadRecord>();
   private readonly live = new Map<string, LiveDownload>();
+  private readonly reservedPaths = new Set<string>();
   private persistOperation: Promise<void> = Promise.resolve();
 
   constructor(
@@ -90,6 +91,17 @@ export class BrowserDownloadManager {
     contents: WebContents
   ): void => {
     item.pause();
+    // Electron reads the destination when will-download returns, before an
+    // asynchronous site approval can settle. Reserve it for the item's entire
+    // lifetime, including approval, when no file may exist on disk yet.
+    const savePath = availableDownloadPath(
+      this.deps.downloadsDirectory,
+      safeFilename(item.getFilename()),
+      this.reservedPaths
+    );
+    item.setSavePath(savePath);
+    this.reservedPaths.add(savePath);
+    item.once("done", () => this.reservedPaths.delete(savePath));
     void this.deps
       .requestSiteCapability(contents, "downloads")
       .then((granted) => {
@@ -97,13 +109,13 @@ export class BrowserDownloadManager {
           item.cancel();
           return;
         }
-        this.beginDownload(item, contents);
+        this.beginDownload(item, contents, savePath);
         item.resume();
       })
       .catch(() => item.cancel());
   };
 
-  private beginDownload(item: DownloadItem, contents: WebContents): void {
+  private beginDownload(item: DownloadItem, contents: WebContents, savePath: string): void {
     const id = randomUUID();
     const url = item.getURL();
     const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id) ?? undefined;
@@ -113,9 +125,6 @@ export class BrowserDownloadManager {
     } catch {
       // A non-web redirect chain is recorded without an origin.
     }
-    const filename = safeFilename(item.getFilename());
-    const savePath = availableDownloadPath(this.deps.downloadsDirectory, filename);
-    item.setSavePath(savePath);
     const now = Date.now();
     const record: BrowserDownloadRecord = {
       id,
@@ -231,11 +240,15 @@ function safeFilename(value: string): string {
   return name && name !== "." && name !== ".." ? name.slice(0, 240) : "download";
 }
 
-function availableDownloadPath(directory: string, filename: string): string {
+function availableDownloadPath(
+  directory: string,
+  filename: string,
+  reservedPaths: ReadonlySet<string>
+): string {
   const extension = path.extname(filename);
   const stem = path.basename(filename, extension);
   let candidate = path.join(directory, filename);
-  for (let index = 1; existsSync(candidate); index += 1) {
+  for (let index = 1; reservedPaths.has(candidate) || existsSync(candidate); index += 1) {
     candidate = path.join(directory, `${stem} (${index})${extension}`);
   }
   return candidate;
