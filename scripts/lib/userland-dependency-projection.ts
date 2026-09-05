@@ -35,7 +35,13 @@ export interface PrepareUserlandDependencyProjectionOptions {
   excludedUnitPaths?: ReadonlySet<string>;
 }
 
-const DEFAULT_EXCLUDED_UNIT_PATHS = new Set(["apps/mobile"]);
+/** Native units and their consumers use the installed native host toolchain.
+ * Keep them in the source graph, but never merge their React/RN realm into the
+ * desktop validation install. This follows dependencies rather than app paths. */
+export function requiresNativeHost(unit: GraphNode, graph: PackageGraph): boolean {
+  if (unit.dependencies["react-native"] || unit.peerDependencies["react-native"]) return true;
+  return unit.internalDeps.some((name) => requiresNativeHost(graph.get(name), graph));
+}
 
 interface UnitPackageJson {
   devDependencies?: Record<string, string>;
@@ -54,7 +60,7 @@ export async function prepareUserlandDependencyProjection(
   const appRoot = path.resolve(options.appRoot);
   const workspaceRoot = path.resolve(options.workspaceRoot);
   const appNodeModules = [path.join(appRoot, "node_modules")];
-  const excluded = options.excludedUnitPaths ?? DEFAULT_EXCLUDED_UNIT_PATHS;
+  const excluded = options.excludedUnitPaths ?? new Set<string>();
   const graph = discoverPackageGraph(workspaceRoot);
   const units = graph
     .topologicalOrder()
@@ -64,6 +70,7 @@ export async function prepareUserlandDependencyProjection(
   const dependencyPatches = new Map<string, ExternalDependencyPatch>();
 
   for (const unit of units) {
+    if (requiresNativeHost(unit, graph)) continue;
     mergeExternalDependencySpecs(
       dependencies,
       collectExternalDependencyClosure(unit, graph, workspaceRoot, appNodeModules).installSet
