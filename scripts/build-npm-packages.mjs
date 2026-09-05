@@ -21,6 +21,8 @@ import { fileURLToPath } from "node:url";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
 
+import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
+
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
@@ -42,10 +44,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
 async function main() {
   console.log(`Staging npm packages @ v${VERSION}`);
   assertBuilt();
+  const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
-  stageServer();
-  stageApp();
+  stageServer(nativeArtifacts);
+  stageApp(nativeArtifacts);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   assertNoBundledUserlandSource(path.join(outRoot, "app"), "staged app npm package");
   console.log("\n✔ Staged dist-packages/{server,app}. Validate with:");
@@ -73,7 +76,7 @@ function buildSelfContainedExtensionHost() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-function stageServer() {
+function stageServer(nativeArtifacts) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -82,6 +85,7 @@ function stageServer() {
   for (const artifact of SERVER_RUNTIME_ARTIFACTS) {
     copyFile(artifact, path.join(root, artifact));
   }
+  stageNativeIsolationArtifacts(root, nativeArtifacts);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),
@@ -139,13 +143,14 @@ function stageServer() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio
 // ---------------------------------------------------------------------------
-function stageApp() {
+function stageApp(nativeArtifacts) {
   const root = path.join(outRoot, "app");
   console.log(`• Staging ${PUBLIC_APP_PACKAGE_NAME}…`);
   mkdirp(root);
 
   // Full host build (main + all preloads + server-electron + cli + headless-host).
   copyTree(path.join(repoRoot, "dist"), path.join(root, "dist"), defaultSkip);
+  stageNativeIsolationArtifacts(root, nativeArtifacts);
 
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
   copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
@@ -367,4 +372,13 @@ function mkdirp(p) {
 }
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
+}
+
+export function stageNativeIsolationArtifacts(root, artifacts) {
+  for (const { source, artifact } of artifacts) {
+    const destination = path.join(root, artifact);
+    mkdirp(path.dirname(destination));
+    fs.copyFileSync(source, destination);
+    if (!artifact.endsWith(".json") && !artifact.endsWith(".exe")) fs.chmodSync(destination, 0o755);
+  }
 }

@@ -21,6 +21,7 @@ import {
   writeHostBuildFingerprint,
 } from "./scripts/host-build-fingerprint.mjs";
 
+if (process.argv.includes("--production")) process.env.NODE_ENV = "production";
 const isDev = process.env.NODE_ENV === "development";
 
 const logOverride = {

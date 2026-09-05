@@ -19,6 +19,8 @@ const INPUT_FILES = [
   "scripts/build-native-isolation.mjs",
   "scripts/server-runtime-artifacts.mjs",
   "native/isolation/Cargo.toml",
+  "native/isolation/targets.json",
+  "scripts/native-isolation-artifacts.mjs",
   "native/isolation/Cargo.lock",
   "native/isolation/src/main.rs",
   "native/isolation/src/cleanup.rs",

@@ -1,3 +1,4 @@
+import { nativeIsolationExecutable } from "./nativeIsolationExecutable.js";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
 import { waitForNativeJob, type NativeWorkspaceJob } from "./nativeWorkspaceJob.js";
 import { mkdir, realpath, copyFile, stat, lstat, readFile, writeFile, rm } from "node:fs/promises";
@@ -180,7 +181,7 @@ export async function startNativeWorkspaceRuntime(input: {
           ? "/usr/bin/bwrap"
           : platform === "darwin"
             ? "/usr/bin/sandbox-exec"
-            : path.join(input.appRoot, "dist", "vibestudio-isolation.exe")
+            : nativeIsolationExecutable(input.appRoot)
       ),
       workspaceEntry,
     }
@@ -234,7 +235,7 @@ export async function startNativeWorkspaceRuntime(input: {
         if (!stopped.launcherExited) throw new Error("Native workspace still owns its storage");
         await WorkspaceSandbox.retireStorage(privateRoot, {
           platform,
-          launcher: path.join(input.appRoot, "dist", "vibestudio-isolation.exe"),
+          launcher: nativeIsolationExecutable(input.appRoot),
         });
       },
     };

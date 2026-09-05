@@ -1,0 +1,4 @@
+# Native artifacts built on different OSes share one exact source-closure hash.
+native/isolation/** text eol=lf
+scripts/build-native-isolation.mjs text eol=lf
+scripts/native-isolation-artifacts.mjs text eol=lf

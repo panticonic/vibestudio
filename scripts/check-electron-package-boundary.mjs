@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { listPackage, uncache } from "@electron/asar";
+import { assertPackagedNativeIsolation } from "./stage-electron-native-isolation.mjs";
 import {
   assertNoBundledUserlandPaths,
   assertNoBundledUserlandSource,
@@ -28,7 +29,7 @@ export function assertPackagedIrohBinding(resources, platform, arch) {
 }
 
 export async function afterPack(context) {
-  const resources = path.join(context.appOutDir, "resources");
+  const resources = context.packager.getResourcesDir(context.appOutDir);
   const archive = path.join(resources, "app.asar");
   if (!fs.existsSync(archive)) {
     throw new Error(`Electron package has no app.asar: ${archive}`);
@@ -44,6 +45,7 @@ export async function afterPack(context) {
     "Electron app.asar.unpacked"
   );
   assertPackagedIrohBinding(resources, context.electronPlatformName, context.arch);
+  assertPackagedNativeIsolation(resources, context);
 
   const resourceEntries = fs
     .readdirSync(resources, { withFileTypes: true })

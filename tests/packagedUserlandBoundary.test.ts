@@ -3,7 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createPackage } from "@electron/asar";
 import { describe, expect, it } from "vitest";
+import {
+  prepareNativeIsolationSource,
+  writeNativeIsolationArtifacts,
+} from "./helpers/nativeIsolationArtifacts.js";
 import { afterPack } from "../scripts/check-electron-package-boundary.mjs";
+import { nativeIsolationTarget } from "../scripts/native-isolation-artifacts.mjs";
 import {
   assertNoBundledUserlandPaths,
   assertNoBundledUserlandSource,
@@ -69,12 +74,34 @@ describe("packaged host/userland boundary", () => {
       fs.mkdirSync(path.dirname(artifact), { recursive: true });
       fs.writeFileSync(binding, "module.exports = {};\n");
       fs.writeFileSync(artifact, "native binding fixture\n");
+      const nativeTarget = nativeIsolationTarget(process.platform, process.arch);
+      const nativeSource = prepareNativeIsolationSource(app);
+      const artifactRoot = path.join(nativeSource, "artifacts");
+      writeNativeIsolationArtifacts(app, artifactRoot, [nativeTarget]);
+      const nativeInput = path.join(
+        artifactRoot,
+        `native-isolation-${process.platform}-${process.arch}`
+      );
+      const helperPath = path.join(nativeInput, path.basename(nativeTarget.artifact));
+      const unpackedNative = path.join(resources, "app.asar.unpacked", nativeTarget.artifact);
+      fs.mkdirSync(path.dirname(unpackedNative), { recursive: true });
+      fs.copyFileSync(helperPath, unpackedNative);
+      fs.chmodSync(unpackedNative, 0o755);
+      fs.copyFileSync(
+        path.join(nativeInput, "manifest.json"),
+        path.join(
+          resources,
+          "app.asar.unpacked",
+          nativeTarget.artifact.replace(/[^/]+$/, "manifest.json")
+        )
+      );
       fs.writeFileSync(path.join(app, "dist", "main.cjs"), "module.exports = {};\n");
       await createPackage(app, path.join(resources, "app.asar"));
       const context = {
         appOutDir: path.join(root, "out"),
-        arch: process.arch,
+        arch: process.arch === "x64" ? 1 : 3,
         electronPlatformName: process.platform,
+        packager: { projectDir: app, getResourcesDir: () => resources },
       };
       await expect(afterPack(context)).resolves.toBeUndefined();
 
