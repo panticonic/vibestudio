@@ -6,6 +6,7 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX,
+  BROWSER_ENVIRONMENT_DOWNLOAD_AUTHORITY_PREFIX,
   browserEnvironmentMethods,
 } from "@vibestudio/service-schemas/browserEnvironment";
 import { allOf, relationship, requirementForPrincipals } from "@vibestudio/shared/authorization";
@@ -85,39 +86,51 @@ export function createBrowserEnvironmentService(deps: {
   importRouter: BrowserEnvironmentImportRouter;
   browserDataBrokerRepoPath: string | null;
 }): ServiceDefinition {
-  const nonPromptingProviderMethods = new Set([
-    "previewSensitiveImport",
-    "startSensitiveImport",
-    "observeSensitiveImport",
-    "cancelSensitiveImport",
-  ]);
+  const codeRequirements: Record<
+    string,
+    (capability: string) => ReturnType<typeof requirementForPrincipals>
+  > = {
+    [BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX]: (capability: string) =>
+      allOf(
+        requirementForPrincipals(["code"], capability),
+        relationship(
+          "code-source",
+          deps.browserDataBrokerRepoPath ?? "__no_browser_data_broker_declared__"
+        )
+      ),
+    [BROWSER_ENVIRONMENT_DOWNLOAD_AUTHORITY_PREFIX]: (capability: string) =>
+      requirementForPrincipals(["code"], capability),
+  };
   const authorityPreparation = Object.fromEntries(
-    Object.keys(browserEnvironmentMethods)
-      .filter((method) => !nonPromptingProviderMethods.has(method))
-      .map((method) => [
-        `${BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX}.${method}`,
-        (ctx: Parameters<NonNullable<ServiceDefinition["authorityPreparation"]>[string]>[0]) => {
-          if (!ctx.caller.code && !ctx.caller.executionSession)
-            return { selections: [], payload: null };
-          const capability = `service:browserEnvironment.${method}`;
-          return {
-            selections: [
-              selectedPreparedAuthoritySelection({
-                capability,
-                resourceKey: capability,
-                requirement: allOf(
-                  requirementForPrincipals(["code"], capability),
-                  relationship(
-                    "code-source",
-                    deps.browserDataBrokerRepoPath ?? "__no_browser_data_broker_declared__"
-                  )
-                ),
-              }),
-            ],
-            payload: null,
-          };
-        },
-      ])
+    Object.entries(browserEnvironmentMethods).flatMap(([method, definition]) => {
+      const resolver =
+        "prepared" in definition.authority ? definition.authority.prepared.resolver : undefined;
+      if (!resolver) return [];
+      const prefix = resolver.slice(0, resolver.lastIndexOf("."));
+      const requirement = codeRequirements[prefix];
+      if (!requirement)
+        throw new Error(`Unknown browser environment authority resolver: ${resolver}`);
+      return [
+        [
+          resolver,
+          (ctx: Parameters<NonNullable<ServiceDefinition["authorityPreparation"]>[string]>[0]) => {
+            if (!ctx.caller.code && !ctx.caller.executionSession)
+              return { selections: [], payload: null };
+            const capability = `service:browserEnvironment.${method}`;
+            return {
+              selections: [
+                selectedPreparedAuthoritySelection({
+                  capability,
+                  resourceKey: capability,
+                  requirement: requirement(capability),
+                }),
+              ],
+              payload: null,
+            };
+          },
+        ],
+      ];
+    })
   );
   return {
     name: "browserEnvironment",

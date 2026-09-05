@@ -8289,8 +8289,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.cancelDownload\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.cancelDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.cancelDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "public-download-capability-admission",
+        "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
       },
       "capability": "service:browserEnvironment.cancelDownload",
       "parityAssertion": "generated-census:host-authority"
@@ -8308,7 +8308,7 @@
       "capability": "service:browserEnvironment.cancelDownload",
       "resourceDerivation": {
         "kind": "prepared",
-        "resolver": "browserEnvironment.broker.cancelDownload"
+        "resolver": "browserEnvironment.download.cancelDownload"
       },
       "authorityPrincipals": [
         "code"
@@ -8510,8 +8510,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.listDownloads\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.listDownloads\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.listDownloads\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "public-download-capability-admission",
+        "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
       },
       "capability": "service:browserEnvironment.listDownloads",
       "parityAssertion": "generated-census:host-authority"
@@ -8529,7 +8529,7 @@
       "capability": "service:browserEnvironment.listDownloads",
       "resourceDerivation": {
         "kind": "prepared",
-        "resolver": "browserEnvironment.broker.listDownloads"
+        "resolver": "browserEnvironment.download.listDownloads"
       },
       "authorityPrincipals": [
         "code"
@@ -9083,8 +9083,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.openDownload\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.openDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.openDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "public-download-capability-admission",
+        "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
       },
       "capability": "service:browserEnvironment.openDownload",
       "parityAssertion": "generated-census:host-authority"
@@ -9102,7 +9102,7 @@
       "capability": "service:browserEnvironment.openDownload",
       "resourceDerivation": {
         "kind": "prepared",
-        "resolver": "browserEnvironment.broker.openDownload"
+        "resolver": "browserEnvironment.download.openDownload"
       },
       "authorityPrincipals": [
         "code"
@@ -9171,8 +9171,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.pauseDownload\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.pauseDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.pauseDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "public-download-capability-admission",
+        "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
       },
       "capability": "service:browserEnvironment.pauseDownload",
       "parityAssertion": "generated-census:host-authority"
@@ -9190,7 +9190,7 @@
       "capability": "service:browserEnvironment.pauseDownload",
       "resourceDerivation": {
         "kind": "prepared",
-        "resolver": "browserEnvironment.broker.pauseDownload"
+        "resolver": "browserEnvironment.download.pauseDownload"
       },
       "authorityPrincipals": [
         "code"
@@ -9480,8 +9480,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.resumeDownload\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.resumeDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.resumeDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "public-download-capability-admission",
+        "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
       },
       "capability": "service:browserEnvironment.resumeDownload",
       "parityAssertion": "generated-census:host-authority"
@@ -9499,7 +9499,7 @@
       "capability": "service:browserEnvironment.resumeDownload",
       "resourceDerivation": {
         "kind": "prepared",
-        "resolver": "browserEnvironment.broker.resumeDownload"
+        "resolver": "browserEnvironment.download.resumeDownload"
       },
       "authorityPrincipals": [
         "code"
@@ -9568,8 +9568,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.revealDownload\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.revealDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.revealDownload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "public-download-capability-admission",
+        "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
       },
       "capability": "service:browserEnvironment.revealDownload",
       "parityAssertion": "generated-census:host-authority"
@@ -9587,7 +9587,7 @@
       "capability": "service:browserEnvironment.revealDownload",
       "resourceDerivation": {
         "kind": "prepared",
-        "resolver": "browserEnvironment.broker.revealDownload"
+        "resolver": "browserEnvironment.download.revealDownload"
       },
       "authorityPrincipals": [
         "code"

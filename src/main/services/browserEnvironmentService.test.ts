@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createTestServiceDispatcher,
+  testAuthority,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
 import {
   createBrowserEnvironmentService,
@@ -15,7 +19,7 @@ function service() {
 }
 
 describe("browserEnvironment authority", () => {
-  it("binds every code call to the manifest-declared broker source", () => {
+  it("binds browser import code calls to the manifest-declared broker source", () => {
     const definition = service();
     const caller = createVerifiedCaller("extension-1", "extension", {
       callerId: "extension-1",
@@ -72,6 +76,53 @@ describe("browserEnvironment authority", () => {
       payload: null,
     });
   });
+
+  it.each([
+    "listDownloads",
+    "pauseDownload",
+    "resumeDownload",
+    "cancelDownload",
+    "openDownload",
+    "revealDownload",
+  ])(
+    "admits declared and granted panel capability for %s without broker identity",
+    async (method) => {
+      const capability = `service:browserEnvironment.${method}`;
+      const caller = createVerifiedCaller("downloads-panel", "panel", {
+        callerId: "downloads-panel",
+        callerKind: "panel",
+        repoPath: "about/downloads",
+        effectiveVersion: "test",
+        executionDigest: "a".repeat(64),
+        requested: [{ capability, resource: { kind: "exact", key: capability } }],
+      });
+      const definition = service();
+      const handler = vi.fn(async () => (method === "listDownloads" ? [] : undefined));
+      const dispatcher = createTestServiceDispatcher();
+      dispatcher.registerService({ ...definition, handler });
+      dispatcher.markInitialized();
+      const args = method === "listDownloads" ? [] : ["download-1"];
+      await dispatcher.dispatch({ caller } as never, "browserEnvironment", method, args);
+      expect(handler).toHaveBeenCalledOnce();
+      handler.mockClear();
+      dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
+        ...testAuthority(caller, capability, resourceKey),
+        grants: [],
+      }));
+      await expect(
+        dispatcher.dispatch({ caller } as never, "browserEnvironment", method, args)
+      ).rejects.toMatchObject({ code: "EACQUIRE" });
+      expect(handler).not.toHaveBeenCalled();
+      dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+        testAuthority(caller, capability, resourceKey)
+      );
+      const undeclared = { ...caller, code: { ...caller.code!, requested: [] } };
+      await expect(
+        dispatcher.dispatch({ caller: undeclared } as never, "browserEnvironment", method, args)
+      ).rejects.toMatchObject({ code: "EACCES" });
+      expect(handler).not.toHaveBeenCalled();
+    }
+  );
 
   it("keeps sensitive values out of the plaintext import-frame contract", () => {
     expect(() =>

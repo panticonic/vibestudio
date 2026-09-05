@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:f813403397314e138b56f64467736e5781db772e74b43741e109ce3aac7dfe30",
+  "censusDigest": "sha256:9275396b343742d054f54e2de2bb2df1d40c053f27639debe5297892b0896324",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -108,7 +108,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -549,6 +549,30 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities": {
       "review": "host-only-runtime-resource-binding-lookup",
       "change": "Returns active entity ids bound to an exact resource kind and bounded id list so the runtime can apply resource-owned lifecycle events. It is a host-only read and exposes no user content or capability grant material."
+    },
+    "host:browserEnvironment.listDownloads": {
+      "review": "public-download-capability-admission",
+      "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
+    },
+    "host:browserEnvironment.pauseDownload": {
+      "review": "public-download-capability-admission",
+      "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
+    },
+    "host:browserEnvironment.resumeDownload": {
+      "review": "public-download-capability-admission",
+      "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
+    },
+    "host:browserEnvironment.cancelDownload": {
+      "review": "public-download-capability-admission",
+      "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
+    },
+    "host:browserEnvironment.openDownload": {
+      "review": "public-download-capability-admission",
+      "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
+    },
+    "host:browserEnvironment.revealDownload": {
+      "review": "public-download-capability-admission",
+      "change": "Separate public download controls from broker-owned browser imports. Installed code must still declare and receive the exact gated method capability and satisfy workspace membership; it no longer needs to impersonate the browser-data broker. Host calls retain their direct admission. Import source identity and sealed sensitive-import checks are unchanged."
     }
   }
 }
