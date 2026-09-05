@@ -35,7 +35,7 @@ const RUNTIME_DEPENDENCY_SECTIONS = ["dependencies", "peerDependencies", "option
 const EXACT_PIN_EXCEPTIONS = new Map([
   [
     "packages/pi-ai/package.json:dependencies:@earendil-works/pi-ai",
-    "the package applies a source patch to exactly 0.82.0",
+    "the package applies a source patch to exactly 0.85.0",
   ],
   ...[
     "@notifee/react-native",
