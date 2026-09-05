@@ -517,7 +517,11 @@ describe("RpcServer HTTP POST /rpc", () => {
         errorCode: "EACCES",
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
-      expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+      expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, {
+        entityId: binding.entityId,
+        contextId: binding.contextId,
+        channelId: binding.channelId,
+      });
     });
 
     it("attributes exact trajectory causality to its initiating user", async () => {
@@ -1443,7 +1447,11 @@ describe("RpcServer HTTP POST /rpc", () => {
         error: expect.stringContaining("does not exist"),
       });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
-      expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent);
+      expect(resolveExactCausalInvocation).toHaveBeenCalledWith(causalParent, {
+        entityId: binding.entityId,
+        contextId: binding.contextId,
+        channelId: binding.channelId,
+      });
     });
 
     it("denies a caller-kind not in the credentials service policy", async () => {
