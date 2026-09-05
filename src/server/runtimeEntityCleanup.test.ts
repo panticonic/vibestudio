@@ -47,6 +47,7 @@ function deps() {
     workerdManager: {
       stopWorker: vi.fn(async () => {}),
       retireDOEntity: vi.fn(async () => {}),
+      retireEgressCaller: vi.fn(),
     },
     resourceHandles: {
       revokeReceiver: vi.fn(() => 1),
@@ -70,6 +71,7 @@ describe("cleanupRuntimeEntity", () => {
     });
 
     expect(d.panelRuntimeCoordinator.retireRuntimeEntity).toHaveBeenCalledWith("panel:one");
+    expect(d.workerdManager.retireEgressCaller).toHaveBeenCalledWith("panel:one");
     expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:one");
     expect(d.approvalQueue.cancelForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.credentialSessionGrantStore.dropForCaller).toHaveBeenCalledWith("panel:one");
@@ -124,6 +126,32 @@ describe("cleanupRuntimeEntity", () => {
       },
       "logical receiver retired"
     );
+  });
+
+  it("retires egress before a blocking panel teardown", async () => {
+    const d = deps();
+    let release!: () => void;
+    d.panelRuntimeCoordinator.retireRuntimeEntity.mockImplementation(
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    const cleanup = cleanupRuntimeEntity(record("panel", "panel:blocking"), {
+      panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
+      egressProxy: d.egressProxy,
+      approvalQueue: d.approvalQueue,
+      credentialSessionGrantStore: d.credentialSessionGrantStore,
+      tokenManager: d.tokenManager,
+      connectionGrants: d.connectionGrants,
+      getFsService: () => d.fsService as never,
+      getWebhookIngress: () => d.webhookIngress,
+      getWorkerdManager: () => d.workerdManager as never,
+    });
+    await vi.waitFor(() =>
+      expect(d.panelRuntimeCoordinator.retireRuntimeEntity).toHaveBeenCalledWith("panel:blocking")
+    );
+    expect(d.workerdManager.retireEgressCaller).toHaveBeenCalledWith("panel:blocking");
+    expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:blocking");
+    release();
+    await cleanup;
   });
 
   it("attempts every cleanup step and reports failures to the durable reaper", async () => {

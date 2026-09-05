@@ -1,15 +1,12 @@
-import { createServer, request as httpRequest } from "node:http";
+import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { lookup as systemLookup, resolve4, resolve6 } from "node:dns";
 import type {
   IncomingHttpHeaders,
   IncomingMessage,
   OutgoingHttpHeaders,
-  Server,
   ServerResponse,
 } from "node:http";
-import type { AddressInfo, LookupFunction } from "node:net";
 import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { Agent, type Dispatcher } from "undici";
@@ -58,6 +55,15 @@ import { resolveCredentialByLabel } from "./credentialSelection.js";
 import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "../socketBridge.js";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
 
+import {
+  NetworkDestinationDenied,
+  resolveNetworkDestination,
+  type NetworkDestination,
+  type NetworkEndpointAuthority,
+} from "./networkDestination.js";
+
+import { EgressListener } from "./egressListener.js";
+
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -87,6 +93,7 @@ const PASSTHROUGH_PROVIDER_ID = "passthrough";
 const PASSTHROUGH_CONNECTION_ID = "passthrough";
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
 const RAW_EGRESS_CAPABILITY = "network.response.read";
+const CONNECT_CAPABILITY = "network.connect";
 const DEFAULT_RETRY_ATTEMPTS = 2;
 const DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS = 2;
 const DEFAULT_RETRY_INITIAL_DELAY_MS = 100;
@@ -96,56 +103,6 @@ const CIRCUIT_OPEN_MS = 30_000;
 const WEBSOCKET_DIAGNOSTIC_BODY_LIMIT = 512;
 const GITHUB_BINDING_CATALOG_VERSION = "github:v2";
 const GIT_HTTP_RESPONSE_TIMEOUT_MS = 15 * 60_000;
-const GIT_HTTP_LOOKUP_TIMEOUT_MS = 10_000;
-
-const gitHttpLookup: LookupFunction = (hostname, options, callback) => {
-  let settled = false;
-  let pending = 2;
-  let lastError: NodeJS.ErrnoException | null = null;
-  const finish = (
-    error: NodeJS.ErrnoException | null,
-    address: string | import("node:dns").LookupAddress[],
-    family?: number
-  ) => {
-    if (settled) return;
-    if (error) {
-      lastError = error;
-      pending -= 1;
-      if (pending > 0) return;
-    }
-    settled = true;
-    clearTimeout(timer);
-    callback(error, address, family);
-  };
-  const timer = setTimeout(() => {
-    if (settled) return;
-    settled = true;
-    const error = lastError ?? new Error(`DNS lookup timed out for ${hostname}`);
-    (error as NodeJS.ErrnoException).code ??= "ETIMEDOUT";
-    callback(error as NodeJS.ErrnoException, "", 0);
-  }, GIT_HTTP_LOOKUP_TIMEOUT_MS);
-
-  systemLookup(hostname, options, finish);
-  const requestedFamily = options.family === 6 || options.family === "IPv6" ? 6 : 4;
-  const resolve = requestedFamily === 6 ? resolve6 : resolve4;
-  resolve(hostname, (error, addresses) => {
-    if (error || addresses.length === 0) {
-      const unavailable = error ?? new Error(`DNS returned no addresses for ${hostname}`);
-      (unavailable as NodeJS.ErrnoException).code ??= "ENOTFOUND";
-      finish(unavailable as NodeJS.ErrnoException, "", requestedFamily);
-      return;
-    }
-    if (options.all) {
-      finish(
-        null,
-        addresses.map((address) => ({ address, family: requestedFamily }))
-      );
-      return;
-    }
-    finish(null, addresses[0]!, requestedFamily);
-  });
-};
-
 interface GitIntentMetadata {
   force: boolean;
   overwrites?:
@@ -255,6 +212,7 @@ interface Authorization {
   connectionId: string | null;
   scopes: string[];
   trustedForwardHeaders: Record<string, string>;
+  endpointAuthority: NetworkEndpointAuthority;
 }
 
 interface ForwardResult {
@@ -317,19 +275,68 @@ interface CircuitState {
 }
 
 export class EgressProxy {
-  private server: Server | null = null;
-  private readonly attributedServers = new Map<string, { server: Server; port: number }>();
+  private server: EgressListener | null = null;
+  private readonly operations = new Map<string, Set<AbortController>>();
+  private stopped = false;
+
+  private beginOperation(callerId: string) {
+    const controller = new AbortController();
+    let entries = this.operations.get(callerId);
+    if (!entries) this.operations.set(callerId, (entries = new Set()));
+    entries.add(controller);
+    let finished = false;
+    const held = new Set<Duplex | ServerResponse>();
+    const release = () => {
+      if (!finished || held.size) return;
+      entries.delete(controller);
+      if (entries.size === 0 && this.operations.get(callerId) === entries) {
+        this.operations.delete(callerId);
+      }
+    };
+    if (this.stopped) controller.abort(new Error("Egress proxy stopped"));
+    return {
+      signal: controller.signal,
+      abort: () => controller.abort(new Error("Egress connection closed")),
+      hold: (socket: Duplex | ServerResponse) => {
+        if (held.has(socket)) return;
+        held.add(socket);
+        const abort = () => socket.destroy();
+        const closed = () => {
+          controller.abort(new Error("Egress downstream closed"));
+          controller.signal.removeEventListener("abort", abort);
+          held.delete(socket);
+          release();
+        };
+        socket.once("close", closed);
+        controller.signal.addEventListener("abort", abort, { once: true });
+        if (controller.signal.aborted) abort();
+        if (socket.destroyed) {
+          socket.off("close", closed);
+          closed();
+        }
+      },
+      finish: () => {
+        finished = true;
+        release();
+      },
+    };
+  }
+
+  private abortOperations(callerId: string): void {
+    const entries = this.operations.get(callerId);
+    this.operations.delete(callerId);
+    for (const controller of entries ?? []) controller.abort(new Error("Egress caller retired"));
+  }
+  private readonly attributedServers = new Map<string, EgressListener>();
   private readonly circuits = new Map<string, CircuitState>();
   private readonly sessionGrantStore: CredentialSessionGrantStore;
   private readonly credentialUseGrantStore: CredentialUseGrantStoreLike | null;
   /** Shared attributed-by-header listener (dynamic worker host). One server for
    *  all dynamically-loaded workers; identity travels in a trusted header
    *  instead of a per-caller port. */
-  private sharedServer: { server: Server; port: number } | null = null;
+  private sharedServer: EgressListener | null = null;
   private sharedSecret: string | null = null;
   private callerResolver: ((callerId: string) => VerifiedCaller | null) | null = null;
-  private fetchDispatcher: Agent | null = null;
-  private gitHttpDispatcher: Agent | null = null;
 
   constructor(private readonly deps: EgressProxyDeps) {
     this.sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
@@ -349,48 +356,31 @@ export class EgressProxy {
    * `X-Vibestudio-Egress-Secret`. Returns the listener port (memoized).
    */
   async startShared(secret: string): Promise<number> {
-    if (this.sharedServer) return this.sharedServer.port;
+    if (this.stopped) throw new Error("Egress proxy stopped");
+    if (this.sharedServer) {
+      if (secret !== this.sharedSecret)
+        throw new Error("Egress owner must retire before replacement");
+      return this.sharedServer.ready;
+    }
     this.sharedSecret = secret;
-
-    const server = createServer((req, res) => {
-      const caller = this.resolveAttributedCaller(req);
-      if (!caller) {
-        req.resume();
-        this.respondWithError(res, 403, "egress: unattributed request");
-        return;
-      }
-      void this.handleHttpRequest(req, res, caller);
-    });
-    server.on("connect", (req, socket, head) => {
-      const caller = this.resolveAttributedCaller(req);
-      if (!caller) {
-        (socket as Duplex).end();
-        return;
-      }
-      void this.handleConnect(req, socket as Duplex, head, caller);
-    });
-    server.on("upgrade", (req, socket, head) => {
-      const caller = this.resolveAttributedCaller(req);
-      if (!caller) {
-        this.rejectUpgrade(socket as Duplex, 403, "egress: unattributed websocket request");
-        return;
-      }
-      void this.handleWebSocketUpgrade(req, socket as Duplex, head, caller);
-    });
-
-    return new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        const address = server.address() as AddressInfo | null;
-        if (!address) {
-          reject(new Error("Egress proxy failed to bind the shared listener"));
+    this.sharedServer = new EgressListener({
+      request: (req, res) => {
+        const caller = this.resolveAttributedCaller(req);
+        if (!caller) {
+          req.resume();
+          this.respondWithError(res, 403, "egress: unattributed request");
           return;
         }
-        this.sharedServer = { server, port: address.port };
-        resolve(address.port);
-      });
+        void this.handleHttpRequest(req, res, caller);
+      },
+      connect: (req, socket, head) => {
+        void this.handleConnect(req, socket, head, this.resolveAttributedCaller(req));
+      },
+      upgrade: (req, socket, head) => {
+        void this.handleWebSocketUpgrade(req, socket, head, this.resolveAttributedCaller(req));
+      },
     });
+    return this.sharedServer.ready;
   }
 
   /** Resolve the trusted caller for a shared-listener request, or null if the
@@ -404,138 +394,118 @@ export class EgressProxy {
   }
 
   async start(): Promise<number> {
-    if (this.server) {
-      const currentAddress = this.server.address();
-      if (currentAddress && typeof currentAddress !== "string") {
-        return currentAddress.port;
-      }
-    }
-
-    const server = createServer((req, res) => {
-      void this.handleHttpRequest(req, res, null);
+    if (this.stopped) throw new Error("Egress proxy stopped");
+    this.server ??= new EgressListener({
+      request: (req, res) => {
+        void this.handleHttpRequest(req, res, null);
+      },
+      connect: (req, socket, head) => {
+        void this.handleConnect(req, socket, head, null);
+      },
+      upgrade: (req, socket, head) => {
+        void this.handleWebSocketUpgrade(req, socket, head, null);
+      },
     });
-
-    server.on("connect", (req, socket, head) => {
-      void this.handleConnect(req, socket as Duplex, head, null);
-    });
-    server.on("upgrade", (req, socket, head) => {
-      void this.handleWebSocketUpgrade(req, socket as Duplex, head, null);
-    });
-
-    this.server = server;
-
-    return new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        const address = server.address() as AddressInfo | null;
-        if (!address) {
-          reject(new Error("Egress proxy failed to bind to an ephemeral port"));
-          return;
-        }
-        resolve(address.port);
-      });
-    });
+    return this.server.ready;
   }
 
-  async startForCaller(caller: VerifiedCaller): Promise<number> {
+  async startForCaller(
+    caller: VerifiedCaller,
+    resolveCaller: () => VerifiedCaller | null
+  ): Promise<number> {
+    if (this.stopped) throw new Error("Egress proxy stopped");
     const key = caller.runtime.id;
     const existing = this.attributedServers.get(key);
-    if (existing) return existing.port;
+    if (existing) return existing.ready;
+    const liveCaller = () => {
+      const current = resolveCaller();
+      return current?.runtime.id === key ? current : null;
+    };
+    const listener = new EgressListener({
+      request: (req, res) => {
+        void this.handleHttpRequest(req, res, liveCaller());
+      },
+      connect: (req, socket, head) => {
+        void this.handleConnect(req, socket, head, liveCaller());
+      },
+      upgrade: (req, socket, head) => {
+        void this.handleWebSocketUpgrade(req, socket, head, liveCaller());
+      },
+    });
+    this.attributedServers.set(key, listener);
+    try {
+      const port = await listener.ready;
+      if (this.attributedServers.get(key) !== listener || !liveCaller())
+        throw new Error("Egress caller retired during startup");
+      return port;
+    } catch (error) {
+      if (this.attributedServers.get(key) === listener) this.attributedServers.delete(key);
+      await listener.close();
+      throw error;
+    }
+  }
 
-    const server = createServer((req, res) => {
-      void this.handleHttpRequest(req, res, caller);
-    });
-    server.on("connect", (req, socket, head) => {
-      void this.handleConnect(req, socket as Duplex, head, caller);
-    });
-    server.on("upgrade", (req, socket, head) => {
-      void this.handleWebSocketUpgrade(req, socket as Duplex, head, caller);
-    });
-
-    return new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        const address = server.address() as AddressInfo | null;
-        if (!address) {
-          reject(new Error("Egress proxy failed to bind an attributed listener"));
-          return;
-        }
-        this.attributedServers.set(key, { server, port: address.port });
-        resolve(address.port);
-      });
-    });
+  async stopShared(): Promise<void> {
+    const shared = this.sharedServer;
+    this.sharedServer = null;
+    this.sharedSecret = null;
+    this.callerResolver = null;
+    await shared?.close();
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    for (const callerId of this.operations.keys()) this.abortOperations(callerId);
     const server = this.server;
     this.server = null;
-    const shared = this.sharedServer;
-    this.sharedServer = null;
     const attributed = [...this.attributedServers.values()];
     this.attributedServers.clear();
-    const gitHttpDispatcher = this.gitHttpDispatcher;
-    this.gitHttpDispatcher = null;
-    const fetchDispatcher = this.fetchDispatcher;
-    this.fetchDispatcher = null;
     await Promise.all([
-      ...(server ? [new Promise<void>((resolve) => server.close(() => resolve()))] : []),
-      ...(shared ? [new Promise<void>((resolve) => shared.server.close(() => resolve()))] : []),
-      ...attributed.map(
-        ({ server }) => new Promise<void>((resolve) => server.close(() => resolve()))
-      ),
-      ...(gitHttpDispatcher ? [gitHttpDispatcher.close()] : []),
-      ...(fetchDispatcher ? [fetchDispatcher.close()] : []),
+      this.stopShared(),
+      ...(server ? [server.close()] : []),
+      ...attributed.map((listener) => listener.close()),
     ]);
   }
 
-  /**
-   * Cleanup hook called by `runtime.retireEntity`. Drops the per-caller
-   * attributed listener (if any) and circuit-breaker state. Best-effort.
-   */
   async dropCaller(callerId: string): Promise<void> {
+    this.abortOperations(callerId);
     const entry = this.attributedServers.get(callerId);
-    if (entry) {
-      this.attributedServers.delete(callerId);
-      await new Promise<void>((resolve) => entry.server.close(() => resolve()));
-    }
-    for (const key of [...this.circuits.keys()]) {
-      if (key.startsWith(`${callerId}:`) || key === callerId) {
-        this.circuits.delete(key);
-      }
+    this.attributedServers.delete(callerId);
+    await entry?.close();
+    for (const key of this.circuits.keys()) {
+      if (key.startsWith(`${callerId}:`) || key === callerId) this.circuits.delete(key);
     }
   }
 
-  async forwardProxyFetch(params: {
-    caller: VerifiedCaller;
-    url: string;
-    method: string;
-    headers?: Record<string, string>;
-    body?: string | Uint8Array;
-    credentialId?: string;
-  }): Promise<{
-    status: number;
-    statusText: string;
-    /**
-     * Headers as ordered pairs (not a flat Record) so multiple
-     * `Set-Cookie` entries — which the Fetch spec deliberately does
-     * NOT combine when iterating — round-trip intact.
-     */
-    headerPairs: Array<[string, string]>;
-    /**
-     * Final URL after any redirects the underlying fetch followed.
-     * Mirrors `Response.url`. Falls back to the requested URL when
-     * the runtime didn't expose it.
-     */
-    finalUrl: string;
-    body: Uint8Array;
-  }> {
+  async forwardProxyFetch(
+    params: ProxyFetchRequest<string | Uint8Array>
+  ): Promise<ProxyFetchResponse> {
+    const operation = this.beginOperation(params.caller.runtime.id);
+    try {
+      let request = params;
+      for (let hop = 0; ; hop++) {
+        operation.signal.throwIfAborted();
+        const response = await this.forwardProxyFetchHop(request, operation.signal);
+        const location = new Headers(response.headerPairs).get("location");
+        if (!isRedirectStatus(response.status) || !location) return response;
+        if (hop >= 20) throw new ForwardRejection(502, "Too many network redirects");
+        request = redirectedFetchRequest(request, response.finalUrl, response.status, location);
+      }
+    } finally {
+      operation.finish();
+    }
+  }
+
+  private async forwardProxyFetchHop(
+    params: ProxyFetchRequest<string | Uint8Array>,
+    signal: AbortSignal
+  ): Promise<ProxyFetchResponse> {
     const body = params.body;
     const bytesOut =
       body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
     return this.executeAuthorizedRequest({
       authority: { kind: "runtime", caller: params.caller },
+      signal,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
@@ -543,19 +513,20 @@ export class EgressProxy {
       credentialUse: "fetch",
       initialBytesOut: bytesOut,
       replaySafe: true,
-      execute: async (targetUrl, headers, _authorization, manualRedirects) => {
-        this.fetchDispatcher ??= new Agent({
-          pipelining: 0,
-          connect: { lookup: gitHttpLookup },
-        });
+      execute: async (targetUrl, headers, _authorization, transport) => {
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
-          redirect: manualRedirects ? "manual" : "follow",
-          dispatcher: this.fetchDispatcher,
+          redirect: "manual",
+          dispatcher: transport.dispatcher,
+          signal: transport.signal,
         } as RequestInit & { dispatcher: Dispatcher });
-        const responseBody = new Uint8Array(await response.arrayBuffer());
+        const redirect = isRedirectStatus(response.status) && response.headers.has("location");
+        if (redirect) await response.body?.cancel();
+        const responseBody = redirect
+          ? new Uint8Array()
+          : new Uint8Array(await response.arrayBuffer());
         await this.deps.recordExternalIngestion?.(
           params.caller,
           new URL(response.url || targetUrl.toString()),
@@ -599,22 +570,38 @@ export class EgressProxy {
    * with `bytesIn` totaled across all emitted chunks.
    */
   async forwardProxyFetchStream(
-    params: {
-      caller: VerifiedCaller;
-      url: string;
-      method: string;
-      headers?: Record<string, string>;
-      /**
-       * `ReadableStream` = a streamed upload from the Iroh pipe (plan §1.6).
-       * Streams are single-shot, which is compatible with this path's
-       * no-retries contract (`maxRetries: 0` below).
-       */
-      body?: string | Uint8Array | ReadableStream<Uint8Array>;
-      credentialId?: string;
-    },
+    params: ProxyFetchRequest<string | Uint8Array | ReadableStream<Uint8Array>>,
     sink: (frame: StreamFrame) => Promise<void> | void,
     abortSignal?: AbortSignal
   ): Promise<{ status: number; bytesIn: number }> {
+    const operation = this.beginOperation(params.caller.runtime.id);
+    const signal = abortSignal
+      ? AbortSignal.any([abortSignal, operation.signal])
+      : operation.signal;
+    try {
+      let request = params;
+      for (let hop = 0; ; hop++) {
+        signal.throwIfAborted();
+        const response = await this.forwardProxyFetchStreamHop(request, sink, signal);
+        if (!response.redirect) return { status: response.status, bytesIn: response.bytesIn };
+        if (hop >= 20) throw new ForwardRejection(502, "Too many network redirects");
+        request = redirectedFetchRequest(
+          request,
+          response.redirect.url,
+          response.status,
+          response.redirect.location
+        );
+      }
+    } finally {
+      operation.finish();
+    }
+  }
+
+  private async forwardProxyFetchStreamHop(
+    params: ProxyFetchRequest<string | Uint8Array | ReadableStream<Uint8Array>>,
+    sink: (frame: StreamFrame) => Promise<void> | void,
+    abortSignal: AbortSignal
+  ): Promise<{ status: number; bytesIn: number; redirect?: { url: string; location: string } }> {
     const body = params.body;
     const bodyIsStream = typeof ReadableStream !== "undefined" && body instanceof ReadableStream;
     // A streamed body's size is unknown until it is consumed; the audit entry
@@ -628,8 +615,13 @@ export class EgressProxy {
 
     let bytesInTotal = 0;
 
-    const result = await this.executeAuthorizedRequest({
+    const result = await this.executeAuthorizedRequest<{
+      status: number;
+      bytesIn: number;
+      redirect?: { url: string; location: string };
+    }>({
       authority: { kind: "runtime", caller: params.caller },
+      signal: abortSignal,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
@@ -641,20 +633,16 @@ export class EgressProxy {
       // entirely for the streaming path to keep the contract simple.
       replaySafe: false,
       maxRetries: 0,
-      execute: async (targetUrl, headers, authorization, manualRedirects) => {
-        this.fetchDispatcher ??= new Agent({
-          pipelining: 0,
-          connect: { lookup: gitHttpLookup },
-        });
+      execute: async (targetUrl, headers, authorization, transport) => {
         const upstream = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
-          signal: abortSignal,
-          redirect: manualRedirects ? "manual" : "follow",
+          signal: abortSignal ? AbortSignal.any([abortSignal, transport.signal]) : transport.signal,
+          redirect: "manual",
           // undici requires half-duplex to be declared for stream bodies.
           ...(bodyIsStream ? { duplex: "half" } : {}),
-          dispatcher: this.fetchDispatcher,
+          dispatcher: transport.dispatcher,
         } as RequestInit & { dispatcher: Dispatcher });
 
         await this.deps.recordExternalIngestion?.(
@@ -663,6 +651,20 @@ export class EgressProxy {
           "egress-proxy-stream"
         );
 
+        const location = upstream.headers.get("location");
+        if (isRedirectStatus(upstream.status) && location) {
+          await upstream.body?.cancel();
+          return {
+            statusCode: upstream.status,
+            bytesIn: 0,
+            bytesOut,
+            payload: {
+              status: upstream.status,
+              bytesIn: 0,
+              redirect: { url: upstream.url || targetUrl.toString(), location },
+            },
+          };
+        }
         if (upstream.status === 401 && this.canForceRefreshCredential(authorization.credential)) {
           const responseBody = new Uint8Array(await upstream.arrayBuffer());
           return {
@@ -775,23 +777,14 @@ export class EgressProxy {
       // smart-HTTP exchange would move credentialed requests to an origin the
       // caller never declared. The redirect is surfaced as a rejection so the
       // caller fixes the remote URL instead of silently following it.
-      execute: async (targetUrl, headers) => {
-        // Git receive-pack may legitimately withhold response headers while the
-        // remote validates a large uploaded pack. Undici's implicit five-minute
-        // header deadline must not terminate that semantic operation. This
-        // dispatcher is owned by the proxy and closed in stop().
-        this.gitHttpDispatcher ??= new Agent({
-          headersTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
-          bodyTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
-          pipelining: 0,
-          connect: { lookup: gitHttpLookup },
-        });
+      execute: async (targetUrl, headers, _authorization, transport) => {
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
           redirect: "manual",
-          dispatcher: this.gitHttpDispatcher,
+          dispatcher: transport.dispatcher,
+          signal: transport.signal,
         } as RequestInit & { dispatcher: Dispatcher });
         if (isRedirectStatus(response.status)) {
           throw new ForwardRejection(
@@ -917,74 +910,97 @@ export class EgressProxy {
     res: ServerResponse,
     caller: VerifiedCaller | null
   ): Promise<void> {
-    const targetUrl = this.resolveTargetUrl(req);
-    if (!targetUrl) {
-      this.respondWithError(res, 400, "Proxy request URL is invalid");
-      return;
-    }
-
-    if (await this.isPlatformRpcCallback(req, targetUrl)) {
-      try {
-        const forwardResult = await this.forwardHttpRequest(
-          req,
-          res,
-          targetUrl,
-          this.preparePlatformRpcHeaders(req.headers, targetUrl)
-        );
-        await this.appendAuditEntry({
-          ts: Date.now(),
-          workerId: "platform-rpc",
-          callerId: this.readHeader(req, RPC_RUNTIME_ID_HEADER) ?? "unknown",
-          providerId: PASSTHROUGH_PROVIDER_ID,
-          connectionId: PASSTHROUGH_CONNECTION_ID,
-          method: req.method ?? "POST",
-          url: `${targetUrl.origin}${targetUrl.pathname}`,
-          status: forwardResult.statusCode,
-          durationMs: 0,
-          bytesIn: forwardResult.bytesIn,
-          bytesOut: forwardResult.bytesOut,
-          scopesUsed: [],
-          retries: 0,
-          breakerState: "closed",
-        });
-      } catch {
-        if (!res.headersSent) {
-          this.respondWithError(res, 502, "Failed to forward platform RPC callback");
-        }
-      }
-      return;
-    }
-
-    if (!caller) {
-      req.resume();
-      this.respondWithError(
-        res,
-        403,
-        "Direct egress proxy HTTP forwarding requires an attributed workerd service"
-      );
-      return;
-    }
-
+    const operation = this.beginOperation(
+      caller?.runtime.id ?? this.readHeader(req, RPC_RUNTIME_ID_HEADER) ?? "unattributed"
+    );
+    operation.hold(res);
     try {
-      await this.executeAuthorizedRequest({
-        authority: { kind: "runtime", caller },
-        method: (req.method ?? "GET").toUpperCase(),
-        targetUrl,
-        inputHeaders: req.headers,
-        credentialUse: "fetch",
-        execute: async (preparedUrl, headers) => {
-          const forwardResult = await this.forwardHttpRequest(req, res, preparedUrl, headers);
-          return { ...forwardResult, payload: undefined };
-        },
-      });
-    } catch (error) {
-      if (error instanceof ForwardRejection) {
-        this.respondWithError(res, error.statusCode, error.message);
+      const targetUrl = this.resolveTargetUrl(req);
+      if (!targetUrl) {
+        this.respondWithError(res, 400, "Proxy request URL is invalid");
         return;
       }
-      if (!res.headersSent) {
-        this.respondWithError(res, 502, "Failed to forward proxy request");
+
+      if (await this.isPlatformRpcCallback(req, targetUrl)) {
+        try {
+          const forwardResult = await this.forwardHttpRequest(
+            req,
+            res,
+            targetUrl,
+            this.preparePlatformRpcHeaders(req.headers, targetUrl),
+            await resolveNetworkDestination(
+              targetUrl,
+              { kind: "internal-loopback", origin: targetUrl.origin },
+              operation.signal
+            ),
+            operation.signal
+          );
+          await this.appendAuditEntry({
+            ts: Date.now(),
+            workerId: "platform-rpc",
+            callerId: this.readHeader(req, RPC_RUNTIME_ID_HEADER) ?? "unknown",
+            providerId: PASSTHROUGH_PROVIDER_ID,
+            connectionId: PASSTHROUGH_CONNECTION_ID,
+            method: req.method ?? "POST",
+            url: `${targetUrl.origin}${targetUrl.pathname}`,
+            status: forwardResult.statusCode,
+            durationMs: 0,
+            bytesIn: forwardResult.bytesIn,
+            bytesOut: forwardResult.bytesOut,
+            scopesUsed: [],
+            retries: 0,
+            breakerState: "closed",
+          });
+        } catch {
+          if (!res.headersSent) {
+            this.respondWithError(res, 502, "Failed to forward platform RPC callback");
+          }
+        }
+        return;
       }
+
+      if (!caller) {
+        req.resume();
+        this.respondWithError(
+          res,
+          403,
+          "Direct egress proxy HTTP forwarding requires an attributed workerd service"
+        );
+        return;
+      }
+
+      try {
+        await this.executeAuthorizedRequest({
+          authority: { kind: "runtime", caller },
+          signal: operation.signal,
+          method: (req.method ?? "GET").toUpperCase(),
+          targetUrl,
+          inputHeaders: req.headers,
+          credentialUse: "fetch",
+          execute: async (preparedUrl, headers, _authorization, transport) => {
+            transport.hold(res);
+            const forwardResult = await this.forwardHttpRequest(
+              req,
+              res,
+              preparedUrl,
+              headers,
+              transport.destination,
+              transport.signal
+            );
+            return { ...forwardResult, payload: undefined };
+          },
+        });
+      } catch (error) {
+        if (error instanceof ForwardRejection) {
+          this.respondWithError(res, error.statusCode, error.message);
+          return;
+        }
+        if (!res.headersSent) {
+          this.respondWithError(res, 502, "Failed to forward proxy request");
+        }
+      }
+    } finally {
+      operation.finish();
     }
   }
 
@@ -1043,6 +1059,7 @@ export class EgressProxy {
 
   private async executeAuthorizedRequest<T>(params: {
     authority: GitHttpAuthority;
+    signal?: AbortSignal;
     method: string;
     targetUrl: URL;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
@@ -1058,9 +1075,18 @@ export class EgressProxy {
       targetUrl: URL,
       headers: OutgoingHttpHeaders,
       authorization: Authorization,
-      manualRedirects: boolean
+      transport: {
+        destination: NetworkDestination;
+        dispatcher: Agent;
+        signal: AbortSignal;
+        hold(socket: Duplex | ServerResponse): void;
+      }
     ) => Promise<RequestExecutionResult<T>>;
   }): Promise<T> {
+    const operation = this.beginOperation(params.authority.caller.runtime.id);
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, operation.signal])
+      : operation.signal;
     const startedAt = Date.now();
     const attemptedHostAttribution =
       params.authority.kind === "host-operation"
@@ -1079,19 +1105,29 @@ export class EgressProxy {
     let breakerState: AuditEntry["breakerState"] = "closed";
 
     try {
-      let manualRedirects = await this.missionRequiresManualRedirects(
-        params.authority.caller,
-        targetUrl
+      signal.throwIfAborted();
+      if (
+        !["http:", "https:"].includes(targetUrl.protocol) ||
+        targetUrl.username ||
+        targetUrl.password
+      ) {
+        throw new ForwardRejection(400, "Egress requires an HTTP(S) URL without user information");
+      }
+      await this.missionRequiresManualRedirects(params.authority.caller, targetUrl);
+      authorization = await waitForEgress(
+        this.authorizeRequest({
+          authority: params.authority,
+          targetUrl,
+          method: params.method,
+          inputHeaders: params.inputHeaders,
+          credential: params.credential ?? { kind: "automatic" },
+          credentialUse: params.credentialUse ?? "fetch",
+          gitIntent: params.gitIntent,
+          signal,
+        }),
+        signal
       );
-      authorization = await this.authorizeRequest({
-        authority: params.authority,
-        targetUrl,
-        method: params.method,
-        inputHeaders: params.inputHeaders,
-        credential: params.credential ?? { kind: "automatic" },
-        credentialUse: params.credentialUse ?? "fetch",
-        gitIntent: params.gitIntent,
-      });
+      signal.throwIfAborted();
       const executionKey = executionPolicyKey(authorization, params.targetUrl);
       let maxAttempts =
         (params.maxRetries !== undefined
@@ -1120,17 +1156,31 @@ export class EgressProxy {
           prepared.headers[name.toLowerCase()] = value;
         }
         targetUrl = prepared.targetUrl;
-        manualRedirects =
-          (await this.missionRequiresManualRedirects(params.authority.caller, targetUrl)) ||
-          manualRedirects === true;
+        await this.missionRequiresManualRedirects(params.authority.caller, targetUrl);
+        signal.throwIfAborted();
+        const destination = await resolveNetworkDestination(
+          targetUrl,
+          authorization.endpointAuthority,
+          signal
+        );
+        const dispatcher = new Agent({
+          pipelining: 0,
+          ...(params.credentialUse === "git-http"
+            ? {
+                headersTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
+                bodyTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
+              }
+            : {}),
+          connect: { lookup: destination.lookup },
+        });
         let result: RequestExecutionResult<T> | undefined;
         try {
-          result = await params.execute(
-            targetUrl,
-            prepared.headers,
-            authorization,
-            manualRedirects === true
-          );
+          result = await params.execute(targetUrl, prepared.headers, authorization, {
+            destination,
+            dispatcher,
+            signal,
+            hold: operation.hold,
+          });
           statusCode = result.statusCode;
           bytesIn = result.bytesIn;
           bytesOut = result.bytesOut;
@@ -1184,16 +1234,24 @@ export class EgressProxy {
           recordCircuitFailure(this.circuits, executionKey);
           breakerState = getCircuitState(this.circuits, executionKey);
           throw error;
+        } finally {
+          await dispatcher.destroy();
         }
       }
       throw lastError instanceof Error ? lastError : new Error("Failed to forward proxy request");
     } catch (error) {
+      if (error instanceof NetworkDestinationDenied) {
+        statusCode = 403;
+        capabilityViolation = "network-address-denied";
+        throw new ForwardRejection(403, error.message, capabilityViolation);
+      }
       if (error instanceof ForwardRejection) {
         statusCode = error.statusCode;
         capabilityViolation = error.capabilityViolation;
       }
       throw error;
     } finally {
+      operation.finish();
       await this.appendAuditEntry({
         ts: startedAt,
         workerId: authorization?.attribution
@@ -1221,6 +1279,7 @@ export class EgressProxy {
   }
 
   private async authorizeHostGitHttp(
+    signal: AbortSignal,
     caller: VerifiedCaller,
     operation: HostGitHttpOperation,
     targetUrl: URL,
@@ -1232,7 +1291,7 @@ export class EgressProxy {
     }
     const origin = targetUrl.origin;
     await this.deps.authorizeEffect(
-      { caller, authorityAcquisition: "wait" },
+      { caller, signal, authorityAcquisition: "wait" },
       {
         service: operation.service,
         method: operation.method,
@@ -1252,7 +1311,7 @@ export class EgressProxy {
     );
     if (credentialId === null) return;
     await this.deps.authorizeEffect(
-      { caller, authorityAcquisition: "wait" },
+      { caller, signal, authorityAcquisition: "wait" },
       {
         service: operation.service,
         method: operation.method,
@@ -1298,7 +1357,9 @@ export class EgressProxy {
     credential: GitCredentialSelection;
     credentialUse: CredentialBindingUse;
     gitIntent?: GitIntentMetadata;
+    signal: AbortSignal;
   }): Promise<Authorization> {
+    params.signal.throwIfAborted();
     const caller = params.authority.caller;
     let codeAttribution: CodeRequestAttribution | null = null;
     let attribution: RequestAttribution;
@@ -1331,6 +1392,19 @@ export class EgressProxy {
       }
       attribution = codeAttribution;
     }
+    const internalAuthorization =
+      params.authority.kind === "runtime"
+        ? await this.deps.authorizeInternalRequest?.({
+            caller,
+            targetUrl: params.targetUrl,
+            method: params.method,
+            headers: params.inputHeaders,
+          })
+        : null;
+    params.signal.throwIfAborted();
+    const endpointAuthority: NetworkEndpointAuthority = internalAuthorization
+      ? { kind: "internal-loopback", origin: params.targetUrl.origin }
+      : { kind: "public" };
     const testPolicyApproved = testPolicyAllowsGatedInvocation(caller, undefined, {
       capability: "credential.use",
       resourceKey: "credential.use",
@@ -1340,6 +1414,7 @@ export class EgressProxy {
         params.credential.kind === "automatic"
           ? codeAttribution
             ? await this.resolveCredentialForRequest(
+                params.signal,
                 params.targetUrl,
                 codeAttribution,
                 params.credentialUse,
@@ -1352,6 +1427,7 @@ export class EgressProxy {
           : params.credential.kind === "named"
             ? codeAttribution
               ? await this.resolveCredentialForRequest(
+                  params.signal,
                   params.targetUrl,
                   codeAttribution,
                   params.credentialUse,
@@ -1367,6 +1443,7 @@ export class EgressProxy {
                   params.credential.label
                 )
             : null;
+      params.signal.throwIfAborted();
       if (params.credential.kind === "named" && !credential) {
         throw new ForwardRejection(
           409,
@@ -1382,14 +1459,14 @@ export class EgressProxy {
         );
       }
       if (params.authority.kind === "runtime" && !credential) {
-        const internalAuthorization = await this.deps.authorizeInternalRequest?.({
-          caller,
-          targetUrl: params.targetUrl,
-          method: params.method,
-          headers: params.inputHeaders,
-        });
         if (!internalAuthorization) {
-          await this.authorizeRawEgress(caller, codeAttribution!, params.targetUrl, params.method);
+          await this.authorizeRawEgress(
+            caller,
+            codeAttribution!,
+            params.targetUrl,
+            params.method,
+            params.signal
+          );
         }
         return {
           attribution,
@@ -1398,10 +1475,12 @@ export class EgressProxy {
           connectionId: null,
           scopes: [],
           trustedForwardHeaders: internalAuthorization?.trustedForwardHeaders ?? {},
+          endpointAuthority,
         };
       }
       if (params.authority.kind === "host-operation") {
         await this.authorizeHostGitHttp(
+          params.signal,
           caller,
           params.authority.operation,
           params.targetUrl,
@@ -1417,7 +1496,8 @@ export class EgressProxy {
           : null,
         connectionId: credential?.id ?? null,
         scopes: credential?.scopes ?? [],
-        trustedForwardHeaders: {},
+        trustedForwardHeaders: internalAuthorization?.trustedForwardHeaders ?? {},
+        endpointAuthority,
       };
     }
 
@@ -1443,6 +1523,7 @@ export class EgressProxy {
     const usage = credentialUseResource(binding, params.targetUrl, params.method);
     if (params.authority.kind === "host-operation") {
       await this.authorizeHostGitHttp(
+        params.signal,
         caller,
         params.authority.operation,
         params.targetUrl,
@@ -1463,6 +1544,7 @@ export class EgressProxy {
         !this.isCallerAllowed(credential, codeAttribution, usage.sessionResource))
     ) {
       await this.requestCredentialUseGrant(
+        params.signal,
         credential,
         binding,
         callerId,
@@ -1482,7 +1564,8 @@ export class EgressProxy {
       binding,
       connectionId: credential.id ?? credential.connectionId,
       scopes: credential.scopes,
-      trustedForwardHeaders: {},
+      trustedForwardHeaders: internalAuthorization?.trustedForwardHeaders ?? {},
+      endpointAuthority,
     };
   }
 
@@ -1490,7 +1573,8 @@ export class EgressProxy {
     caller: VerifiedCaller,
     attribution: CodeRequestAttribution,
     targetUrl: URL,
-    method: string
+    method: string,
+    signal: AbortSignal
   ): Promise<void> {
     if (!this.deps.authorizeEffect) {
       throw new ForwardRejection(403, "Raw network egress approval is unavailable");
@@ -1509,7 +1593,7 @@ export class EgressProxy {
     );
     try {
       await this.deps.authorizeEffect(
-        { caller, authorityAcquisition: "wait" },
+        { caller, signal, authorityAcquisition: "wait" },
         {
           service: "gateway",
           method: "fetch",
@@ -1553,6 +1637,7 @@ export class EgressProxy {
   }
 
   private async resolveCredentialForRequest(
+    signal: AbortSignal,
     targetUrl: URL,
     attribution: CodeRequestAttribution,
     use: CredentialBindingUse = "fetch",
@@ -1571,6 +1656,7 @@ export class EgressProxy {
         this.upgradeBindingCatalog(credential)
       )
     );
+    signal.throwIfAborted();
     const matchingCredentials = credentials.filter(
       (credential) =>
         !credential.revokedAt &&
@@ -1595,6 +1681,7 @@ export class EgressProxy {
             !this.isCallerAllowed(credential, attribution, usage.sessionResource))
         ) {
           await this.requestCredentialUseGrant(
+            signal,
             credential,
             binding,
             attribution.callerId,
@@ -1710,6 +1797,7 @@ export class EgressProxy {
   }
 
   private async requestCredentialUseGrant(
+    signal: AbortSignal,
     credential: Credential,
     binding: CredentialBinding,
     callerId: string,
@@ -1724,6 +1812,7 @@ export class EgressProxy {
         "credential-caller-not-granted"
       );
     }
+    signal.throwIfAborted();
     const usage = credentialUseResource(binding, operation.targetUrl, operation.method);
     const gitOperation =
       binding.use === "git-http" || binding.use === "git-ssh"
@@ -1734,6 +1823,7 @@ export class EgressProxy {
         : undefined;
     const force = gitOperation?.force === true;
     const decision = await this.deps.approvalQueue.request({
+      signal,
       callerId,
       callerKind: attribution.callerKind,
       ...(requestedByUserId ? { requestedByUserId } : {}),
@@ -1757,6 +1847,7 @@ export class EgressProxy {
         credential.metadata?.["oauthTokenOrigin"],
       ]),
     });
+    signal.throwIfAborted();
     if (decision === "deny" || decision === "dismiss") {
       throw new ForwardRejection(
         403,
@@ -1965,104 +2056,147 @@ export class EgressProxy {
     head: Buffer,
     caller: VerifiedCaller | null
   ): Promise<void> {
+    consumeSocketErrorsUntilClose(socket);
     const startedAt = Date.now();
-    const authority = req.url ?? "";
-    const targetUrl = authority ? new URL(`https://${authority}`) : null;
-    let authorization: Authorization | null = null;
-    let status = 502;
-    let settled = false;
-    const finishAudit = async () => {
-      if (settled) return;
-      settled = true;
+    let target: { url: URL; resource: string; port: number };
+    try {
+      target = parseConnectAuthority(req.url ?? "");
+    } catch {
+      this.rejectUpgrade(socket, 400, "CONNECT requires an exact hostname and port");
+      return;
+    }
+    if (!caller) {
+      this.rejectUpgrade(socket, 403, "CONNECT requires an attributed caller");
+      return;
+    }
+    const operation = this.beginOperation(caller.runtime.id);
+    let upstream: ReturnType<typeof netConnect> | undefined;
+    let status = 403;
+    let audited = false;
+    let attribution: CodeRequestAttribution | null = null;
+    const audit = async () => {
+      if (audited) return;
+      audited = true;
       await this.appendAuditEntry({
         ts: startedAt,
-        workerId: authorization?.attribution
-          ? attributionWorkerId(authorization.attribution)
-          : "unknown",
-        callerId: authorization?.attribution?.callerId ?? caller?.runtime.id ?? "unknown",
+        workerId: attribution ? attributionWorkerId(attribution) : "unknown",
+        callerId: caller.runtime.id,
         providerId: PASSTHROUGH_PROVIDER_ID,
         connectionId: PASSTHROUGH_CONNECTION_ID,
         method: "CONNECT",
-        url: targetUrl?.toString() ?? "CONNECT",
+        url: target.resource,
         status,
         durationMs: Date.now() - startedAt,
         bytesIn: 0,
         bytesOut: 0,
-        scopesUsed: [],
+        scopesUsed: [CONNECT_CAPABILITY],
         retries: 0,
         breakerState: "closed",
       });
     };
-
-    if (!caller || !targetUrl) {
-      status = 403;
-      await finishAudit();
-      const body = "Direct egress proxy CONNECT requires an attributed workerd service";
-      socket.end(
-        `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
-      );
-      return;
-    }
-
+    const abort = () => {
+      upstream?.destroy();
+      socket.destroy();
+    };
+    const closed = () => {
+      operation.abort();
+      upstream?.destroy();
+      operation.signal.removeEventListener("abort", abort);
+      operation.finish();
+      void audit();
+    };
+    operation.signal.addEventListener("abort", abort, { once: true });
+    socket.once("close", closed);
     try {
-      authorization = await this.authorizeRequest({
-        authority: { kind: "runtime", caller },
-        targetUrl,
-        method: "CONNECT",
-        inputHeaders: req.headers,
-        credential: { kind: "automatic" },
-        credentialUse: "fetch",
+      operation.signal.throwIfAborted();
+      attribution = this.resolveAttribution(caller);
+      if (!attribution || !this.deps.authorizeEffect) {
+        throw new ForwardRejection(403, "TCP connection authority is unavailable");
+      }
+      await this.missionRequiresManualRedirects(caller, target.url);
+      await waitForEgress(
+        this.deps.authorizeEffect(
+          { caller, signal: operation.signal, authorityAcquisition: "wait" },
+          {
+            service: "gateway",
+            method: "connect",
+            capability: CONNECT_CAPABILITY,
+            resourceKey: target.resource,
+            requirement: requirementForPrincipals(
+              ["host", "user", "code", "session"],
+              CONNECT_CAPABILITY
+            ),
+            tier: "gated",
+            sessionAdmission: "family",
+            args: [target.resource],
+            preparedStateDigest: sha256Canonical({ endpoint: target.resource }),
+            sensitivity: "write",
+            challenge: {
+              dedupKey: `tcp-connect:${caller.runtime.id}:${target.resource}`,
+              resource: { type: "text", label: "TCP endpoint", value: target.resource },
+              operation: {
+                kind: "network",
+                verb: "open a TCP connection",
+                object: { type: "text", label: "TCP endpoint", value: target.resource },
+                groupKey: `tcp-connect:${caller.runtime.id}:${target.resource}`,
+              },
+              title: `Open a TCP connection to ${target.resource}`,
+              description:
+                "Allow bidirectional TCP traffic to this endpoint. Encrypted contents are opaque; HTTP paths and credentials do not constrain this connection.",
+              details: [{ label: "Source", value: attribution.repoPath }],
+              deniedReason: "TCP connection denied",
+            },
+          }
+        ),
+        operation.signal
+      );
+      operation.signal.throwIfAborted();
+      if (socket.destroyed) return;
+      const destination = await resolveNetworkDestination(
+        target.url,
+        { kind: "public" },
+        operation.signal
+      );
+      operation.signal.throwIfAborted();
+      if (socket.destroyed) return;
+      status = 502;
+      upstream = netConnect({
+        host: destination.hostname,
+        port: target.port,
+        lookup: destination.lookup,
+      });
+      consumeSocketErrorsUntilClose(upstream);
+      upstream.once("error", () => {
+        if (!socket.destroyed) this.rejectUpgrade(socket, 502, "TCP connection failed");
+        void audit();
+      });
+      upstream.once("connect", () => {
+        if (operation.signal.aborted || socket.destroyed || !upstream) {
+          upstream?.destroy();
+          return;
+        }
+        status = 200;
+        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) upstream.write(head);
+        bridgeDuplexSockets(socket, upstream);
+        void audit();
       });
     } catch (error) {
-      status = error instanceof ForwardRejection ? error.statusCode : 403;
-      await finishAudit();
-      const body = error instanceof Error ? error.message : "CONNECT egress denied";
-      socket.end(
-        `HTTP/1.1 ${status} Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
-      );
-      return;
-    }
-
-    const onUpstreamConnectError = () => {
       if (!socket.destroyed) {
-        socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+        this.rejectUpgrade(
+          socket,
+          403,
+          error instanceof Error ? error.message : "TCP connection denied"
+        );
       }
-      void finishAudit();
-    };
-
-    let upstream: ReturnType<typeof netConnect> | null = null;
-    const onClientConnectError = () => {
-      upstream?.destroy();
-      void finishAudit();
-    };
-    const onClientConnectClose = () => {
-      upstream?.destroy();
-      void finishAudit();
-    };
-
-    const port = targetUrl.port ? Number(targetUrl.port) : 443;
-    upstream = netConnect(port, targetUrl.hostname, () => {
-      if (!upstream) return;
-      upstream.off("error", onUpstreamConnectError);
-      socket.off("error", onClientConnectError);
-      socket.off("close", onClientConnectClose);
-      status = 200;
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) upstream.write(head);
-      bridgeDuplexSockets(socket, upstream, {
-        onError: () => {
-          void finishAudit();
-        },
-        onClose: () => {
-          void finishAudit();
-        },
-      });
-      void finishAudit();
-    });
-
-    upstream.on("error", onUpstreamConnectError);
-    socket.on("error", onClientConnectError);
-    socket.on("close", onClientConnectClose);
+      await audit();
+    } finally {
+      if (!upstream) {
+        operation.signal.removeEventListener("abort", abort);
+        operation.finish();
+        socket.off("close", closed);
+      }
+    }
   }
 
   private async handleWebSocketUpgrade(
@@ -2071,93 +2205,103 @@ export class EgressProxy {
     head: Buffer,
     caller: VerifiedCaller | null
   ): Promise<void> {
-    // An HTTP upgrade hands ownership of the raw downstream socket to this
-    // proxy. Request/bridge listeners are intentionally short-lived, but the
-    // socket can still report a late reset after a non-101 response has been
-    // pipelined or after the bridge has observed both closes. Keep one
-    // lifetime error sink until close so such a transport event tears down
-    // only this connection instead of becoming an unhandled EventEmitter
-    // error that terminates the workspace server.
-    consumeSocketErrorsUntilClose(socket);
-
-    const resolvedTargetUrl = this.resolveTargetUrl(req);
-    let metadata: { targetUrl: URL; headerPairs: Array<[string, string]> } | null = null;
+    const operation = this.beginOperation(caller?.runtime.id ?? "unattributed");
+    operation.hold(socket);
     try {
-      metadata = resolvedTargetUrl ? extractVibestudioWebSocketMetadata(resolvedTargetUrl) : null;
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Invalid Vibestudio WebSocket metadata";
-      this.logWebSocketUpgradeDiagnostic("reject", {
-        reason: "invalid_metadata",
-        statusCode: 400,
-        message,
-        target: resolvedTargetUrl ? diagnosticWebSocketTarget(resolvedTargetUrl) : undefined,
-      });
-      this.rejectUpgrade(socket, 400, message);
-      return;
-    }
-    const targetUrl = metadata?.targetUrl ?? null;
-    if (!caller || !targetUrl) {
-      this.logWebSocketUpgradeDiagnostic("reject", {
-        reason: !caller ? "missing_attributed_caller" : "missing_target_url",
-        statusCode: 403,
-        target: targetUrl ? diagnosticWebSocketTarget(targetUrl) : undefined,
-      });
-      this.rejectUpgrade(socket, 403, "WebSocket egress requires an attributed workerd service");
-      return;
-    }
-    const inputHeaders = mergeWebSocketMetadataHeaders(req.headers, metadata?.headerPairs ?? []);
+      // An HTTP upgrade hands ownership of the raw downstream socket to this
+      // proxy. Request/bridge listeners are intentionally short-lived, but the
+      // socket can still report a late reset after a non-101 response has been
+      // pipelined or after the bridge has observed both closes. Keep one
+      // lifetime error sink until close so such a transport event tears down
+      // only this connection instead of becoming an unhandled EventEmitter
+      // error that terminates the workspace server.
+      consumeSocketErrorsUntilClose(socket);
 
-    const policyUrl = websocketPolicyUrlFor(targetUrl);
-    if (!policyUrl) {
-      this.logWebSocketUpgradeDiagnostic("reject", {
-        reason: "invalid_target_protocol",
-        statusCode: 400,
-        target: diagnosticWebSocketTarget(targetUrl),
-      });
-      this.rejectUpgrade(socket, 400, "WebSocket egress target URL is invalid");
-      return;
-    }
-
-    try {
-      await this.executeAuthorizedRequest({
-        authority: { kind: "runtime", caller },
-        method: "GET",
-        targetUrl: policyUrl,
-        inputHeaders,
-        credentialUse: "fetch",
-        replaySafe: false,
-        maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
-        retryStatuses: false,
-        shouldRetryError: shouldRetryWebSocketUpgradeError,
-        execute: async (preparedPolicyUrl, headers) => {
-          const upstreamUrl = websocketUpstreamUrlFor(preparedPolicyUrl, targetUrl.protocol);
-          const forwardHeaders = this.prepareWebSocketForwardHeaders(inputHeaders, headers);
-          const result = await this.forwardWebSocketUpgrade(
-            req,
-            socket,
-            head,
-            upstreamUrl,
-            forwardHeaders
-          );
-          return result;
-        },
-      });
-    } catch (error) {
-      if (!socket.destroyed) {
-        const status = error instanceof ForwardRejection ? error.statusCode : 502;
-        const message = error instanceof Error ? error.message : "WebSocket egress failed";
+      const resolvedTargetUrl = this.resolveTargetUrl(req);
+      let metadata: { targetUrl: URL; headerPairs: Array<[string, string]> } | null = null;
+      try {
+        metadata = resolvedTargetUrl ? extractVibestudioWebSocketMetadata(resolvedTargetUrl) : null;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Invalid Vibestudio WebSocket metadata";
         this.logWebSocketUpgradeDiagnostic("reject", {
-          reason:
-            error instanceof ForwardRejection
-              ? (error.code ?? "authorization_rejected")
-              : "forward_failed",
-          statusCode: status,
+          reason: "invalid_metadata",
+          statusCode: 400,
           message,
+          target: resolvedTargetUrl ? diagnosticWebSocketTarget(resolvedTargetUrl) : undefined,
+        });
+        this.rejectUpgrade(socket, 400, message);
+        return;
+      }
+      const targetUrl = metadata?.targetUrl ?? null;
+      if (!caller || !targetUrl) {
+        this.logWebSocketUpgradeDiagnostic("reject", {
+          reason: !caller ? "missing_attributed_caller" : "missing_target_url",
+          statusCode: 403,
+          target: targetUrl ? diagnosticWebSocketTarget(targetUrl) : undefined,
+        });
+        this.rejectUpgrade(socket, 403, "WebSocket egress requires an attributed workerd service");
+        return;
+      }
+      const inputHeaders = mergeWebSocketMetadataHeaders(req.headers, metadata?.headerPairs ?? []);
+
+      const policyUrl = websocketPolicyUrlFor(targetUrl);
+      if (!policyUrl) {
+        this.logWebSocketUpgradeDiagnostic("reject", {
+          reason: "invalid_target_protocol",
+          statusCode: 400,
           target: diagnosticWebSocketTarget(targetUrl),
         });
-        this.rejectUpgrade(socket, status, message);
+        this.rejectUpgrade(socket, 400, "WebSocket egress target URL is invalid");
+        return;
       }
+
+      try {
+        await this.executeAuthorizedRequest({
+          authority: { kind: "runtime", caller },
+          signal: operation.signal,
+          method: "GET",
+          targetUrl: policyUrl,
+          inputHeaders,
+          credentialUse: "fetch",
+          replaySafe: false,
+          maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
+          retryStatuses: false,
+          shouldRetryError: shouldRetryWebSocketUpgradeError,
+          execute: async (preparedPolicyUrl, headers, _authorization, transport) => {
+            transport.hold(socket);
+            const upstreamUrl = websocketUpstreamUrlFor(preparedPolicyUrl, targetUrl.protocol);
+            const forwardHeaders = this.prepareWebSocketForwardHeaders(inputHeaders, headers);
+            const result = await this.forwardWebSocketUpgrade(
+              req,
+              socket,
+              head,
+              upstreamUrl,
+              forwardHeaders,
+              transport.destination,
+              transport.signal
+            );
+            return result;
+          },
+        });
+      } catch (error) {
+        if (!socket.destroyed) {
+          const status = error instanceof ForwardRejection ? error.statusCode : 502;
+          const message = error instanceof Error ? error.message : "WebSocket egress failed";
+          this.logWebSocketUpgradeDiagnostic("reject", {
+            reason:
+              error instanceof ForwardRejection
+                ? (error.code ?? "authorization_rejected")
+                : "forward_failed",
+            statusCode: status,
+            message,
+            target: diagnosticWebSocketTarget(targetUrl),
+          });
+          this.rejectUpgrade(socket, status, message);
+        }
+      }
+    } finally {
+      operation.finish();
     }
   }
 
@@ -2196,7 +2340,9 @@ export class EgressProxy {
     socket: Duplex,
     head: Buffer,
     targetUrl: URL,
-    headers: OutgoingHttpHeaders
+    headers: OutgoingHttpHeaders,
+    destination: NetworkDestination,
+    signal: AbortSignal
   ): Promise<RequestExecutionResult<void>> {
     return new Promise<RequestExecutionResult<void>>((resolve, reject) => {
       const requestUrl = websocketHttpUrlFor(targetUrl);
@@ -2229,7 +2375,10 @@ export class EgressProxy {
       const startAttempt = (family?: 4, fallbackFrom?: unknown) => {
         const upstreamRequest = requestFn({
           protocol: requestUrl.protocol,
-          hostname: requestUrl.hostname,
+          hostname: destination.hostname,
+          lookup: destination.lookup,
+          agent: false,
+          signal,
           port: requestUrl.port ? Number(requestUrl.port) : defaultPort,
           method: req.method ?? "GET",
           path: `${requestUrl.pathname}${requestUrl.search}`,
@@ -2435,7 +2584,9 @@ export class EgressProxy {
     req: IncomingMessage,
     res: ServerResponse,
     targetUrl: URL,
-    headers: OutgoingHttpHeaders
+    headers: OutgoingHttpHeaders,
+    destination: NetworkDestination,
+    signal: AbortSignal
   ): Promise<ForwardResult> {
     return new Promise<ForwardResult>((resolve, reject) => {
       const requestFn = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
@@ -2448,7 +2599,10 @@ export class EgressProxy {
       const upstreamRequest = requestFn(
         {
           protocol: targetUrl.protocol,
-          hostname: targetUrl.hostname,
+          hostname: destination.hostname,
+          lookup: destination.lookup,
+          agent: false,
+          signal,
           port: targetUrl.port ? Number(targetUrl.port) : defaultPort,
           method: req.method ?? "GET",
           path: `${targetUrl.pathname}${targetUrl.search}`,
@@ -3292,4 +3446,80 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
     grant.scope === "version" ? grant.repoPath : grant.agentId,
     grant.scope === "version" ? grant.effectiveVersion : "",
   ].join("\x00");
+}
+
+/** CONNECT uses authority-form, never URL paths, credentials, or default ports. */
+export function parseConnectAuthority(value: string): { url: URL; resource: string; port: number } {
+  const match = /^(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9.-]+):([0-9]{1,5})$/.exec(value);
+  if (!match) throw new Error("Invalid CONNECT authority");
+  const port = Number(match[2]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid CONNECT port");
+  const url = new URL(`https://${match[1]}:${port}`);
+  const resource = `${url.hostname}:${port}`;
+  return { url, resource, port };
+}
+
+interface ProxyFetchRequest<Body> {
+  caller: VerifiedCaller;
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: Body;
+  credentialId?: string;
+}
+
+interface ProxyFetchResponse {
+  status: number;
+  statusText: string;
+  headerPairs: Array<[string, string]>;
+  finalUrl: string;
+  body: Uint8Array;
+}
+
+function redirectedFetchRequest<Body>(
+  request: ProxyFetchRequest<Body>,
+  from: string,
+  status: number,
+  location: string
+): ProxyFetchRequest<Body> {
+  const target = new URL(location, from);
+  if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) {
+    throw new ForwardRejection(403, "Redirect destination is not an HTTP(S) endpoint");
+  }
+  const headers = new Headers(request.headers);
+  const method = request.method.toUpperCase();
+  const useGet =
+    ((status === 301 || status === 302) && method === "POST") ||
+    (status === 303 && method !== "GET" && method !== "HEAD");
+  if (useGet) {
+    for (const name of [
+      "content-type",
+      "content-length",
+      "content-encoding",
+      "content-language",
+      "content-location",
+    ])
+      headers.delete(name);
+  } else if (request.body instanceof ReadableStream) {
+    throw new ForwardRejection(403, "Cannot replay a streamed upload across a redirect");
+  }
+  if (target.origin !== new URL(from).origin) {
+    for (const name of ["authorization", "cookie", "proxy-authorization"]) headers.delete(name);
+  }
+  return {
+    ...request,
+    url: target.href,
+    method: useGet ? "GET" : method,
+    body: useGet ? undefined : request.body,
+    headers: Object.fromEntries(headers),
+  };
+}
+
+function waitForEgress<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }

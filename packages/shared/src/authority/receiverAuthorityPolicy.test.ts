@@ -3,7 +3,11 @@ import { receiverAuthorityPolicy, standingAgentScopeEligible } from "./receiverA
 
 describe("standing agent-scope eligibility", () => {
   it("requires two exact interactive approvals for sharing, accounts, and network egress", () => {
-    for (const capability of ["external.open", "accounts.connect", "workspace.gateway.access"]) {
+    for (const capability of [
+      "external.open",
+      "accounts.connect",
+      "workspace.gateway.access",
+    ]) {
       const policy = receiverAuthorityPolicy(capability);
       expect(
         standingAgentScopeEligible({
@@ -22,6 +26,12 @@ describe("standing agent-scope eligibility", () => {
         })
       ).toBe(true);
     }
+  });
+
+  it("keeps TCP CONNECT outside standing agent scope like raw response egress", () => {
+    expect(receiverAuthorityPolicy("network.connect")).toEqual(
+      receiverAuthorityPolicy("network.response.read")
+    );
   });
 
   it("offers ordinary reversible gated authority immediately", () => {

@@ -24,7 +24,10 @@ export interface RuntimeEntityCleanupDeps {
     ): number;
   };
   workspaceId?: string;
-  getWorkerdManager(): Pick<WorkerdManager, "stopWorker" | "retireDOEntity"> | null;
+  getWorkerdManager(): Pick<
+    WorkerdManager,
+    "stopWorker" | "retireDOEntity" | "retireEgressCaller"
+  > | null;
   getFsService(): FsService | null;
   getWebhookIngress(): {
     internal?: { revokeForCaller?: (callerId: string) => Promise<number> };
@@ -51,10 +54,12 @@ export async function cleanupRuntimeEntity(
     }
   };
 
+  const workerdManager = deps.getWorkerdManager();
+  await attempt(() => workerdManager?.retireEgressCaller(record.id));
+  await attempt(() => deps.egressProxy.dropCaller(record.id));
   if (record.kind === "panel") {
     await attempt(() => deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id));
   }
-  await attempt(() => deps.egressProxy.dropCaller(record.id));
   await attempt(() => deps.approvalQueue.cancelForCaller(record.id));
   await attempt(() => deps.credentialSessionGrantStore.dropForCaller(record.id));
   await attempt(() => deps.connectionGrants?.revokeForPrincipal(record.id));
@@ -62,7 +67,6 @@ export async function cleanupRuntimeEntity(
   await attempt(() => deps.getWebhookIngress()?.internal?.revokeForCaller?.(record.id));
   await attempt(() => deps.tokenManager.revokeToken(record.id));
   await attempt(() => deps.clearPresentationTitle?.(record.id));
-  const workerdManager = deps.getWorkerdManager();
   if (record.kind === "worker") {
     await attempt(() => workerdManager?.stopWorker(record.id));
   }

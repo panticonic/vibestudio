@@ -1,4 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  return {
+    ...actual,
+    lookup: vi.fn(async (hostname: string, options?: { all?: boolean }) => {
+      if (
+        hostname === "api.example.test" ||
+        hostname === "example.test" ||
+        hostname === "github.com"
+      ) {
+        return options?.all === false
+          ? { address: "93.184.216.34", family: 4 }
+          : [{ address: "93.184.216.34", family: 4 }];
+      }
+      return actual.lookup(hostname, options as never);
+    }),
+  };
+});
 import {
   createServer,
   request as httpRequest,
@@ -251,6 +269,14 @@ function createProxy(
     auditLog: auditLog as never,
     ...extraDeps,
   });
+}
+
+function authorizeLoopbackFixture(origin: string) {
+  return {
+    authorizeInternalRequest: vi.fn(async ({ targetUrl }: { targetUrl: URL }) =>
+      targetUrl.origin === origin ? {} : null
+    ),
+  };
 }
 
 function createApprovalQueueMock(
@@ -604,7 +630,11 @@ describe("EgressProxy", () => {
         },
       ],
     });
-    const proxy = createProxy(credential, auditLog);
+    const proxy = createProxy(
+      credential,
+      auditLog,
+      authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+    );
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
     );
@@ -750,6 +780,9 @@ describe("EgressProxy", () => {
       credentialStore: store,
       auditLog: auditLog as never,
       credentialLifecycle: credentialLifecycle as never,
+      authorizeInternalRequest: vi.fn(async ({ targetUrl }: { targetUrl: URL }) =>
+        targetUrl.origin === `http://127.0.0.1:${upstreamPort}` ? {} : null
+      ),
     });
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
@@ -835,7 +868,11 @@ describe("EgressProxy", () => {
         },
       ],
     });
-    const proxy = createProxy(credential, auditLog);
+    const proxy = createProxy(
+      credential,
+      auditLog,
+      authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+    );
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
     );
@@ -908,7 +945,11 @@ describe("EgressProxy", () => {
       ],
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const proxy = createProxy(credential, auditLog);
+    const proxy = createProxy(
+      credential,
+      auditLog,
+      authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+    );
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
     );
@@ -1002,7 +1043,11 @@ describe("EgressProxy", () => {
       ],
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const proxy = createProxy(credential, auditLog);
+    const proxy = createProxy(
+      credential,
+      auditLog,
+      authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+    );
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
     );
@@ -1062,7 +1107,11 @@ describe("EgressProxy", () => {
         resolve((upstreamServer.address() as AddressInfo).port);
       });
     });
-    const proxy = createProxy(createLocalFetchCredential(upstreamPort), auditLog);
+    const proxy = createProxy(
+      createLocalFetchCredential(upstreamPort),
+      auditLog,
+      authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+    );
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
     );
@@ -1134,6 +1183,9 @@ describe("EgressProxy", () => {
       credentialStore: new MemoryCredentialStore(new Map([[credential.id!, credential]])),
       auditLog: auditLog as never,
       credentialLifecycle: credentialLifecycle as never,
+      authorizeInternalRequest: vi.fn(async ({ targetUrl }: { targetUrl: URL }) =>
+        targetUrl.origin === `http://127.0.0.1:${upstreamPort}` ? {} : null
+      ),
     });
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
@@ -1216,7 +1268,11 @@ describe("EgressProxy", () => {
         },
       ],
     });
-    const proxy = createProxy(credential, auditLog);
+    const proxy = createProxy(
+      credential,
+      auditLog,
+      authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`)
+    );
     proxy.setCallerResolver((callerId) =>
       callerId === "worker:test" ? workerCaller(callerId) : null
     );
@@ -1260,32 +1316,36 @@ describe("EgressProxy", () => {
     const approvalQueue = createApprovalQueueMock("version");
     const authority = rawEgressAuthority(approvalQueue);
     const auditLog = new MemoryAuditLog();
+    let targetPort = 0;
     const proxy = createProxy(createCredential({ bindings: [] }), auditLog, {
       approvalQueue,
       authorizeEffect: authority.authorizeEffect,
     });
+    let upstreamRequests = 0;
     const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      upstreamRequests += 1;
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("raw-ok");
     });
 
     try {
-      const targetPort = await new Promise<number>((resolve, reject) => {
+      targetPort = await new Promise<number>((resolve, reject) => {
         target.once("error", reject);
         target.listen(0, "127.0.0.1", () => {
           target.off("error", reject);
           resolve((target.address() as AddressInfo).port);
         });
       });
-      const proxyPort = await proxy.startForCaller(workerCaller("worker:test"));
+      const caller = workerCaller("worker:test");
+      const proxyPort = await proxy.startForCaller(caller, () => caller);
 
       const res = await requestThroughHttpProxy({
         proxyPort,
         targetUrl: `http://127.0.0.1:${targetPort}/raw`,
       });
 
-      expect(res.status).toBe(200);
-      expect(res.body).toBe("raw-ok");
+      expect(res.status).toBe(403);
+      expect(upstreamRequests).toBe(0);
       expect(approvalQueue.request).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "capability",
@@ -1303,7 +1363,7 @@ describe("EgressProxy", () => {
         callerId: "worker:test",
         workerId: "/repo",
         providerId: "passthrough",
-        status: 200,
+        status: 403,
       });
     } finally {
       await proxy.stop();
@@ -1330,7 +1390,8 @@ describe("EgressProxy", () => {
           resolve((target.address() as AddressInfo).port);
         });
       });
-      const proxyPort = await proxy.startForCaller(workerCaller("worker:test"));
+      const caller = workerCaller("worker:test");
+      const proxyPort = await proxy.startForCaller(caller, () => caller);
       const res = await requestThroughHttpProxy({
         proxyPort,
         targetUrl: `http://127.0.0.1:${targetPort}/internal`,
@@ -1353,31 +1414,36 @@ describe("EgressProxy", () => {
   it("reuses raw workerd egress approvals by origin", async () => {
     const approvalQueue = createApprovalQueueMock("version");
     const authority = rawEgressAuthority(approvalQueue);
+    let targetPort = 0;
     const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
       approvalQueue,
       authorizeEffect: authority.authorizeEffect,
     });
+    let upstreamRequests = 0;
     const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      upstreamRequests += 1;
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("ok");
     });
 
     try {
-      const targetPort = await new Promise<number>((resolve, reject) => {
+      targetPort = await new Promise<number>((resolve, reject) => {
         target.once("error", reject);
         target.listen(0, "127.0.0.1", () => {
           target.off("error", reject);
           resolve((target.address() as AddressInfo).port);
         });
       });
-      const proxyPort = await proxy.startForCaller(workerCaller("worker:test"));
+      const caller = workerCaller("worker:test");
+      const proxyPort = await proxy.startForCaller(caller, () => caller);
       for (const path of ["/one", "/two"]) {
         const res = await requestThroughHttpProxy({
           proxyPort,
           targetUrl: `http://127.0.0.1:${targetPort}${path}`,
         });
-        expect(res.status).toBe(200);
+        expect(res.status).toBe(403);
       }
+      expect(upstreamRequests).toBe(0);
       expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     } finally {
       await proxy.stop();
@@ -1622,27 +1688,34 @@ describe("EgressProxy", () => {
     const assertMissionNetworkExposure = vi.fn(() => true);
     const proxy = createProxy(createCredential(), new MemoryAuditLog(), {
       assertMissionNetworkExposure,
+      authorizeEffect: vi.fn(async () => undefined),
     });
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.redirect).toBe("manual");
-      return new Response(null, {
-        status: 302,
-        headers: { location: "https://unreviewed.example/escape" },
-      });
+      if (fetchMock.mock.calls.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://api.example.test/v1/next" },
+        });
+      }
+      return new Response("ok", { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await proxy.forwardProxyFetch({
       caller: workerCaller("worker:mission"),
-      credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
     });
-    expect(response.status).toBe(302);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(assertMissionNetworkExposure).toHaveBeenCalledWith(
       expect.objectContaining({ runtime: expect.objectContaining({ id: "worker:mission" }) }),
       new URL("https://api.example.test/v1/items")
+    );
+    expect(assertMissionNetworkExposure).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: expect.objectContaining({ id: "worker:mission" }) }),
+      new URL("https://api.example.test/v1/next")
     );
 
     const blockedFetch = vi.fn();
@@ -1657,7 +1730,6 @@ describe("EgressProxy", () => {
     await expect(
       blocked.forwardProxyFetch({
         caller: workerCaller("worker:mission"),
-        credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",
       })
@@ -2131,9 +2203,9 @@ describe("EgressProxy", () => {
         },
       ],
     });
-    const authorizeInternalRequest = vi.fn(async () => ({}));
     const proxy = createProxy(credential, new MemoryAuditLog(), {
-      authorizeInternalRequest,
+      authorizeInternalRequest: vi.fn(async () => null),
+      authorizeEffect: vi.fn(async () => undefined),
     });
     vi.stubGlobal(
       "fetch",
@@ -2149,20 +2221,25 @@ describe("EgressProxy", () => {
       url: "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack",
       method: "GET",
     });
-
-    expect(authorizeInternalRequest).toHaveBeenCalledTimes(1);
   });
 
   it("owns the dispatcher used by long-running Git HTTP requests", async () => {
+    let destroySpy: ReturnType<typeof vi.spyOn> | undefined;
     const fetchMock = vi.fn<
       (
         input: RequestInfo | URL,
         init?: RequestInit & { dispatcher?: Dispatcher }
       ) => Promise<Response>
-    >(async () => new Response(new Uint8Array(), { status: 200 }));
+    >(async (_input, init) => {
+      if (init?.dispatcher && !destroySpy) {
+        destroySpy = vi.spyOn(init.dispatcher, "destroy");
+      }
+      return new Response(new Uint8Array(), { status: 200 });
+    });
     vi.stubGlobal("fetch", fetchMock);
     const proxy = createProxy(undefined, new MemoryAuditLog(), {
-      authorizeInternalRequest: vi.fn(async () => ({})),
+      authorizeInternalRequest: vi.fn(async () => null),
+      authorizeEffect: vi.fn(async () => undefined),
     });
 
     await proxy.forwardGitHttp({
@@ -2172,11 +2249,10 @@ describe("EgressProxy", () => {
       method: "GET",
     });
 
-    const dispatcher = fetchMock.mock.calls[0]?.[1]?.dispatcher;
-    expect(dispatcher).toBeDefined();
-    const close = vi.spyOn(dispatcher!, "close");
+    expect(destroySpy).toBeDefined();
+    expect(destroySpy).toHaveBeenCalled();
     await proxy.stop();
-    expect(close).toHaveBeenCalled();
+    expect(destroySpy).toHaveBeenCalled();
   });
 
   it("rejects a bare host caller on the runtime Git authority path", async () => {
@@ -2248,7 +2324,8 @@ describe("EgressProxy", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
       const proxy = createProxy(undefined, new MemoryAuditLog(), {
-        authorizeInternalRequest: vi.fn(async () => ({})),
+        authorizeInternalRequest: vi.fn(async () => null),
+        authorizeEffect: vi.fn(async () => undefined),
       });
 
       await expect(
@@ -2267,26 +2344,38 @@ describe("EgressProxy", () => {
     }
   );
 
-  it("still lets ordinary fetch follow redirects when no mission requires otherwise", async () => {
-    // Refusing redirects is a Git-HTTP-specific rule. `credentials.fetch` has
-    // no redirect-following loop of its own, so forcing `manual` here would
-    // hand callers a bare 301 instead of the resource.
-    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 }));
+  it("reauthorizes each ordinary fetch redirect hop", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://api.example.test/next" },
+        })
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array([1]), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const authorizeEffect = vi.fn(async () => undefined);
     const proxy = createProxy(undefined, new MemoryAuditLog(), {
-      authorizeInternalRequest: vi.fn(async () => ({})),
+      authorizeInternalRequest: vi.fn(async () => null),
+      authorizeEffect,
     });
 
-    await proxy.forwardProxyFetch({
+    const response = await proxy.forwardProxyFetch({
       caller: workerCaller("worker:test"),
       url: "https://example.test/resource",
       method: "GET",
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://example.test/resource",
-      expect.objectContaining({ redirect: "follow" })
-    );
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://example.test/resource");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://api.example.test/next");
+    expect(fetchMock.mock.calls).toEqual([
+      ["https://example.test/resource", expect.objectContaining({ redirect: "manual" })],
+      ["https://api.example.test/next", expect.objectContaining({ redirect: "manual" })],
+    ]);
+    expect(authorizeEffect).toHaveBeenCalledTimes(2);
   });
 
   it.each([

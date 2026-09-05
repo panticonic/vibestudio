@@ -142,6 +142,7 @@ for (const row of authorityLedger.rows) {
 const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
   ["context.boundary", "critical"],
   ["clipboard", "gated"],
+  ["network.connect", "gated"],
   ["network.response.read", "gated"],
   ["incoming-pair-links", "gated"],
   ["internal-model-runtime.use", "gated"],
