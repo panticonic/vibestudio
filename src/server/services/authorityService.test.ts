@@ -256,6 +256,9 @@ describe("authorityService", () => {
         targetSubject: task,
         sourceUser: "user:alice",
         capability: "notification.show",
+        authorityPlanDigest: "b".repeat(64),
+        resource: { kind: "exact", key: "user:alice" },
+        tier: "gated",
       }),
     ]);
   });
