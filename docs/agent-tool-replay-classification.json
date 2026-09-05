@@ -21,6 +21,12 @@
   },
   "surfaces": [
     {
+      "id": "harness.imagegen",
+      "paths": ["workspace/packages/harness/src/tools/imagegen.ts"],
+      "class": "unsafe",
+      "notes": "Image generation is a nondeterministic provider request that can consume subscription quota. Do not replay an interrupted request automatically; completed binary writes use the canonical semantic mutation engine."
+    },
+    {
       "id": "agentic-do.set-title",
       "paths": ["workspace/packages/agentic-do/src/trajectory-vessel-base.ts"],
       "class": "unsafe",
