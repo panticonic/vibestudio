@@ -113,6 +113,10 @@ async function loadWithMocks(): Promise<{
     "@workspace/lib": "workspace:*",
   });
   writeUnit(workspaceRoot, "packages/isolated", "@workspace/isolated");
+  const isolatedManifestPath = path.join(workspaceRoot, "packages/isolated/package.json");
+  const isolatedManifest = JSON.parse(fs.readFileSync(isolatedManifestPath, "utf8"));
+  isolatedManifest.exports = { ".": "./index.ts", "./alpha": "./index.ts", "./beta": "./index.ts" };
+  fs.writeFileSync(isolatedManifestPath, JSON.stringify(isolatedManifest));
   writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
     "@workspace/mid": "workspace:*",
   });
@@ -290,6 +294,20 @@ describe("BuildSystemV2 — explicit build reports", () => {
     ]);
   });
 
+  it("validates package source once across all six export targets", async () => {
+    env = await loadWithMocks();
+    const node = env.buildSystem;
+    const report = await node.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(report.builds).toHaveLength(6);
+    expect(typecheckCalls).toBe(1);
+    expect(typecheckInputs[0]?.authority).toBeUndefined();
+    expect(buildCalls).toHaveLength(6);
+
+    await node.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+    expect(typecheckCalls).toBe(1);
+    expect(buildCalls).toHaveLength(6);
+  });
+
   it("coalesces concurrent reports for the same immutable unit view", async () => {
     env = await loadWithMocks();
 
@@ -464,6 +482,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
 
     expect(report.diagnostics).toHaveLength(1);
+    expect(typecheckCalls).toBe(1);
     expect(report.builds.length).toBeGreaterThan(1);
     expect(report.builds.every((build) => build.diagnosticIndexes[0] === 0)).toBe(true);
   });

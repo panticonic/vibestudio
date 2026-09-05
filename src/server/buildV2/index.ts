@@ -771,9 +771,24 @@ export async function initBuildSystemV2(
           // disagree and desynchronize the lookup array below.
           const isCacheable = (unitName: string): boolean =>
             view.evMap[unitName] !== undefined && view.evMap[unitName] !== "unknown";
-          const cacheableIdentities = [...consumerIdentities.values()].filter((consumer) =>
-            isCacheable(consumer.unitName)
+          // Capture memory hits before yielding to the worker. A concurrent
+          // analysis may evict LRU entries while disk lookup is in flight.
+          const memoryByUnit = new Map(
+            [...consumerIdentities.values()].flatMap((consumer) => {
+              const facts = isCacheable(consumer.unitName)
+                ? authorityFactCache.get(sha256Canonical(consumer))
+                : undefined;
+              return facts ? [[consumer.unitName, facts] as const] : [];
+            })
           );
+          const cacheableIdentities = [...consumerIdentities.values()].filter(
+            (consumer) => isCacheable(consumer.unitName) && !memoryByUnit.has(consumer.unitName)
+          );
+          const cacheMissSamples: Array<{
+            unitName: string;
+            reason: string;
+            firstDifferingPath?: string;
+          }> = [];
           const durableLookups = await authorityAnalysisWorker.factLookups(
             source.workspaceId,
             cacheableIdentities,
@@ -790,15 +805,17 @@ export async function initBuildSystemV2(
             const consumerIdentity = assertPresent(consumerIdentities.get(node.name));
             const factCacheKey = sha256Canonical(consumerIdentity);
             const cacheable = isCacheable(node.name);
-            const durableLookup = cacheable
-              ? assertPresent(durableByUnit.get(node.name))
-              : { facts: null, reason: "unit-not-cacheable" as const };
+            const memoryFacts = memoryByUnit.get(node.name);
+            const durableLookup = memoryFacts
+              ? { facts: null, reason: "hit-memory" as const }
+              : cacheable
+                ? assertPresent(durableByUnit.get(node.name))
+                : { facts: null, reason: "unit-not-cacheable" as const };
             cacheReasons.set(
               durableLookup.reason,
               (cacheReasons.get(durableLookup.reason) ?? 0) + 1
             );
             const durableFacts = durableLookup.facts;
-            const memoryFacts = cacheable ? authorityFactCache.get(factCacheKey) : undefined;
             const cachedFacts =
               memoryFacts ??
               (durableFacts
@@ -823,6 +840,15 @@ export async function initBuildSystemV2(
                 facts: cachedFacts.facts,
               });
               continue;
+            }
+            if (cacheMissSamples.length < 8) {
+              cacheMissSamples.push({
+                unitName: node.name,
+                reason: durableLookup.reason,
+                ...("firstDifferingPath" in durableLookup && durableLookup.firstDifferingPath
+                  ? { firstDifferingPath: durableLookup.firstDifferingPath }
+                  : {}),
+              });
             }
             missingConsumers.push({
               node,
@@ -974,7 +1000,7 @@ export async function initBuildSystemV2(
             }
             commitMs = Date.now() - commitStartedAt;
           }
-          if (missingConsumers.length > 0) {
+          {
             const eventLoop = performance.eventLoopUtilization(eventLoopStart);
             console.log("[BuildV2] Authority analysis phases", {
               stateHash,
@@ -988,6 +1014,7 @@ export async function initBuildSystemV2(
                 [...cacheReasons].sort(([a], [b]) => a.localeCompare(b))
               ),
               misses: missingConsumers.length,
+              cacheMissSamples,
               projectionUnits: new Set(
                 missingConsumers.flatMap((consumer) =>
                   consumer.internalDeps.map((unit) => unit.name)
@@ -1488,7 +1515,7 @@ export async function initBuildSystemV2(
 
   /**
    * Build a single target for a unit at a state, capturing structured esbuild
-   * diagnostics on failure + folding tsc diagnostics. Never throws — failures
+   * diagnostics on failure. Source validation belongs to the unit report. Failures
    * land in the returned target's `diagnostics`.
    */
   const buildOneTarget = async (
@@ -1504,6 +1531,7 @@ export async function initBuildSystemV2(
   ): Promise<{
     target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
     reusable: boolean;
+    built: BuildResult | null;
   }> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
@@ -1536,6 +1564,56 @@ export async function initBuildSystemV2(
       reusable = false;
     }
 
+    if (buildError != null) {
+      try {
+        const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
+          internalDeps,
+          viewStateHash,
+          workspaceRoot
+        );
+        diagnostics = diagnosticsFromError(buildError, {
+          workspaceRoot,
+          sourceRoot,
+          unitRelativePath: node.relativePath,
+        });
+      } catch {
+        // Source validation below reports materialization failures separately.
+      }
+    }
+    if (buildError != null && diagnostics.length === 0) {
+      diagnostics = diagnosticsFromError(buildError, {
+        workspaceRoot,
+        unitRelativePath: node.relativePath,
+      });
+    }
+
+    return {
+      target: {
+        target: spec.target,
+        ...(spec.target !== "runtime"
+          ? { exportPath: (spec as { exportPath: string }).exportPath }
+          : {}),
+        buildKey,
+        diagnostics,
+      },
+      reusable,
+      built,
+    };
+  };
+
+  /** Validate a unit's source once, independently of its emitted export targets.
+   * Library targets change bundling, not the compiler inputs checked here.
+   * Executable authority still uses that executable's sealed module inventory. */
+  const validateUnitSource = async (
+    node: GraphNode,
+    graphAtView: PackageGraph,
+    viewStateHash: string,
+    built: BuildResult | null,
+    onProgress?: (progress: BuildReportProgress) => void
+  ): Promise<{ diagnostics: BuildDiagnostic[]; reusable: boolean }> => {
+    const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
+    let diagnostics: BuildDiagnostic[] = [];
+    let reusable = true;
     // Fold typecheck diagnostics from the exact materialized source. This is
     // fail-closed: typecheck engine/materialization failures become errors in
     // the report and therefore cannot pass a protected-main build gate.
@@ -1548,13 +1626,6 @@ export async function initBuildSystemV2(
         viewStateHash,
         workspaceRoot
       );
-      if (buildError != null) {
-        diagnostics = diagnosticsFromError(buildError, {
-          workspaceRoot,
-          sourceRoot,
-          unitRelativePath: node.relativePath,
-        });
-      }
       // Provision resolution exactly like the build: workspace deps from the
       // materialized subtrees, external deps from the app node_modules. Without
       // both, the bare source root resolves nothing → false "Cannot find module".
@@ -1635,25 +1706,7 @@ export async function initBuildSystemV2(
         message: `Typecheck could not complete: ${message}`,
       });
     }
-    if (buildError != null && diagnostics.length === 0) {
-      diagnostics = diagnosticsFromError(buildError, {
-        workspaceRoot,
-        unitRelativePath: node.relativePath,
-      });
-    }
-
-    recordDiagnostics(node.name, buildKey, diagnostics);
-    return {
-      target: {
-        target: spec.target,
-        ...(spec.target !== "runtime"
-          ? { exportPath: (spec as { exportPath: string }).exportPath }
-          : {}),
-        buildKey,
-        diagnostics,
-      },
-      reusable,
-    };
+    return { diagnostics, reusable };
   };
 
   /**
@@ -1735,6 +1788,7 @@ export async function initBuildSystemV2(
     const outcomes: Array<{
       target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
       reusable: boolean;
+      built: BuildResult | null;
     }> = [];
     if (node.kind === "package") {
       const targets = libraryTargetsForDependents(node.name, view.graph);
@@ -1766,6 +1820,21 @@ export async function initBuildSystemV2(
           priority
         )
       );
+    }
+
+    const validation = await validateUnitSource(
+      node,
+      view.graph,
+      viewStateHash,
+      outcomes[0]?.built ?? null,
+      onProgress
+    );
+    for (const outcome of outcomes) {
+      outcome.target.diagnostics.push(...validation.diagnostics);
+      outcome.reusable &&= validation.reusable;
+      if (outcome.target.buildKey) {
+        recordDiagnostics(node.name, outcome.target.buildKey, outcome.target.diagnostics);
+      }
     }
 
     const diagnostics: BuildDiagnostic[] = [];

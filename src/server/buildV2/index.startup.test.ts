@@ -302,8 +302,15 @@ describe("BuildSystemV2 startup", () => {
     const { AuthorityAnalysisWorkerClient } = await import("./authorityAnalysisWorkerClient.js");
     const compilerSnapshot = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "compilerSnapshot");
 
+    const factLookups = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "factLookups");
     buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
     await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
+    expect(compilerSnapshot).toHaveBeenCalledTimes(1);
+
+    // A different workspace state with the same consumer inputs reuses the
+    // in-memory facts; it neither rechecks their disk dependencies nor compiles.
+    await buildSystem.listAffectedBuildUnits(`state:${"b".repeat(64)}`, []);
+    expect(factLookups.mock.calls.at(-1)?.[1]).toEqual([]);
     expect(compilerSnapshot).toHaveBeenCalledTimes(1);
     await buildSystem.shutdown();
     buildSystem = null;
@@ -312,6 +319,7 @@ describe("BuildSystemV2 startup", () => {
     await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
     expect(compilerSnapshot).toHaveBeenCalledTimes(1);
 
+    factLookups.mockRestore();
     compilerSnapshot.mockRestore();
     vi.doUnmock("./typecheckFold.js");
   });
