@@ -88,3 +88,10 @@ are in `wrangler.toml`.
 
 When the universal-link env is unset, the `.well-known` routes return 503 rather
 than serving a broken association.
+
+## Local toolchain
+
+Wrangler is pinned to 4.116.0, which pairs Miniflare 4.20260730.0 with patched
+Sharp 0.35.2. Later Wrangler releases switch to Miniflare 5 alpha; upgrade that
+execution layer deliberately. The repository already requires Node 22.19 or
+newer, satisfying this toolchain.

@@ -1,0 +1,123 @@
+{
+  "date": "2026-09-05",
+  "scopes": {
+    "production": {
+      "command": "pnpm audit --prod --json",
+      "metadata": {
+        "vulnerabilities": {
+          "info": 0,
+          "low": 0,
+          "moderate": 0,
+          "high": 3,
+          "critical": 0
+        },
+        "dependencies": 1417,
+        "devDependencies": 0,
+        "optionalDependencies": 0,
+        "totalDependencies": 1417
+      },
+      "advisories": [
+        {
+          "package": "image-size",
+          "severity": "high",
+          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+          "advisory": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+          "patchedVersions": "<0.0.0",
+          "findings": [
+            {
+              "version": "1.2.1",
+              "paths": [
+                "apps__mobile>react-native>@react-native/community-cli-plugin>metro>image-size"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "image-size",
+          "severity": "high",
+          "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+          "advisory": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
+          "patchedVersions": "<0.0.0",
+          "findings": [
+            {
+              "version": "1.2.1",
+              "paths": [
+                "apps__mobile>react-native>@react-native/community-cli-plugin>metro>image-size"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "extract-zip",
+          "severity": "high",
+          "title": "extract-zip unvalidated symlink path traversal",
+          "advisory": "https://github.com/advisories/GHSA-jmr9-qjv8-65gv",
+          "patchedVersions": "<0.0.0",
+          "findings": [
+            {
+              "version": "2.0.1",
+              "paths": [".>@puppeteer/browsers>extract-zip"]
+            }
+          ]
+        }
+      ]
+    },
+    "allDependencies": {
+      "command": "pnpm audit --json",
+      "metadata": {
+        "vulnerabilities": {
+          "info": 0,
+          "low": 0,
+          "moderate": 0,
+          "high": 3,
+          "critical": 0
+        },
+        "dependencies": 1925,
+        "devDependencies": 0,
+        "optionalDependencies": 0,
+        "totalDependencies": 1925
+      },
+      "advisories": [
+        {
+          "package": "image-size",
+          "severity": "high",
+          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+          "advisory": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+          "patchedVersions": "<0.0.0",
+          "findings": [
+            {
+              "version": "1.2.1",
+              "paths": ["apps__mobile>@react-native/metro-config>metro-config>metro>image-size"]
+            }
+          ]
+        },
+        {
+          "package": "image-size",
+          "severity": "high",
+          "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+          "advisory": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
+          "patchedVersions": "<0.0.0",
+          "findings": [
+            {
+              "version": "1.2.1",
+              "paths": ["apps__mobile>@react-native/metro-config>metro-config>metro>image-size"]
+            }
+          ]
+        },
+        {
+          "package": "extract-zip",
+          "severity": "high",
+          "title": "extract-zip unvalidated symlink path traversal",
+          "advisory": "https://github.com/advisories/GHSA-jmr9-qjv8-65gv",
+          "patchedVersions": "<0.0.0",
+          "findings": [
+            {
+              "version": "2.0.1",
+              "paths": [".>@puppeteer/browsers>extract-zip"]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

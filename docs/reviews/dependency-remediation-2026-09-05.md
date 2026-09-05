@@ -1,5 +1,10 @@
 # Low-risk dependency remediation — 2026-09-05
 
+Follow-up: [navigation and Miniflare modernization](navigation-miniflare-upgrade-2026-09-05.md)
+removes the decoder and Sharp findings recorded below. The current production
+and full audits each contain three findings; this report retains the earlier
+stage as historical evidence.
+
 This follow-up completes the compatible security updates left open by the
 [initial review](project-review-2026-09-05.md). No product permissions, supported
 user actions, or approval requirements were changed.

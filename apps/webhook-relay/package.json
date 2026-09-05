@@ -9,8 +9,8 @@
     "test": "cd ../.. && vitest run apps/webhook-relay/src"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241112.0",
+    "@cloudflare/workers-types": "^5.20260730.1",
     "typescript": "7.0.2",
-    "wrangler": "^4.0.0"
+    "wrangler": "4.116.0"
   }
 }
