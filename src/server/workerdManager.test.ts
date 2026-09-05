@@ -802,6 +802,8 @@ describe("WorkerdManager", () => {
         authority: { provides: [], requests: [], serviceRequests: [] },
       }));
       vi.mocked(deps.bindRuntimeImage).mockClear();
+      const unregisterEgressCaller = vi.fn();
+      deps.unregisterEgressCaller = unregisterEgressCaller;
       const restored = new WorkerdManager(deps);
 
       await restored.restoreDurableObjectEntity({
@@ -847,6 +849,7 @@ describe("WorkerdManager", () => {
           objectKey: "k1",
         })
       ).resolves.toBeUndefined();
+      expect(unregisterEgressCaller).toHaveBeenCalledWith("do:workers/new-do:NewDO:k1");
       expect(recordLifecycleEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           entityId: "do:workers/new-do:NewDO:k1",

@@ -1181,7 +1181,7 @@ export function createApprovalQueue(deps: {
       ) {
         return { kind: "workspace", verb: req.title, ...(object ? { object } : {}) };
       }
-      if (req.capability === "network.response.read") {
+      if (req.capability === "network.response.read" || req.capability === "network.connect") {
         return { kind: "network", verb: req.title, ...(object ? { object } : {}) };
       }
       if (req.capability === "workerd.inspector") {

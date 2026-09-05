@@ -1488,6 +1488,10 @@ export class WorkerdManager {
    * keeps ordinary create/delete UX restart-free while bounding accumulation
    * during long-running build and system-test campaigns.
    */
+  retireEgressCaller(callerId: string): void {
+    this.deps.unregisterEgressCaller(callerId);
+  }
+
   async retireDOEntity(ref: DORef): Promise<void> {
     const targetId = canonicalEntityId({
       kind: "do",
@@ -1495,6 +1499,7 @@ export class WorkerdManager {
       className: ref.className,
       key: ref.objectKey,
     });
+    this.retireEgressCaller(targetId);
     let abortError: unknown;
     if (!isInternalDOSource(ref.source)) {
       try {

@@ -56,6 +56,25 @@ describe("capability clearance", () => {
     ).toBe(false);
   });
 
+  it("keeps broad TCP CONNECT reach contextual while allowing an exact host and port", () => {
+    expect(
+      isInstallClearable({
+        capability: "network.connect",
+        resource: { kind: "exact", key: "127.0.0.1:42531" },
+        tier: "gated",
+        reviewed: true,
+      })
+    ).toBe(true);
+    expect(
+      isInstallClearable({
+        capability: "network.connect",
+        resource: { kind: "network", value: "*" },
+        tier: "gated",
+        reviewed: true,
+      })
+    ).toBe(false);
+  });
+
   it("never lets a critical request hold a standing decision", () => {
     expect(
       capabilityClearancePolicy({

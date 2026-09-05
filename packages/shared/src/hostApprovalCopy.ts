@@ -859,6 +859,14 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "host",
   },
   {
+    prefix: "network.connect",
+    authorityCategory: { domain: "web", verb: "act" },
+    title: "Open a TCP connection",
+    action: "open a TCP connection",
+    description: "Send and receive bidirectional bytes with the approved host and port",
+    group: "network",
+  },
+  {
     prefix: "network.response.read",
     authorityCategory: { domain: "web", verb: "act" },
     title: "Use the internet",

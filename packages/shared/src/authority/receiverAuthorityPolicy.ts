@@ -8,7 +8,11 @@ export interface ReceiverAuthorityPolicy {
   substanceKind: import("../approvals.js").OperationSubstance["kind"] | null;
 }
 
-const NETWORK_EGRESS = new Set<string>(["network.response.read", "workspace.gateway.access"]);
+const NETWORK_EGRESS = new Set<string>([
+  "network.connect",
+  "network.response.read",
+  "workspace.gateway.access",
+]);
 
 const IRREVERSIBLE = new Set<string>([
   "application.shutdown",

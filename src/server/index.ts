@@ -6155,6 +6155,8 @@ async function main() {
     eventService,
     executionPublicationPort: executionPublicationJournal,
     resolveEgressCaller: (registered) => {
+      const entity = entityCache.resolve(registered.runtime.id);
+      if (entity && entity.status !== "active") return null;
       const activeEntity = entityCache.resolveActive(registered.runtime.id);
       return resolveLiveExecutionCaller({
         registered,

@@ -62,6 +62,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "notifications", notability: "everyday" },
 
   // ── The web ────────────────────────────────────────────────────────────────
+  { key: "network.connect", notability: "headline" },
   { key: "network.response.read", notability: "headline" },
   { key: "workspace.gateway.access", notability: "headline" },
   { key: "browser-data.read", notability: "headline" },

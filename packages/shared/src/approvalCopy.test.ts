@@ -1,4 +1,4 @@
-import type { PendingApproval } from "./approvals.js";
+import type { PendingApproval, PendingCapabilityApproval } from "./approvals.js";
 import type { InstallReviewPart } from "./authority/unitInstallReview.js";
 import { authorityRow } from "./authority/authorityRows.js";
 import {
@@ -218,6 +218,32 @@ describe("approvalCopy", () => {
       category: "Internet access",
       title: "Connect to localhost:42531",
       summaryIncludes: "Sends and receives data",
+    },
+    {
+      name: "tcp connect",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "network.connect",
+        title: "Open a TCP connection",
+        resource: {
+          type: "host-port",
+          label: "TCP destination",
+          value: "127.0.0.1:42531",
+        },
+        operation: {
+          kind: "network",
+          verb: "Open a TCP connection",
+          object: {
+            type: "host-port",
+            label: "TCP destination",
+            value: "127.0.0.1:42531",
+          },
+        },
+      },
+      category: "Internet access",
+      title: "Open a TCP connection",
+      summaryIncludes: "send and receive bidirectional bytes",
     },
     {
       name: "credential repo binding",
@@ -652,6 +678,9 @@ describe("approvalCopy", () => {
     expect(getStandardActionCopy(networkEgress).once.label).toBe("Connect once");
     expect(getStandardActionCopy(networkEgress).session!.label).toBe("Allow this site");
     expect(getStandardActionCopy(networkEgress).session!.description).toContain("localhost:42531");
+    const networkConnect = fixtures.find(({ name }) => name === "tcp connect")!
+      .approval as PendingCapabilityApproval;
+    expect(getStandardActionCopy(networkConnect).session!.label).toBe("Allow this TCP endpoint");
     expect(getStandardActionCopy(networkEgress).version!.label).toBe(
       "Allow all internet access for this version"
     );

@@ -10,6 +10,15 @@ import {
 } from "./workerd.js";
 
 describe("workerd bootstrap policy", () => {
+  const egressProxyMock = () =>
+    ({
+      startForCaller: vi.fn(),
+      startShared: vi.fn(),
+      setCallerResolver: vi.fn(),
+      dropCaller: vi.fn(async () => {}),
+      stopShared: vi.fn(async () => {}),
+    }) as unknown as WorkerdBootstrapDeps["egressProxy"];
+
   it("parses JSON and comma-separated gateway aliases", () => {
     expect(parseGatewayAliases('["https://one.example", "https://two.example", 3]')).toEqual([
       "https://one.example",
@@ -56,7 +65,7 @@ describe("workerd bootstrap policy", () => {
       userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
       assertBootstrapSnapshotUnchanged: vi.fn(async () => undefined),
       routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
-      egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
+      egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",
       gateway: {
         getPort: () => 7788,
@@ -119,7 +128,7 @@ describe("workerd bootstrap policy", () => {
       userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
       assertBootstrapSnapshotUnchanged,
       routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
-      egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
+      egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",
       gateway: {
         getPort: () => 7788,
@@ -208,7 +217,7 @@ describe("workerd bootstrap policy", () => {
         userlandResourceHandles as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
       assertBootstrapSnapshotUnchanged: vi.fn(async () => undefined),
       routeRegistry: routeRegistry as unknown as WorkerdBootstrapDeps["routeRegistry"],
-      egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
+      egressProxy: egressProxyMock(),
       gatewayToken: "gateway-token",
       gateway: {
         getPort: () => 7788,

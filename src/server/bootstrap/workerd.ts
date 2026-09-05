@@ -35,7 +35,10 @@ export interface WorkerdBootstrapDeps {
   workspaceId: string;
   workspaceDeclarations: WorkspaceDeclarations;
   routeRegistry: RouteRegistry;
-  egressProxy: Pick<EgressProxy, "startForCaller" | "startShared" | "setCallerResolver">;
+  egressProxy: Pick<
+    EgressProxy,
+    "startForCaller" | "startShared" | "setCallerResolver" | "dropCaller" | "stopShared"
+  >;
   gatewayToken: string;
   gateway: WorkerdGatewayBootstrapConfig;
   getInternalDoEnv(className: string): Record<string, string>;
@@ -277,7 +280,15 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         getInternalDoEnv: deps.getInternalDoEnv,
         executionPublicationPort: deps.executionPublicationPort,
         routeRegistry: deps.routeRegistry,
-        getProxyPort: (caller) => deps.egressProxy.startForCaller(caller),
+        getProxyPort: async (caller) => {
+          await deps.egressProxy.dropCaller(caller.runtime.id);
+          egressCallers.set(caller.runtime.id, caller);
+          return deps.egressProxy.startForCaller(caller, () =>
+            egressCallers.get(caller.runtime.id) === caller
+              ? deps.resolveEgressCaller(caller)
+              : null
+          );
+        },
         getSharedEgressPort: () => deps.egressProxy.startShared(egressSecret),
         registerEgressCaller: (callerId, caller) => egressCallers.set(callerId, caller),
         unregisterEgressCaller: (callerId) => egressCallers.delete(callerId),
@@ -339,6 +350,12 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       return manager;
     },
     async stop(instance: WorkerdManager | null) {
+      const callers = [...egressCallers.keys()];
+      egressCallers.clear();
+      await Promise.all([
+        ...callers.map((callerId) => deps.egressProxy.dropCaller(callerId)),
+        deps.egressProxy.stopShared(),
+      ]);
       await instance?.shutdown();
     },
   });

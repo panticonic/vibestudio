@@ -245,7 +245,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.capability === "workspace-project-import") {
     return HOST_APPROVAL_COPY.categories.projectImport;
   }
-  if (approval.capability === "network.response.read") {
+  if (approval.capability === "network.response.read" || approval.capability === "network.connect") {
     return HOST_APPROVAL_COPY.categories.networkAccess;
   }
   if (approval.capability === "workerd.inspector") {
@@ -529,6 +529,21 @@ const CAPABILITY_ACTION_HANDLERS: Record<
         description: `Allow ${exactTrustSubject(approval)} to use the internet without asking for each site.`,
       },
       denyDescription: `Do not connect to ${destination}.`,
+    };
+  },
+  "network.connect"(approval) {
+    const destination = approval.resource?.value ?? "this host and port";
+    return {
+      once: HOST_APPROVAL_COPY.actions.network.once,
+      session: {
+        label: "Allow this TCP endpoint",
+        description: `Allow TCP connections to ${destination} until you close Vibestudio.`,
+      },
+      version: {
+        label: networkTrustLabel(approval),
+        description: `Allow ${exactTrustSubject(approval)} to use this TCP destination without asking each time.`,
+      },
+      denyDescription: `Do not open a TCP connection to ${destination}.`,
     };
   },
 };
@@ -877,6 +892,15 @@ const CAPABILITY_COPY_HANDLERS: Record<
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
     return { title: fallback.title, summary: approvalDescription(approval) ?? fallback.summary };
+  },
+  "network.connect"(approval) {
+    const destination = approval.resource?.value ?? "this host and port";
+    return {
+      title: "Open a TCP connection",
+      summary:
+        approvalDescription(approval) ??
+        `Allow ${exactTrustSubject(approval)} to send and receive bidirectional bytes with ${destination}.`,
+    };
   },
   "workerd.inspector"(approval) {
     const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
