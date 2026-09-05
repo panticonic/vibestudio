@@ -170,6 +170,9 @@ jobs:
       - name: Install test dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Build the native terminal dependency
+        run: pnpm rebuild node-pty
+
       - name: Install bubblewrap
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap

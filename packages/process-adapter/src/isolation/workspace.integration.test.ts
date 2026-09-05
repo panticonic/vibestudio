@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm, realpath, copyFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, realpath, copyFile, cp } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createServer, type Server } from "node:net";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceSandbox } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
@@ -61,6 +62,204 @@ function message(command: ProcessAdapter): Promise<unknown> {
 // These are real kernel checks, not mocked launch assertions. Build the package
 // before running: the same installed JS entry used by production is exercised.
 describe("shared workspace sandbox on the native platform", () => {
+  it("opens a real PTY inside the workspace and carries input and resize", async () => {
+    const platform = process.platform;
+    if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
+      throw new Error(`No confinement backend for ${platform}`);
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibestudio-workspace-pty-")));
+    directories.push(root);
+    const privateRoot = path.join(root, "workspace");
+    const runtime = path.join(privateRoot, "runtime");
+    const home = path.join(privateRoot, "state");
+    await mkdir(runtime, { recursive: true });
+    await mkdir(path.join(home, "tmp"), { recursive: true });
+    const hostCanary = path.join(root, "host-secret");
+    await writeFile(hostCanary, "host-only");
+    const executable = path.join(runtime, platform === "win32" ? "node.exe" : "node");
+    await copyFile(platform === "linux" ? "/usr/bin/node" : process.execPath, executable);
+    const installedRuntime = await realpath(
+      fileURLToPath(new URL("../../dist/isolation", import.meta.url))
+    );
+    for (const name of ["workspaceChild.js", "control.js"])
+      await copyFile(path.join(installedRuntime, name), path.join(runtime, name));
+    await writeFile(path.join(runtime, "package.json"), '{"type":"module"}');
+
+    // Copy the installed package's actual native loader closure into this
+    // workspace, rather than exposing the host node_modules tree or a PTY.
+    const require = createRequire(import.meta.url);
+    const installedPty = path.dirname(require.resolve("node-pty/package.json"));
+    const ptyRoot = path.join(runtime, "node_modules", "node-pty");
+    await mkdir(ptyRoot, { recursive: true });
+    await copyFile(path.join(installedPty, "package.json"), path.join(ptyRoot, "package.json"));
+    await cp(path.join(installedPty, "lib"), path.join(ptyRoot, "lib"), {
+      recursive: true,
+      dereference: true,
+    });
+    for (const relative of [
+      "build/Release",
+      "build/Debug",
+      `prebuilds/${platform}-${process.arch}`,
+    ]) {
+      try {
+        await cp(path.join(installedPty, relative), path.join(ptyRoot, relative), {
+          recursive: true,
+          dereference: true,
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    const terminalEntry = path.join(runtime, "terminal.cjs");
+    await writeFile(
+      terminalEntry,
+      `
+      const fs = require('node:fs');
+      const emit = value => process.stdout.write('PTY_RESULT:' + JSON.stringify(value) + '\\n');
+      const dimensions = () => ({ columns: process.stdout.columns, rows: process.stdout.rows });
+      const deadline = setTimeout(() => process.exit(124), 8000);
+      emit({ ready: true, tty: process.stdin.isTTY && process.stdout.isTTY, ...dimensions() });
+      require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+        if (line === 'quit') { clearTimeout(deadline); process.exit(0); }
+        let hostDenied = false;
+        let inputWriteDenied = false;
+        try { fs.readFileSync(${JSON.stringify(hostCanary)}); } catch { hostDenied = true; }
+        try { fs.writeFileSync(__filename, 'tampered'); } catch { inputWriteDenied = true; }
+        emit({ input: line, ...dimensions() });
+        emit({ hostDenied, inputWriteDenied });
+      });
+    `
+    );
+    const entry = path.join(runtime, "pty-owner.cjs");
+    await writeFile(
+      entry,
+      `
+      let terminal;
+      let output = '';
+      let outputBytes = 0;
+      const deadline = setTimeout(() => { terminal?.kill(); process.exit(124); }, 10000);
+      const stop = () => { terminal?.kill(); };
+      process.on('SIGTERM', stop);
+      process.on('disconnect', stop);
+      try {
+        terminal = require('node-pty').spawn(process.execPath, [${JSON.stringify(terminalEntry)}], {
+          name: 'xterm-256color', cols: 100, rows: 30, cwd: process.env.HOME, env: process.env
+        });
+        terminal.onData(data => {
+          outputBytes += Buffer.byteLength(data);
+          if (outputBytes > 65536) { stop(); throw new Error('PTY output exceeded fixture limit'); }
+          output += data;
+          for (;;) {
+            const start = output.indexOf('PTY_RESULT:');
+            if (start < 0) break;
+            const end = output.indexOf('\\n', start);
+            if (end < 0) break;
+            const record = output.slice(start + 'PTY_RESULT:'.length, end).trim();
+            output = output.slice(end + 1);
+            process.send(JSON.parse(record));
+          }
+        });
+        terminal.onExit(event => { clearTimeout(deadline); process.exit(event.exitCode); });
+        process.on('message', value => {
+          if (value.resize) terminal.resize(value.resize.columns, value.resize.rows);
+          if (value.input) terminal.write(value.input);
+        });
+      } catch (error) {
+        console.error('Workspace node-pty startup failed:', error.stack);
+        clearTimeout(deadline);
+        process.exit(1);
+      }
+    `
+    );
+    const launcher = await realpath(
+      platform === "linux"
+        ? "/usr/bin/bwrap"
+        : platform === "darwin"
+          ? "/usr/bin/sandbox-exec"
+          : fileURLToPath(
+              new URL("../../../../dist/native/win32-x64/vibestudio-isolation.exe", import.meta.url)
+            )
+    );
+    const installation = {
+      platform,
+      launcher,
+      workspaceEntry: path.join(runtime, "workspaceChild.js"),
+    };
+    storageOwners.push({ root: privateRoot, installation });
+    const sandbox = await WorkspaceSandbox.start(
+      {
+        version: 1,
+        owner: {
+          workspaceId: "pty",
+          contextId: null,
+          runtimeId: "workspace-pty",
+          incarnation: "fixture",
+          executionDigest: "fixture-runtime",
+        },
+        privateRoot,
+        executable,
+        args: [],
+        cwd: home,
+        home,
+        environment: {
+          PATH: runtime,
+          ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {}),
+        },
+        read: [
+          ...(platform === "linux"
+            ? ["/usr"]
+            : platform === "darwin"
+              ? ["/usr/lib", "/System/Library"]
+              : []),
+          runtime,
+        ],
+        write: [home],
+        sockets: [],
+      },
+      installation
+    );
+    sandboxes.push(sandbox);
+    const command = sandbox.fork(entry, {});
+    // Collect from one subscription so adjacent PTY records cannot race a
+    // succession of one-shot message listeners. Keep failures diagnostic.
+    const records: unknown[] = [];
+    let stderr = "";
+    command.on("message", (value) => records.push(value));
+    command.stderr?.on("data", (chunk) => {
+      stderr = (stderr + String(chunk)).slice(-16_384);
+    });
+    let exitCode: number | null | undefined;
+    command.on("exit", (code) => {
+      exitCode = code;
+    });
+    try {
+      await vi.waitFor(
+        () => {
+          if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);
+          expect(records).toContainEqual({ ready: true, tty: true, columns: 100, rows: 30 });
+        },
+        { timeout: 5000 }
+      );
+      command.postMessage({ resize: { columns: 120, rows: 40 }, input: "workspace-input\r" });
+      await vi.waitFor(
+        () => {
+          if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);
+          expect(records).toContainEqual({ input: "workspace-input", columns: 120, rows: 40 });
+          expect(records).toContainEqual({ hostDenied: true, inputWriteDenied: true });
+        },
+        { timeout: 5000 }
+      );
+      command.postMessage({ input: "quit\r" });
+      await vi.waitFor(() => expect(exitCode, stderr).toBe(0), { timeout: 3000 });
+    } finally {
+      if (exitCode === undefined) {
+        command.kill();
+        await vi.waitFor(() => expect(exitCode, `PTY cleanup: ${stderr}`).not.toBeUndefined(), {
+          timeout: 3000,
+        });
+      }
+    }
+  }, 20_000);
+
   it("shares commands within a workspace, denies host/sibling access and cancels independently", async () => {
     vi.stubEnv("ISOLATION_PARENT_SECRET", "synthetic-host-secret");
     const root = await realpath(
@@ -94,10 +293,7 @@ describe("shared workspace sandbox on the native platform", () => {
         : platform === "darwin"
           ? "/usr/bin/sandbox-exec"
           : fileURLToPath(
-              new URL(
-                "../../../../dist/native/win32-x64/vibestudio-isolation.exe",
-                import.meta.url
-              )
+              new URL("../../../../dist/native/win32-x64/vibestudio-isolation.exe", import.meta.url)
             )
     );
     const starts = await Promise.allSettled(
