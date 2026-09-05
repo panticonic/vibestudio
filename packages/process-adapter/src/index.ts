@@ -7,6 +7,15 @@ import { fork as nodeFork } from "node:child_process";
 import type { Serializable } from "node:child_process";
 import { createRequire } from "node:module";
 
+export { compileExecution, validateExecutionPolicy, IsolationError } from "./isolation/index.js";
+export type {
+  ExecutionPolicy,
+  IsolationInstallation,
+  CompiledExecution,
+} from "./isolation/index.js";
+export { WorkspaceSandbox } from "./isolation/workspace.js";
+export type { WorkspaceSandboxInstallation, WorkspaceStopResult } from "./isolation/workspace.js";
+
 // Electron is supplied by the runtime executable rather than the workspace or
 // launch directory. Anchoring the require at that executable works in both the
 // package's native ESM build and the host's CommonJS production bundle.
@@ -22,11 +31,17 @@ export interface ProcessAdapter {
   on(event: "message", handler: (msg: unknown) => void): this;
   on(event: "exit", handler: (code: number | null) => void): this;
   on(event: "spawn", handler: () => void): this;
+  on(event: "disconnect", handler: () => void): this;
+  on(event: "error", handler: (error: Error) => void): this;
   off(event: string, handler: (...args: any[]) => void): this;
   removeListener(event: string, handler: (...args: any[]) => void): this;
   kill(): boolean;
   stdout: NodeJS.ReadableStream | null;
   stderr: NodeJS.ReadableStream | null;
+  /** Bytes awaiting delivery on the process-control channel, when available. */
+  readonly bufferedAmount?: number;
+  /** Diagnostic process observation. A sandbox adapter's PID may be namespace-
+   * local or guest-reported; never use it to signal/inspect a host process. */
   pid: number | undefined;
 }
 
@@ -91,16 +106,30 @@ export function createNodeProcessAdapter(
     env: childEnv as NodeJS.ProcessEnv,
     execArgv: options.execArgv,
   });
+  let bufferedAmount = 0;
   const adapter: ProcessAdapter = {
     postMessage: (msg) => {
       if (!proc.connected || typeof proc.send !== "function") return;
+      const bytes = Buffer.byteLength(JSON.stringify(msg) ?? "null");
+      if (bufferedAmount + bytes > 64 * 1024 * 1024) {
+        throw new Error("Process IPC delivery buffer limit exceeded");
+      }
+      bufferedAmount += bytes;
+      let accounted = true;
+      const delivered = () => {
+        if (!accounted) return;
+        accounted = false;
+        bufferedAmount -= bytes;
+      };
       try {
         proc.send(msg as Serializable, (error) => {
+          delivered();
           if (error && !isClosedIpcError(error)) {
             proc.emit("error", error);
           }
         });
       } catch (error) {
+        delivered();
         if (!isClosedIpcError(error)) throw error;
       }
     },
@@ -119,6 +148,9 @@ export function createNodeProcessAdapter(
     kill: () => proc.kill(),
     stdout: proc.stdout,
     stderr: proc.stderr,
+    get bufferedAmount() {
+      return bufferedAmount;
+    },
     get pid() {
       return proc.pid;
     },
