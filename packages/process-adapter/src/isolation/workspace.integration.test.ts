@@ -95,7 +95,7 @@ describe("shared workspace sandbox on the native platform", () => {
           ? "/usr/bin/sandbox-exec"
           : fileURLToPath(
               new URL(
-                "../../../../native/isolation/target/release/vibestudio-isolation.exe",
+                "../../../../dist/native/win32-x64/vibestudio-isolation.exe",
                 import.meta.url
               )
             )

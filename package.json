@@ -11,7 +11,7 @@
     "vibestudio-server": "dist/server.mjs"
   },
   "scripts": {
-    "build": "node scripts/generate-system-epoch.mjs && NODE_ENV=production node build.mjs",
+    "build": "node scripts/generate-system-epoch.mjs && node build.mjs --production",
     "build:infrastructure": "node scripts/build-infrastructure-packages.mjs",
     "bootstrap": "pnpm install",
     "bootstrap:frozen": "pnpm install --frozen-lockfile",

@@ -43,6 +43,11 @@ jobs:
       - name: Install Linux sandbox runtime
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
+      - name: Install the reviewed Rust toolchain
+        run: |
+          rustup set profile minimal
+          rustup default 1.95.0
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -127,12 +132,22 @@ jobs:
           test "$(wc -l < SHA256SUMS-macos)" -eq 1
 
   native-isolation:
-    name: Native workspace isolation (${{ matrix.os }})
+    name: Native workspace isolation (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14, windows-2022]
-    runs-on: ${{ matrix.os }}
+        include:
+          - runner: ubuntu-22.04
+            target: linux-x64
+          - runner: ubuntu-22.04-arm
+            target: linux-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: macos-14
+            target: darwin-arm64
+          - runner: windows-2022
+            target: win32-x64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
 
@@ -159,9 +174,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
+      - name: Install the reviewed Rust toolchain
+        run: |
+          rustup set profile minimal
+          rustup default 1.95.0
+
       - name: Build native storage cleanup and admission
-        working-directory: native/isolation
-        run: cargo build --locked --release
+        run: node scripts/build-native-isolation.mjs
 
       - name: Test native storage primitives
         working-directory: native/isolation
@@ -172,3 +191,11 @@ jobs:
 
       - name: Check native confinement and workspace sharing
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
+
+      - name: Upload tested native release input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-isolation-${{ matrix.target }}
+          path: dist/native/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 30

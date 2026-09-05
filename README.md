@@ -263,6 +263,14 @@ ports, ready files, CLI credentials, and sessions. The checkout-scoped lock
 prevents two launchers from competing for one instance, while different
 instances run concurrently. Stopping one never targets another hub.
 
+Native helper builds require Rust 1.95.0. Source builds emit the helper for the current process architecture. Release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging npm packages or installers, download the native artifacts from a successful CI run for the same native source:
+
+```bash
+gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/artifacts
+```
+
+Generic npm packages require the complete Linux/macOS x64 and ARM64 plus Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
+
 ## Scripts
 
 - `pnpm dev` - Build and start in development mode with DevTools

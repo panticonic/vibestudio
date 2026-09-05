@@ -75,3 +75,6 @@ test-results/
 
 # Generated Miniflare/Durable Object state (never commit)
 .wrangler/
+
+# CI-built native release matrix, validated before packaging.
+/native/isolation/artifacts/

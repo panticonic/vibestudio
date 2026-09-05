@@ -1,14 +1,10 @@
 import { execFileSync } from "node:child_process";
-import path from "node:path";
+import { nativeIsolationExecutable } from "./nativeIsolationExecutable.js";
 import type { WorkspaceTrashRemoval } from "@vibestudio/workspace/loader";
 
 /** Installed catalog-owner effect; never a guest-selected filesystem service. */
 export function nativeWorkspaceCleanup(appRoot: string): WorkspaceTrashRemoval {
-  const helper = path.join(
-    appRoot,
-    "dist",
-    process.platform === "win32" ? "vibestudio-isolation.exe" : "vibestudio-isolation"
-  );
+  const helper = nativeIsolationExecutable(appRoot);
   return (target) => {
     execFileSync(helper, ["--remove-workspace-trash", target], {
       env:

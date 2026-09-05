@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
 
-const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const contracts = [
   {
@@ -36,7 +36,9 @@ const contracts = [
       '"use strict"',
       'import("esbuild-svelte")',
       'require("node-pty")',
-      'require("@vscode/ripgrep")',
+      // The workspace owner resolves and stages this installed binary with
+      // createRequire; the confined disk worker receives its admitted path.
+      '"@vscode/ripgrep"',
     ],
     forbidden: [
       {
@@ -54,6 +56,12 @@ const contracts = [
           "@vscode/ripgrep must stay external so import.meta.url resolves its installed platform binary.",
       },
     ],
+  },
+  {
+    path: "dist/fs-disk-worker.cjs",
+    runtime: "confined native filesystem worker",
+    format: "cjs",
+    mustContain: ["VIBESTUDIO_RIPGREP_PATH"],
   },
   {
     path: "dist/dependency-content-maintenance.cjs",
