@@ -1,0 +1,792 @@
+{
+  "command": "pnpm audit --prod --json",
+  "date": "2026-09-05",
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 8,
+      "moderate": 20,
+      "high": 29,
+      "critical": 0
+    },
+    "dependencies": 1411,
+    "devDependencies": 0,
+    "optionalDependencies": 0,
+    "totalDependencies": 1411
+  },
+  "advisories": [
+    {
+      "package": "diff",
+      "severity": "low",
+      "title": "jsdiff has a Denial of Service vulnerability in parsePatch and applyPatch",
+      "advisory": "https://github.com/advisories/GHSA-73rr-hh4g-fpgx",
+      "patchedVersions": ">=8.0.3",
+      "findings": [
+        {
+          "version": "7.0.0",
+          "paths": [".>diff"]
+        }
+      ]
+    },
+    {
+      "package": "qs",
+      "severity": "low",
+      "title": "qs's arrayLimit bypass in comma parsing allows denial of service",
+      "advisory": "https://github.com/advisories/GHSA-w7fw-mjwx-w883",
+      "patchedVersions": ">=6.14.2",
+      "findings": [
+        {
+          "version": "6.14.1",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-server-api>body-parser>qs"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "minimatch",
+      "severity": "high",
+      "title": "minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern",
+      "advisory": "https://github.com/advisories/GHSA-3ppc-4f35-3m26",
+      "patchedVersions": ">=3.1.3",
+      "findings": [
+        {
+          "version": "3.1.2",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "minimatch",
+      "severity": "high",
+      "title": "minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments",
+      "advisory": "https://github.com/advisories/GHSA-7r86-cg39-jmmj",
+      "patchedVersions": ">=3.1.3",
+      "findings": [
+        {
+          "version": "3.1.2",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "minimatch",
+      "severity": "high",
+      "title": "minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions",
+      "advisory": "https://github.com/advisories/GHSA-23c5-xmqv-rm74",
+      "patchedVersions": ">=3.1.4",
+      "findings": [
+        {
+          "version": "3.1.2",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "brace-expansion",
+      "severity": "moderate",
+      "title": "brace-expansion: Zero-step sequence causes process hang and memory exhaustion",
+      "advisory": "https://github.com/advisories/GHSA-f886-m6hf-6m8v",
+      "patchedVersions": ">=1.1.13",
+      "findings": [
+        {
+          "version": "1.1.12",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch>brace-expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "picomatch",
+      "severity": "moderate",
+      "title": "Picomatch: Method Injection in POSIX Character Classes causes incorrect Glob Matching",
+      "advisory": "https://github.com/advisories/GHSA-3v7f-55p6-f55p",
+      "patchedVersions": ">=4.0.4",
+      "findings": [
+        {
+          "version": "4.0.3",
+          "paths": [".>sucrase>tinyglobby>picomatch"]
+        }
+      ]
+    },
+    {
+      "package": "picomatch",
+      "severity": "high",
+      "title": "Picomatch has a ReDoS vulnerability via extglob quantifiers",
+      "advisory": "https://github.com/advisories/GHSA-c2c7-rcm5-vvqj",
+      "patchedVersions": ">=4.0.4",
+      "findings": [
+        {
+          "version": "4.0.3",
+          "paths": [".>sucrase>tinyglobby>picomatch"]
+        }
+      ]
+    },
+    {
+      "package": "fast-xml-parser",
+      "severity": "moderate",
+      "title": "fast-xml-parser XMLBuilder: XML Comment and CDATA Injection via Unescaped Delimiters",
+      "advisory": "https://github.com/advisories/GHSA-gh4j-gqv2-49f6",
+      "patchedVersions": ">=5.7.0",
+      "findings": [
+        {
+          "version": "4.5.5",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-doctor>@react-native-community/cli-platform-android>@react-native-community/cli-config-android>fast-xml-parser"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "ip-address",
+      "severity": "moderate",
+      "title": "ip-address has XSS in Address6 HTML-emitting methods",
+      "advisory": "https://github.com/advisories/GHSA-v2v4-37r5-5v8g",
+      "patchedVersions": ">=10.1.1",
+      "findings": [
+        {
+          "version": "10.1.0",
+          "paths": [".>@puppeteer/browsers>proxy-agent>socks-proxy-agent>socks>ip-address"]
+        }
+      ]
+    },
+    {
+      "package": "@tootallnate/once",
+      "severity": "low",
+      "title": "@tootallnate/once vulnerable to Incorrect Control Flow Scoping",
+      "advisory": "https://github.com/advisories/GHSA-vpq2-c234-7xj6",
+      "patchedVersions": ">=2.0.1",
+      "findings": [
+        {
+          "version": "2.0.0",
+          "paths": [
+            ".>firebase-admin>@google-cloud/firestore>google-gax>retry-request>teeny-request>http-proxy-agent>@tootallnate/once"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "uuid",
+      "severity": "moderate",
+      "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+      "advisory": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+      "patchedVersions": ">=11.1.1",
+      "findings": [
+        {
+          "version": "10.0.0",
+          "paths": [".>firebase-admin>uuid"]
+        },
+        {
+          "version": "9.0.1",
+          "paths": [".>firebase-admin>@google-cloud/firestore>google-gax>uuid"]
+        },
+        {
+          "version": "8.3.2",
+          "paths": [".>firebase-admin>@google-cloud/storage>uuid"]
+        }
+      ]
+    },
+    {
+      "package": "qs",
+      "severity": "moderate",
+      "title": "qs has a remotely triggerable DoS: qs.stringify crashes with TypeError on null/undefined entries in comma-format arrays when encodeValuesOnly is set",
+      "advisory": "https://github.com/advisories/GHSA-q8mj-m7cp-5q26",
+      "patchedVersions": ">=6.15.2",
+      "findings": [
+        {
+          "version": "6.14.1",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-server-api>body-parser>qs"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "@grpc/grpc-js",
+      "severity": "high",
+      "title": "@grpc/grpc-js: A malformed request can cause a server crash",
+      "advisory": "https://github.com/advisories/GHSA-5375-pq7m-f5r2",
+      "patchedVersions": ">=1.14.4",
+      "findings": [
+        {
+          "version": "1.14.3",
+          "paths": [".>firebase-admin>@google-cloud/firestore>google-gax>@grpc/grpc-js"]
+        }
+      ]
+    },
+    {
+      "package": "@grpc/grpc-js",
+      "severity": "high",
+      "title": "@grpc/grpc-js: A malformed request can cause a server crash",
+      "advisory": "https://github.com/advisories/GHSA-5375-pq7m-f5r2",
+      "patchedVersions": ">=1.9.16",
+      "findings": [
+        {
+          "version": "1.9.15",
+          "paths": [
+            "apps__mobile>@react-native-firebase/app>firebase>@firebase/firestore>@grpc/grpc-js"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "@grpc/grpc-js",
+      "severity": "high",
+      "title": "@grpc/grpc-js: An incoming malformed compressed message can cause a client or server crash",
+      "advisory": "https://github.com/advisories/GHSA-99f4-grh7-6pcq",
+      "patchedVersions": ">=1.14.4",
+      "findings": [
+        {
+          "version": "1.14.3",
+          "paths": [".>firebase-admin>@google-cloud/firestore>google-gax>@grpc/grpc-js"]
+        }
+      ]
+    },
+    {
+      "package": "@grpc/grpc-js",
+      "severity": "high",
+      "title": "@grpc/grpc-js: An incoming malformed compressed message can cause a client or server crash",
+      "advisory": "https://github.com/advisories/GHSA-99f4-grh7-6pcq",
+      "patchedVersions": ">=1.9.16",
+      "findings": [
+        {
+          "version": "1.9.15",
+          "paths": [
+            "apps__mobile>@react-native-firebase/app>firebase>@firebase/firestore>@grpc/grpc-js"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "joi",
+      "severity": "moderate",
+      "title": "joi has an uncaught RangeError on deeply nested input through recursive `link()` schemas",
+      "advisory": "https://github.com/advisories/GHSA-q7cg-457f-vx79",
+      "patchedVersions": ">=17.13.4",
+      "findings": [
+        {
+          "version": "17.13.3",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-config>joi"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "esbuild",
+      "severity": "low",
+      "title": "esbuild allows arbitrary file read when running the development server on Windows",
+      "advisory": "https://github.com/advisories/GHSA-g7r4-m6w7-qqqr",
+      "patchedVersions": ">=0.28.1",
+      "findings": [
+        {
+          "version": "0.27.3",
+          "paths": [".>esbuild"]
+        }
+      ]
+    },
+    {
+      "package": "form-data",
+      "severity": "high",
+      "title": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames",
+      "advisory": "https://github.com/advisories/GHSA-hmw2-7cc7-3qxx",
+      "patchedVersions": ">=2.5.6",
+      "findings": [
+        {
+          "version": "2.5.5",
+          "paths": [
+            ".>firebase-admin>@google-cloud/firestore>google-gax>retry-request>@types/request>form-data"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "launch-editor",
+      "severity": "moderate",
+      "title": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows",
+      "advisory": "https://github.com/advisories/GHSA-v6wh-96g9-6wx3",
+      "patchedVersions": ">=2.14.1",
+      "findings": [
+        {
+          "version": "2.13.2",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-tools>launch-editor"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "high",
+      "title": "undici vulnerable to TLS certificate validation bypass via dropped requestTls in SOCKS5 ProxyAgent",
+      "advisory": "https://github.com/advisories/GHSA-vmh5-mc38-953g",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "moderate",
+      "title": "undici vulnerable to HTTP header injection via Set-Cookie percent-decoding",
+      "advisory": "https://github.com/advisories/GHSA-p88m-4jfj-68fv",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "high",
+      "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+      "advisory": "https://github.com/advisories/GHSA-vxpw-j846-p89q",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "high",
+      "title": "undici vulnerable to cross-origin request routing via SOCKS5 proxy pool reuse",
+      "advisory": "https://github.com/advisories/GHSA-hm92-r4w5-c3mj",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "low",
+      "title": "undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching",
+      "advisory": "https://github.com/advisories/GHSA-g8m3-5g58-fq7m",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "moderate",
+      "title": "undici vulnerable to cross-user information disclosure via shared cache whitespace bypass",
+      "advisory": "https://github.com/advisories/GHSA-pr7r-676h-xcf6",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "js-yaml",
+      "severity": "moderate",
+      "title": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+      "advisory": "https://github.com/advisories/GHSA-h67p-54hq-rp68",
+      "patchedVersions": ">=3.15.0",
+      "findings": [
+        {
+          "version": "3.14.2",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>metro-config>cosmiconfig>js-yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "js-yaml",
+      "severity": "moderate",
+      "title": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+      "advisory": "https://github.com/advisories/GHSA-h67p-54hq-rp68",
+      "patchedVersions": ">=4.2.0",
+      "findings": [
+        {
+          "version": "4.1.1",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-config>cosmiconfig>js-yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "@babel/core",
+      "severity": "low",
+      "title": "@babel/core: Arbitrary File Read via sourceMappingURL Comment",
+      "advisory": "https://github.com/advisories/GHSA-4x5r-pxfx-6jf8",
+      "patchedVersions": ">=7.29.6",
+      "findings": [
+        {
+          "version": "7.29.0",
+          "paths": [".>@babel/core"]
+        }
+      ]
+    },
+    {
+      "package": "brace-expansion",
+      "severity": "high",
+      "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+      "advisory": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+      "patchedVersions": ">=1.1.16",
+      "findings": [
+        {
+          "version": "1.1.12",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch>brace-expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "js-yaml",
+      "severity": "high",
+      "title": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+      "advisory": "https://github.com/advisories/GHSA-52cp-r559-cp3m",
+      "patchedVersions": ">=4.3.0",
+      "findings": [
+        {
+          "version": "4.1.1",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-config>cosmiconfig>js-yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "js-yaml",
+      "severity": "high",
+      "title": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+      "advisory": "https://github.com/advisories/GHSA-52cp-r559-cp3m",
+      "patchedVersions": ">=3.15.0",
+      "findings": [
+        {
+          "version": "3.14.2",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>metro-config>cosmiconfig>js-yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "body-parser",
+      "severity": "low",
+      "title": "body-parser vulnerable to denial of service when invalid limit value silently disables size enforcement",
+      "advisory": "https://github.com/advisories/GHSA-v422-hmwv-36x6",
+      "patchedVersions": ">=1.20.6",
+      "findings": [
+        {
+          "version": "1.20.4",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-server-api>body-parser"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "brace-expansion",
+      "severity": "high",
+      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+      "advisory": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+      "patchedVersions": ">=1.1.17",
+      "findings": [
+        {
+          "version": "1.1.12",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch>brace-expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "moderate",
+      "title": "undici vulnerable to downstream response desynchronization via retry interceptor",
+      "advisory": "https://github.com/advisories/GHSA-8xcm-r25x-g524",
+      "patchedVersions": ">=7.29.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "high",
+      "title": "undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives",
+      "advisory": "https://github.com/advisories/GHSA-4cwx-7wf7-3272",
+      "patchedVersions": ">=7.29.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "ip-address",
+      "severity": "high",
+      "title": "ip-address: Address4 decodes leading-zero octets as decimal while resolvers decode them as octal, allowing SSRF and trust-boundary bypass",
+      "advisory": "https://github.com/advisories/GHSA-mwp4-54f8-5fhr",
+      "patchedVersions": ">=10.3.1",
+      "findings": [
+        {
+          "version": "10.1.0",
+          "paths": [".>@puppeteer/browsers>proxy-agent>socks-proxy-agent>socks>ip-address"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "moderate",
+      "title": "undici vulnerable to CRLF Injection via blob-like body 'type' property",
+      "advisory": "https://github.com/advisories/GHSA-m8rv-5g2x-5cg5",
+      "patchedVersions": ">=7.29.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "moderate",
+      "title": "undici vulnerable to cross-user information disclosure via whitespace around equals in Cache-Control directives",
+      "advisory": "https://github.com/advisories/GHSA-jr45-8vmc-qm54",
+      "patchedVersions": ">=7.29.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "moderate",
+      "title": "undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields",
+      "advisory": "https://github.com/advisories/GHSA-v3r7-h72x-cjcm",
+      "patchedVersions": ">=7.29.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "brace-expansion",
+      "severity": "high",
+      "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+      "advisory": "https://github.com/advisories/GHSA-rgw5-rvv9-x895",
+      "patchedVersions": ">=1.1.18",
+      "findings": [
+        {
+          "version": "1.1.12",
+          "paths": [
+            "apps__mobile>react-native>babel-jest>babel-plugin-istanbul>test-exclude>minimatch>brace-expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "undici",
+      "severity": "low",
+      "title": "undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse",
+      "advisory": "https://github.com/advisories/GHSA-35p6-xmwp-9g52",
+      "patchedVersions": ">=7.28.0",
+      "findings": [
+        {
+          "version": "7.24.8",
+          "paths": ["packages__env-paths>electron>@electron/get>undici"]
+        }
+      ]
+    },
+    {
+      "package": "js-yaml",
+      "severity": "high",
+      "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) \u2014 CVE-2026-59870 fix not backported",
+      "advisory": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+      "patchedVersions": ">=3.15.1",
+      "findings": [
+        {
+          "version": "3.14.2",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>metro-config>cosmiconfig>js-yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "js-yaml",
+      "severity": "high",
+      "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) \u2014 CVE-2026-59870 fix not backported",
+      "advisory": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+      "patchedVersions": ">=4.3.1",
+      "findings": [
+        {
+          "version": "4.1.1",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-config>cosmiconfig>js-yaml"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "image-size",
+      "severity": "high",
+      "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+      "advisory": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+      "patchedVersions": "<0.0.0",
+      "findings": [
+        {
+          "version": "1.2.1",
+          "paths": ["apps__mobile>react-native>@react-native/community-cli-plugin>metro>image-size"]
+        }
+      ]
+    },
+    {
+      "package": "image-size",
+      "severity": "high",
+      "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+      "advisory": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
+      "patchedVersions": "<0.0.0",
+      "findings": [
+        {
+          "version": "1.2.1",
+          "paths": ["apps__mobile>react-native>@react-native/community-cli-plugin>metro>image-size"]
+        }
+      ]
+    },
+    {
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: non-secure generators can loop indefinitely with negative size",
+      "advisory": "https://github.com/advisories/GHSA-28wg-ghj8-5hjv",
+      "patchedVersions": ">=3.3.16",
+      "findings": [
+        {
+          "version": "3.3.11",
+          "paths": ["apps__mobile>@react-navigation/native>nanoid"]
+        }
+      ]
+    },
+    {
+      "package": "extract-zip",
+      "severity": "high",
+      "title": "extract-zip unvalidated symlink path traversal",
+      "advisory": "https://github.com/advisories/GHSA-jmr9-qjv8-65gv",
+      "patchedVersions": "<0.0.0",
+      "findings": [
+        {
+          "version": "2.0.1",
+          "paths": [".>@puppeteer/browsers>extract-zip"]
+        }
+      ]
+    },
+    {
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: custom generators can loop indefinitely when size is zero",
+      "advisory": "https://github.com/advisories/GHSA-2v37-7h3g-55p8",
+      "patchedVersions": ">=3.3.18",
+      "findings": [
+        {
+          "version": "3.3.11",
+          "paths": ["apps__mobile>@react-navigation/native>nanoid"]
+        }
+      ]
+    },
+    {
+      "package": "decode-uri-component",
+      "severity": "moderate",
+      "title": "decode-uri-component: Denial of service via exponential decoding of malformed percent-encoded input",
+      "advisory": "https://github.com/advisories/GHSA-vcc3-ghjq-m6fr",
+      "patchedVersions": ">=0.5.0",
+      "findings": [
+        {
+          "version": "0.2.2",
+          "paths": [
+            "apps__mobile>@react-navigation/native>@react-navigation/core>query-string>decode-uri-component"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "browserslist",
+      "severity": "high",
+      "title": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM",
+      "advisory": "https://github.com/advisories/GHSA-c83g-rgw3-j3cx",
+      "patchedVersions": ">=4.28.7",
+      "findings": [
+        {
+          "version": "4.28.1",
+          "paths": [".>@babel/core>@babel/helper-compilation-targets>browserslist"]
+        }
+      ]
+    },
+    {
+      "package": "browserslist",
+      "severity": "high",
+      "title": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)",
+      "advisory": "https://github.com/advisories/GHSA-73wf-gq98-2v4g",
+      "patchedVersions": ">=4.28.7",
+      "findings": [
+        {
+          "version": "4.28.1",
+          "paths": [".>@babel/core>@babel/helper-compilation-targets>browserslist"]
+        }
+      ]
+    },
+    {
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: Integer Overflow or Wraparound",
+      "advisory": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w",
+      "patchedVersions": ">=3.3.12",
+      "findings": [
+        {
+          "version": "3.3.11",
+          "paths": ["apps__mobile>@react-navigation/native>nanoid"]
+        }
+      ]
+    },
+    {
+      "package": "qs",
+      "severity": "moderate",
+      "title": "qs: Denial of Service via Attacker Controlled isBuffer",
+      "advisory": "https://github.com/advisories/GHSA-4mjr-xmp4-gh2g",
+      "patchedVersions": ">=6.16.0",
+      "findings": [
+        {
+          "version": "6.14.1",
+          "paths": [
+            "apps__mobile>react-native>@react-native/community-cli-plugin>@react-native-community/cli>@react-native-community/cli-server-api>body-parser>qs"
+          ]
+        }
+      ]
+    }
+  ]
+}
