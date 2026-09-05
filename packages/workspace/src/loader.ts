@@ -48,12 +48,12 @@ import {
   WORKSPACE_STATE_DIRS,
 } from "@vibestudio/workspace-contracts/sourceDirs";
 
+const WORKSPACE_DELETE_MAX_RETRIES = 10;
+const WORKSPACE_DELETE_RETRY_DELAY_MS = 100;
 const WORKSPACE_CONFIG_FILE = "meta/vibestudio.yml";
 const CENTRAL_CONFIG_FILE = "config.yml";
 const SECRETS_FILE = ".secrets.yml";
 const ENV_FILE = ".env";
-const WORKSPACE_DELETE_MAX_RETRIES = 10;
-const WORKSPACE_DELETE_RETRY_DELAY_MS = 100;
 const WORKSPACE_DELETION_MARKER = "deletion.json";
 const WORKSPACE_DELETION_MARKER_VERSION = 1;
 const WORKSPACE_CREATION_DESCRIPTOR = "workspace-creation/v1.json";
@@ -568,9 +568,12 @@ export interface WorkspaceDeletionRecoveryReport {
  * central-data transaction itself removes memberships, resume targets, and
  * revocation-cleanup rows together with the catalog row.
  */
+export type WorkspaceTrashRemoval = (target: string) => void;
+
 export function deleteAndUnregisterWorkspace(
   name: string,
-  centralData: CentralDataManager
+  centralData: CentralDataManager,
+  removeWorkspaceTree: WorkspaceTrashRemoval
 ): string | null {
   validateWorkspaceName(name);
   const workspaceDir = getWorkspaceDir(name);
@@ -584,7 +587,7 @@ export function deleteAndUnregisterWorkspace(
     );
   }
 
-  const staged = stageWorkspaceDeletion(name, entry.workspaceId, workspaceDir);
+  const staged = stageWorkspaceDeletion(name, entry.workspaceId, workspaceDir, removeWorkspaceTree);
   let removedWorkspaceId: string | null;
   try {
     removedWorkspaceId = centralData.removeWorkspace(name);
@@ -593,7 +596,7 @@ export function deleteAndUnregisterWorkspace(
     }
   } catch (error) {
     try {
-      restoreWorkspaceDeletion(staged);
+      restoreWorkspaceDeletion(staged, removeWorkspaceTree);
     } catch (restoreError) {
       throw new AggregateError(
         [error, restoreError],
@@ -620,7 +623,8 @@ export function deleteAndUnregisterWorkspace(
  * restores a pre-commit rename, while an absent row finalizes the deletion.
  */
 export function recoverStagedWorkspaceDeletions(
-  centralData: CentralDataManager
+  centralData: CentralDataManager,
+  removeWorkspaceTree: WorkspaceTrashRemoval
 ): WorkspaceDeletionRecoveryReport {
   const report: WorkspaceDeletionRecoveryReport = {
     finalized: [],
@@ -634,7 +638,16 @@ export function recoverStagedWorkspaceDeletions(
     if (!entry.isDirectory() || !entry.name.startsWith(".delete-")) continue;
     const trashRoot = path.join(workspacesDir, entry.name);
     try {
-      const marker = readWorkspaceDeletionMarker(trashRoot);
+      let marker: WorkspaceDeletionMarker;
+      try {
+        marker = readWorkspaceDeletionMarker(trashRoot);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        // A completed native cleanup may crash between removing its receipt
+        // and the empty shell. Never infer authority over receiptless contents.
+        fs.rmdirSync(trashRoot);
+        continue;
+      }
       const workspaceDir = getWorkspaceDir(marker.name);
       const trashWorkspaceDir = path.join(trashRoot, "workspace");
       const catalogEntry = centralData.getWorkspaceEntry(marker.name);
@@ -680,7 +693,8 @@ export function recoverStagedWorkspaceDeletions(
 export function deleteUnregisteredWorkspace(
   cleanup: EphemeralWorkspaceCleanupRecord,
   centralData: CentralDataManager,
-  ownerBootId: string
+  ownerBootId: string,
+  removeWorkspaceTree: WorkspaceTrashRemoval
 ): boolean {
   const name = cleanup.diskName;
   validateWorkspaceName(name);
@@ -697,14 +711,14 @@ export function deleteUnregisteredWorkspace(
     }
     return false;
   }
-  const staged = stageWorkspaceDeletion(name, cleanup.cleanupId, workspaceDir);
+  const staged = stageWorkspaceDeletion(name, cleanup.cleanupId, workspaceDir, removeWorkspaceTree);
   try {
     if (!centralData.completeEphemeralWorkspaceCleanup(ownerBootId, cleanup)) {
       throw new Error(`Ephemeral cleanup ticket ${cleanup.cleanupId} changed before completion`);
     }
   } catch (error) {
     try {
-      restoreWorkspaceDeletion(staged);
+      restoreWorkspaceDeletion(staged, removeWorkspaceTree);
     } catch (restoreError) {
       throw new AggregateError(
         [error, restoreError],
@@ -727,7 +741,8 @@ export function deleteUnregisteredWorkspace(
 function stageWorkspaceDeletion(
   name: string,
   workspaceId: string,
-  workspaceDir: string
+  workspaceDir: string,
+  removeWorkspaceTree: WorkspaceTrashRemoval
 ): StagedWorkspaceDeletion {
   const trashRoot = fs.mkdtempSync(path.join(getWorkspacesDir(), `.delete-${name}-`));
   const trashWorkspaceDir = path.join(trashRoot, "workspace");
@@ -750,7 +765,10 @@ function stageWorkspaceDeletion(
   return { workspaceDir, trashRoot, trashWorkspaceDir };
 }
 
-function restoreWorkspaceDeletion(staged: StagedWorkspaceDeletion): void {
+function restoreWorkspaceDeletion(
+  staged: StagedWorkspaceDeletion,
+  removeWorkspaceTree: WorkspaceTrashRemoval
+): void {
   if (fs.existsSync(staged.workspaceDir)) {
     throw new Error(
       `Cannot restore workspace because its directory was recreated: ${staged.workspaceDir}`
@@ -758,15 +776,6 @@ function restoreWorkspaceDeletion(staged: StagedWorkspaceDeletion): void {
   }
   fs.renameSync(staged.trashWorkspaceDir, staged.workspaceDir);
   removeWorkspaceTree(staged.trashRoot);
-}
-
-function removeWorkspaceTree(target: string): void {
-  fs.rmSync(target, {
-    recursive: true,
-    force: true,
-    maxRetries: WORKSPACE_DELETE_MAX_RETRIES,
-    retryDelay: WORKSPACE_DELETE_RETRY_DELAY_MS,
-  });
 }
 
 function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker {

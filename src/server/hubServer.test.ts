@@ -42,6 +42,10 @@ import {
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
 import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
 
+const removeWorkspaceTreeForTest = (target: string): void => {
+  fs.rmSync(target, { recursive: true, force: true });
+};
+
 describe("hub control HTTP routing", () => {
   it("routes both RPC dispatch and pre-upgrade admission to the control server", () => {
     expect(isHubControlHttpPath("/rpc")).toBe(true);
@@ -528,6 +532,7 @@ describe("ephemeral workspace evidence retention", () => {
       "boot-owner",
       "ws_dev",
       "dev-replacement",
+      removeWorkspaceTreeForTest,
       (cleanup) => {
         calls.push(cleanup.diskName);
         return true;
@@ -544,7 +549,14 @@ describe("ephemeral workspace evidence retention", () => {
       rotateEphemeralWorkspaceDiskName: vi.fn(() => null),
     } as unknown as CentralDataManager;
 
-    prepareEphemeralWorkspaceDisk(centralData, "boot-owner", "ws_dev", "dev-current", remove);
+    prepareEphemeralWorkspaceDisk(
+      centralData,
+      "boot-owner",
+      "ws_dev",
+      "dev-current",
+      removeWorkspaceTreeForTest,
+      remove
+    );
 
     expect(remove).not.toHaveBeenCalled();
   });
@@ -556,7 +568,12 @@ describe("ephemeral workspace evidence retention", () => {
       removeEphemeralWorkspace: compareRemove,
     } as unknown as CentralDataManager;
 
-    removeOwnedEphemeralWorkspace(centralData, "boot-displaced", remove);
+    removeOwnedEphemeralWorkspace(
+      centralData,
+      "boot-displaced",
+      removeWorkspaceTreeForTest,
+      remove
+    );
 
     expect(compareRemove).toHaveBeenCalledWith("boot-displaced", "boot-displaced");
     expect(remove).not.toHaveBeenCalled();
@@ -583,9 +600,14 @@ describe("ephemeral workspace evidence retention", () => {
       })),
     } as unknown as CentralDataManager;
 
-    removeOwnedEphemeralWorkspace(centralData, "boot-owner", remove);
+    removeOwnedEphemeralWorkspace(centralData, "boot-owner", removeWorkspaceTreeForTest, remove);
 
-    expect(remove).toHaveBeenCalledWith(cleanup, centralData, "boot-owner");
+    expect(remove).toHaveBeenCalledWith(
+      cleanup,
+      centralData,
+      "boot-owner",
+      removeWorkspaceTreeForTest
+    );
   });
 });
 

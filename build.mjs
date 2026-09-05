@@ -1,4 +1,5 @@
 import * as esbuild from "esbuild";
+import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
@@ -295,6 +296,19 @@ const serverConfig = {
   banner: {
     js: SERVER_ESM_BANNER,
   },
+};
+
+const fsDiskWorkerConfig = {
+  entryPoints: ["src/server/services/fsDiskWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: "dist/fs-disk-worker.cjs",
+  external: ["electron"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
 };
 
 const authorityAnalysisWorkerConfig = {
@@ -720,6 +734,7 @@ async function build() {
     // Must be built before @workspace/* packages since they depend on @vibestudio/*
     // Dependencies: none
     await buildVibestudioPackages();
+    buildNativeIsolation();
 
     // ========================================================================
     // STEP 1: Build standalone headless panel host
@@ -823,6 +838,7 @@ async function build() {
       buildHostArtifact(immutableTreeWorkerConfig),
       buildHostArtifact(sqliteIntegrityWorkerElectronConfig),
       buildHostArtifact(sqliteIntegrityWorkerConfig),
+      buildHostArtifact(fsDiskWorkerConfig),
       buildHostArtifact(dependencyContentMaintenanceConfig),
     ]);
     assertHostBuildMetafiles(serverBuilds);
@@ -893,11 +909,13 @@ async function buildSourceServerPrerequisites() {
     // stale RPC/runtime binaries. Keep this boundary equivalent to the
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
+    buildNativeIsolation();
     await buildHeadlessHost();
     // Injected into every non-Electron/headless panel by PanelHttpServer. It
     // embeds the RPC WebSocket client, so leaving it stale can make panels use
     // an older wire protocol even when packages/rpc/dist is current.
     await esbuild.build(browserTransportConfig);
+    await esbuild.build(fsDiskWorkerConfig);
     await esbuild.build(internalDoBundleConfig);
     await buildWorkerdPrograms({ minify: !isDev, logOverride });
 

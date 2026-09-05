@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 /**
  * Scaffold-to-verifier acceptance: every supported default scaffold produced by
  * the PUBLIC Base createProjects path must pass the canonical build report
@@ -338,6 +339,7 @@ describe("default scaffolds pass the canonical build report unchanged", () => {
       APP_NODE_MODULES,
       {
         appRoot: path.resolve(__dirname, "../../.."),
+        runNativeJob: runIsolatedBuildJob,
         dependencyWorkspaceRoot: workspaceRoot,
         // The same canonical config → exact-binding derivation the server wires:
         // meta/vibestudio.yml services[] become the authority environment.

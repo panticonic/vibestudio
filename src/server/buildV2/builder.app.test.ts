@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,7 +15,8 @@ import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => {
   initBuilder(
     path.resolve(__dirname, "../../../node_modules"),
-    path.resolve(__dirname, "../../..")
+    path.resolve(__dirname, "../../.."),
+    runIsolatedBuildJob
   );
   setBuildSourceProvider(workingTreeSourceProvider());
 });
@@ -391,7 +393,7 @@ describe("buildUnit app builds", () => {
       JSON.stringify({ name: "@platform/fake", version: "0.1.0", type: "module" })
     );
     fs.writeFileSync(path.join(platformPackage, "src", "index.ts"), "export const fake = true;\n");
-    initBuilder(testNodeModules, path.dirname(testNodeModules));
+    initBuilder(testNodeModules, path.dirname(testNodeModules), runIsolatedBuildJob);
     const appDir = path.join(workspaceRoot, "apps", "mobile");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
@@ -473,7 +475,8 @@ describe("buildUnit app builds", () => {
     } finally {
       initBuilder(
         path.resolve(__dirname, "../../../node_modules"),
-        path.resolve(__dirname, "../../..")
+        path.resolve(__dirname, "../../.."),
+        runIsolatedBuildJob
       );
     }
 

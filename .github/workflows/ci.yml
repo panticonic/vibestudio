@@ -159,10 +159,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
-      - name: Build Windows LPAC launcher
-        if: runner.os == 'Windows'
+      - name: Build native storage cleanup and admission
         working-directory: native/isolation
         run: cargo build --locked --release
+
+      - name: Test native storage primitives
+        working-directory: native/isolation
+        run: cargo test --locked
 
       - name: Build shared command host
         run: pnpm --filter @vibestudio/process-adapter build

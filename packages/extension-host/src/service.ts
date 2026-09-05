@@ -71,7 +71,7 @@ import {
   type UnitWorkspaceStatus,
 } from "@vibestudio/unit-host";
 
-import { ExtensionProcessManager } from "./processManager.js";
+import { ExtensionProcessManager, type ExtensionProcessManagerDeps } from "./processManager.js";
 import {
   isBinaryEnvelope,
   isStreamEnvelope,
@@ -330,6 +330,7 @@ export interface ExtensionHostDeps {
    * — `invoke` and `handleExtensionHttpRequest` need this to reach the child.
    */
   extensionTransport: ExtensionTransportLike;
+  launchNativeExtension: ExtensionProcessManagerDeps["launch"];
   registerBuildProvider?: (provider: BuildProvider) => void;
   unregisterBuildProvider?: (target: BuildProviderTarget, name: string) => void;
   onWorkspaceUnitsChanged?: (reason: string) => void;
@@ -395,6 +396,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
     });
     this.processes = new ExtensionProcessManager({
+      launch: this.deps.launchNativeExtension,
       attachProcess: (proc, credential) =>
         this.deps.extensionTransport.attachProcess(proc, credential),
       onStatus: (name, status, error) => {
@@ -660,8 +662,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           this.deferredBuildIdentityKeys.set(node.name, identity.identityKey);
           return true;
         },
-        buildAndActivate: async (_node, d) =>
-          this.buildAndActivate(node.name, d.ref, "background"),
+        buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref, "background"),
         activateCurrent: async () => {
           if (this.activatesEagerly(node)) {
             await this.ensureActivated(node.name);
@@ -2224,9 +2225,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     ref?: string,
     priority: "interactive" | "background" = "interactive"
   ): Promise<void> {
-    await this.runActivationExclusive(name, () =>
-      this.buildAndActivateOnce(name, ref, priority)
-    );
+    await this.runActivationExclusive(name, () => this.buildAndActivateOnce(name, ref, priority));
   }
 
   private async buildAndActivateOnce(

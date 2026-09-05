@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./workspace-runtime": {
+      "types": "./dist/isolation/workspaceChild.d.ts",
+      "default": "./dist/isolation/workspaceChild.js"
     }
   },
   "scripts": {

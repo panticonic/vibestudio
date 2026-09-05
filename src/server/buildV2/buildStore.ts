@@ -361,6 +361,10 @@ async function linkBuildTree(sourceDir: string, targetDir: string): Promise<void
     if (!entry.isFile()) {
       throw new Error(`Unsupported build cache entry: ${sourcePath}`);
     }
+    if (process.platform === "win32") {
+      await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+      continue;
+    }
     try {
       await fs.promises.link(sourcePath, targetPath);
     } catch (error) {
@@ -552,6 +556,10 @@ async function writeArtifactFile(
     const stored = await putBlobBytes(poolDir, bytes);
     if (stored.digest !== integrityHex(entry.integrity)) {
       throw new Error(`Artifact integrity mismatch for ${entry.path}`);
+    }
+    if (process.platform === "win32") {
+      await fs.promises.copyFile(blobPath, targetPath, fs.constants.COPYFILE_EXCL);
+      return;
     }
     try {
       await fs.promises.link(blobPath, targetPath);

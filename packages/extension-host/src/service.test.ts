@@ -45,7 +45,7 @@ afterEach(async () => {
     [...ownedHosts].map(async (host) => {
       await host.whenSettled();
       await host.shutdown();
-    }),
+    })
   );
   ownedHosts.clear();
   for (const dir of ownedTempDirs) {
@@ -53,12 +53,12 @@ afterEach(async () => {
   }
   ownedTempDirs.clear();
   const failures = shutdowns.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected",
+    (result): result is PromiseRejectedResult => result.status === "rejected"
   );
   if (failures.length > 0) {
     throw new AggregateError(
       failures.map((failure) => failure.reason),
-      "Failed to shut down an ExtensionHost test fixture",
+      "Failed to shut down an ExtensionHost test fixture"
     );
   }
 });
@@ -293,6 +293,7 @@ function makeHost(
     onPushBuild: vi.fn(),
   };
   const host = new ExtensionHost({
+    launchNativeExtension: vi.fn(),
     statePath,
     workspacePath: path.join(statePath, "source"),
     workspaceId: "workspace-test",
@@ -901,7 +902,9 @@ describe("ExtensionHost reconcileDeclared", () => {
           ],
         })
       );
-      expect(host.registry.get(extensionNode.name)).toMatchObject({ activeBundleKey: "bundle-key" });
+      expect(host.registry.get(extensionNode.name)).toMatchObject({
+        activeBundleKey: "bundle-key",
+      });
       expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
         "blame",
         [],

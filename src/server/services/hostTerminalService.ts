@@ -167,7 +167,7 @@ export function createHostTerminalService(deps: {
         const result = terminals.read(input);
         if (result.text)
           await deps.recordContextIngestion(ctx, {
-            key: `host-terminal:${input.terminalSessionId}`,
+            key: `session:host-terminal:${input.terminalSessionId}`,
             via: "host-terminal-read",
             classification: "external",
           });

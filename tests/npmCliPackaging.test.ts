@@ -13,6 +13,8 @@ describe("npm CLI packaging", () => {
   it("stages every standalone server boot artifact", () => {
     expect(SERVER_RUNTIME_ARTIFACTS).toEqual([
       "dist/server.mjs",
+      "dist/fs-disk-worker.cjs",
+      process.platform === "win32" ? "dist/vibestudio-isolation.exe" : "dist/vibestudio-isolation",
       "dist/browserTransport.js",
       "dist/authority-analysis-worker.mjs",
       "dist/library-lowering-worker.mjs",

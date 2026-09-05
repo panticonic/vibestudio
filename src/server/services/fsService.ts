@@ -1,23 +1,29 @@
-/**
- * fsService — Server-side filesystem handler for panel RPC calls.
- *
- * Registered in the Electron main process dispatcher (not SERVER_SERVICES),
- * so panel fs.* calls route through Electron IPC where panel context
- * is available. In headless mode, registered in the server process dispatcher.
- *
- * All operations are sandboxed to the caller's context folder via path
- * validation and symlink traversal checks.
- */
+import {
+  matchesGlob,
+  TextRangeAccumulator,
+  normalizedReadTextOptions,
+  byteRangeResult,
+  normalizedReadBytesOptions,
+  type ReadBytesResult,
+  type ReadBytesOptions,
+  type ReadTextResult,
+  type ReadTextOptions,
+  type GlobResult,
+  type GrepResult,
+  type GlobOptions,
+  type GrepOptions,
+  encodeBinary,
+  isBinaryEnvelope,
+  type BinaryEnvelope,
+} from "./fsValues.js";
+import type { FsDiskPort } from "./fsDisk.js";
+/** Protected filesystem receiver. Semantic reads/edits retain verified caller
+ * context here; raw disk operations run through the required native worker.
+ * Source projections are read-only and scratch has a separate physical root. */
 
-import * as fs from "fs/promises";
-import * as fsSync from "fs";
 import * as path from "path";
 import { createHash, randomBytes } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
-import { rgPath as bundledRipgrepPath } from "@vscode/ripgrep";
-import ignore, { type Ignore } from "ignore";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
-import type { FileHandle as NodeFileHandle } from "fs/promises";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { ContextFolderManager } from "@vibestudio/shared/contextFolderManager";
@@ -205,12 +211,10 @@ const HANDLE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Tracked file handle with cleanup metadata. */
 interface TrackedHandle {
-  handle: NodeFileHandle;
+  nativeId: number;
   panelId: string;
   timer: ReturnType<typeof setTimeout>;
-  /** Exact semantic file versions whose bytes this handle can reveal. */
-  ingestion: ContextIngestionDescriptor[];
-  ingestionRecorded: boolean;
+  scope: FsCallScope;
 }
 
 interface ContextIngestionDescriptor {
@@ -255,18 +259,6 @@ function ingestionDescriptorsForVcsRead(result: VcsFileLineage): ContextIngestio
   ];
 }
 
-function ingestionDescriptorsForDirectoryListing(
-  files: readonly (ManagedWorkspaceRepository & VcsListFilesResult["files"][number])[]
-): ContextIngestionDescriptor[] {
-  const descriptors = new Map<string, ContextIngestionDescriptor>();
-  for (const file of files) {
-    for (const descriptor of ingestionDescriptorsForVcsRead(file)) {
-      retainStrongestIngestionDescriptor(descriptors, descriptor);
-    }
-  }
-  return [...descriptors.values()];
-}
-
 function ingestionDescriptorsForVisibleEntries(
   entries: NonNullable<VcsListDirectoryResult>["entries"]
 ): ContextIngestionDescriptor[] {
@@ -304,25 +296,10 @@ function ingestionDescriptorsForVisibleEntries(
 
 interface FsCallScope {
   root: string;
+  sourceRoot: string;
   panelId: string;
   contextId?: string;
   exposeHostPaths: boolean;
-}
-
-interface ResolvedFsPath {
-  path: string;
-}
-
-type SandboxLeafMode = "follow" | "entry" | "allow-dangling";
-
-interface ResolveFsPathOptions {
-  /**
-   * `follow` validates the leaf target like every parent. `entry` validates
-   * only parents for operations that act on the directory entry itself.
-   * `allow-dangling` is the read-only `exists` variant: an unresolved leaf is
-   * allowed through so fs.access can return false naturally.
-   */
-  leafMode?: SandboxLeafMode;
 }
 
 function codedError(code: string, message: string): NodeJS.ErrnoException {
@@ -395,191 +372,23 @@ function authorityPathsForCall(method: string, args: unknown[]): string[] {
 }
 
 function requiresSemanticAuthority(userPath: string): boolean {
-  const normalized = userPath.replaceAll("\\", "/").replace(/^\/+|\/+$/gu, "");
+  const normalized = path.posix.normalize(
+    userPath.replaceAll("\\", "/").replace(/^\/+|\/+$/gu, "")
+  );
   if (normalized === "" || normalized === ".") return true;
   const sourceRoot = normalized.split("/", 1)[0] ?? "";
   return CANONICAL_SOURCE_ROOT_BY_LOWER.has(sourceRoot.toLowerCase());
 }
 
-// ---------------------------------------------------------------------------
-// Path sandboxing
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve a user-provided path within a sandbox root, preventing traversal
- * and symlink-based escapes.
- */
-async function sandboxPath(
-  root: string,
-  userPath: string,
-  options: ResolveFsPathOptions = {}
-): Promise<ResolvedFsPath> {
-  const leafMode = options.leafMode ?? "follow";
-  const relative = userPath.startsWith("/") ? userPath.slice(1) : userPath;
-  const resolved = path.resolve(root, relative);
-  if (!resolved.startsWith(root + path.sep) && resolved !== root) {
-    throw new Error("Path traversal detected");
-  }
-  const realRoot = await fs.realpath(root);
-  // Walk path components and check for symlinks in parents.
-  let current = root;
-  const relativePath = path.relative(root, resolved);
-  const segments = relativePath ? relativePath.split(path.sep) : [];
-  for (const [index, segment] of segments.entries()) {
-    current = path.join(current, segment);
-    let st: fsSync.Stats;
-    try {
-      st = await fs.lstat(current);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") break; // remainder doesn't exist yet
-      throw error;
-    }
-    if (st.isSymbolicLink()) {
-      const isLeaf = index === segments.length - 1;
-      if (isLeaf && leafMode === "entry") continue;
-      let target: string;
-      try {
-        target = await fs.realpath(current);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          if (isLeaf && leafMode === "allow-dangling") continue;
-          // A dangling link can point outside the context and become writable
-          // later; without a real target there is no safe containment proof.
-          throw new Error("Dangling symlink is not allowed in sandbox paths");
-        }
-        throw error;
-      }
-      if (!target.startsWith(realRoot + path.sep) && target !== realRoot) {
-        throw new Error("Symlink escapes sandbox");
-      }
-    }
-  }
-  return { path: resolved };
-}
-
-async function resolveFsPathInfo(
-  scope: FsCallScope,
-  userPath: string,
-  options: ResolveFsPathOptions = {}
-): Promise<ResolvedFsPath> {
-  return sandboxPath(scope.root, userPath, options);
-}
-
-async function resolveFsPath(
-  scope: FsCallScope,
-  userPath: string,
-  options: ResolveFsPathOptions = {}
-): Promise<string> {
-  return (await resolveFsPathInfo(scope, userPath, options)).path;
-}
-
-/** Resolve a file-oriented path through the workspace's canonical shorthand.
- * Directory-oriented operations deliberately continue to use resolveFsPath:
- * a dotted repo id can still be addressed as a directory, while a file call
- * such as `projects/report.md` consistently addresses
- * `projects/report/report.md` across fs, vcs, and agent tools. */
-async function resolveFsFilePathInfo(
-  scope: FsCallScope,
-  userPath: string,
-  options: ResolveFsPathOptions = {}
-): Promise<ResolvedFsPath> {
-  return resolveFsPathInfo(scope, canonicalizeWorkspaceFilePath(userPath), options);
-}
-
-async function resolveFsFilePath(
-  scope: FsCallScope,
-  userPath: string,
-  options: ResolveFsPathOptions = {}
-): Promise<string> {
-  return (await resolveFsFilePathInfo(scope, userPath, options)).path;
-}
-
-/**
- * Return the caller-visible path after resolving any existing in-sandbox
- * symlink/case aliases. The target file may not exist yet, so resolve the
- * nearest existing ancestor and append the missing suffix. Mutation routing
- * must classify this canonical path; otherwise an alias such as `alias/lib/x`
- * → `packages/lib/x` could be mistaken for scratch and written behind semantic state.
- */
-async function canonicalContextRelativePath(
-  scope: FsCallScope,
-  userPath: string,
-  options: { preserveLeaf?: boolean; directory?: boolean } = {}
-): Promise<string> {
-  const preserveLeaf = options.preserveLeaf ?? false;
-  const resolved = options.directory
-    ? await resolveFsPath(scope, userPath, {
-        leafMode: preserveLeaf ? "entry" : "follow",
-      })
-    : await resolveFsFilePath(scope, userPath, {
-        leafMode: preserveLeaf ? "entry" : "follow",
-      });
-
-  const realRoot = await fs.realpath(scope.root);
-  let probe = preserveLeaf && resolved !== scope.root ? path.dirname(resolved) : resolved;
-  const missingSegments: string[] =
-    preserveLeaf && resolved !== scope.root ? [path.basename(resolved)] : [];
-
-  while (true) {
-    try {
-      const realAncestor = await fs.realpath(probe);
-      const canonical = path.resolve(realAncestor, ...missingSegments);
-      if (!canonical.startsWith(realRoot + path.sep) && canonical !== realRoot) {
-        throw new Error("Canonical path escapes sandbox");
-      }
-      return path.relative(realRoot, canonical).split(path.sep).join("/");
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      if (probe === scope.root) throw error;
-      missingSegments.unshift(path.basename(probe));
-      probe = path.dirname(probe);
-    }
-  }
-}
-
-/** Test the caller-visible leaf without following it. Parents remain fully
- * sandbox-validated, so this is safe for deciding whether an operation acts on
- * a disk-only symlink directory entry. */
-async function isLeafSymlink(scope: FsCallScope, userPath: string): Promise<boolean> {
-  const resolved = await resolveFsFilePath(scope, userPath, { leafMode: "entry" });
-  try {
-    return (await fs.lstat(resolved)).isSymbolicLink();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-async function ensureDirectWriteParent(scope: FsCallScope, absolutePath: string): Promise<void> {
-  if (absolutePath === scope.root) return;
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-}
-
-// ---------------------------------------------------------------------------
-// Binary data encoding helpers (JSON RPC can't transport Uint8Array)
-// ---------------------------------------------------------------------------
-
-interface BinaryEnvelope {
-  __bin: true;
-  data: string; // base64
-}
-
-function isBinaryEnvelope(v: unknown): v is BinaryEnvelope {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    (v as any).__bin === true &&
-    typeof (v as any).data === "string"
-  );
-}
-
-function encodeBinary(buf: Buffer): BinaryEnvelope {
-  return { __bin: true, data: buf.toString("base64") };
-}
-
-function decodeBinary(envelope: BinaryEnvelope): Buffer {
-  return Buffer.from(envelope.data, "base64");
+/** Resolve logical input without consulting native paths or worker output.
+ * Only original semantic coordinates can authorize protected repository edits. */
+function contextLogicalPath(userPath: string, options: { directory?: boolean } = {}): string {
+  const input = options.directory ? userPath : canonicalizeWorkspaceFilePath(userPath);
+  const logical = input.replaceAll("\\", "/").replace(/^\/+/, "");
+  const normalized = path.posix.normalize(logical);
+  if (normalized === ".." || normalized.startsWith("../") || normalized.includes("\0"))
+    throw codedError("EACCES", "Path traversal detected");
+  return normalized === "." ? "" : normalized;
 }
 
 function requestedReadEncoding(value: unknown): BufferEncoding | undefined {
@@ -624,8 +433,8 @@ export interface FsVcsMutationIntegrity {
  * Bridge from the fs service to the workspace semantic VCS. When a sandboxed
  * context caller mutates a managed path, `edit` advances the working state and
  * the host materializes that state; the caller never writes managed disk bytes.
- * Scratch/ignored paths (`.tmp`, `.testkit`, `node_modules`, `*.log`, …) are
- * not tracked and stay direct disk writes.
+ * Paths outside reserved source roots (`.tmp`, `.testkit`, …) use native scratch.
+ * Ignored paths inside a source repository cannot become raw disk writes.
  *
  * All tracked paths are resolved against one exact working state and one
  * workspace-wide edit transaction. Repository coordinates route content; they
@@ -873,56 +682,6 @@ async function managedWorkspaceFilesMatching(
   );
 }
 
-async function managedWorkspaceFilesForPaths(
-  bridge: FsVcsBridge,
-  snapshot: ManagedWorkspaceSnapshot,
-  workspacePaths: ReadonlySet<string>
-): Promise<Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>> {
-  const perRepository = await mapWithBoundedConcurrency(
-    snapshot.repositories,
-    SEMANTIC_READ_CONCURRENCY,
-    async (repository) => {
-      const prefixes = new Set<string>();
-      for (const workspacePath of workspacePaths) {
-        if (
-          workspacePath === repository.repoPath ||
-          repository.repoPath.startsWith(`${workspacePath}/`)
-        ) {
-          prefixes.clear();
-          prefixes.add("");
-          break;
-        }
-        if (workspacePath.startsWith(`${repository.repoPath}/`)) {
-          prefixes.add(workspacePath.slice(repository.repoPath.length + 1));
-        }
-      }
-
-      const files = new Map<
-        string,
-        ManagedWorkspaceRepository & VcsListFilesResult["files"][number]
-      >();
-      for (const prefix of prefixes) {
-        let cursor: string | undefined;
-        do {
-          const page = await bridge.listFiles({
-            state: snapshot.state,
-            repositoryId: repository.repositoryId,
-            ...(prefix ? { prefix } : {}),
-            limit: 500,
-            ...(cursor ? { cursor } : {}),
-          });
-          for (const file of page.files) {
-            files.set(file.fileId, { ...repository, ...file });
-          }
-          cursor = page.nextCursor ?? undefined;
-        } while (cursor);
-      }
-      return [...files.values()];
-    }
-  );
-  return perRepository.flat();
-}
-
 /**
  * Explicit construction authority for context-bound filesystem calls.
  *
@@ -944,6 +703,7 @@ export interface FsCallTelemetry {
 }
 
 export interface FsServiceOptions {
+  disk: FsDiskPort;
   contextAuthority: FsContextAuthority;
   /** Monotone latch update that must settle before managed read bytes return. */
   recordContextIngestion?: (
@@ -986,7 +746,7 @@ export interface FsServiceOptions {
  * the existing operation-specific router can either handle subtree operations
  * or emit its actionable repo-root error for file mutations.
  */
-async function isManagedVcsPath(bridge: FsVcsBridge, wsRel: string): Promise<boolean> {
+async function isManagedVcsPath(_bridge: FsVcsBridge, wsRel: string): Promise<boolean> {
   const sourceRoot = wsRel.split("/", 1)[0] ?? "";
   const canonicalSourceRoot = CANONICAL_SOURCE_ROOT_BY_LOWER.get(sourceRoot.toLowerCase());
   if (canonicalSourceRoot && sourceRoot !== canonicalSourceRoot) {
@@ -1000,7 +760,7 @@ async function isManagedVcsPath(bridge: FsVcsBridge, wsRel: string): Promise<boo
   const split = splitRepoPath(wsRel);
   if (split) {
     if (!split.repoRelPath) return true;
-    return bridge.isTracked(wsRel);
+    return true;
   }
 
   if (WORKSPACE_SOURCE_ROOTS.has(sourceRoot)) {
@@ -1074,183 +834,7 @@ function truncateVcsContent(existing: FsVcsContent | null, len: number): FsVcsCo
 // Stat serialisation
 // ---------------------------------------------------------------------------
 
-function serializeStat(stats: fsSync.Stats) {
-  return {
-    isFile: stats.isFile(),
-    isDirectory: stats.isDirectory(),
-    isSymbolicLink: stats.isSymbolicLink(),
-    size: stats.size,
-    mtime: stats.mtime.toISOString(),
-    ctime: stats.ctime.toISOString(),
-    mode: stats.mode,
-  };
-}
-
-function serializeDirent(d: fsSync.Dirent, name: string = d.name) {
-  return {
-    name,
-    _isFile: d.isFile(),
-    _isDirectory: d.isDirectory(),
-    _isSymbolicLink: d.isSymbolicLink(),
-  };
-}
-
-/** Path of a (possibly nested) Dirent relative to the listed directory. */
-function relativeDirentName(listedDir: string, d: fsSync.Dirent): string {
-  return path.relative(listedDir, path.join(d.parentPath, d.name)).split(path.sep).join("/");
-}
-
-// ---------------------------------------------------------------------------
-// grep / glob
-// ---------------------------------------------------------------------------
-
-/** Directories never descended into by grep/glob. */
-const SEARCH_SKIP_DIRS = new Set([".git", ".gad", "node_modules"]);
 const INTERNAL_PROJECTION_ENTRIES = new Set([".gad"]);
-
-const GREP_DEFAULT_MAX_MATCHES = 200;
-const GREP_HARD_MAX_MATCHES = 1000;
-/** Bounds search response construction independently of the requested context per match. */
-const GREP_MAX_RESULT_LINES = 10_000;
-
-export interface GrepOptions {
-  /** Directory (or single file) to search, relative to the context root. */
-  path?: string;
-  /** Glob filter for candidate files (gitignore-style; basename match when slash-free). */
-  glob?: string;
-  caseInsensitive?: boolean;
-  /** Requested lines of context before/after each match. */
-  contextLines?: number;
-  /** Stop after this many matches (default 200, hard cap 1000). */
-  maxMatches?: number;
-  /** Include files normally excluded by .gitignore/.ignore. */
-  includeIgnored?: boolean;
-}
-
-export interface GlobOptions {
-  /** Directory to search, relative to the context root. */
-  path?: string;
-  /** Stop after this many files (default 1000, hard cap 10000). */
-  limit?: number;
-  /** Resume strictly after this exact path from a previous bounded result. */
-  after?: string;
-  /** Include files normally excluded by .gitignore/.ignore. */
-  includeIgnored?: boolean;
-}
-
-export interface GrepMatch {
-  file: string;
-  lineNumber: number;
-  line: string;
-  before: string[];
-  after: string[];
-}
-
-export interface GrepResult {
-  matches: GrepMatch[];
-  matchCount: number;
-  truncated: boolean;
-}
-
-export interface GlobResult {
-  files: string[];
-  truncated: boolean;
-  /** Exact display path to pass as `after` for the next page. */
-  nextCursor?: string;
-}
-
-export interface ReadTextOptions {
-  /** First line to return (1-indexed). */
-  offset?: number;
-  /** Maximum lines to return. */
-  limit?: number;
-  /** Maximum UTF-8 bytes to return. */
-  maxBytes?: number;
-}
-
-export interface ReadTextResult {
-  text: string;
-  contentHash: string;
-  totalLines: number;
-  totalBytes: number;
-  maxLines: number;
-  maxBytes: number;
-  startLine: number;
-  endLine: number;
-  start: number;
-  end: number;
-  truncated: boolean;
-  truncatedBy?: "lines" | "bytes";
-  nextOffset?: number;
-  firstLineExceedsLimit: boolean;
-}
-
-export interface ReadBytesOptions {
-  /** First byte to return (zero-based). */
-  offset?: number;
-  /** Maximum raw bytes to return. */
-  limit?: number;
-}
-
-export interface ReadBytesResult {
-  base64: string;
-  contentHash: string;
-  totalBytes: number;
-  maxBytes: number;
-  start: number;
-  end: number;
-  truncated: boolean;
-  nextOffset?: number;
-}
-
-interface RawGrepMatch {
-  /** Absolute file path. */
-  file: string;
-  lineNumber: number;
-  line: string;
-  before: string[];
-  after: string[];
-}
-
-const READ_TEXT_DEFAULT_LINES = 2_000;
-const READ_TEXT_MAX_LINES = 10_000;
-const READ_TEXT_DEFAULT_BYTES = 50 * 1024;
-const READ_TEXT_MAX_BYTES = 1024 * 1024;
-const READ_BYTES_DEFAULT_LIMIT = 50 * 1024;
-const READ_BYTES_MAX_LIMIT = 1024 * 1024;
-
-function normalizedReadBytesOptions(options: ReadBytesOptions = {}): Required<ReadBytesOptions> {
-  const offset = options.offset ?? 0;
-  const limit = options.limit ?? READ_BYTES_DEFAULT_LIMIT;
-  if (!Number.isInteger(offset) || offset < 0) {
-    throw new RangeError("readBytes offset must be a non-negative integer");
-  }
-  if (!Number.isInteger(limit) || limit < 1 || limit > READ_BYTES_MAX_LIMIT) {
-    throw new RangeError(`readBytes limit must be an integer from 1 to ${READ_BYTES_MAX_LIMIT}`);
-  }
-  return { offset, limit };
-}
-
-function byteRangeResult(
-  bytes: Buffer,
-  totalBytes: number,
-  contentHash: string,
-  options: Required<ReadBytesOptions>
-): ReadBytesResult {
-  const start = Math.min(options.offset, totalBytes);
-  const end = Math.min(totalBytes, options.offset + bytes.length);
-  const truncated = end < totalBytes;
-  return {
-    base64: bytes.toString("base64"),
-    contentHash,
-    totalBytes,
-    maxBytes: options.limit,
-    start,
-    end,
-    truncated,
-    ...(truncated ? { nextOffset: end } : {}),
-  };
-}
 
 function readBytesRangeFromBuffer(bytes: Buffer, rawOptions?: ReadBytesOptions): ReadBytesResult {
   const options = normalizedReadBytesOptions(rawOptions);
@@ -1263,455 +847,15 @@ function readBytesRangeFromBuffer(bytes: Buffer, rawOptions?: ReadBytesOptions):
   );
 }
 
-async function readBytesRangeFromFile(
-  filePath: string,
-  rawOptions: ReadBytesOptions | undefined,
-  signal?: AbortSignal
-): Promise<ReadBytesResult> {
-  if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
-  const options = normalizedReadBytesOptions(rawOptions);
-  const selected: Buffer[] = [];
-  const hash = createHash("sha256");
-  let totalBytes = 0;
-  const stream = fsSync.createReadStream(filePath);
-  try {
-    for await (const value of stream) {
-      if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
-      const chunk = Buffer.from(value as Uint8Array);
-      const chunkStart = totalBytes;
-      const chunkEnd = chunkStart + chunk.length;
-      hash.update(chunk);
-      totalBytes = chunkEnd;
-      const overlapStart = Math.max(options.offset, chunkStart);
-      const overlapEnd = Math.min(options.offset + options.limit, chunkEnd);
-      if (overlapStart < overlapEnd) {
-        selected.push(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart));
-      }
-    }
-    return byteRangeResult(Buffer.concat(selected), totalBytes, hash.digest("hex"), options);
-  } finally {
-    stream.destroy();
-  }
-}
-
-function normalizedReadTextOptions(options: ReadTextOptions = {}): Required<ReadTextOptions> {
-  const offset = options.offset ?? 1;
-  const limit = options.limit ?? READ_TEXT_DEFAULT_LINES;
-  const maxBytes = options.maxBytes ?? READ_TEXT_DEFAULT_BYTES;
-  if (!Number.isInteger(offset) || offset < 1) {
-    throw new RangeError("readText offset must be a positive integer");
-  }
-  if (!Number.isInteger(limit) || limit < 1 || limit > READ_TEXT_MAX_LINES) {
-    throw new RangeError(`readText limit must be an integer from 1 to ${READ_TEXT_MAX_LINES}`);
-  }
-  if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > READ_TEXT_MAX_BYTES) {
-    throw new RangeError(`readText maxBytes must be an integer from 1 to ${READ_TEXT_MAX_BYTES}`);
-  }
-  return { offset, limit, maxBytes };
-}
-
-class TextRangeAccumulator {
-  private lineNumber = 1;
-  private utf16Offset = 0;
-  private readonly selected: string[] = [];
-  private selectedBytes = 0;
-  private selectedStart = 0;
-  private selectedEnd = 0;
-  private stoppedBy: "lines" | "bytes" | undefined;
-  private firstLineExceedsLimit = false;
-  private currentLineParts: string[] = [];
-  private currentLineLength = 0;
-  private currentLineBytes = 0;
-
-  constructor(private readonly options: Required<ReadTextOptions>) {}
-
-  push(text: string): void {
-    let start = 0;
-    let newline = text.indexOf("\n");
-    while (newline !== -1) {
-      this.appendFragment(text.slice(start, newline));
-      this.finishLine(true);
-      start = newline + 1;
-      newline = text.indexOf("\n", start);
-    }
-    this.appendFragment(text.slice(start));
-  }
-
-  finish(contentHash: string, totalBytes: number): ReadTextResult {
-    // `String.prototype.split("\n")` has one final line even for empty input
-    // and one trailing empty line when the file ends in a newline.
-    this.finishLine(false);
-    const totalLines = this.lineNumber - 1;
-    const startLine = this.options.offset;
-    if (this.selected.length === 0 && startLine > totalLines) {
-      this.selectedStart = this.utf16Offset;
-      this.selectedEnd = this.utf16Offset;
-    }
-    const endLine = this.selected.length > 0 ? startLine + this.selected.length - 1 : startLine - 1;
-    const moreLines = endLine < totalLines;
-    return {
-      text: this.selected.join("\n"),
-      contentHash,
-      totalLines,
-      totalBytes,
-      maxLines: this.options.limit,
-      maxBytes: this.options.maxBytes,
-      startLine,
-      endLine,
-      start: this.selectedStart,
-      end: this.selectedEnd,
-      truncated: moreLines,
-      ...(moreLines && this.stoppedBy ? { truncatedBy: this.stoppedBy } : {}),
-      ...(moreLines ? { nextOffset: Math.max(startLine + 1, endLine + 1) } : {}),
-      firstLineExceedsLimit: this.firstLineExceedsLimit,
-    };
-  }
-
-  private appendFragment(fragment: string): void {
-    this.currentLineLength += fragment.length;
-    if (this.lineNumber < this.options.offset || this.stoppedBy) return;
-    if (this.selected.length >= this.options.limit) {
-      this.stoppedBy = "lines";
-      return;
-    }
-    this.currentLineBytes += Buffer.byteLength(fragment, "utf8");
-    const separatorBytes = this.selected.length > 0 ? 1 : 0;
-    if (this.selectedBytes + separatorBytes + this.currentLineBytes > this.options.maxBytes) {
-      this.stoppedBy = "bytes";
-      this.firstLineExceedsLimit = this.selected.length === 0;
-      if (this.selected.length === 0) this.selectedStart = this.utf16Offset;
-      this.currentLineParts = [];
-      return;
-    }
-    this.currentLineParts.push(fragment);
-  }
-
-  private finishLine(hadNewline: boolean): void {
-    const currentLine = this.lineNumber;
-    const currentStart = this.utf16Offset;
-    this.lineNumber += 1;
-    this.utf16Offset += this.currentLineLength + (hadNewline ? 1 : 0);
-    if (currentLine < this.options.offset || this.stoppedBy) {
-      this.resetCurrentLine();
-      return;
-    }
-    if (this.selected.length >= this.options.limit) {
-      this.stoppedBy = "lines";
-      this.resetCurrentLine();
-      return;
-    }
-    if (this.selected.length === 0) this.selectedStart = currentStart;
-    const line = this.currentLineParts.join("");
-    this.selected.push(line);
-    this.selectedBytes += this.currentLineBytes + (this.selected.length > 1 ? 1 : 0);
-    this.selectedEnd = currentStart + line.length;
-    this.resetCurrentLine();
-  }
-
-  private resetCurrentLine(): void {
-    this.currentLineParts = [];
-    this.currentLineLength = 0;
-    this.currentLineBytes = 0;
-  }
-}
-
 function readTextRangeFromBuffer(bytes: Buffer, options?: ReadTextOptions): ReadTextResult {
   const accumulator = new TextRangeAccumulator(normalizedReadTextOptions(options));
   accumulator.push(bytes.toString("utf8"));
   return accumulator.finish(createHash("sha256").update(bytes).digest("hex"), bytes.length);
 }
 
-async function readTextRangeFromFile(
-  filePath: string,
-  options: ReadTextOptions | undefined,
-  signal?: AbortSignal
-): Promise<ReadTextResult> {
-  if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
-  const accumulator = new TextRangeAccumulator(normalizedReadTextOptions(options));
-  const decoder = new StringDecoder("utf8");
-  const hash = createHash("sha256");
-  let totalBytes = 0;
-  const stream = fsSync.createReadStream(filePath);
-  try {
-    for await (const value of stream) {
-      if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
-      const chunk = Buffer.from(value as Uint8Array);
-      totalBytes += chunk.length;
-      hash.update(chunk);
-      accumulator.push(decoder.write(chunk));
-    }
-    accumulator.push(decoder.end());
-    return accumulator.finish(hash.digest("hex"), totalBytes);
-  } finally {
-    stream.destroy();
-  }
-}
-
-let ripgrepPathOverride: string | null | undefined;
-
-/** Test hook: force re-detection of ripgrep (and optionally disable it). */
-export function _setRipgrepPathForTests(value: string | null | undefined): void {
-  ripgrepPathOverride = value;
-}
-
-/**
- * Convert a glob pattern to a RegExp source string. Supports `*`, `**`, `?`,
- * `[...]` character classes, and `{a,b}` alternation.
- */
-function globSource(glob: string): string {
-  let out = "";
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i]!;
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        if (glob[i + 2] === "/") {
-          out += "(?:[^/]+/)*";
-          i += 3;
-        } else {
-          out += ".*";
-          i += 2;
-        }
-      } else {
-        out += "[^/]*";
-        i += 1;
-      }
-    } else if (c === "?") {
-      out += "[^/]";
-      i += 1;
-    } else if (c === "[") {
-      const end = glob.indexOf("]", i + 2);
-      if (end === -1) {
-        out += "\\[";
-        i += 1;
-      } else {
-        let cls = glob.slice(i + 1, end);
-        if (cls.startsWith("!")) cls = "^" + cls.slice(1);
-        out += `[${cls}]`;
-        i = end + 1;
-      }
-    } else if (c === "{") {
-      const end = glob.indexOf("}", i + 1);
-      if (end === -1) {
-        out += "\\{";
-        i += 1;
-      } else {
-        const parts = glob.slice(i + 1, end).split(",");
-        out += `(?:${parts.map(globSource).join("|")})`;
-        i = end + 1;
-      }
-    } else {
-      out += c.replace(/[.+^$()|\\\]}]/g, "\\$&");
-      i += 1;
-    }
-  }
-  return out;
-}
-
-/**
- * Match a slash-separated relative path against a glob pattern. Patterns
- * without a slash match against the basename (gitignore convention).
- */
-function matchesGlob(relPath: string, pattern: string): boolean {
-  const subject = pattern.includes("/") ? relPath : path.posix.basename(relPath);
-  return new RegExp(`^${globSource(pattern)}$`).test(subject);
-}
-
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) return null;
-  let pattern = line;
-  let negated = false;
-  if (pattern.startsWith("!")) {
-    negated = true;
-    pattern = pattern.slice(1);
-  } else if (pattern.startsWith("\\!")) {
-    pattern = pattern.slice(1);
-  }
-  if (pattern.startsWith("/")) pattern = pattern.slice(1);
-  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-  return negated ? `!${prefixed}` : prefixed;
-}
-
-async function addSearchIgnoreRules(matcher: Ignore, dir: string, root: string): Promise<void> {
-  const relativeDir = path.relative(root, dir).split(path.sep).join("/");
-  const prefix = relativeDir ? `${relativeDir}/` : "";
-  for (const filename of [".gitignore", ".ignore"]) {
-    try {
-      const rules = (await fs.readFile(path.join(dir, filename), "utf8"))
-        .split(/\r?\n/u)
-        .map((line) => prefixIgnorePattern(line, prefix))
-        .filter((line): line is string => line !== null);
-      if (rules.length > 0) matcher.add(rules);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-}
-
-/** Deterministic bounded-search traversal with one canonical ignore policy. */
-async function* walkFiles(
-  root: string,
-  options: { includeIgnored?: boolean; signal?: AbortSignal } = {}
-): AsyncGenerator<string> {
-  const matcher = ignore().add([".git/", ".gad/", "node_modules/"]);
-  async function* visit(dir: string): AsyncGenerator<string> {
-    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Operation aborted");
-    if (!options.includeIgnored) await addSearchIgnoreRules(matcher, dir, root);
-    let entries: fsSync.Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    entries.sort((left, right) => compareUtf16CodeUnits(left.name, right.name));
-    for (const entry of entries) {
-      if (options.signal?.aborted) throw options.signal.reason ?? new Error("Operation aborted");
-      const abs = path.join(dir, entry.name);
-      const rel = path.relative(root, abs).split(path.sep).join("/");
-      if (entry.isDirectory()) {
-        if (SEARCH_SKIP_DIRS.has(entry.name)) continue;
-        if (!options.includeIgnored && matcher.ignores(`${rel}/`)) continue;
-        yield* visit(abs);
-      } else if (entry.isFile()) {
-        if (!options.includeIgnored && matcher.ignores(rel)) continue;
-        yield abs;
-      }
-      // Symlinks and special entries are never followed across the authority boundary.
-    }
-  }
-  yield* visit(root);
-}
-
-/** Run ripgrep and collect up to `limit` raw matches. */
-async function grepWithRipgrep(
-  rgPath: string,
-  searchRoot: string,
-  pattern: string,
-  opts: { caseInsensitive: boolean; glob?: string; includeIgnored: boolean },
-  limit: number,
-  contextLines: number,
-  signal?: AbortSignal
-): Promise<{ raw: RawGrepMatch[]; truncated: boolean }> {
-  const { spawn } = await import("node:child_process");
-  const rgArgs = [
-    "--json",
-    "--sort",
-    "path",
-    "--hidden",
-    "--no-messages",
-    "--no-require-git",
-    "--glob",
-    "!**/.git/**",
-    "--glob",
-    "!**/node_modules/**",
-    "--glob",
-    "!**/.gad/**",
-  ];
-  if (opts.includeIgnored) rgArgs.push("--no-ignore");
-  if (contextLines > 0) rgArgs.push("--context", String(contextLines));
-  if (opts.caseInsensitive) rgArgs.push("--ignore-case");
-  if (opts.glob) rgArgs.push("--glob", opts.glob);
-  rgArgs.push("--regexp", pattern, "--", searchRoot);
-
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(rgPath, rgArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    const raw: RawGrepMatch[] = [];
-    let truncated = false;
-    let stderr = "";
-    let buffered = "";
-    let settled = false;
-    const contextByFile = new Map<string, Map<number, string>>();
-    const finish = (err?: Error) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener("abort", abort);
-      if (err) rejectPromise(err);
-      else resolvePromise({ raw, truncated });
-    };
-    const abort = () => {
-      child.kill();
-      finish(signal?.reason instanceof Error ? signal.reason : new Error("Operation aborted"));
-    };
-    if (signal?.aborted) abort();
-    else signal?.addEventListener("abort", abort, { once: true });
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.stdout.on("data", (chunk: Buffer) => {
-      buffered += chunk.toString("utf8");
-      let newline: number;
-      while ((newline = buffered.indexOf("\n")) !== -1) {
-        const line = buffered.slice(0, newline);
-        buffered = buffered.slice(newline + 1);
-        if (!line.trim()) continue;
-        let event: any;
-        try {
-          event = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (event.type !== "match" && event.type !== "context") continue;
-        const file = event.data?.path?.text;
-        const text = event.data?.lines?.text;
-        const lineNumber = event.data?.line_number;
-        // Skip non-UTF8 payloads (rg reports them as base64 `bytes`).
-        if (typeof file !== "string" || typeof text !== "string") continue;
-        if (typeof lineNumber !== "number") continue;
-        if (event.type === "context") {
-          const lines = contextByFile.get(file) ?? new Map<number, string>();
-          lines.set(lineNumber, text.replace(/\r?\n$/u, ""));
-          contextByFile.set(file, lines);
-          continue;
-        }
-        if (raw.length >= limit) {
-          truncated = true;
-          child.kill();
-          return;
-        }
-        const lines = contextByFile.get(file) ?? new Map<number, string>();
-        lines.set(lineNumber, text.replace(/\r?\n$/u, ""));
-        contextByFile.set(file, lines);
-        raw.push({
-          file,
-          lineNumber,
-          line: text.replace(/\r?\n$/u, ""),
-          before: [],
-          after: [],
-        });
-      }
-    });
-    child.on("error", (err) => finish(err));
-    child.on("close", (code) => {
-      // rg exits 0 on matches, 1 on no matches, 2 on error.
-      if (!truncated && code !== null && code > 1) {
-        finish(new Error(`ripgrep failed: ${stderr.trim() || `exit code ${code}`}`));
-        return;
-      }
-      for (const match of raw) {
-        const lines = contextByFile.get(match.file);
-        if (!lines) continue;
-        for (let line = match.lineNumber - contextLines; line < match.lineNumber; line += 1) {
-          const value = lines.get(line);
-          if (value !== undefined) match.before.push(value);
-        }
-        for (let line = match.lineNumber + 1; line <= match.lineNumber + contextLines; line += 1) {
-          const value = lines.get(line);
-          if (value !== undefined) match.after.push(value);
-        }
-      }
-      finish();
-    });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// FsService class
-// ---------------------------------------------------------------------------
-
 export class FsService {
+  private readonly disk: FsDiskPort;
+  private readonly pendingCloses = new Set<Promise<void>>();
   private readonly contextFolderManager: ContextFolderManager;
   private readonly entityCache: EntityCache;
   /** Explicit semantic-workspace or scratch-only construction authority. */
@@ -1730,6 +874,7 @@ export class FsService {
     entityCache: EntityCache,
     opts: FsServiceOptions
   ) {
+    this.disk = opts.disk;
     this.contextFolderManager = contextFolderManager;
     this.entityCache = entityCache;
     this.contextAuthority = opts.contextAuthority;
@@ -1862,7 +1007,9 @@ export class FsService {
     if (!scope.contextId || this.contextAuthority.kind !== "scratch-only") {
       return;
     }
-    const managedPath = authorityPathsForCall(method, args).find(requiresSemanticAuthority);
+    const managedPath = authorityPathsForCall(method, args)
+      .map((input) => contextLogicalPath(input, { directory: true }))
+      .find(requiresSemanticAuthority);
     if (managedPath === undefined) return;
     throw codedError(
       "ESEMANTICAUTHORITY",
@@ -1880,14 +1027,31 @@ export class FsService {
     this._closeHandlesImpl(callerId);
   }
 
+  private closeDisk(operation: Promise<unknown>): void {
+    const closing = operation
+      .then(
+        () => undefined,
+        (error) => {
+          log.warn("Disk handle cleanup failed", { error: String(error) });
+        }
+      )
+      .finally(() => this.pendingCloses.delete(closing));
+    this.pendingCloses.add(closing);
+  }
+
+  async stop(): Promise<void> {
+    for (const caller of new Set([...this.openHandles.values()].map((handle) => handle.panelId)))
+      this._closeHandlesImpl(caller);
+    await Promise.all(this.pendingCloses);
+  }
+
   private _closeHandlesImpl(callerId: string): void {
     for (const [id, tracked] of this.openHandles) {
-      if (tracked.panelId === callerId) {
-        clearTimeout(tracked.timer);
-        tracked.handle.close().catch(() => {});
-        this.openHandles.delete(id);
-      }
+      if (tracked.panelId !== callerId) continue;
+      clearTimeout(tracked.timer);
+      this.openHandles.delete(id);
     }
+    this.closeDisk(this.disk.closeCaller(callerId, AbortSignal.timeout(1_000)));
   }
 
   // =========================================================================
@@ -1949,7 +1113,8 @@ export class FsService {
         }
         const root = await this.contextFolderManager.ensureContextFolder(contextId);
         return {
-          root,
+          sourceRoot: root,
+          root: await this.contextFolderManager.ensureContextScratch(contextId),
           panelId,
           contextId,
           exposeHostPaths: true,
@@ -1983,7 +1148,8 @@ export class FsService {
 
     const root = await this.contextFolderManager.ensureContextFolder(contextId);
     return {
-      root,
+      sourceRoot: root,
+      root: await this.contextFolderManager.ensureContextScratch(contextId),
       panelId,
       contextId,
       exposeHostPaths: false,
@@ -1994,33 +1160,31 @@ export class FsService {
   // FileHandle helpers
   // =========================================================================
 
-  private trackHandle(
-    handle: NodeFileHandle,
-    panelId: string,
-    ingestion: ContextIngestionDescriptor[] = []
-  ): number {
+  private trackHandle(nativeId: number, scope: FsCallScope): number {
+    const panelId = scope.panelId;
     const id = this.nextHandleId++;
-    const timer = setTimeout(() => {
-      log.info(`Closing idle file handle ${id} for ${panelId}`);
-      handle.close().catch(() => {});
-      this.openHandles.delete(id);
-    }, HANDLE_IDLE_TIMEOUT_MS);
-    this.openHandles.set(id, { handle, panelId, timer, ingestion, ingestionRecorded: false });
+    const timer = setTimeout(() => this.expireHandle(id), HANDLE_IDLE_TIMEOUT_MS);
+    this.openHandles.set(id, { nativeId, panelId, timer, scope });
     return id;
   }
 
-  private getTrackedHandle(handleId: number, callerPanelId: string): TrackedHandle {
-    const tracked = this.openHandles.get(handleId);
-    if (!tracked) throw new Error(`Invalid file handle: ${handleId}`);
-    if (tracked.panelId !== callerPanelId) {
-      throw new Error(`File handle ${handleId} does not belong to caller`);
-    }
-    // Reset idle timer
+  private expireHandle(id: number): void {
+    const tracked = this.openHandles.get(id);
+    if (!tracked) return;
+    this.openHandles.delete(id);
     clearTimeout(tracked.timer);
-    tracked.timer = setTimeout(() => {
-      tracked.handle.close().catch(() => {});
-      this.openHandles.delete(handleId);
-    }, HANDLE_IDLE_TIMEOUT_MS);
+    this.closeDisk(
+      this.disk.call(tracked.scope, "handleClose", [tracked.nativeId], AbortSignal.timeout(1_000))
+    );
+  }
+
+  private getTrackedHandle(id: number, callerId: string): TrackedHandle {
+    const tracked = this.openHandles.get(id);
+    if (!tracked) throw new Error(`Invalid file handle: ${id}`);
+    if (tracked.panelId !== callerId)
+      throw new Error(`File handle ${id} does not belong to caller`);
+    clearTimeout(tracked.timer);
+    tracked.timer = setTimeout(() => this.expireHandle(id), HANDLE_IDLE_TIMEOUT_MS);
     return tracked;
   }
 
@@ -2032,45 +1196,18 @@ export class FsService {
    * retain exact file identity; external versions collapse to their persisted
    * outside sources so one imported tree cannot exhaust the session latch.
    */
-  private async ingestionForProjectedPaths(
-    bridge: FsVcsBridge | null,
-    scope: FsCallScope,
+
+  /** Native diagnostics and acknowledgements are data too, including failures. */
+  private async callDisk(
     ctx: ServiceContext,
-    absolutePaths: readonly string[]
-  ): Promise<ContextIngestionDescriptor[]> {
-    if (
-      !bridge ||
-      !scope.contextId ||
-      !ctx.caller.agentBinding ||
-      !this.recordContextIngestion ||
-      absolutePaths.length === 0
-    ) {
-      return [];
-    }
-
-    const exposed = new Set(
-      absolutePaths.flatMap((absolutePath) => {
-        const relative = path.relative(scope.root, absolutePath).split(path.sep).join("/");
-        return relative === "" || relative === "." || relative.startsWith("../") ? [] : [relative];
-      })
-    );
-    if (exposed.size === 0) return [];
-
-    const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
-    const files = await managedWorkspaceFilesForPaths(bridge, snapshot, exposed);
-    const selected = files
-      .filter((file) => {
-        const workspacePath = `${file.repoPath}/${file.path}`;
-        for (const exposedPath of exposed) {
-          if (workspacePath === exposedPath || workspacePath.startsWith(`${exposedPath}/`)) {
-            return true;
-          }
-        }
-        return false;
-      })
-      .sort((a, b) => compareUtf16CodeUnits(`${a.repoPath}/${a.path}`, `${b.repoPath}/${b.path}`));
-
-    return ingestionDescriptorsForDirectoryListing(selected);
+    scope: FsCallScope,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown> {
+    await this.recordProjectedIngestion(ctx, "fs-native-read", [
+      { key: `session:native-fs:${scope.contextId ?? "scratch"}`, derivedClass: "external" },
+    ]);
+    return this.disk.call(scope, method, args, ctx.signal);
   }
 
   private async recordProjectedIngestion(
@@ -2107,8 +1244,7 @@ export class FsService {
    * Intercept managed single-file reads and mutating fs calls from a sandboxed
    * context caller. Reads resolve the exact working state and return its
    * content-addressed bytes; mutations advance semantic state before materialization.
-   * Scratch/ignored paths deliberately retain
-   * the direct-disk implementation.
+   * Scratch paths are delegated to the native disk worker.
    */
   private async maybeRouteToVcs(
     bridge: FsVcsBridge | null,
@@ -2147,8 +1283,7 @@ export class FsService {
 
     const router = this.buildRepoRouter();
 
-    const relOf = (userPath: string, options: { preserveLeaf?: boolean } = {}): Promise<string> =>
-      canonicalContextRelativePath(scope, userPath, options);
+    const relOf = (userPath: string): string => contextLogicalPath(userPath);
     const tracked = (rel: string) => isManagedVcsPath(bridge, rel);
     // Author one workspace-wide edit on the exact working state.
     const commit = (edits: FsVcsEditOp[]) => {
@@ -2163,7 +1298,7 @@ export class FsService {
         mutationIntegrity()
       );
     };
-    const importFile = async (sourceRel: string, sourceAbs: string, destinationRel: string) => {
+    const importFile = async (sourceRel: string, destinationRel: string) => {
       requireManagedCause();
       const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
       const destinationRoute = router.route(destinationRel);
@@ -2178,7 +1313,12 @@ export class FsService {
       if (existing) {
         throw codedError("EEXIST", `copyFile: managed destination exists: ${destinationRel}`);
       }
-      const [bytes, sourceStat] = await Promise.all([fs.readFile(sourceAbs), fs.stat(sourceAbs)]);
+      const snapshotRead = (await this.callDisk(ctx, scope, "snapshot", [sourceRel])) as {
+        buffer: BinaryEnvelope;
+        mode: number;
+      };
+      const bytes = Buffer.from(snapshotRead.buffer.data, "base64");
+      const sourceStat = { mode: snapshotRead.mode };
       await bridge.edit(
         {
           commandId,
@@ -2196,7 +1336,12 @@ export class FsService {
           ],
         },
         causalParent,
-        mutationIntegrity()
+        {
+          class: "external",
+          externalKeys: [
+            ...new Set([...mutationIntegrity().externalKeys, `session:native-fs:${contextId}`]),
+          ],
+        }
       );
     };
     const readWsFile = async (
@@ -2229,9 +1374,7 @@ export class FsService {
       case "readdir": {
         const opts = args[1] as { withFileTypes?: boolean; recursive?: boolean } | undefined;
         if (opts?.recursive) return { handled: false };
-        const rel = (
-          await canonicalContextRelativePath(scope, args[0] as string, { directory: true })
-        ).replace(/\/+$/u, "");
+        const rel = contextLogicalPath(args[0] as string, { directory: true }).replace(/\/+$/u, "");
         if (rel !== "" && scopeForPath(rel) === null) return { handled: false };
         const { workingHead: state } = await bridge.status({ contextId });
         const entries: NonNullable<VcsListDirectoryResult>["entries"] = [];
@@ -2256,7 +1399,17 @@ export class FsService {
         );
         const scratchEntries =
           rel === ""
-            ? (await fs.readdir(scope.root, { withFileTypes: true })).filter(
+            ? (
+                (await this.callDisk(ctx, scope, "readdir", [
+                  "/",
+                  { withFileTypes: true },
+                ])) as Array<{
+                  name: string;
+                  _isFile: boolean;
+                  _isDirectory: boolean;
+                  _isSymbolicLink: boolean;
+                }>
+              ).filter(
                 (entry) =>
                   !WORKSPACE_SOURCE_ROOTS.has(entry.name) &&
                   !INTERNAL_PROJECTION_ENTRIES.has(entry.name)
@@ -2276,7 +1429,7 @@ export class FsService {
                   _isDirectory: entry.kind === "directory",
                   _isSymbolicLink: false,
                 })),
-                ...orderedScratch.map((entry) => serializeDirent(entry)),
+                ...orderedScratch,
               ]
             : [...entries.map((entry) => entry.name), ...orderedScratch.map((entry) => entry.name)],
         };
@@ -2335,7 +1488,7 @@ export class FsService {
         return { handled: true };
       }
       case "mkdir": {
-        const rel = await relOf(args[0] as string, { preserveLeaf: true });
+        const rel = await relOf(args[0] as string);
         if (!(await tracked(rel))) return { handled: false };
         requireManagedCause();
         throw codedError(
@@ -2370,30 +1523,32 @@ export class FsService {
       }
       case "unlink": {
         const userPath = args[0] as string;
-        if (await isLeafSymlink(scope, userPath)) return { handled: false };
-        const rel = await relOf(userPath, { preserveLeaf: true });
+        const rel = await relOf(userPath);
         if (!(await tracked(rel))) return { handled: false };
         await commit([{ kind: "delete", path: rel }]);
         return { handled: true };
       }
       case "rmdir": {
         const userPath = args[0] as string;
-        if (await isLeafSymlink(scope, userPath)) return { handled: false };
-        const rel = await relOf(userPath, { preserveLeaf: true });
+        const rel = await relOf(userPath);
         if (!(await tracked(rel))) return { handled: false };
-        await commit(await this.subtreeDeleteEdits(bridge, contextId, rel));
+        const edits = await this.subtreeDeleteEdits(bridge, contextId, rel);
+        if (!edits.length) throw codedError("ENOENT", `delete: target not found: ${rel}`);
+        await commit(edits);
         return { handled: true };
       }
       case "rm": {
         const userPath = args[0] as string;
-        if (await isLeafSymlink(scope, userPath)) return { handled: false };
-        const rel = await relOf(userPath, { preserveLeaf: true });
+        const rel = await relOf(userPath);
         if (!(await tracked(rel))) return { handled: false };
         const recursive = !!(args[1] as { recursive?: boolean } | undefined)?.recursive;
         const force = !!(args[1] as { force?: boolean } | undefined)?.force;
         if (recursive) {
           const edits = await this.subtreeDeleteEdits(bridge, contextId, rel);
-          if (force && edits.length === 0) return { handled: true };
+          if (!edits.length) {
+            if (force) return { handled: true };
+            throw codedError("ENOENT", `delete: target not found: ${rel}`);
+          }
           await commit(edits);
           return { handled: true };
         }
@@ -2410,8 +1565,17 @@ export class FsService {
       }
       case "copyFile": {
         const dstRel = await relOf(args[1] as string);
-        if (!(await tracked(dstRel))) return { handled: false };
         const srcRel = await relOf(args[0] as string);
+        if (!(await tracked(dstRel))) {
+          if (!(await tracked(srcRel))) return { handled: false };
+          const content = await readWsFile(srcRel, true);
+          if (!content) throw codedError("ENOENT", `copyFile: source not found: ${srcRel}`);
+          await this.callDisk(ctx, scope, "writeFile", [
+            dstRel,
+            encodeBinary(contentToBuffer(content)),
+          ]);
+          return { handled: true };
+        }
         if (await tracked(srcRel)) {
           const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
           const [sourceRoute, destinationRoute] = [router.route(srcRel), router.route(dstRel)];
@@ -2454,36 +1618,16 @@ export class FsService {
           );
           return { handled: true };
         }
-        const srcAbs = await resolveFsFilePath(scope, args[0] as string);
-        await importFile(srcRel, srcAbs, dstRel);
+        await importFile(srcRel, dstRel);
         return { handled: true };
       }
       case "rename": {
         const srcPath = args[0] as string;
         const dstPath = args[1] as string;
-        const [srcIsSymlink, dstIsSymlink, srcRel, dstRel] = await Promise.all([
-          isLeafSymlink(scope, srcPath),
-          isLeafSymlink(scope, dstPath),
-          relOf(srcPath, { preserveLeaf: true }),
-          relOf(dstPath, { preserveLeaf: true }),
-        ]);
-        const dstTracked = await tracked(dstRel);
-        if (srcIsSymlink) {
-          if (!dstTracked) return { handled: false };
-          throw codedError(
-            "EACCES",
-            `fs.rename cannot move or replace a symbolic link at the managed destination ` +
-              `${JSON.stringify(dstPath)}; semantic edits cannot represent symlink entries.`
-          );
-        }
+        const srcRel = await relOf(srcPath);
+        const dstRel = await relOf(dstPath);
         const srcTracked = await tracked(srcRel);
-        if (dstTracked && dstIsSymlink) {
-          throw codedError(
-            "EACCES",
-            `fs.rename cannot move or replace a symbolic link at the managed destination ` +
-              `${JSON.stringify(dstPath)}; semantic edits cannot represent symlink entries.`
-          );
-        }
+        const dstTracked = await tracked(dstRel);
         if (!srcTracked && !dstTracked) return { handled: false };
         if (srcTracked && dstTracked) {
           const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
@@ -2816,6 +1960,12 @@ export class FsService {
     const bridge = this.semanticBridge(scope);
     this.assertScratchOnlyCall(scope, method, args);
 
+    if (method === "nativeRoots") {
+      if (!scope.exposeHostPaths)
+        throw codedError("EACCES", "Native roots are available only to scoped native extensions");
+      return { source: scope.sourceRoot, scratch: scope.root };
+    }
+
     // Explicit projection request for consumers that read disk OUTSIDE fs.*
     // (for example, grep/find in an extension). The argument declares the
     // narrowest read intent while the authority still publishes one complete
@@ -2855,490 +2005,112 @@ export class FsService {
     // authority/projection mismatch instead of a silent partial read.
     if (bridge) await this.demandForReadMethod(bridge, scope, method, args);
 
-    switch (method) {
-      // ----- File content -----
-      case "readFile": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        const encoding = args[1] as string | undefined;
-        if (encoding) {
-          return fs.readFile(p, encoding as BufferEncoding);
-        }
-        const buf = await fs.readFile(p);
-        return encodeBinary(buf);
+    if (method.startsWith("handle")) {
+      const id = args[0] as number;
+      if (method === "handleClose" && !this.openHandles.has(id)) return;
+      const tracked = this.getTrackedHandle(id, panelId);
+      args[0] = tracked.nativeId;
+      if (method === "handleClose") {
+        clearTimeout(tracked.timer);
+        this.openHandles.delete(id);
       }
-
-      case "readText": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        return readTextRangeFromFile(p, args[1] as ReadTextOptions | undefined, ctx.signal);
+    }
+    const target =
+      method === "mktemp" || method.startsWith("handle")
+        ? ".tmp"
+        : method === "symlink"
+          ? String(args[1])
+          : (readScopePath(method, args) ?? (typeof args[0] === "string" ? args[0] : "/"));
+    const logical = contextLogicalPath(target, {
+      directory: ["readdir", "grep", "glob", "mkdir", "rmdir", "rm"].includes(method),
+    });
+    const source = requiresSemanticAuthority(logical);
+    const mutating = [
+      "writeFile",
+      "appendFile",
+      "mkdir",
+      "rmdir",
+      "rm",
+      "unlink",
+      "rename",
+      "copyFile",
+      "truncate",
+      "chmod",
+      "utimes",
+      "symlink",
+    ].includes(method);
+    if (source && mutating)
+      throw codedError(
+        "EROFS",
+        "Managed workspace projections cannot be modified through raw disk operations"
+      );
+    if (method === "realpath" && logical === "" && scope.exposeHostPaths)
+      throw codedError(
+        "ENOTSUP",
+        "The workspace has separate source and scratch roots; use fs.nativeRoots"
+      );
+    const diskScope = { ...scope, root: source ? scope.sourceRoot : scope.root };
+    if ((method === "grep" || method === "glob" || method === "readdir") && logical === "") {
+      const results = await Promise.all(
+        [scope.sourceRoot, scope.root].map((root) =>
+          this.callDisk(ctx, { ...scope, root }, method, args)
+        )
+      );
+      if (method === "readdir") {
+        const nameOf = (entry: unknown): string =>
+          typeof entry === "string" ? entry : (entry as { name: string }).name;
+        return (results as unknown[][])
+          .flatMap((entries, index) =>
+            entries.filter((entry) => requiresSemanticAuthority(nameOf(entry)) === (index === 0))
+          )
+          .sort((left, right) => compareUtf16CodeUnits(nameOf(left), nameOf(right)));
       }
-
-      case "readBytes": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        return readBytesRangeFromFile(p, args[1] as ReadBytesOptions | undefined, ctx.signal);
-      }
-
-      case "writeFile": {
-        const resolvedPath = await resolveFsFilePathInfo(scope, args[0] as string);
-        const p = resolvedPath.path;
-        const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
-        await ensureDirectWriteParent(scope, p);
-        await fs.writeFile(p, data);
-        return;
-      }
-
-      case "appendFile": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
-        await ensureDirectWriteParent(scope, p);
-        await fs.appendFile(p, data);
-        return;
-      }
-
-      // ----- Directory operations -----
-      case "readdir": {
-        const operationStartedAt = Date.now();
-        try {
-          const p = await resolveFsPath(scope, args[0] as string);
-          const opts = args[1] as { withFileTypes?: boolean; recursive?: boolean } | undefined;
-          const recursive = opts?.recursive ?? false;
-          if (opts?.withFileTypes) {
-            const entries = await fs.readdir(p, { withFileTypes: true, recursive });
-            const ingestion = await this.ingestionForProjectedPaths(
-              bridge,
-              scope,
-              ctx,
-              entries.map((entry) => path.join(entry.parentPath, entry.name))
-            );
-            await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
-            // For recursive listings, report names relative to the listed
-            // directory (Node's Dirent.name is just the basename).
-            return entries.map((d) =>
-              serializeDirent(d, recursive ? relativeDirentName(p, d) : d.name)
-            );
-          }
-          const entries = await fs.readdir(p, recursive ? { recursive } : undefined);
-          const ingestion = await this.ingestionForProjectedPaths(
-            bridge,
-            scope,
-            ctx,
-            entries.map((entry) => path.join(p, entry))
-          );
-          await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
-          return entries;
-        } finally {
-          this.emitTelemetry({
-            method,
-            phase: "operation",
-            durationMs: Date.now() - operationStartedAt,
-            ...(scope.contextId ? { contextId: scope.contextId } : {}),
-          });
-        }
-      }
-
-      case "grep": {
-        const result = await this.grep(
-          scope,
-          args[0] as string,
-          args[1] as GrepOptions | undefined,
-          ctx.signal
+      if (method === "grep") {
+        const [managed, scratch] = results as [GrepResult, GrepResult];
+        const matches = [
+          ...managed.matches.filter((match) => requiresSemanticAuthority(match.file)),
+          ...scratch.matches.filter((match) => !requiresSemanticAuthority(match.file)),
+        ];
+        const options = args[1] as GrepOptions | undefined;
+        const limit = Math.min(
+          options?.maxMatches ?? 200,
+          Math.max(1, Math.floor(10000 / (2 * Math.min(options?.contextLines ?? 0, 4999) + 1)))
         );
-        const ingestion = await this.ingestionForProjectedPaths(
-          bridge,
-          scope,
-          ctx,
-          result.matches.map((match) => path.join(scope.root, match.file.replace(/^\/+/, "")))
-        );
-        await this.recordProjectedIngestion(ctx, "fs-grep", ingestion);
-        return result;
-      }
-
-      case "glob": {
-        const result = await this.glob(
-          scope,
-          args[0] as string,
-          args[1] as GlobOptions | undefined,
-          ctx.signal
-        );
-        const ingestion = await this.ingestionForProjectedPaths(
-          bridge,
-          scope,
-          ctx,
-          result.files.map((file) => path.join(scope.root, file.replace(/^\/+/, "")))
-        );
-        await this.recordProjectedIngestion(ctx, "fs-glob", ingestion);
-        return result;
-      }
-
-      case "mkdir": {
-        const resolvedPath = await resolveFsPathInfo(scope, args[0] as string);
-        const p = resolvedPath.path;
-        const opts = args[1] as { recursive?: boolean } | undefined;
-        const result = await fs.mkdir(p, opts);
-        // Return first-created path relative to context root (Node API contract)
-        return result ? "/" + path.relative(scope.root, result) : result;
-      }
-
-      case "rmdir": {
-        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
-        await fs.rmdir(p);
-        return;
-      }
-
-      case "rm": {
-        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
-        const opts = args[1] as { recursive?: boolean; force?: boolean } | undefined;
-        await fs.rm(p, opts);
-        return;
-      }
-
-      // ----- Stat / metadata -----
-      case "stat": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        return serializeStat(await fs.stat(p));
-      }
-
-      case "lstat": {
-        const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
-        return serializeStat(await fs.lstat(p));
-      }
-
-      case "exists": {
-        const p = await resolveFsFilePath(scope, args[0] as string, {
-          leafMode: "allow-dangling",
-        });
-        try {
-          await fs.access(p);
-          return true;
-        } catch {
-          return false;
-        }
-      }
-
-      case "access": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        await fs.access(p, args[1] as number | undefined);
-        return;
-      }
-
-      // ----- File manipulation -----
-      case "unlink": {
-        const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
-        await fs.unlink(p);
-        return;
-      }
-
-      case "copyFile": {
-        const src = await resolveFsFilePath(scope, args[0] as string);
-        const dest = await resolveFsFilePath(scope, args[1] as string);
-        await ensureDirectWriteParent(scope, dest);
-        await fs.copyFile(src, dest);
-        return;
-      }
-
-      case "rename": {
-        const oldP = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
-        const newP = await resolveFsFilePath(scope, args[1] as string, { leafMode: "entry" });
-        await ensureDirectWriteParent(scope, newP);
-        await fs.rename(oldP, newP);
-        return;
-      }
-
-      case "realpath": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        const real = await fs.realpath(p);
-        if (scope.exposeHostPaths) return real;
-        // Return relative to root (panel sees paths relative to context root)
-        if (!real.startsWith(scope.root + path.sep) && real !== scope.root) {
-          throw new Error("Realpath escapes sandbox");
-        }
-        return "/" + path.relative(scope.root, real);
-      }
-
-      case "truncate": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        await fs.truncate(p, args[1] as number | undefined);
-        return;
-      }
-
-      // ----- Symlinks -----
-      case "readlink": {
-        const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
-        const target = await fs.readlink(p);
-        // If the target is absolute, relativize to prevent leaking host paths
-        if (path.isAbsolute(target)) {
-          const resolved = path.resolve(path.dirname(p), target);
-          if (!resolved.startsWith(scope.root + path.sep) && resolved !== scope.root) {
-            throw new Error("Readlink target escapes sandbox");
-          }
-          return "/" + path.relative(scope.root, resolved);
-        }
-        return target;
-      }
-
-      case "symlink": {
-        const target = args[0] as string;
-        const linkPath = args[1] as string;
-        const type = args[2] as "file" | "dir" | "junction" | undefined;
-        const p = await resolveFsPath(scope, linkPath, { leafMode: "entry" });
-        const wsRel = await canonicalContextRelativePath(scope, linkPath, { preserveLeaf: true });
-        const sourceRoot = wsRel.split("/", 1)[0] ?? "";
-        const isWorkspaceSourcePath = bridge
-          ? await isManagedVcsPath(bridge, wsRel)
-          : splitRepoPath(wsRel) !== null || WORKSPACE_SOURCE_ROOTS.has(sourceRoot);
-        if (isWorkspaceSourcePath) {
-          throw codedError(
-            "ENOTSUP",
-            `Symbolic links are supported for context-local scratch paths, not managed workspace paths: ${JSON.stringify(linkPath)}`
-          );
-        }
-        const virtualLinkDir = path.posix.dirname(linkPath.replaceAll("\\", "/"));
-        const virtualTarget = target.startsWith("/")
-          ? target
-          : path.posix.join(virtualLinkDir, target);
-        const targetPath = await resolveFsPath(scope, virtualTarget, {
-          leafMode: "allow-dangling",
-        });
-        const containedTarget = path.relative(path.dirname(p), targetPath) || ".";
-        await ensureDirectWriteParent(scope, p);
-        await fs.symlink(containedTarget, p, type);
-        return;
-      }
-
-      // `chown` remains absent: ownership mutation is neither portable nor safe
-      // for context callers. Symlink creation above is scratch-only and stores
-      // a target proven to resolve lexically inside the context; every follow-up
-      // operation still revalidates traversal through sandboxPath().
-
-      // ----- Permissions & timestamps -----
-      case "chmod": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        await fs.chmod(p, args[1] as number);
-        return;
-      }
-
-      case "utimes": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        await fs.utimes(p, args[1] as number, args[2] as number);
-        return;
-      }
-
-      // ----- File handles -----
-      case "open": {
-        const p = await resolveFsFilePath(scope, args[0] as string);
-        const flags = (args[1] as string) ?? "r";
-        const mode = args[2] as number | undefined;
-        const ingestion = await this.ingestionForProjectedPaths(bridge, scope, ctx, [p]);
-        const handle = await fs.open(p, flags, mode);
-        const handleId = this.trackHandle(handle, panelId, ingestion);
-        return { handleId };
-      }
-
-      case "handleRead": {
-        const tracked = this.getTrackedHandle(args[0] as number, panelId);
-        const length = args[1] as number;
-        if (length < 0) {
-          throw new Error(`Read length out of range`);
-        }
-        const position = args[2] as number | null;
-        const buf = Buffer.alloc(length);
-        const result = await tracked.handle.read(buf, 0, length, position);
-        if (result.bytesRead > 0 && !tracked.ingestionRecorded) {
-          await this.recordProjectedIngestion(ctx, "fs-handle-read", tracked.ingestion);
-          tracked.ingestionRecorded = true;
-        }
         return {
-          bytesRead: result.bytesRead,
-          buffer: encodeBinary(buf.subarray(0, result.bytesRead)),
+          matches: matches.slice(0, limit),
+          matchCount: Math.min(matches.length, limit),
+          truncated: managed.truncated || scratch.truncated || matches.length > limit,
         };
       }
-
-      case "handleWrite": {
-        const tracked = this.getTrackedHandle(args[0] as number, panelId);
-        const data = isBinaryEnvelope(args[1])
-          ? decodeBinary(args[1])
-          : Buffer.from(args[1] as string);
-        const position = (args[2] as number | null) ?? null;
-        const result = await tracked.handle.write(data, 0, data.length, position);
-        return { bytesWritten: result.bytesWritten };
-      }
-
-      case "handleClose": {
-        const id = args[0] as number;
-        const tracked = this.openHandles.get(id);
-        if (tracked) {
-          if (tracked.panelId !== panelId) {
-            throw new Error(`File handle ${id} does not belong to caller`);
-          }
-          clearTimeout(tracked.timer);
-          await tracked.handle.close();
-          this.openHandles.delete(id);
-        }
-        return;
-      }
-
-      case "handleStat": {
-        const tracked = this.getTrackedHandle(args[0] as number, panelId);
-        return serializeStat(await tracked.handle.stat());
-      }
-
-      // ----- Tmp files (atomic-write helper for tools) -----
-      case "mktemp": {
-        const prefix = args[0];
-        if (prefix !== undefined && typeof prefix !== "string") {
-          throw new Error("mktemp prefix must be a string when provided");
-        }
-        // Normalize prefix: strip any path separators so callers can't escape
-        // `.tmp/` by passing e.g. "../foo". Audit finding #20 (filesystem
-        // report): strip leading dots so callers cannot create .htaccess /
-        // .DS_Store / other hidden-file conventions inside `.tmp/`.
-        let safePrefix = (prefix ?? "tmp").replace(/[\\/]/g, "_").replace(/^\.+/, "");
-        if (safePrefix.length === 0) safePrefix = "tmp";
-        const tmpDir = path.join(scope.root, ".tmp");
-        await fs.mkdir(tmpDir, { recursive: true });
-        // Audit finding #34: 16 bytes of crypto-grade entropy in the suffix
-        // (was already crypto.randomBytes(8); widened to 16 to reduce
-        // brute-force pre-create races).
-        const random = randomBytes(16).toString("hex");
-        const filename = `${safePrefix}-${random}`;
-        // Return path relative to context root (with leading `/`) so it
-        // matches the format other fs methods accept.
-        return "/" + path.posix.join(".tmp", filename);
-      }
-
-      default:
-        throw new Error(`Unknown fs method: ${method}`);
+      const [managed, scratch] = results as [GlobResult, GlobResult];
+      const files = [
+        ...managed.files.filter((file) => requiresSemanticAuthority(file)),
+        ...scratch.files.filter((file) => !requiresSemanticAuthority(file)),
+      ].sort(compareUtf16CodeUnits);
+      const limit = (args[1] as GlobOptions | undefined)?.limit ?? 1000;
+      const selected = files.slice(0, limit);
+      const truncated = managed.truncated || scratch.truncated || files.length > limit;
+      return { files: selected, truncated, ...(truncated ? { nextCursor: selected.at(-1) } : {}) };
     }
-  }
-
-  // =========================================================================
-  // Search (grep / glob)
-  // =========================================================================
-
-  /** Map an absolute path back to the caller-visible form. */
-  private toDisplayPath(scope: FsCallScope, absolutePath: string): string {
-    if (absolutePath === scope.root) return "/";
-    return "/" + path.relative(scope.root, absolutePath).split(path.sep).join("/");
-  }
-
-  /**
-   * Search file contents under the context root with the bundled ripgrep
-   * engine. Skips internal/dependency trees, symlinks, and binary files.
-   */
-  private async grep(
-    scope: FsCallScope,
-    pattern: string,
-    opts: GrepOptions = {},
-    signal?: AbortSignal
-  ): Promise<GrepResult> {
-    if (typeof pattern !== "string" || pattern.length === 0) {
-      throw new Error("grep pattern must be a non-empty string");
-    }
-    const caseInsensitive = opts.caseInsensitive ?? false;
-    const requestedContextLines = opts.contextLines ?? 0;
-    if (!Number.isSafeInteger(requestedContextLines) || requestedContextLines < 0) {
-      throw new RangeError("grep contextLines must be a non-negative safe integer");
-    }
-    const maxMatches = opts.maxMatches ?? GREP_DEFAULT_MAX_MATCHES;
-    if (!Number.isInteger(maxMatches) || maxMatches < 1 || maxMatches > GREP_HARD_MAX_MATCHES) {
-      throw new RangeError(`grep maxMatches must be an integer from 1 to ${GREP_HARD_MAX_MATCHES}`);
-    }
-    // Context is useful precisely when callers need to inspect a larger local
-    // region. Bound the aggregate response instead of rejecting that request
-    // at an arbitrary per-match number. One result consumes at most
-    // (2 * context + 1) lines; both dimensions are reduced only as necessary
-    // to keep the complete host-side result within this invariant.
-    const contextLines = Math.min(
-      requestedContextLines,
-      Math.floor((GREP_MAX_RESULT_LINES - 1) / 2)
-    );
-    const boundedMaxMatches = Math.min(
-      maxMatches,
-      Math.max(1, Math.floor(GREP_MAX_RESULT_LINES / (2 * contextLines + 1)))
-    );
-    const contextTruncated = contextLines !== requestedContextLines;
-    const searchRoot = await resolveFsFilePath(scope, opts.path ?? "/");
+    const operationStartedAt = Date.now();
+    let result: unknown;
     try {
-      await fs.stat(searchRoot);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const requestedPath = opts.path ?? "/";
-      throw Object.assign(new Error(`grep search path not found: ${requestedPath}`), {
-        code: "ENOENT",
-        path: requestedPath,
+      result = await this.callDisk(ctx, diskScope, method, args);
+    } finally {
+      this.emitTelemetry({
+        method,
+        phase: "operation",
+        durationMs: Date.now() - operationStartedAt,
+        ...(scope.contextId ? { contextId: scope.contextId } : {}),
       });
     }
-
-    const rgPath = ripgrepPathOverride === undefined ? bundledRipgrepPath : ripgrepPathOverride;
-    if (!rgPath) throw new Error("The bundled ripgrep search engine is unavailable");
-    const { raw, truncated } = await grepWithRipgrep(
-      rgPath,
-      searchRoot,
-      pattern,
-      { caseInsensitive, glob: opts.glob, includeIgnored: opts.includeIgnored === true },
-      boundedMaxMatches,
-      contextLines,
-      signal
-    );
-
-    const matches: GrepMatch[] = raw.map((m) => {
-      return {
-        file: this.toDisplayPath(scope, m.file),
-        lineNumber: m.lineNumber,
-        line: m.line,
-        before: m.before,
-        after: m.after,
-      };
-    });
-
-    return { matches, matchCount: matches.length, truncated: truncated || contextTruncated };
-  }
-
-  /**
-   * Find files matching a glob pattern under the context root in stable
-   * lexical traversal order. Skips internal/dependency trees and symlinks.
-   */
-  private async glob(
-    scope: FsCallScope,
-    pattern: string,
-    opts: GlobOptions = {},
-    signal?: AbortSignal
-  ): Promise<GlobResult> {
-    if (typeof pattern !== "string" || pattern.length === 0) {
-      throw new Error("glob pattern must be a non-empty string");
+    if (method === "open") {
+      const nativeId = (result as { handleId: number }).handleId;
+      if (!Number.isSafeInteger(nativeId) || nativeId < 1)
+        throw new Error("Invalid native file handle");
+      return { handleId: this.trackHandle(nativeId, diskScope) };
     }
-    const searchRoot = await resolveFsPath(scope, opts.path ?? "/");
-    const limit = opts.limit ?? 1_000;
-    if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
-      throw new RangeError("glob limit must be an integer from 1 to 10000");
-    }
-    const matched: string[] = [];
-    let cursorSeen = opts.after === undefined;
-    for await (const file of walkFiles(searchRoot, {
-      includeIgnored: opts.includeIgnored,
-      signal,
-    })) {
-      const rel = path.relative(searchRoot, file).split(path.sep).join("/");
-      if (!matchesGlob(rel, pattern)) continue;
-      const display = this.toDisplayPath(scope, file);
-      if (!cursorSeen) {
-        cursorSeen = display === opts.after;
-        continue;
-      }
-      matched.push(display);
-      if (matched.length > limit) break;
-    }
-    if (!cursorSeen) {
-      throw Object.assign(new Error(`Glob cursor is no longer present: ${opts.after}`), {
-        code: "InvalidCursor",
-      });
-    }
-    const truncated = matched.length > limit;
-    const files = truncated ? matched.slice(0, limit) : matched;
-    return {
-      files,
-      truncated,
-      ...(truncated ? { nextCursor: files.at(-1) } : {}),
-    };
+    return result;
   }
 }
 
@@ -3365,3 +2137,15 @@ export function handleFsCall(
 ): Promise<unknown> {
   return fsService.handleCall(ctx, method, args);
 }
+
+export type {
+  GrepOptions,
+  GlobOptions,
+  GrepMatch,
+  GrepResult,
+  GlobResult,
+  ReadTextOptions,
+  ReadTextResult,
+  ReadBytesOptions,
+  ReadBytesResult,
+} from "./fsValues.js";

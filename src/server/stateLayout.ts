@@ -25,6 +25,7 @@ export function stateLayout(statePath: string) {
       base: contextProjectionsBase,
       current: currentContextProjectionsPath(statePath),
     },
+    contextScratch: path.join(statePath, "scratch", "contexts"),
     logsDir: path.join(statePath, "logs"),
     credentialsAuditDir: path.join(statePath, "credentials-audit"),
     credentialUseGrantsFile: path.join(statePath, "credential-use-grants.json"),

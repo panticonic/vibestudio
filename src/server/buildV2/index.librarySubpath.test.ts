@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -24,7 +25,11 @@ const CONTEXT_STATE = `state:${"b".repeat(64)}`;
 const RESOLVE_CONTEXT_STATE = `state:${"c".repeat(64)}`;
 
 function buildRoots(workspaceRoot: string) {
-  return { appRoot: path.resolve(__dirname, "../../.."), dependencyWorkspaceRoot: workspaceRoot };
+  return {
+    appRoot: path.resolve(__dirname, "../../.."),
+    runNativeJob: runIsolatedBuildJob,
+    dependencyWorkspaceRoot: workspaceRoot,
+  };
 }
 
 /** Serves the working tree as the (only) workspace state. */

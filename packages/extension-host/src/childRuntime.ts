@@ -322,6 +322,9 @@ function createFsClient() {
     async rename(oldPath: string, newPath: string) {
       await rpcCall("fs.rename", [oldPath, newPath]);
     },
+    async nativeRoots() {
+      return rpcCall<{ source: string; scratch: string }>("fs.nativeRoots", []);
+    },
     async realpath(filePath: string) {
       return rpcCall("fs.realpath", [filePath]);
     },
@@ -407,6 +410,7 @@ function createContext() {
     name,
     version,
     storage: {
+      root: normalizedRoot,
       mkdir: (p: string, opts?: { recursive?: boolean }) =>
         nodeFs.mkdir(storagePath(p), { recursive: opts?.recursive ?? true }),
       readFile: (p: string, encoding?: BufferEncoding) => nodeFs.readFile(storagePath(p), encoding),

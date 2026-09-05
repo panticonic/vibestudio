@@ -1,6 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { open, realpath } from "node:fs/promises";
+import { open, realpath, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import path from "node:path";
@@ -86,6 +86,28 @@ class WorkspaceCommand extends EventEmitter implements ProcessAdapter {
  * resources, create host processes, select a host PID, or report kernel proof.
  * Broker revocation is separately owned and must precede workspace retirement. */
 export class WorkspaceSandbox {
+  /** Final ownership retirement, after stop; never used for an ordinary restart. */
+  static async retireStorage(
+    privateRoot: string,
+    installation: IsolationInstallation
+  ): Promise<void> {
+    if (installation.platform !== "win32") return;
+    const root = await realpath(privateRoot);
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        installation.launcher,
+        ["--retire-storage", root],
+        {
+          env: { SystemRoot: process.env["SystemRoot"] ?? "C:\\Windows" },
+          windowsHide: true,
+          timeout: 10_000,
+          maxBuffer: 64 * 1024,
+        },
+        (error) => (error ? reject(error) : resolve())
+      );
+    });
+  }
+
   private readonly commands = new Map<string, WorkspaceCommand>();
   private readonly environment: Record<string, string>;
   private readonly child: ChildProcessWithoutNullStreams;
@@ -104,7 +126,7 @@ export class WorkspaceSandbox {
   private constructor(
     private readonly policy: ExecutionPolicy,
     installation: WorkspaceSandboxInstallation,
-    launch: ReturnType<typeof compileExecution>
+    private readonly launch: ReturnType<typeof compileExecution>
   ) {
     this.environment = executionEnvironment(policy, installation.platform);
     this.retired = new Promise((resolve) => {
@@ -202,14 +224,21 @@ export class WorkspaceSandbox {
         throw new IsolationError(`Workspace admission requires a canonical resource: ${resource}`);
       }
     }
-    for (const file of launch.controlFiles) {
-      const handle = await open(file.path, "wx", file.mode);
-      try {
-        await handle.writeFile(file.contents);
-        await handle.sync();
-      } finally {
-        await handle.close();
+    const created: string[] = [];
+    try {
+      for (const file of launch.controlFiles) {
+        const handle = await open(file.path, "wx", file.mode);
+        created.push(file.path);
+        try {
+          await handle.writeFile(file.contents);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
       }
+    } catch (error) {
+      await Promise.all(created.map((file) => unlink(file)));
+      throw error;
     }
     const sandbox = new WorkspaceSandbox(resolved, installation, launch);
     try {
@@ -379,6 +408,11 @@ export class WorkspaceSandbox {
     this.child.stdout.destroy();
     this.child.stderr.destroy();
     if (!this.launcherExited) this.child.unref();
+    else
+      for (const file of this.launch.controlFiles)
+        await unlink(file.path).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
     return { launcherExited: this.launcherExited, descendantCleanup: "unverified" };
   }
 }

@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 /**
  * End-to-end build coverage for the framework-agnostic panel pipeline: it drives
  * a real `buildUnit()` through `resolveTemplate` → `getAdapter` → the vanilla /
@@ -84,7 +85,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     });
     // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
     // real node_modules instead of a fresh install.
-    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT);
+    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT, runIsolatedBuildJob);
   });
 
   afterEach(async () => {

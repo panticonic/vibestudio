@@ -6,10 +6,15 @@ import { createServer, type Server } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceSandbox } from "./workspace.js";
+import type { ExecutionPolicy } from "./policy.js";
 
 const sandboxes: WorkspaceSandbox[] = [];
 const directories: string[] = [];
 const listeners: Server[] = [];
+const storageOwners: Array<{
+  root: string;
+  installation: import("./index.js").IsolationInstallation;
+}> = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   const stops = await Promise.allSettled(sandboxes.splice(0).map((sandbox) => sandbox.stop()));
@@ -27,6 +32,8 @@ afterEach(async () => {
     directories.length = 0;
     throw new Error("A native fixture launcher did not retire", { cause: unfinished });
   }
+  for (const owner of storageOwners.splice(0))
+    await WorkspaceSandbox.retireStorage(owner.root, owner.installation);
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
 });
@@ -137,6 +144,7 @@ describe("shared workspace sandbox on the native platform", () => {
         });
         connected.then(networkDenied => process.send({
           networkDenied,
+          anchorRenameDenied: (() => { try { fs.renameSync(process.env.HOME, process.env.HOME + '-replaced'); return false; } catch { return true; } })(),
           inputWriteDenied: (() => { try { fs.writeFileSync(__filename, 'tampered'); return false; } catch { return true; } })(),
           hardlinkWriteDenied: (() => {
             try {
@@ -163,49 +171,53 @@ describe("shared workspace sandbox on the native platform", () => {
         }));
         process.on('message', message => {
           if (message.write) fs.writeFileSync(process.env.HOME + '/shared', message.write);
+          if (message.links) {
+            fs.linkSync(process.env.HOME + '/shared', process.env.HOME + '/retained-hardlink');
+            fs.symlinkSync(process.env.HOME + '/tmp', process.env.HOME + '/retained-directory-link', process.platform === 'win32' ? 'junction' : 'dir');
+          }
           process.send({ value: fs.readFileSync(process.env.HOME + '/shared', 'utf8') });
         });
       `
         );
-        const sandbox = await WorkspaceSandbox.start(
-          {
-            version: 1,
-            owner: {
-              workspaceId: id,
-              contextId: null,
-              runtimeId: `workspace-${id}`,
-              incarnation: "fixture",
-              executionDigest: "fixture-runtime",
-            },
-            privateRoot,
-            executable,
-            args: [],
-            cwd: home,
-            home,
-            environment: {
-              PATH: runtime,
-              ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {}),
-            },
-            read: [
-              ...(platform === "linux"
-                ? ["/usr"]
-                : platform === "darwin"
-                  ? ["/usr/lib", "/System/Library"]
-                  : []),
-              runtime,
-              input,
-            ],
-            write: [home],
-            sockets: [],
+        const policy: ExecutionPolicy = {
+          version: 1,
+          owner: {
+            workspaceId: id,
+            contextId: null,
+            runtimeId: `workspace-${id}`,
+            incarnation: "fixture",
+            executionDigest: "fixture-runtime",
           },
-          {
-            platform,
-            launcher,
-            workspaceEntry: path.join(runtime, "workspaceChild.js"),
-          }
-        );
+          privateRoot,
+          executable,
+          args: [],
+          cwd: home,
+          home,
+          environment: {
+            PATH: runtime,
+            ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {}),
+          },
+          read: [
+            ...(platform === "linux"
+              ? ["/usr"]
+              : platform === "darwin"
+                ? ["/usr/lib", "/System/Library"]
+                : []),
+            runtime,
+            input,
+          ],
+          write: [home],
+          sockets: [],
+        };
+        const launch = {
+          platform,
+          launcher,
+          workspaceEntry: path.join(runtime, "workspaceChild.js"),
+        };
+        storageOwners.push({ root: privateRoot, installation: launch });
+        const sandbox = await WorkspaceSandbox.start(policy, launch);
         sandboxes.push(sandbox);
-        return { sandbox, entry, id };
+        return { sandbox, entry, id, policy, launch };
       })
     );
     const fixtures = starts.map((result) => {
@@ -259,6 +271,7 @@ describe("shared workspace sandbox on the native platform", () => {
         siblingDenied: true,
         ambientSecret: null,
         networkDenied: true,
+        anchorRenameDenied: true,
         inputWriteDenied: true,
         hardlinkWriteDenied: true,
         symlinkHostReadDenied: true,
@@ -279,6 +292,9 @@ describe("shared workspace sandbox on the native platform", () => {
       expect(await survivor).toEqual({ value: "shared-by-commands" });
       observations.push({ second, sandbox: fixture.sandbox });
     }
+    const linked = message(observations[0]!.second);
+    observations[0]!.second.postMessage({ links: true });
+    expect(await linked).toEqual({ value: "shared-by-commands" });
     expect(await observations[0]!.sandbox.stop()).toEqual({
       launcherExited: true,
       descendantCleanup: "unverified",
@@ -287,6 +303,21 @@ describe("shared workspace sandbox on the native platform", () => {
     const remaining = message(observations[1]!.second);
     observations[1]!.second.postMessage({ read: true });
     expect(await remaining).toEqual({ value: "shared-by-commands" });
+    const prior = fixtures[0]!;
+    const restarted = await WorkspaceSandbox.start(
+      {
+        ...prior.policy,
+        owner: { ...prior.policy.owner, incarnation: "restart" },
+      },
+      prior.launch
+    );
+    sandboxes.push(restarted);
+    expect(await message(restarted.fork(prior.entry, {}))).toMatchObject({
+      own: "shared-by-commands",
+      hostDenied: true,
+      siblingDenied: true,
+      anchorRenameDenied: true,
+    });
     expect(hostConnections).toBe(0);
   }, 20_000);
 });

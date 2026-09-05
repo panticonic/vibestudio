@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -59,7 +60,7 @@ describe("buildUnit terminal worker builds", () => {
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
     // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
-    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT);
+    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT, runIsolatedBuildJob);
   });
 
   afterEach(async () => {

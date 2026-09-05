@@ -1,3 +1,6 @@
+import { parseLineageKey } from "@vibestudio/shared/authority/contextIntegrity";
+import { rgPath as bundledRipgrepPath } from "@vscode/ripgrep";
+import { FsDisk, _setRipgrepPathForTests } from "./fsDisk.js";
 /**
  * FsService tests — context resolution, mktemp, and error-code preservation.
  *
@@ -31,7 +34,6 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   FsService,
-  _setRipgrepPathForTests,
   type GrepResult,
   type GlobResult,
   type FsVcsBridge,
@@ -48,6 +50,11 @@ import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/se
  */
 function makeStubFolderManager(root: string): ContextFolderManager {
   return {
+    async ensureContextScratch(contextId: string): Promise<string> {
+      const scratch = path.join(root, `${contextId}-scratch`);
+      mkdirSync(scratch, { recursive: true });
+      return scratch;
+    },
     async ensureContextFolder(contextId: string): Promise<string> {
       const p = path.join(root, contextId);
       mkdirSync(p, { recursive: true });
@@ -521,6 +528,7 @@ describe("FsService", () => {
     tmpRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-fsservice-"));
     entityCache = new EntityCache();
     service = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+      disk: new FsDisk(bundledRipgrepPath),
       contextAuthority: { kind: "semantic", bridge: makeProjectedReadBridge(tmpRoot) },
     });
   });
@@ -532,13 +540,14 @@ describe("FsService", () => {
   it("reports scope and directory-operation phases without exposing path contents", async () => {
     const telemetry: Array<{ method: string; phase: string; contextId?: string }> = [];
     const observed = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+      disk: new FsDisk(bundledRipgrepPath),
       contextAuthority: { kind: "scratch-only" },
       onTelemetry: (event) => telemetry.push(event),
     });
     const ctx = makeWorkerCtx("do:src:class:telemetry");
     registerContext(ctx.caller.runtime.id, "do", "ctx-telemetry");
-    mkdirSync(path.join(tmpRoot, "ctx-telemetry", ".tmp"), { recursive: true });
-    writeFileSync(path.join(tmpRoot, "ctx-telemetry", ".tmp", "entry.txt"), "ready");
+    mkdirSync(path.join(tmpRoot, "ctx-telemetry-scratch", ".tmp"), { recursive: true });
+    writeFileSync(path.join(tmpRoot, "ctx-telemetry-scratch", ".tmp", "entry.txt"), "ready");
 
     await expect(observed.handleCall(ctx, "readdir", [".tmp"])).resolves.toEqual(["entry.txt"]);
 
@@ -574,7 +583,7 @@ describe("FsService", () => {
     it("streams only the requested line range with exact UTF-16 coordinates and continuation", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-read-text");
-      const root = path.join(tmpRoot, "ctx-read-text");
+      const root = path.join(tmpRoot, "ctx-read-text-scratch");
       mkdirSync(root, { recursive: true });
       writeFileSync(path.join(root, "value.txt"), "one\n🙂two\nthree");
 
@@ -599,7 +608,7 @@ describe("FsService", () => {
     it("does not return a partial UTF-8 line when the byte budget is too small", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-read-text-long");
-      const root = path.join(tmpRoot, "ctx-read-text-long");
+      const root = path.join(tmpRoot, "ctx-read-text-long-scratch");
       mkdirSync(root, { recursive: true });
       writeFileSync(path.join(root, "value.txt"), "🙂🙂🙂\nnext");
 
@@ -619,7 +628,7 @@ describe("FsService", () => {
     it("rejects an already-cancelled bounded read", async () => {
       const base = makeWorkerCtx("do:src:class:key");
       registerContext(base.caller.runtime.id, "do", "ctx-read-text-cancel");
-      const root = path.join(tmpRoot, "ctx-read-text-cancel");
+      const root = path.join(tmpRoot, "ctx-read-text-cancel-scratch");
       mkdirSync(root, { recursive: true });
       writeFileSync(path.join(root, "value.txt"), "text");
       const controller = new AbortController();
@@ -635,7 +644,7 @@ describe("FsService", () => {
     it("streams an exact byte range with a complete-file hash and continuation", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-read-bytes");
-      const root = path.join(tmpRoot, "ctx-read-bytes");
+      const root = path.join(tmpRoot, "ctx-read-bytes-scratch");
       mkdirSync(root, { recursive: true });
       writeFileSync(path.join(root, "value.bin"), Buffer.from([0, 255, 1, 254, 2, 253]));
 
@@ -656,7 +665,7 @@ describe("FsService", () => {
     it("returns an empty terminal range when the byte offset is past EOF", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-read-bytes-eof");
-      const root = path.join(tmpRoot, "ctx-read-bytes-eof");
+      const root = path.join(tmpRoot, "ctx-read-bytes-eof-scratch");
       mkdirSync(root, { recursive: true });
       writeFileSync(path.join(root, "value.bin"), Buffer.from([1, 2]));
 
@@ -684,7 +693,7 @@ describe("FsService", () => {
       expect(p2).toMatch(/^\/\.tmp\/tmp-[0-9a-f]{32}$/);
       expect(p1).not.toBe(p2);
 
-      expect(existsSync(path.join(tmpRoot, "ctx-d", ".tmp"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-d-scratch", ".tmp"))).toBe(true);
     });
 
     it("honors a custom prefix", async () => {
@@ -723,7 +732,7 @@ describe("FsService", () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-b");
       await service.handleCall(ctx, "writeFile", ["/hello.txt", "world"]);
-      expect(existsSync(path.join(tmpRoot, "ctx-b", "hello.txt"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-b-scratch", "hello.txt"))).toBe(true);
       const content = await service.handleCall(ctx, "readFile", ["/hello.txt", "utf8"]);
       expect(content).toBe("world");
     });
@@ -736,7 +745,13 @@ describe("FsService", () => {
 
       expect(
         existsSync(
-          path.join(tmpRoot, "ctx-nested-write", ".vibestudio", "tmp", "fs-text-roundtrip.txt")
+          path.join(
+            tmpRoot,
+            "ctx-nested-write-scratch",
+            ".vibestudio",
+            "tmp",
+            "fs-text-roundtrip.txt"
+          )
         )
       ).toBe(true);
       await expect(
@@ -774,8 +789,8 @@ describe("FsService", () => {
 
     it("stat sees files that were placed on disk before the service call", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
-      mkdirSync(path.join(tmpRoot, "ctx-h"), { recursive: true });
-      writeFileSync(path.join(tmpRoot, "ctx-h", "greeting.txt"), "hi");
+      mkdirSync(path.join(tmpRoot, "ctx-h-scratch"), { recursive: true });
+      writeFileSync(path.join(tmpRoot, "ctx-h-scratch", "greeting.txt"), "hi");
 
       registerContext(ctx.caller.runtime.id, "do", "ctx-h");
       const stat = (await service.handleCall(ctx, "stat", ["/greeting.txt"])) as {
@@ -806,7 +821,7 @@ describe("FsService", () => {
 
       await service.handleCall(ctx, "writeFile", ["/app.txt", "from-app"]);
 
-      expect(existsSync(path.join(tmpRoot, "ctx-app", "app.txt"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-app-scratch", "app.txt"))).toBe(true);
       await expect(service.handleCall(ctx, "readFile", ["/app.txt", "utf8"])).resolves.toBe(
         "from-app"
       );
@@ -817,7 +832,7 @@ describe("FsService", () => {
     it("rejects reads through an invalid .git/objects symlink escape", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-git-invalid");
-      const contextRoot = path.join(tmpRoot, "ctx-git-invalid");
+      const contextRoot = path.join(tmpRoot, "ctx-git-invalid-scratch");
       const repoGit = path.join(contextRoot, "repo", ".git");
       const externalObjects = path.join(tmpRoot, "external-objects");
       mkdirSync(path.join(externalObjects, "ab"), { recursive: true });
@@ -839,7 +854,7 @@ describe("FsService", () => {
     it("rejects writes through dangling symlinks whose target cannot be contained", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-dangling-link");
-      const contextRoot = path.join(tmpRoot, "ctx-dangling-link");
+      const contextRoot = path.join(tmpRoot, "ctx-dangling-link-scratch");
       mkdirSync(contextRoot, { recursive: true });
       const outside = path.join(tmpRoot, "outside-created-by-link.txt");
       symlinkSync(path.relative(contextRoot, outside), path.join(contextRoot, "escape.txt"));
@@ -853,7 +868,7 @@ describe("FsService", () => {
     it("lets entry operations inspect, rename, and remove dangling leaf symlinks", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-dangling-entry");
-      const contextRoot = path.join(tmpRoot, "ctx-dangling-entry");
+      const contextRoot = path.join(tmpRoot, "ctx-dangling-entry-scratch");
       mkdirSync(contextRoot, { recursive: true });
       symlinkSync("missing-target.txt", path.join(contextRoot, "dangling-link"));
 
@@ -952,7 +967,7 @@ describe("FsService", () => {
       ).rejects.toThrow(/ENOENT|no such file|Path traversal/i);
     });
 
-    it("returns the physical context root from realpath for chained extension callers", async () => {
+    it("returns explicit source and scratch roots for chained extension callers", async () => {
       const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
       ctx.chainCaller = {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-2",
@@ -963,9 +978,13 @@ describe("FsService", () => {
       registerContext(ctx.chainCaller.callerId, "do", "ctx-realpath");
       mkdirSync(path.join(tmpRoot, "ctx-realpath"), { recursive: true });
 
-      await expect(service.handleCall(ctx, "realpath", ["/"])).resolves.toBe(
-        path.join(tmpRoot, "ctx-realpath")
-      );
+      await expect(service.handleCall(ctx, "nativeRoots", [])).resolves.toEqual({
+        source: path.join(tmpRoot, "ctx-realpath"),
+        scratch: path.join(tmpRoot, "ctx-realpath-scratch"),
+      });
+      await expect(service.handleCall(ctx, "realpath", ["/"])).rejects.toMatchObject({
+        code: "ENOTSUP",
+      });
     });
 
     it("fails fast for chained extension fs calls before context materialization", async () => {
@@ -989,7 +1008,7 @@ describe("FsService", () => {
       mkdirSync(path.join(tmpRoot, "ctx-shell"), { recursive: true });
       const ctx = makeShellCtx("shell-1");
       await service.handleCall(ctx, "writeFile", ["ctx-shell", "/note.txt", "from-shell"]);
-      expect(existsSync(path.join(tmpRoot, "ctx-shell", "note.txt"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-shell-scratch", "note.txt"))).toBe(true);
       await expect(
         service.handleCall(ctx, "readFile", ["ctx-shell", "/note.txt", "utf8"])
       ).resolves.toBe("from-shell");
@@ -999,7 +1018,7 @@ describe("FsService", () => {
       registerContext("do:src:class:entity-only", "do", "ctx-entity-only");
       const ctx = makeShellCtx("shell-1");
       await service.handleCall(ctx, "writeFile", ["ctx-entity-only", "/x.txt", "ok"]);
-      expect(existsSync(path.join(tmpRoot, "ctx-entity-only", "x.txt"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-entity-only-scratch", "x.txt"))).toBe(true);
     });
 
     it("rejects unknown contextIds for shell callers", async () => {
@@ -1017,7 +1036,7 @@ describe("FsService", () => {
     it("server callers may address fresh contexts (created on the fly)", async () => {
       const ctx: ServiceContext = { caller: createVerifiedCaller("server-main", "server") };
       await service.handleCall(ctx, "writeFile", ["ctx-fresh", "/s.txt", "srv"]);
-      expect(existsSync(path.join(tmpRoot, "ctx-fresh", "s.txt"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-fresh-scratch", "s.txt"))).toBe(true);
     });
 
     it("agent callers are pinned to their host-verified binding, not a client-supplied context id", async () => {
@@ -1028,8 +1047,8 @@ describe("FsService", () => {
       await service.handleCall(ctx, "writeFile", ["/own.txt", "ok"]);
 
       expect(existsSync(path.join(tmpRoot, "ctx-foreign", "pwned.txt"))).toBe(false);
-      expect(existsSync(path.join(tmpRoot, "ctx-agent-bound", "ctx-foreign"))).toBe(true);
-      expect(existsSync(path.join(tmpRoot, "ctx-agent-bound", "own.txt"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-agent-bound-scratch", "ctx-foreign"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-agent-bound-scratch", "own.txt"))).toBe(true);
     });
   });
 
@@ -1045,7 +1064,7 @@ describe("FsService", () => {
 
   describe("readdir recursive", () => {
     function setupTree(contextId: string): void {
-      const root = path.join(tmpRoot, contextId);
+      const root = path.join(tmpRoot, `${contextId}-scratch`);
       mkdirSync(path.join(root, "sub", "deeper"), { recursive: true });
       writeFileSync(path.join(root, "top.txt"), "t");
       writeFileSync(path.join(root, "sub", "mid.txt"), "m");
@@ -1098,7 +1117,7 @@ describe("FsService", () => {
 
   describe("grep", () => {
     function setupSearchTree(contextId: string): string {
-      const root = path.join(tmpRoot, contextId);
+      const root = path.join(tmpRoot, `${contextId}-scratch`);
       mkdirSync(path.join(root, "src"), { recursive: true });
       mkdirSync(path.join(root, "node_modules", "dep"), { recursive: true });
       mkdirSync(path.join(root, ".git"), { recursive: true });
@@ -1163,7 +1182,7 @@ describe("FsService", () => {
         it("accepts useful context ranges while bounding aggregate result lines", async () => {
           const ctx = makeWorkerCtx("do:src:class:key");
           registerContext(ctx.caller.runtime.id, "do", "ctx-grep-context-range");
-          const root = path.join(tmpRoot, "ctx-grep-context-range");
+          const root = path.join(tmpRoot, "ctx-grep-context-range-scratch");
           mkdirSync(root, { recursive: true });
           writeFileSync(
             path.join(root, "context.txt"),
@@ -1185,7 +1204,7 @@ describe("FsService", () => {
         it("truncates at maxMatches", async () => {
           const ctx = makeWorkerCtx("do:src:class:key");
           registerContext(ctx.caller.runtime.id, "do", "ctx-grep-c");
-          const root = path.join(tmpRoot, "ctx-grep-c");
+          const root = path.join(tmpRoot, "ctx-grep-c-scratch");
           mkdirSync(root, { recursive: true });
           writeFileSync(root + "/many.txt", Array(20).fill("needle").join("\n"));
           withBackend();
@@ -1214,7 +1233,7 @@ describe("FsService", () => {
         it("respects ignore files unless includeIgnored is explicit", async () => {
           const ctx = makeWorkerCtx("do:src:class:key");
           registerContext(ctx.caller.runtime.id, "do", "ctx-grep-ignore");
-          const root = path.join(tmpRoot, "ctx-grep-ignore");
+          const root = path.join(tmpRoot, "ctx-grep-ignore-scratch");
           mkdirSync(root, { recursive: true });
           writeFileSync(path.join(root, ".gitignore"), "ignored.txt\n");
           writeFileSync(path.join(root, "ignored.txt"), "needle\n");
@@ -1238,7 +1257,7 @@ describe("FsService", () => {
     it("propagates cancellation to the ripgrep subprocess", async () => {
       const base = makeWorkerCtx("do:src:class:key");
       registerContext(base.caller.runtime.id, "do", "ctx-grep-cancel");
-      const root = path.join(tmpRoot, "ctx-grep-cancel");
+      const root = path.join(tmpRoot, "ctx-grep-cancel-scratch");
       mkdirSync(root, { recursive: true });
       writeFileSync(path.join(root, "large.txt"), "needle\n".repeat(10_000));
       const controller = new AbortController();
@@ -1286,7 +1305,8 @@ describe("FsService", () => {
 
     it("works for shell callers with an explicit contextId", async () => {
       mkdirSync(path.join(tmpRoot, "ctx-grep-shell"), { recursive: true });
-      writeFileSync(path.join(tmpRoot, "ctx-grep-shell", "f.txt"), "needle\n");
+      mkdirSync(path.join(tmpRoot, "ctx-grep-shell-scratch"), { recursive: true });
+      writeFileSync(path.join(tmpRoot, "ctx-grep-shell-scratch", "f.txt"), "needle\n");
       const result = (await service.handleCall(makeShellCtx("shell-1"), "grep", [
         "ctx-grep-shell",
         "needle",
@@ -1300,7 +1320,7 @@ describe("FsService", () => {
     it("returns matching files in stable lexical order, skipping internal and dependency trees", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob");
-      const root = path.join(tmpRoot, "ctx-glob");
+      const root = path.join(tmpRoot, "ctx-glob-scratch");
       mkdirSync(path.join(root, "src", "deep"), { recursive: true });
       mkdirSync(path.join(root, "node_modules"), { recursive: true });
       mkdirSync(path.join(root, ".gad"), { recursive: true });
@@ -1323,7 +1343,7 @@ describe("FsService", () => {
     it("scopes the search to options.path", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob-scope");
-      const root = path.join(tmpRoot, "ctx-glob-scope");
+      const root = path.join(tmpRoot, "ctx-glob-scope-scratch");
       mkdirSync(path.join(root, "a"), { recursive: true });
       mkdirSync(path.join(root, "b"), { recursive: true });
       writeFileSync(path.join(root, "a", "in.txt"), "");
@@ -1339,7 +1359,7 @@ describe("FsService", () => {
     it("matches slash-free patterns against basenames anywhere in the tree", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob-base");
-      const root = path.join(tmpRoot, "ctx-glob-base");
+      const root = path.join(tmpRoot, "ctx-glob-base-scratch");
       mkdirSync(path.join(root, "nested"), { recursive: true });
       writeFileSync(path.join(root, "nested", "match.spec.ts"), "");
 
@@ -1350,7 +1370,7 @@ describe("FsService", () => {
     it("respects ignore files by default and can deliberately include ignored files", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob-ignore");
-      const root = path.join(tmpRoot, "ctx-glob-ignore");
+      const root = path.join(tmpRoot, "ctx-glob-ignore-scratch");
       mkdirSync(path.join(root, "nested"), { recursive: true });
       writeFileSync(path.join(root, ".gitignore"), "ignored.ts\n");
       writeFileSync(path.join(root, "visible.ts"), "");
@@ -1370,7 +1390,7 @@ describe("FsService", () => {
     it("returns bounded resumable pages without duplicates", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob-pages");
-      const root = path.join(tmpRoot, "ctx-glob-pages");
+      const root = path.join(tmpRoot, "ctx-glob-pages-scratch");
       mkdirSync(root, { recursive: true });
       for (const name of ["a.ts", "b.ts", "c.ts"]) writeFileSync(path.join(root, name), "");
 
@@ -1405,6 +1425,7 @@ describe("FsService", () => {
   describe("explicit context filesystem authority", () => {
     it("keeps scratch direct while refusing every managed path without semantic authority", async () => {
       const scratchOnly = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "scratch-only" },
       });
       const ctx = makeWorkerCtx("do:scratch-only");
@@ -1455,6 +1476,7 @@ describe("FsService", () => {
     it("routes a managed write through semantic state, not raw disk", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -1482,6 +1504,7 @@ describe("FsService", () => {
     it("reads managed file bytes from the exact semantic state, not stale materialization", async () => {
       const { bridge, readCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:semantic-read");
@@ -1519,11 +1542,14 @@ describe("FsService", () => {
         derivedClass: "internal" | "external";
       }> = [];
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: async (_ctx, input) => {
+          parseLineageKey(input.key);
           observed.push(input);
         },
         recordContextIngestionBatch: async (_ctx, inputs) => {
+          inputs.forEach((input) => parseLineageKey(input.key));
           observed.push(...inputs);
         },
       });
@@ -1561,11 +1587,14 @@ describe("FsService", () => {
         derivedClass: "internal" | "external";
       }> = [];
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: async (_ctx, input) => {
+          parseLineageKey(input.key);
           observed.push(input);
         },
         recordContextIngestionBatch: async (_ctx, inputs) => {
+          inputs.forEach((input) => parseLineageKey(input.key));
           observed.push(...inputs);
         },
       });
@@ -1637,6 +1666,7 @@ describe("FsService", () => {
       const readFile = bridge.readFile.bind(bridge);
       bridge.readFile = (input) => track(() => readFile(input));
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const agent = makeAgentCtx("bounded-semantic-read", contextId);
@@ -1678,6 +1708,7 @@ describe("FsService", () => {
         }
       };
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: vi.fn(),
         recordContextIngestionBatch: vi.fn(),
@@ -1700,8 +1731,10 @@ describe("FsService", () => {
         derivedClass: "internal" | "external";
       }> = [];
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: async (_ctx, input) => {
+          parseLineageKey(input.key);
           observed.push(input);
         },
       });
@@ -1729,7 +1762,7 @@ describe("FsService", () => {
       ]);
     });
 
-    it("records exact semantic lineage for names and search results before returning them", async () => {
+    it("records semantic directory lineage and classifies native search results as external", async () => {
       const { bridge } = makeMockBridge();
       const observed: Array<{
         key: string;
@@ -1738,11 +1771,14 @@ describe("FsService", () => {
         derivedClass: "internal" | "external";
       }> = [];
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: async (_ctx, input) => {
+          parseLineageKey(input.key);
           observed.push(input);
         },
         recordContextIngestionBatch: async (_ctx, inputs) => {
+          inputs.forEach((input) => parseLineageKey(input.key));
           observed.push(...inputs);
         },
       });
@@ -1780,16 +1816,22 @@ describe("FsService", () => {
         { path: "/packages/lib" },
       ])) as GrepResult;
       expect(grep.matches.map((match) => match.file)).toEqual(["/packages/lib/match.txt"]);
-      expect(observed.filter((entry) => entry.via === "fs-grep")).toEqual([
-        expect.objectContaining({ key: expect.stringContaining("match.txt@") }),
-      ]);
+      expect(observed.at(-1)).toEqual({
+        key: `session:native-fs:${contextId}`,
+        via: "fs-native-read",
+        classification: "derived",
+        derivedClass: "external",
+      });
 
       await expect(
         svc.handleCall(agent, "glob", ["match.*", { path: "/packages/lib" }])
       ).resolves.toEqual({ files: ["/packages/lib/match.txt"], truncated: false });
-      expect(observed.filter((entry) => entry.via === "fs-glob")).toEqual([
-        expect.objectContaining({ key: expect.stringContaining("match.txt@") }),
-      ]);
+      expect(observed.at(-1)).toEqual({
+        key: `session:native-fs:${contextId}`,
+        via: "fs-native-read",
+        classification: "derived",
+        derivedClass: "external",
+      });
     });
 
     it("attributes directory names to bounded outside sources without reading file bodies", async () => {
@@ -1813,6 +1855,7 @@ describe("FsService", () => {
       const recordContextIngestion = vi.fn();
       const recordContextIngestionBatch = vi.fn();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion,
         recordContextIngestionBatch,
@@ -1856,6 +1899,7 @@ describe("FsService", () => {
       const { bridge } = makeMockBridge();
       const recordContextIngestion = vi.fn();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion,
         recordContextIngestionBatch: vi.fn(),
@@ -1911,7 +1955,41 @@ describe("FsService", () => {
       );
     });
 
-    it("records a managed handle's exact semantic lineage on its first byte read", async () => {
+    it.each(["readFile", "writeFile", "readdir"])(
+      "records native %s diagnostics before exposing failure",
+      async (method) => {
+        const { bridge } = makeMockBridge();
+        const observed: string[] = [];
+        const contextId = "ctx-native-errors";
+        const agent = makeAgentCtx("native-errors", contextId);
+        registerContext(agent.caller.runtime.id, "do", contextId);
+        const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+          disk: {
+            call: async () => {
+              expect(observed.at(-1)).toBe(`session:native-fs:${contextId}`);
+              throw new Error("worker-controlled diagnostic");
+            },
+            closeCaller: async () => {},
+          },
+          contextAuthority: { kind: "semantic", bridge },
+          recordContextIngestionBatch: async (_ctx, inputs) => {
+            for (const input of inputs) {
+              parseLineageKey(input.key);
+              observed.push(input.key);
+            }
+          },
+          recordContextIngestion: async (_ctx, input) => {
+            parseLineageKey(input.key);
+            observed.push(input.key);
+          },
+        });
+        await expect(
+          svc.handleCall(agent, method, [method === "readdir" ? "/" : ".tmp/note", "bytes"])
+        ).rejects.toThrow("worker-controlled diagnostic");
+      }
+    );
+
+    it("classifies every native handle byte read as external", async () => {
       const { bridge } = makeMockBridge();
       const observed: Array<{
         key: string;
@@ -1920,8 +1998,10 @@ describe("FsService", () => {
         derivedClass: "internal" | "external";
       }> = [];
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: async (_ctx, input) => {
+          parseLineageKey(input.key);
           observed.push(input);
         },
       });
@@ -1938,24 +2018,25 @@ describe("FsService", () => {
         "/packages/lib/handle.txt",
         "r",
       ])) as { handleId: number };
-      expect(observed).toEqual([]);
+      expect(observed).toHaveLength(1);
 
       await svc.handleCall(agent, "handleRead", [handleId, 8, 0]);
       await svc.handleCall(agent, "handleRead", [handleId, 8, 8]);
-      expect(observed).toEqual([
-        {
-          key: expect.stringContaining("handle.txt@"),
-          via: "fs-handle-read",
+      expect(observed).toEqual(
+        Array.from({ length: 3 }, () => ({
+          key: `session:native-fs:${contextId}`,
+          via: "fs-native-read",
           classification: "derived",
-          derivedClass: "internal",
-        },
-      ]);
+          derivedClass: "external",
+        }))
+      );
       await svc.handleCall(agent, "handleClose", [handleId]);
     });
 
     it("leaves scratch-path writes (.tmp) on direct disk", async () => {
       const { bridge, applyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -1965,12 +2046,15 @@ describe("FsService", () => {
       await svc.handleCall(ctx, "writeFile", [tmp, "scratch"]);
 
       expect(applyCalls).toHaveLength(0);
-      expect(existsSync(path.join(tmpRoot, "ctx-scratch", tmp.replace(/^\//, "")))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-scratch-scratch", tmp.replace(/^\//, "")))).toBe(
+        true
+      );
     });
 
     it("rejects managed empty-directory mkdir instead of reporting nonexistent state", async () => {
       const { bridge, applyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:managed-mkdir");
@@ -1987,12 +2071,15 @@ describe("FsService", () => {
       await expect(svc.handleCall(ctx, "mkdir", ["/.tmp/real", { recursive: true }])).resolves.toBe(
         "/.tmp"
       );
-      expect(existsSync(path.join(tmpRoot, "ctx-managed-mkdir", ".tmp", "real"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-managed-mkdir-scratch", ".tmp", "real"))).toBe(
+        true
+      );
     });
 
     it("routes a managed delete through semantic state", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2009,6 +2096,7 @@ describe("FsService", () => {
     it("implements managed truncate with exact byte semantics", async () => {
       const { bridge, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:truncate");
@@ -2036,6 +2124,7 @@ describe("FsService", () => {
     it("routes a tracked rename through one identity-preserving move transaction", async () => {
       const { bridge, moveCalls, applyCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2066,6 +2155,7 @@ describe("FsService", () => {
     it("routes a tracked copy through exact copy-of provenance instead of a write", async () => {
       const { bridge, copyCalls, applyCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2100,6 +2190,7 @@ describe("FsService", () => {
     it("maps a missing managed copy source to ENOENT", async () => {
       const { bridge, copyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2120,6 +2211,7 @@ describe("FsService", () => {
         throw failure;
       };
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2134,6 +2226,7 @@ describe("FsService", () => {
     it("creates a managed file from scratch bytes through one semantic edit", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2163,15 +2256,19 @@ describe("FsService", () => {
     it("unlinks a scratch symlink entry without deleting its managed target", async () => {
       const { bridge, applyCalls, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-link-delete");
 
       await svc.handleCall(ctx, "writeFile", ["/packages/lib/a.ts", "tracked"]);
-      const root = path.join(tmpRoot, "ctx-link-delete");
+      const root = path.join(tmpRoot, "ctx-link-delete-scratch");
       mkdirSync(path.join(root, ".tmp"), { recursive: true });
-      symlinkSync("../packages/lib/a.ts", path.join(root, ".tmp", "tracked-link"));
+      symlinkSync(
+        path.join(tmpRoot, "ctx-link-delete", "packages/lib/a.ts"),
+        path.join(root, ".tmp", "tracked-link")
+      );
 
       await svc.handleCall(ctx, "unlink", ["/.tmp/tracked-link"]);
 
@@ -2183,9 +2280,10 @@ describe("FsService", () => {
       expect(() => lstatSync(path.join(root, ".tmp", "tracked-link"))).toThrow();
     });
 
-    it("keeps disk-only leaf symlinks out of semantic delete routing", async () => {
+    it("does not let projection-only symlinks authorize semantic deletes", async () => {
       const { bridge, applyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2197,11 +2295,15 @@ describe("FsService", () => {
       symlinkSync("target.txt", path.join(repoRoot, "rm-link"));
       symlinkSync("target-dir", path.join(repoRoot, "rmdir-link"), "dir");
 
-      await svc.handleCall(ctx, "unlink", ["/packages/lib/unlink-link"]);
-      await svc.handleCall(ctx, "rm", ["/packages/lib/rm-link", { recursive: true }]);
+      await expect(svc.handleCall(ctx, "unlink", ["/packages/lib/unlink-link"])).rejects.toThrow(
+        /target not found/
+      );
       await expect(
-        svc.handleCall(ctx, "rmdir", ["/packages/lib/rmdir-link"])
-      ).rejects.toMatchObject({ code: "ENOTDIR" });
+        svc.handleCall(ctx, "rm", ["/packages/lib/rm-link", { recursive: true }])
+      ).rejects.toThrow(/target not found/);
+      await expect(svc.handleCall(ctx, "rmdir", ["/packages/lib/rmdir-link"])).rejects.toThrow(
+        /target not found/
+      );
 
       expect(existsSync(path.join(repoRoot, "target.txt"))).toBe(true);
       expect(existsSync(path.join(repoRoot, "target-dir"))).toBe(true);
@@ -2212,25 +2314,27 @@ describe("FsService", () => {
     it("rejects renaming a symlink entry into a tracked destination", async () => {
       const { bridge, applyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-link-rename");
-      const root = path.join(tmpRoot, "ctx-link-rename");
+      const root = path.join(tmpRoot, "ctx-link-rename-scratch");
       mkdirSync(path.join(root, ".tmp"), { recursive: true });
       symlinkSync("missing-target", path.join(root, ".tmp", "source-link"));
 
       await expect(
         svc.handleCall(ctx, "rename", ["/.tmp/source-link", "/packages/lib/link"])
-      ).rejects.toThrow(/cannot move or replace a symbolic link.*managed destination/s);
+      ).rejects.toThrow(/cannot infer managed replacement/);
 
       expect(lstatSync(path.join(root, ".tmp", "source-link")).isSymbolicLink()).toBe(true);
       expect(applyCalls).toHaveLength(0);
     });
 
-    it("directly renames a disk-only symlink from a malformed reserved path to scratch", async () => {
+    it("rejects raw renames from malformed reserved paths", async () => {
       const { bridge, applyCalls } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2240,16 +2344,20 @@ describe("FsService", () => {
       mkdirSync(path.join(root, ".tmp"), { recursive: true });
       symlinkSync("missing-target", path.join(root, "agents", "legacy", "source-link"));
 
-      await svc.handleCall(ctx, "rename", ["/agents/legacy/source-link", "/.tmp/moved-link"]);
-
-      expect(() => lstatSync(path.join(root, "agents", "legacy", "source-link"))).toThrow();
-      expect(lstatSync(path.join(root, ".tmp", "moved-link")).isSymbolicLink()).toBe(true);
+      await expect(
+        svc.handleCall(ctx, "rename", ["/agents/legacy/source-link", "/.tmp/moved-link"])
+      ).rejects.toThrow(/reserved workspace source root/);
+      expect(lstatSync(path.join(root, "agents", "legacy", "source-link")).isSymbolicLink()).toBe(
+        true
+      );
+      expect(existsSync(path.join(root, ".tmp", "moved-link"))).toBe(false);
       expect(applyCalls).toHaveLength(0);
     });
 
     it("refuses scratch-to-managed rename because replacement uses an exact semantic edit", async () => {
       const { bridge, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2262,12 +2370,15 @@ describe("FsService", () => {
       );
 
       expect(files.has("ctx-atomic/skills/x/SKILL.md")).toBe(false);
-      expect(existsSync(path.join(tmpRoot, "ctx-atomic", tmp.replace(/^\//, "")))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-atomic-scratch", tmp.replace(/^\//, "")))).toBe(
+        true
+      );
     });
 
     it("rejects opening a managed path for writing", async () => {
       const { bridge } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2297,6 +2408,7 @@ describe("FsService", () => {
     it("routes a write to its owning repository identity and exact working state", async () => {
       const { bridge, applyCalls, files } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2315,6 +2427,7 @@ describe("FsService", () => {
     it("keeps ordinary relative root write/rename/copy operations on context-local scratch disk", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2342,6 +2455,7 @@ describe("FsService", () => {
     it("rejects malformed paths beneath reserved workspace source roots", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2355,9 +2469,10 @@ describe("FsService", () => {
       expect(applyCalls).toHaveLength(0);
     });
 
-    it("routes in-sandbox symlink aliases to the canonical workspace repo", async () => {
+    it("never derives semantic write authority from a native symlink alias", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2370,22 +2485,14 @@ describe("FsService", () => {
       await svc.handleCall(ctx, "writeFile", ["source-alias/lib/src/x.ts", "x\n"]);
       await svc.handleCall(ctx, "unlink", ["source-alias/lib/src/x.ts"]);
 
-      expect(applyCalls).toEqual([
-        {
-          repoPath: "packages/lib",
-          edits: [{ kind: "write", path: "src/x.ts", content: { kind: "text", text: "x\n" } }],
-        },
-        {
-          repoPath: "packages/lib",
-          edits: [{ kind: "delete", path: "src/x.ts" }],
-        },
-      ]);
+      expect(applyCalls).toEqual([]);
       expect(existsSync(path.join(root, "packages", "lib", "src", "x.ts"))).toBe(false);
     });
 
     it("rejects non-canonical workspace source-root casing", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2400,6 +2507,7 @@ describe("FsService", () => {
     it("rejects writes that name a workspace repo root instead of a file inside it", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2414,6 +2522,7 @@ describe("FsService", () => {
     it("preserves fs.rm force semantics for a missing tracked file", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2428,6 +2537,7 @@ describe("FsService", () => {
     it("preserves recursive fs.rm force semantics for a missing tracked subtree", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2442,6 +2552,7 @@ describe("FsService", () => {
     it("canonicalizes a dotted project filename into a repo-shaped path", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2483,6 +2594,7 @@ describe("FsService", () => {
     it("does not materialize platform scratch paths before direct reads", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2499,6 +2611,7 @@ describe("FsService", () => {
     it("keeps fs.mktemp paths usable for read/stat/exists with a VCS bridge installed", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2518,6 +2631,7 @@ describe("FsService", () => {
       writeFileSync(path.join(tmpRoot, "ctx-s", "packages", "lib", "x.ts"), "x\n");
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2532,6 +2646,7 @@ describe("FsService", () => {
       mkdirSync(path.join(tmpRoot, "ctx-root-realpath"), { recursive: true });
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2552,6 +2667,7 @@ describe("FsService", () => {
       // rather than a bespoke ENOMATERIALIZE that breaks them.
       const { bridge } = makeMaterializeBridge({ materialize: false });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2563,6 +2679,7 @@ describe("FsService", () => {
     it("a root grep demands 'all' (the only legitimate blanket case)", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2581,6 +2698,7 @@ describe("FsService", () => {
       writeFileSync(path.join(tmpRoot, "ctx-glob-demand", "panels", "foo", "a.ts"), "x\n");
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2594,6 +2712,7 @@ describe("FsService", () => {
     it("ensureMaterialized RPC declares a narrow scope (a single repo)", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -2607,6 +2726,7 @@ describe("FsService", () => {
     it("ensureMaterialized RPC ignores direct-disk scratch paths", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeWorkerCtx("do:src:class:key");
