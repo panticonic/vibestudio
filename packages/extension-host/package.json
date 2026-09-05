@@ -31,7 +31,7 @@
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/unit-host": "workspace:*",
     "@vibestudio/workspace": "workspace:*",
-    "yaml": "^2.8.1",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
