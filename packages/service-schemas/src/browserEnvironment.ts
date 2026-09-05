@@ -16,8 +16,13 @@ import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 export const BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX = "browserEnvironment.broker";
+export const BROWSER_ENVIRONMENT_DOWNLOAD_AUTHORITY_PREFIX = "browserEnvironment.download";
 
-function brokerPolicy(method: string, presentation: CapabilityPresentation) {
+function preparedCodePolicy(
+  method: string,
+  presentation: CapabilityPresentation,
+  resolverPrefix: string
+) {
   const capability = `service:browserEnvironment.${method}`;
   return {
     capability,
@@ -26,7 +31,7 @@ function brokerPolicy(method: string, presentation: CapabilityPresentation) {
       requirement: requirementForPrincipals(["host", "code"], capability),
       resource: { kind: "literal" as const, key: capability },
       prepared: {
-        resolver: `${BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX}.${method}`,
+        resolver: `${resolverPrefix}.${method}`,
         leaves: [
           {
             capability,
@@ -37,6 +42,16 @@ function brokerPolicy(method: string, presentation: CapabilityPresentation) {
       },
     },
   };
+}
+
+// Imports are broker-owned; download controls are a public native capability.
+// Both keep the same gated code admission while allowing trusted host calls.
+function brokerPolicy(method: string, presentation: CapabilityPresentation) {
+  return preparedCodePolicy(method, presentation, BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX);
+}
+
+function downloadPolicy(method: string, presentation: CapabilityPresentation) {
+  return preparedCodePolicy(method, presentation, BROWSER_ENVIRONMENT_DOWNLOAD_AUTHORITY_PREFIX);
 }
 
 function reviewedProviderPolicy(method: string, presentation: CapabilityPresentation) {
@@ -470,7 +485,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(DownloadRecordSchema),
     access: { sensitivity: "read" },
-    ...brokerPolicy("listDownloads", {
+    ...downloadPolicy("listDownloads", {
       title: "View browser downloads",
       action: "view browser downloads",
       description: "See your current and recent browser downloads.",
@@ -491,7 +506,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    ...brokerPolicy("pauseDownload", {
+    ...downloadPolicy("pauseDownload", {
       title: "Pause browser downloads",
       action: "pause browser downloads",
       description: "Pause downloads that are currently in progress.",
@@ -512,7 +527,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    ...brokerPolicy("resumeDownload", {
+    ...downloadPolicy("resumeDownload", {
       title: "Resume browser downloads",
       action: "resume browser downloads",
       description: "Resume downloads that were paused.",
@@ -533,7 +548,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "destructive" },
-    ...brokerPolicy("cancelDownload", {
+    ...downloadPolicy("cancelDownload", {
       title: "Cancel browser downloads",
       action: "cancel browser downloads",
       description: "Cancel downloads that are currently in progress.",
@@ -554,7 +569,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    ...brokerPolicy("openDownload", {
+    ...downloadPolicy("openDownload", {
       title: "Open downloaded files",
       action: "open downloaded files",
       description: "Open a downloaded file on this computer.",
@@ -575,7 +590,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    ...brokerPolicy("revealDownload", {
+    ...downloadPolicy("revealDownload", {
       title: "Show downloaded files",
       action: "show downloaded files on this computer",
       description: "Show a downloaded file in your file manager.",

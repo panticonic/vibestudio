@@ -830,7 +830,7 @@
             "key": "service:browserEnvironment.cancelDownload"
           },
           "prepared": {
-            "resolver": "browserEnvironment.broker.cancelDownload",
+            "resolver": "browserEnvironment.download.cancelDownload",
             "leaves": [
               {
                 "capability": "service:browserEnvironment.cancelDownload",
@@ -1023,7 +1023,7 @@
             "key": "service:browserEnvironment.listDownloads"
           },
           "prepared": {
-            "resolver": "browserEnvironment.broker.listDownloads",
+            "resolver": "browserEnvironment.download.listDownloads",
             "leaves": [
               {
                 "capability": "service:browserEnvironment.listDownloads",
@@ -1544,7 +1544,7 @@
             "key": "service:browserEnvironment.openDownload"
           },
           "prepared": {
-            "resolver": "browserEnvironment.broker.openDownload",
+            "resolver": "browserEnvironment.download.openDownload",
             "leaves": [
               {
                 "capability": "service:browserEnvironment.openDownload",
@@ -1626,7 +1626,7 @@
             "key": "service:browserEnvironment.pauseDownload"
           },
           "prepared": {
-            "resolver": "browserEnvironment.broker.pauseDownload",
+            "resolver": "browserEnvironment.download.pauseDownload",
             "leaves": [
               {
                 "capability": "service:browserEnvironment.pauseDownload",
@@ -1901,7 +1901,7 @@
             "key": "service:browserEnvironment.resumeDownload"
           },
           "prepared": {
-            "resolver": "browserEnvironment.broker.resumeDownload",
+            "resolver": "browserEnvironment.download.resumeDownload",
             "leaves": [
               {
                 "capability": "service:browserEnvironment.resumeDownload",
@@ -1983,7 +1983,7 @@
             "key": "service:browserEnvironment.revealDownload"
           },
           "prepared": {
-            "resolver": "browserEnvironment.broker.revealDownload",
+            "resolver": "browserEnvironment.download.revealDownload",
             "leaves": [
               {
                 "capability": "service:browserEnvironment.revealDownload",
