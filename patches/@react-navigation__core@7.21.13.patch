@@ -1,0 +1,49 @@
+diff --git a/lib/module/getPathFromState.js b/lib/module/getPathFromState.js
+index b34b8b089ba9e3ad60ab65da6ad46c3f577d838d..b05a3fc842fbf0fbfd51f59160812f714e8cbfce 100644
+--- a/lib/module/getPathFromState.js
++++ b/lib/module/getPathFromState.js
+@@ -1,6 +1,6 @@
+ "use strict";
+ 
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ import { getPatternParts } from "./getPatternParts.js";
+ import { getStateFromRouteParams } from "./getStateFromRouteParams.js";
+ import { validatePathConfig } from "./validatePathConfig.js";
+diff --git a/lib/module/getStateFromPath.js b/lib/module/getStateFromPath.js
+index 927ab33a10e70e8d869b896b5ddccebe57e91b88..019095852a3bf44f199101ee1a7c8686c9b95609 100644
+--- a/lib/module/getStateFromPath.js
++++ b/lib/module/getStateFromPath.js
+@@ -1,7 +1,7 @@
+ "use strict";
+ 
+ import escape from 'escape-string-regexp';
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ import { arrayStartsWith } from "./arrayStartsWith.js";
+ import { findFocusedRoute } from "./findFocusedRoute.js";
+ import { getPatternParts } from "./getPatternParts.js";
+diff --git a/src/getPathFromState.tsx b/src/getPathFromState.tsx
+index 8dc7bfb09e381019886ba3311b7833738f05f8af..37de977a8a0f624006a6c62f54f429903ff20cab 100644
+--- a/src/getPathFromState.tsx
++++ b/src/getPathFromState.tsx
+@@ -1,5 +1,5 @@
+ import type { NavigationState, PartialState } from '@react-navigation/routers';
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ 
+ import { getPatternParts, type PatternPart } from './getPatternParts';
+ import { getStateFromRouteParams } from './getStateFromRouteParams';
+diff --git a/src/getStateFromPath.tsx b/src/getStateFromPath.tsx
+index ff4e556c869d0b673131896feb1b984ae835bb5c..bf38dda65746b1f58bc06b884ef72eadc4506fcf 100644
+--- a/src/getStateFromPath.tsx
++++ b/src/getStateFromPath.tsx
+@@ -5,7 +5,7 @@ import type {
+   PartialState,
+ } from '@react-navigation/routers';
+ import escape from 'escape-string-regexp';
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ 
+ import { arrayStartsWith } from './arrayStartsWith';
+ import { findFocusedRoute } from './findFocusedRoute';

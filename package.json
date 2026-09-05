@@ -138,7 +138,7 @@
       "esbuild",
       "node-pty"
     ],
-    "//overrides": "react-native 0.79 requires React 19; pin the hoisted React pair. protobufjs, shell-quote, and websocket-driver have compatible security floors for transitive consumers. ws pins each host-required major to its patched fragmentation-memory floor. Revisit React when bumping RN. qs 6 and fast-xml-parser 4 consumers use patched releases with compatible APIs; FXP 5 retains CommonJS exports. Firebase UUID consumers use the stable named v4 API; UUID 11 preserves CommonJS and fixes buffer bounds. esbuild and Undici floors also cover compatible development-tool consumers.",
+    "//overrides": "react-native 0.79 requires React 19; pin the hoisted React pair. protobufjs, shell-quote, and websocket-driver have compatible security floors for transitive consumers. ws pins each host-required major to its patched fragmentation-memory floor. Revisit React when bumping RN. qs 6 and fast-xml-parser 4 consumers use patched releases with compatible APIs; FXP 5 retains CommonJS exports. Firebase UUID consumers use the stable named v4 API; UUID 11 preserves CommonJS and fixes buffer bounds. esbuild and Undici floors also cover compatible development-tool consumers. Navigation core is pinned to its query-string 9 import migration; update the patch and Base mobile-navigation owner together.",
     "overrides": {
       "react": "19.0.0",
       "react-dom": "19.0.0",
@@ -152,10 +152,13 @@
       "fast-xml-parser@4": "^5.7.0",
       "uuid@>=8 <11": "^11.1.1",
       "esbuild@0.27": "^0.28.2",
-      "undici@7": "^7.29.1"
+      "undici@7": "^7.29.1",
+      "@react-navigation/core": "7.21.13",
+      "query-string": "^9.5.1"
     },
     "patchedDependencies": {
-      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch"
+      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch",
+      "@react-navigation/core@7.21.13": "patches/@react-navigation__core@7.21.13.patch"
     }
   },
   "devDependencies": {
