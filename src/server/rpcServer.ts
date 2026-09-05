@@ -917,7 +917,7 @@ export class RpcServer {
       resolveCausalInvocation: async (caller, request) => {
         const causal = await this.resolveCausalInvocation(caller, request);
         return {
-          caller: this.callerWithCausalAttribution(caller, causal),
+          caller: this.callerWithInvocationAttribution(caller, request, causal),
           parent: causal?.parent,
         };
       },
@@ -1093,14 +1093,29 @@ export class RpcServer {
       authorizingCaller: VerifiedCaller | null;
     } | null
   ): VerifiedCaller {
-    if (!parent || parent.requested === null || !caller.code) return caller;
+    const attributed = this.callerWithParentTask(caller, parent?.authorizingCaller);
+    if (!parent || parent.requested === null || !attributed.code) return attributed;
     return {
-      ...caller,
+      ...attributed,
       code: {
-        ...caller.code,
+        ...attributed.code,
         requested: parent.requested,
       },
     };
+  }
+
+  /** Carry task membership through a verified, live invocation, never onto the
+   * shared runtime or connection. The deputy retains its own code, manifest,
+   * and execution admission; the parent's task supplies only task-scoped grants. */
+  private callerWithParentTask(
+    caller: VerifiedCaller,
+    parent: VerifiedCaller | null | undefined
+  ): VerifiedCaller {
+    const taskAuthority =
+      caller.executionSession?.taskAuthority ??
+      parent?.executionSession?.taskAuthority ??
+      parent?.taskAuthority;
+    return taskAuthority ? { ...caller, taskAuthority } : caller;
   }
 
   private beginAuthorityParent(
@@ -1251,7 +1266,7 @@ export class RpcServer {
       wsClient: client,
       ...extras,
     };
-    const parent = this.resolveExtensionParentCaller(client, message);
+    const parent = this.resolveExtensionParentCaller(client.caller, message);
     if (parent) ctx.authorizingCaller = parent.authorizingCaller;
     if (parent?.chainCaller) ctx.chainCaller = parent.chainCaller;
     return ctx;
@@ -1344,10 +1359,13 @@ export class RpcServer {
     };
   }
 
-  private callerWithCausalAttribution(
+  private callerWithInvocationAttribution(
     caller: VerifiedCaller,
+    message: Pick<RpcRequest, "parentRequestId">,
     causal: ResolvedCausalInvocation | undefined
   ): VerifiedCaller {
+    const parent = this.resolveExtensionParentCaller(caller, message);
+    caller = this.callerWithParentTask(caller, parent?.authorizingCaller);
     if (!causal) return caller;
     const taskAuthority = caller.executionSession?.taskAuthority ?? caller.taskAuthority;
     return {
@@ -1358,14 +1376,14 @@ export class RpcServer {
   }
 
   private resolveExtensionParentCaller(
-    client: WsClientState,
+    caller: VerifiedCaller,
     message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentRequestId">
   ): ResolvedExtensionParent | null {
-    if (client.caller.runtime.kind !== "extension" || !message.parentRequestId) {
+    if (caller.runtime.kind !== "extension" || !message.parentRequestId) {
       return null;
     }
     const invocation = this.deps.resolveExtensionInvocation?.(
-      client.caller.runtime.id,
+      caller.runtime.id,
       message.parentRequestId
     );
     if (invocation?.chainCaller) {
@@ -1388,7 +1406,7 @@ export class RpcServer {
     message: Pick<RpcRequest, "parentRequestId">,
     invocationCaller: VerifiedCaller = client.caller
   ): RelayCallerScope {
-    const parent = this.resolveExtensionParentCaller(client, message);
+    const parent = this.resolveExtensionParentCaller(client.caller, message);
     const authenticatedCaller = this.withLiveRuntimeRelationships(invocationCaller);
     return {
       authenticatedCaller,
@@ -2439,7 +2457,7 @@ export class RpcServer {
           ...(causal ? { causalParent: causal.parent } : {}),
           signal: abort.signal,
         },
-        this.callerWithCausalAttribution(client.caller, causal)
+        this.callerWithInvocationAttribution(client.caller, request, causal)
       );
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
       this.sendToSession(client.ws, {
@@ -2519,7 +2537,11 @@ export class RpcServer {
       try {
         const causal = await this.resolveCausalInvocation(client.caller, message);
         const causalParent = causal?.parent;
-        routedInvocationCaller = this.callerWithCausalAttribution(client.caller, causal);
+        routedInvocationCaller = this.callerWithInvocationAttribution(
+          client.caller,
+          message,
+          causal
+        );
         if (causalParent && message.causalParent !== causalParent) {
           message = { ...message, causalParent };
           routeEnvelope = { ...routeEnvelope, message };
@@ -3219,7 +3241,7 @@ export class RpcServer {
     // authorizing origin. Harness-owned tool and closure calls retain their
     // sealed code identity. EvalDO is marked session-originated when its exact
     // active runtime identity is resolved in verifiedCallerFor().
-    const invocationCaller = this.callerWithCausalAttribution(verifiedCaller, causal);
+    const invocationCaller = this.callerWithInvocationAttribution(verifiedCaller, message, causal);
     const authorizingCaller = authorityParent?.authorizingCaller ?? invocationCaller;
 
     // Direct service dispatch
