@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     ffi::c_void,
@@ -93,11 +93,14 @@ impl Drop for Local {
 struct Profile {
     name: Vec<u16>,
     sid: PSID,
+    persistent: bool,
 }
 impl Drop for Profile {
     fn drop(&mut self) {
         unsafe {
-            DeleteAppContainerProfile(self.name.as_ptr());
+            if !self.persistent {
+                DeleteAppContainerProfile(self.name.as_ptr());
+            }
             FreeSid(self.sid);
         }
     }
@@ -126,6 +129,17 @@ struct Policy {
     read: Vec<String>,
     write: Vec<String>,
     sockets: Vec<String>,
+}
+
+/// Protected ownership state; launch incarnations and broker sessions remain fresh.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StorageDomain {
+    version: u32,
+    workspace_id: String,
+    profile_name: String,
+    writable_roots: Vec<String>,
+    retired: bool,
 }
 
 // Windows command-line encoding follows CommandLineToArgvW rules, including
@@ -215,10 +229,46 @@ unsafe fn pin_security_object(resource: &str) -> Result<Handle> {
     }
 }
 
+/// Writable directory anchors remain stable for the whole admitted lifetime.
+/// Sharing blocks data-write handles; the root-only ACL below also denies
+/// attribute-only reparse operations and deletion without restricting children.
+unsafe fn pin_write_anchor(resource: &str) -> Result<Handle> {
+    unsafe {
+        let raw = CreateFileW(
+            wide(resource).as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ,
+            null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        );
+        if raw == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error().into());
+        }
+        let object = Handle(raw);
+        let mut info: BY_HANDLE_FILE_INFORMATION = zeroed();
+        check(GetFileInformationByHandle(object.0, &mut info))?;
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        {
+            return Err("Writable anchors must be ordinary directories".into());
+        }
+        canonical(resource)?;
+        Ok(object)
+    }
+}
+
+enum ResourceAccess {
+    Immutable,
+    WritableRoot,
+}
+
 struct AclGrant {
     object: Handle,
     descriptor: Local,
     original: *mut ACL,
+    persistent: bool,
 }
 
 // Writable LPAC state needs a low mandatory-integrity label as well as a
@@ -261,6 +311,7 @@ struct IntegrityGrant {
     object: Handle,
     descriptor: Local,
     original: *mut ACL,
+    persistent: bool,
 }
 impl IntegrityGrant {
     unsafe fn install(resource: &str) -> Result<Self> {
@@ -312,12 +363,16 @@ impl IntegrityGrant {
                 object,
                 descriptor,
                 original,
+                persistent: false,
             })
         }
     }
 }
 impl Drop for IntegrityGrant {
     fn drop(&mut self) {
+        if self.persistent {
+            return;
+        }
         unsafe {
             if SetKernelObjectSecurity(self.object.0, LABEL_SECURITY_INFORMATION, self.descriptor.0)
                 == 0
@@ -331,7 +386,7 @@ impl Drop for IntegrityGrant {
     }
 }
 impl AclGrant {
-    unsafe fn install(resource: &str, sid: PSID, rights: u32) -> Result<Self> {
+    unsafe fn install(resource: &str, sid: PSID, access: ResourceAccess) -> Result<Self> {
         unsafe {
             let object = pin_security_object(resource)?;
             let mut descriptor = null_mut();
@@ -348,14 +403,35 @@ impl AclGrant {
             ))?;
             let descriptor = Local(descriptor);
             let mut entry: EXPLICIT_ACCESS_W = zeroed();
-            entry.grfAccessPermissions = rights;
+            entry.grfAccessPermissions = match access {
+                ResourceAccess::Immutable => FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                ResourceAccess::WritableRoot => {
+                    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE
+                }
+            };
             entry.grfAccessMode = GRANT_ACCESS;
             entry.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
             entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
             entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
             entry.Trustee.ptstrName = sid.cast();
             let mut updated = null_mut();
-            status(SetEntriesInAclW(1, &entry, original, &mut updated))?;
+            let mut entries = vec![entry];
+            if matches!(access, ResourceAccess::WritableRoot) {
+                let mut deny: EXPLICIT_ACCESS_W = zeroed();
+                deny.grfAccessPermissions = DELETE | FILE_WRITE_ATTRIBUTES;
+                deny.grfAccessMode = DENY_ACCESS;
+                deny.grfInheritance = NO_INHERITANCE;
+                deny.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+                deny.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+                deny.Trustee.ptstrName = sid.cast();
+                entries.push(deny);
+            }
+            status(SetEntriesInAclW(
+                entries.len() as u32,
+                entries.as_ptr(),
+                original,
+                &mut updated,
+            ))?;
             let _updated = Local(updated.cast());
             status(SetSecurityInfo(
                 object.0,
@@ -370,12 +446,16 @@ impl AclGrant {
                 object,
                 descriptor,
                 original,
+                persistent: false,
             })
         }
     }
 }
 impl Drop for AclGrant {
     fn drop(&mut self) {
+        if self.persistent {
+            return;
+        }
         unsafe {
             // Restore the pinned object, never a pathname that guest code could
             // have replaced. Kernel-object mutation does not walk a changed tree.
@@ -430,8 +510,112 @@ impl Drop for Attributes {
     }
 }
 
+unsafe fn lock_domain(root: &str) -> Result<Handle> {
+    unsafe {
+        let raw = CreateFileW(
+            wide(&format!("{root}\\.isolation-owner.lock")).as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            null(),
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_HIDDEN,
+            null_mut(),
+        );
+        if raw == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error().into());
+        }
+        Ok(Handle(raw))
+    }
+}
+
+fn read_storage_domain(file: &str) -> Result<Option<StorageDomain>> {
+    let bytes = match fs::read(file) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if bytes.len() > 64 * 1024 {
+        return Err("Storage domain record exceeds limit".into());
+    }
+    let domain: StorageDomain = serde_json::from_slice(&bytes)?;
+    if domain.version != 1
+        || !domain.profile_name.starts_with("vibestudio.")
+        || domain.profile_name.len() != "vibestudio.".len() + 32
+        || !domain.profile_name["vibestudio.".len()..]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("Invalid storage domain record".into());
+    }
+    Ok(Some(domain))
+}
+
+fn write_storage_domain(file: &str, domain: &StorageDomain) -> Result<()> {
+    use std::io::Write;
+    let mut random = [0u8; 16];
+    unsafe { SystemFunction036(random.as_mut_ptr().cast(), random.len() as u32) }
+        .then_some(())
+        .ok_or("Cannot create storage transaction identity")?;
+    let temporary = format!(
+        "{file}.{}",
+        random
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let mut pending = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| -> Result<()> {
+        pending.write_all(&serde_json::to_vec(domain)?)?;
+        pending.sync_all()?;
+        drop(pending);
+        unsafe {
+            check(MoveFileExW(
+                wide(&temporary).as_ptr(),
+                wide(file).as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            ))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+/// Installed-owner operation after workspace retirement. It never traverses
+/// guest storage, and a retired ownership record can never launch again.
+pub(crate) fn retire_storage(root: &str) -> Result<u32> {
+    let root = canonical(root)?;
+    if root.len() <= 3 {
+        return Err("Host drive root is not a private domain".into());
+    }
+    unsafe {
+        let _lock = lock_domain(&root)?;
+        let file = format!("{root}\\.isolation-domain.json");
+        let Some(mut domain) = read_storage_domain(&file)? else {
+            return Ok(0);
+        };
+        if !domain.retired {
+            domain.retired = true;
+            write_storage_domain(&file, &domain)?;
+        }
+        let hr = DeleteAppContainerProfile(wide(&domain.profile_name).as_ptr());
+        if hr < 0 {
+            return Err(format!("Cannot remove retired storage profile: {hr:#x}").into());
+        }
+    }
+    Ok(0)
+}
+
 pub fn run() -> Result<u32> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 3 && args[1] == "--retire-storage" {
+        return retire_storage(&args[2]);
+    }
     if args.len() != 2 {
         return Err("Expected one installed-owner policy file".into());
     }
@@ -493,74 +677,108 @@ pub fn run() -> Result<u32> {
     }
 
     unsafe {
-        let lock_path = wide(&format!("{}\\.isolation-owner.lock", p.private_root));
-        let lock = CreateFileW(
-            lock_path.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            null(),
-            OPEN_ALWAYS,
-            FILE_ATTRIBUTE_HIDDEN,
-            null_mut(),
-        );
-        if lock == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error().into());
-        }
-        let _lock = Handle(lock);
+        let _lock = lock_domain(&p.private_root)?;
+        let _write_anchors = p
+            .write
+            .iter()
+            .map(|resource| pin_write_anchor(resource))
+            .collect::<Result<Vec<_>>>()?;
         // Complete the entire staging inspection before changing the first ACL.
         for resource in &p.read {
             staged_tree(resource)?;
         }
-        let writable_tree = p
-            .write
-            .iter()
-            .map(|resource| staged_tree(resource))
-            .collect::<Result<Vec<_>>>()?;
-        let mut random = [0u8; 16];
-        // System-generated cryptographic randomness, never a guest-selected SID.
-        SystemFunction036(random.as_mut_ptr().cast(), random.len() as u32)
-            .then_some(())
-            .ok_or("Cannot create domain identity")?;
-        let name = wide(&format!(
-            "vibestudio.{}",
-            random
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        ));
-        let mut sid = null_mut();
-        let hr = CreateAppContainerProfile(
-            name.as_ptr(),
-            name.as_ptr(),
-            name.as_ptr(),
-            null(),
-            0,
-            &mut sid,
-        );
-        if hr < 0 {
-            return Err(format!("Cannot create AppContainer profile: {hr:#x}").into());
-        }
-        let _profile = Profile { name, sid };
-        let mut integrity = Vec::new();
-        for tree in &writable_tree {
-            for resource in tree {
-                integrity.push(IntegrityGrant::install(resource)?);
+        let domain_path = format!("{}\\.isolation-domain.json", p.private_root);
+        let stored = read_storage_domain(&domain_path)?;
+        if let Some(domain) = &stored {
+            if domain.retired
+                || domain.workspace_id != p.owner.workspace_id
+                || domain.writable_roots != p.write
+            {
+                return Err("Storage domain ownership does not match admission".into());
             }
         }
-        let mut grants = Vec::new();
-        for r in &p.read {
-            grants.push(AclGrant::install(
-                r,
-                sid,
-                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-            )?);
+        let fresh = stored.is_none();
+        let domain = if let Some(domain) = stored {
+            domain
+        } else {
+            let mut random = [0u8; 16];
+            SystemFunction036(random.as_mut_ptr().cast(), random.len() as u32)
+                .then_some(())
+                .ok_or("Cannot create domain identity")?;
+            StorageDomain {
+                version: 1,
+                workspace_id: p.owner.workspace_id.clone(),
+                profile_name: format!(
+                    "vibestudio.{}",
+                    random
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                ),
+                writable_roots: p.write.clone(),
+                retired: false,
+            }
+        };
+        let name = wide(&domain.profile_name);
+        let mut sid = null_mut();
+        let hr = if fresh {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
+        } else {
+            DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid)
+        };
+        if hr < 0 {
+            return Err(format!("Cannot resolve AppContainer profile: {hr:#x}").into());
         }
-        for w in &p.write {
-            grants.push(AclGrant::install(
-                w,
-                sid,
-                FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            )?);
+        let mut profile = Profile {
+            name,
+            sid,
+            persistent: !fresh,
+        };
+        let mut integrity = Vec::new();
+        let mut storage_grants = Vec::new();
+        if fresh {
+            // Only first provisioning sees a host-prepared, link-free tree.
+            // Never walk or rewrite security on guest-controlled descendants at restart.
+            let writable_tree = p
+                .write
+                .iter()
+                .map(|resource| staged_tree(resource))
+                .collect::<Result<Vec<_>>>()?;
+            for tree in &writable_tree {
+                for resource in tree {
+                    integrity.push(IntegrityGrant::install(resource)?);
+                }
+            }
+            for resource in &p.write {
+                storage_grants.push(AclGrant::install(
+                    resource,
+                    sid,
+                    ResourceAccess::WritableRoot,
+                )?);
+            }
+            write_storage_domain(&domain_path, &domain)?;
+            profile.persistent = true;
+            for grant in &mut storage_grants {
+                grant.persistent = true;
+            }
+            for grant in &mut integrity {
+                grant.persistent = true;
+            }
+        }
+        // Committed storage security no longer needs rollback descriptors or
+        // per-file handles. Only immutable anchors are pinned for the lifetime.
+        drop(storage_grants);
+        drop(integrity);
+        let mut grants = Vec::new();
+        for resource in &p.read {
+            grants.push(AclGrant::install(resource, sid, ResourceAccess::Immutable)?);
         }
         let job_raw = CreateJobObjectW(null(), null());
         if job_raw.is_null() {
@@ -733,7 +951,6 @@ pub fn run() -> Result<u32> {
         job.retire()?;
         drop(job);
         drop(grants);
-        drop(integrity);
         Ok(code)
     }
 }

@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -5,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
-import { buildUnit } from "./builder.js";
+import { buildUnit, initBuilder, closeBuilder } from "./builder.js";
 import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
@@ -28,6 +29,7 @@ describe("buildUnit extension builds", () => {
   let workspaceRoot: string;
 
   beforeEach(async () => {
+    initBuilder(path.join(process.cwd(), "node_modules"), process.cwd(), runIsolatedBuildJob);
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
     await setBuildRootConfig({
@@ -42,6 +44,7 @@ describe("buildUnit extension builds", () => {
   });
 
   afterEach(async () => {
+    await closeBuilder();
     await setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });

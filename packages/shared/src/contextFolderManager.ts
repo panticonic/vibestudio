@@ -43,6 +43,11 @@ function validateContextId(contextId: string): void {
 export class ContextFolderManager {
   private readonly materializing = new Set<string>();
   private readonly contextProjectionsRoot: string;
+  private readonly contextScratchRoot: string;
+  private readonly scratch: {
+    ensure(contextId: string): Promise<void>;
+    remove(contextId: string): Promise<void>;
+  };
   private readonly materialize: (contextId: string) => Promise<{ dir: string }>;
 
   /** Concurrency guard: in-flight ensureContextFolder promises. */
@@ -51,6 +56,10 @@ export class ContextFolderManager {
   constructor(opts: {
     /** Exact current-epoch root of disposable context projections. */
     contextProjectionsRoot: string;
+    /** Writable context worktrees; disjoint from managed source projections. */
+    contextScratchRoot: string;
+    /** Execute writable-tree operations inside the workspace sandbox. */
+    scratch: { ensure(contextId: string): Promise<void>; remove(contextId: string): Promise<void> };
     /**
      * Ensure the semantic context and its projection directory exist
      * (WorkspaceVcs.ensureContextFolder server-side). Must be idempotent.
@@ -58,7 +67,36 @@ export class ContextFolderManager {
     materialize: (contextId: string) => Promise<{ dir: string }>;
   }) {
     this.contextProjectionsRoot = opts.contextProjectionsRoot;
+    this.contextScratchRoot = opts.contextScratchRoot;
+    this.scratch = opts.scratch;
+    const relative = path.relative(
+      path.resolve(opts.contextProjectionsRoot),
+      path.resolve(opts.contextScratchRoot)
+    );
+    const reverse = path.relative(
+      path.resolve(opts.contextScratchRoot),
+      path.resolve(opts.contextProjectionsRoot)
+    );
+    if (
+      ![relative, reverse].every(
+        (value) => value.startsWith(".." + path.sep) || value === ".." || path.isAbsolute(value)
+      )
+    )
+      throw new Error("Source projections and writable scratch must be disjoint");
     this.materialize = opts.materialize;
+  }
+
+  async ensureContextScratch(contextId: string): Promise<string> {
+    validateContextId(contextId);
+    const scratch = path.join(this.contextScratchRoot, contextId);
+    try {
+      await this.scratch.ensure(contextId);
+    } catch {
+      // The installed lifecycle consumes only success/failure. Never relay
+      // arbitrary native diagnostics through a semantic filesystem operation.
+      throw new Error("Confined context scratch creation failed");
+    }
+    return scratch;
   }
 
   /**
@@ -136,6 +174,11 @@ export class ContextFolderManager {
   async removeContext(contextId: string): Promise<void> {
     validateContextId(contextId);
     const contextPath = path.join(this.contextProjectionsRoot, contextId);
-    await fs.rm(contextPath, { recursive: true, force: true });
+    await Promise.all([
+      fs.rm(contextPath, { recursive: true, force: true }),
+      this.scratch.remove(contextId).catch(() => {
+        throw new Error("Confined context scratch removal failed");
+      }),
+    ]);
   }
 }

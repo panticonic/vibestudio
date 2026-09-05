@@ -1743,6 +1743,47 @@ async function main() {
   // disposable projections of GAD-owned semantic contexts.
   const { ContextFolderManager } = await import("@vibestudio/shared/contextFolderManager");
   const contextFolderManager = new ContextFolderManager({
+    contextScratchRoot: layout.contextScratch,
+    scratch: {
+      ensure: async (contextId) => {
+        const runtime = assertPresent(
+          container.get<
+            Awaited<
+              ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+            >
+          >("nativeWorkspace")
+        );
+        await runtime.disk.call(
+          {
+            root: layout.contextScratch,
+            panelId: "installed:context-lifecycle",
+            exposeHostPaths: false,
+          },
+          "mkdir",
+          [contextId, { recursive: true }],
+          AbortSignal.timeout(10_000)
+        );
+      },
+      remove: async (contextId) => {
+        const runtime = assertPresent(
+          container.get<
+            Awaited<
+              ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+            >
+          >("nativeWorkspace")
+        );
+        await runtime.disk.call(
+          {
+            root: layout.contextScratch,
+            panelId: "installed:context-lifecycle",
+            exposeHostPaths: false,
+          },
+          "rm",
+          [contextId, { recursive: true, force: true }],
+          AbortSignal.timeout(10_000)
+        );
+      },
+    },
     contextProjectionsRoot: layout.contextProjections.current,
     materialize: (contextId) => workspaceVcs.ensureContextFolder(contextId),
   });
@@ -2448,13 +2489,22 @@ async function main() {
   trustedBootstrapStateHash = bootstrapSnapshot.stateHash;
   container.registerManaged({
     name: "bootstrapBuildSystem",
-    async start() {
+    dependencies: ["nativeWorkspace"],
+    async start(resolve) {
+      const nativeWorkspace = assertPresent(
+        resolve<
+          Awaited<
+            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+          >
+        >("nativeWorkspace")
+      );
       return initBuildSystemV2(
         workspacePath,
         bootstrapWorkspaceSource,
         appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
         {
           appRoot,
+          runNativeJob: (input) => nativeWorkspace.runJob(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
         }
       );
@@ -2468,14 +2518,22 @@ async function main() {
   // provider has accepted the exact bootstrap snapshot.
   container.registerManaged({
     name: "buildSystem",
-    dependencies: ["semanticWorkspace"],
-    async start() {
+    dependencies: ["semanticWorkspace", "nativeWorkspace"],
+    async start(resolve) {
+      const nativeWorkspace = assertPresent(
+        resolve<
+          Awaited<
+            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+          >
+        >("nativeWorkspace")
+      );
       const buildSystem = await initBuildSystemV2(
         workspacePath,
         workspaceVcs,
         appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
         {
           appRoot,
+          runNativeJob: (input) => nativeWorkspace.runJob(input),
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
           workspaceIdStability: workspaceIsEphemeral ? "ephemeral" : "stable",
           workspaceAuthorityEnvironmentAt: async (stateHash) => {
@@ -5654,10 +5712,30 @@ async function main() {
     });
   }
 
+  container.registerManaged({
+    name: "nativeWorkspace",
+    async start() {
+      const { startNativeWorkspaceRuntime } = await import("./nativeWorkspaceRuntime.js");
+      return startNativeWorkspaceRuntime({
+        workspaceId: entryWorkspaceId,
+        statePath,
+        sourceRoot: layout.contextProjections.current,
+        scratchRoot: layout.contextScratch,
+        buildsRoot: path.join(statePath, "builds"),
+        appRoot,
+      });
+    },
+    stop: (
+      runtime: Awaited<
+        ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+      >
+    ) => runtime.stop().then(() => undefined),
+  });
+
   // ── Extension host RPC service ──
   container.registerManaged({
     name: "extensionHost",
-    dependencies: ["buildSystem", "tokenManager"],
+    dependencies: ["buildSystem", "tokenManager", "nativeWorkspace"],
     async start(resolve) {
       const { ExtensionHost } = await import("@vibestudio/extension-host");
       const buildSystemInst = assertPresent(
@@ -5666,7 +5744,16 @@ async function main() {
       const tokenManagerInst = assertPresent(
         resolve<import("@vibestudio/shared/tokenManager").TokenManager>("tokenManager")
       );
+      const nativeWorkspace = assertPresent(
+        resolve<
+          Awaited<
+            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+          >
+        >("nativeWorkspace")
+      );
       const host = new ExtensionHost({
+        launchNativeExtension: (environment) =>
+          nativeWorkspace.fork(nativeWorkspace.extensionEntry, environment),
         statePath,
         workspacePath,
         workspaceId,
@@ -6023,13 +6110,23 @@ async function main() {
     };
     container.registerManaged({
       name: "fsService",
-      async start() {
+      dependencies: ["nativeWorkspace"],
+      async start(resolve) {
+        const nativeWorkspace = assertPresent(
+          resolve<
+            Awaited<
+              ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+            >
+          >("nativeWorkspace")
+        );
         return new FsService(contextFolderManager, entityCache, {
+          disk: nativeWorkspace.disk,
           contextAuthority: { kind: "semantic", bridge: vcsBridge },
           recordContextIngestion,
           recordContextIngestionBatch,
         });
       },
+      stop: (service: InstanceType<typeof FsService>) => service.stop(),
     });
   }
 
@@ -6426,7 +6523,8 @@ async function main() {
     // Backs `workspace.ensureContextFolder` — launch orchestrators materialize a
     // context's working folder to place context-scoped terminal sessions in it.
     ensureContextFolder: async (contextId: string) => ({
-      dir: await contextFolderManager.ensureContextFolder(contextId),
+      source: await contextFolderManager.ensureContextFolder(contextId),
+      scratch: await contextFolderManager.ensureContextScratch(contextId),
     }),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     approvalQueue,

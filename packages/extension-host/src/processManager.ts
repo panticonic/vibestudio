@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
+import { type ProcessAdapter } from "@vibestudio/process-adapter";
 
 import type { ExtensionHealth, ExtensionProcessState } from "./types.js";
 
@@ -44,6 +44,7 @@ const CRASH_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 const CRASH_WINDOW_MS = 60_000;
 
 export interface ExtensionProcessManagerDeps {
+  launch(environment: Record<string, string>): ProcessAdapter;
   attachProcess(proc: ProcessAdapter, credential: string): () => void;
   onStatus(name: string, status: "running" | "stopped" | "error", error?: string | null): void;
   onError?(name: string, error: string, attempts: number): void;
@@ -73,23 +74,14 @@ export class ExtensionProcessManager {
   }
 
   private async spawn(state: ExtensionProcessState): Promise<void> {
-    const childRuntime = resolveChildRuntimePath();
-    const proc = createProcessAdapter(
-      childRuntime,
-      {
-        ...process.env,
-        VIBESTUDIO_EXTENSION_NAME: state.name,
-        VIBESTUDIO_EXTENSION_VERSION: state.version,
-        VIBESTUDIO_EXTENSION_BUNDLE_PATH: state.bundlePath,
-        VIBESTUDIO_EXTENSION_STORAGE_DIR: state.storageDir,
-        VIBESTUDIO_EXTENSION_GATEWAY_URL: state.gatewayUrl,
-        VIBESTUDIO_EXTENSION_RPC_TOKEN: state.rpcToken,
-      },
-      {
-        execArgv: extensionRuntimeExecArgv(),
-        preferNode: true,
-      }
-    );
+    const proc = this.deps.launch({
+      VIBESTUDIO_EXTENSION_NAME: state.name,
+      VIBESTUDIO_EXTENSION_VERSION: state.version,
+      VIBESTUDIO_EXTENSION_BUNDLE_PATH: state.bundlePath,
+      VIBESTUDIO_EXTENSION_STORAGE_DIR: state.storageDir,
+      VIBESTUDIO_EXTENSION_GATEWAY_URL: state.gatewayUrl,
+      VIBESTUDIO_EXTENSION_RPC_TOKEN: state.rpcToken,
+    });
     let retireRpc: () => void;
     try {
       retireRpc = this.deps.attachProcess(proc, state.rpcToken);

@@ -1,3 +1,4 @@
+import { parseLineageKey } from "@vibestudio/shared/authority/contextIntegrity";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
@@ -43,7 +44,9 @@ function fixture() {
       pty.exit({ exitCode: 0 });
     },
   }));
-  const recordContextIngestion = vi.fn(async () => {});
+  const recordContextIngestion = vi.fn(async (_ctx: ServiceContext, input: { key: string }) => {
+    parseLineageKey(input.key);
+  });
   const service = createHostTerminalService({
     workspaceId: "workspace-a",
     host: "test-host",

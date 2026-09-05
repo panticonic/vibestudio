@@ -47,6 +47,7 @@ describe("ExtensionProcessManager runtime resolution", () => {
   it("ignores a stale exit after a replacement generation owns the name", () => {
     const onStatus = vi.fn();
     const manager = new ExtensionProcessManager({
+      launch: (environment) => createProcessAdapter(resolveChildRuntimePath(), environment),
       attachProcess: vi.fn(() => vi.fn()),
       onStatus,
       onHealth: vi.fn(),
@@ -105,6 +106,7 @@ describe("ExtensionProcessManager session retirement", () => {
       }) as unknown as ProcessAdapter;
       vi.mocked(createProcessAdapter).mockReturnValue(proc);
       const manager = new ExtensionProcessManager({
+        launch: (environment) => createProcessAdapter(resolveChildRuntimePath(), environment),
         attachProcess: () => retire,
         onStatus: vi.fn(),
         onHealth: vi.fn(),

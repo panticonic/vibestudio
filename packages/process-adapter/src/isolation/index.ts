@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { darwinProfile } from "./darwin.js";
 import { linuxArguments } from "./linux.js";
@@ -62,7 +63,8 @@ export function compileExecution(
   }
   if (policy.sockets.length)
     throw new IsolationError("Unix socket resources cannot be passed to Windows admission");
-  const policyPath = paths.join(policy.privateRoot, ".isolation-policy.json");
+  const generation = createHash("sha256").update(policy.owner.incarnation).digest("hex");
+  const policyPath = paths.join(policy.privateRoot, `.isolation-${generation}.json`);
   return {
     command: installation.launcher,
     args: [policyPath],

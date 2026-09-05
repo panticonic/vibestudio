@@ -1,3 +1,5 @@
+export { NativeOperationPort } from "./operationPort.js";
+export { serveNativeOperations } from "./operationWorker.js";
 /**
  * ProcessAdapter — abstracts Electron utilityProcess / Node.js child_process.
  *

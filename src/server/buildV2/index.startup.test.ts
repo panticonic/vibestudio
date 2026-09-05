@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,7 +19,11 @@ import { sha256 } from "@vibestudio/shared/execution/identity";
 const TEST_STATE = `state:${"a".repeat(64)}`;
 
 function buildRoots(workspaceRoot: string) {
-  return { appRoot: process.cwd(), dependencyWorkspaceRoot: workspaceRoot };
+  return {
+    appRoot: process.cwd(),
+    runNativeJob: runIsolatedBuildJob,
+    dependencyWorkspaceRoot: workspaceRoot,
+  };
 }
 
 function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & BuildSourceProvider {
@@ -558,6 +563,7 @@ describe("BuildSystemV2 startup", () => {
     buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
       appRoot,
       dependencyWorkspaceRoot,
+      runNativeJob: runIsolatedBuildJob,
     });
 
     const info = getRootDependencyFingerprintInfo();

@@ -1,3 +1,4 @@
+import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 /**
  * Build System V2 — Public API + RPC service registration.
  *
@@ -230,6 +231,7 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 }
 
 export interface BuildSystemRootOptions {
+  runNativeJob: RunNativeWorkspaceJob;
   /** Whether this workspace identity survives a process restart. Diagnostics only. */
   workspaceIdStability?: "stable" | "ephemeral";
   /**
@@ -1191,7 +1193,7 @@ export async function initBuildSystemV2(
   });
 
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
-  initBuilder(appNodeModuleRoots, rootOptions.appRoot);
+  initBuilder(appNodeModuleRoots, rootOptions.appRoot, rootOptions.runNativeJob);
   const typecheckWorker = new TypecheckWorkerClient(rootOptions.appRoot);
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({

@@ -145,7 +145,7 @@ export interface CommonDeps {
   reloadPanel?: (ctx: ServiceContext, panelId: string, runtimeEntityId: string) => Promise<void>;
   getGatewayPort?: () => number | null;
   /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
-  ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
+  ensureContextFolder?: (contextId: string) => Promise<{ source: string; scratch: string }>;
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
   /**

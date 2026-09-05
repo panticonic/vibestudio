@@ -22,6 +22,10 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 const originalXdgConfigHome = process.env["XDG_CONFIG_HOME"];
 const tempRoots: string[] = [];
 
+const removeWorkspaceTreeForTest = (target: string): void => {
+  fs.rmSync(target, { recursive: true, force: true });
+};
+
 function writeConfig(sourceRoot: string, content: string): void {
   fs.mkdirSync(path.join(sourceRoot, "meta"), { recursive: true });
   fs.writeFileSync(
@@ -413,7 +417,9 @@ describe("initWorkspace", () => {
       },
     } as unknown as CentralDataManager;
 
-    expect(() => deleteAndUnregisterWorkspace("delete-failure", centralData)).toThrow(
+    expect(() =>
+      deleteAndUnregisterWorkspace("delete-failure", centralData, removeWorkspaceTreeForTest)
+    ).toThrow(
       /injected registry deletion failure/
     );
     expect(fs.readFileSync(path.join(workspaceDir, "operator-data.txt"), "utf-8")).toBe("keep");
@@ -451,9 +457,13 @@ describe("initWorkspace", () => {
     });
 
     try {
-      expect(() => deleteAndUnregisterWorkspace("delete-rename-failure", centralData)).toThrow(
-        /injected delete rename failure/
-      );
+      expect(() =>
+        deleteAndUnregisterWorkspace(
+          "delete-rename-failure",
+          centralData,
+          removeWorkspaceTreeForTest
+        )
+      ).toThrow(/injected delete rename failure/);
     } finally {
       rename.mockRestore();
     }
@@ -486,9 +496,9 @@ describe("initWorkspace", () => {
     });
 
     try {
-      expect(deleteAndUnregisterWorkspace("cleanup-retry", centralData)).toBe(
-        workspace.workspaceId
-      );
+      expect(
+        deleteAndUnregisterWorkspace("cleanup-retry", centralData, removeWorkspaceTreeForTest)
+      ).toBe(workspace.workspaceId);
     } finally {
       rm.mockRestore();
     }
@@ -499,7 +509,7 @@ describe("initWorkspace", () => {
       fs.readdirSync(workspacesDir).filter((name) => name.startsWith(".delete-cleanup-retry-"))
     ).toHaveLength(1);
 
-    expect(recoverStagedWorkspaceDeletions(centralData)).toEqual({
+    expect(recoverStagedWorkspaceDeletions(centralData, removeWorkspaceTreeForTest)).toEqual({
       finalized: ["cleanup-retry"],
       restored: [],
       failures: [],
@@ -508,6 +518,36 @@ describe("initWorkspace", () => {
       fs.readdirSync(workspacesDir).filter((name) => name.startsWith(".delete-cleanup-retry-"))
     ).toEqual([]);
     centralData.close();
+  });
+
+  it("cleans only empty receiptless deletion shells and reports nonempty shells", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+    tempRoots.push(root);
+    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
+    const emptyTrashRoot = path.join(workspacesDir, ".delete-receiptless-empty");
+    const nonemptyTrashRoot = path.join(workspacesDir, ".delete-receiptless-nonempty");
+    fs.mkdirSync(emptyTrashRoot, { recursive: true });
+    fs.mkdirSync(nonemptyTrashRoot, { recursive: true });
+    fs.writeFileSync(path.join(nonemptyTrashRoot, "guest-file"), "retained");
+
+    const report = recoverStagedWorkspaceDeletions(
+      {} as CentralDataManager,
+      removeWorkspaceTreeForTest
+    );
+
+    expect(fs.existsSync(emptyTrashRoot)).toBe(false);
+    expect(fs.existsSync(nonemptyTrashRoot)).toBe(true);
+    expect(report).toEqual({
+      finalized: [],
+      restored: [],
+      failures: [
+        {
+          trashRoot: nonemptyTrashRoot,
+          message: expect.stringMatching(/directory not empty|not empty/i),
+        },
+      ],
+    });
   });
 
   it("keeps the ephemeral disk-only cleanup path from deleting registered workspaces", () => {
@@ -535,9 +575,9 @@ describe("initWorkspace", () => {
       completeEphemeralWorkspaceCleanup: vi.fn(() => true),
     } as unknown as CentralDataManager;
 
-    expect(() => deleteUnregisteredWorkspace(cleanup, registered, "boot-owner")).toThrow(
-      /is registered and must be deleted with deleteAndUnregisterWorkspace/
-    );
+    expect(() =>
+      deleteUnregisteredWorkspace(cleanup, registered, "boot-owner", removeWorkspaceTreeForTest)
+    ).toThrow(/is registered and must be deleted with deleteAndUnregisterWorkspace/);
     expect(fs.existsSync(workspaceDir)).toBe(true);
 
     const unregistered = {
@@ -545,9 +585,13 @@ describe("initWorkspace", () => {
       hasWorkspace: () => false,
       completeEphemeralWorkspaceCleanup: vi.fn(() => true),
     } as unknown as CentralDataManager;
-    expect(deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner")).toBe(true);
+    expect(
+      deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner", removeWorkspaceTreeForTest)
+    ).toBe(true);
     expect(fs.existsSync(workspaceDir)).toBe(false);
-    expect(deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner")).toBe(false);
+    expect(
+      deleteUnregisteredWorkspace(cleanup, unregistered, "boot-owner", removeWorkspaceTreeForTest)
+    ).toBe(false);
   });
 
   it("restores an ephemeral checkout when its fenced cleanup ticket is refused", () => {
@@ -577,9 +621,9 @@ describe("initWorkspace", () => {
       }),
     } as unknown as CentralDataManager;
 
-    expect(() => deleteUnregisteredWorkspace(cleanup, centralData, "boot-displaced")).toThrow(
-      /lease displaced/
-    );
+    expect(() =>
+      deleteUnregisteredWorkspace(cleanup, centralData, "boot-displaced", removeWorkspaceTreeForTest)
+    ).toThrow(/lease displaced/);
     expect(fs.existsSync(workspaceDir)).toBe(true);
   });
 
@@ -613,7 +657,9 @@ describe("initWorkspace", () => {
       "full-lifecycle"
     );
 
-    expect(deleteAndUnregisterWorkspace("full-lifecycle", centralData)).toBe(entry.workspaceId);
+    expect(
+      deleteAndUnregisterWorkspace("full-lifecycle", centralData, removeWorkspaceTreeForTest)
+    ).toBe(entry.workspaceId);
     expect(fs.existsSync(workspaceDir)).toBe(false);
     expect(centralData.getWorkspaceEntry("full-lifecycle")).toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS count FROM membership").get()).toEqual({ count: 0 });

@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 /**
  * On-demand build reports over exact workspace content.
  *
@@ -201,6 +202,7 @@ async function loadWithMocks(): Promise<{
   const graph = discoverPackageGraph(workspaceRoot);
   const buildSystem = await initBuildSystemV2(workspaceRoot, fakeSource(workspaceRoot, graph), [], {
     appRoot: process.cwd(),
+    runNativeJob: runIsolatedBuildJob,
     dependencyWorkspaceRoot: workspaceRoot,
   });
   // Initialization only discovers/version-tracks units. Actual panel/worker

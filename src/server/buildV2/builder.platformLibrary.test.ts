@@ -1,3 +1,4 @@
+import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,7 +18,7 @@ describe("buildPlatformLibrary", () => {
     previousSharedDerivedCacheDir = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
     process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = path.join(root, "derived-cache");
     setUserDataPath(path.join(root, "state"));
-    initBuilder(path.join(REPO_ROOT, "node_modules"), REPO_ROOT);
+    initBuilder(path.join(REPO_ROOT, "node_modules"), REPO_ROOT, runIsolatedBuildJob);
   });
 
   afterAll(async () => {

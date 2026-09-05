@@ -287,6 +287,7 @@ export interface ExtensionFsClient {
   unlink(path: string): Promise<void>;
   copyFile(src: string, dest: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
+  nativeRoots(): Promise<{ source: string; scratch: string }>;
   realpath(path: string): Promise<string>;
   /** Materialize sparse context paths before an extension subprocess reads disk directly. */
   ensureMaterialized(scope: string | string[] | "all"): Promise<void>;
@@ -327,15 +328,11 @@ export interface ExtensionWorkspaceLike {
    * return its absolute path. Lets a launch orchestrator confine a
    * context-scoped session to a real VCS-branched working tree.
    */
-  ensureContextFolder(contextId: string): Promise<{ dir: string }>;
+  ensureContextFolder(contextId: string): Promise<{ source: string; scratch: string }>;
 }
 
 export interface ExtensionNotificationsLike {
-  show(notification: {
-    type?: string;
-    title?: string;
-    message?: string;
-  }): Promise<string>;
+  show(notification: { type?: string; title?: string; message?: string }): Promise<string>;
   dismiss(id: string): Promise<void>;
 }
 
@@ -366,6 +363,8 @@ export interface ExtensionContext {
   readonly name: string;
   readonly version: string;
   readonly storage: {
+    /** Native path to this extension's writable storage in the workspace domain. */
+    readonly root: string;
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
     readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
     writeFile(path: string, data: string | Uint8Array): Promise<void>;

@@ -526,6 +526,21 @@ export const fsMethods = defineServiceMethods({
       { args: ["/projects/demo/notes/draft.md", "/projects/demo/notes/todo.md"] },
     ],
   },
+  nativeRoots: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "Discloses only the scoped native workspace's separately admitted source and scratch locations",
+    },
+    description:
+      "Return explicit read-only source and writable scratch locations for a scoped native extension.",
+    args: z.tuple([]),
+    returns: z.object({ source: z.string(), scratch: z.string() }).strict(),
+    access: READ_ACCESS,
+  },
   realpath: {
     tier: {
       tier: "open",
@@ -536,7 +551,7 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute host path (unrestricted callers).",
+      "Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute path for scoped native extensions. The logical root has two physical locations; native callers use nativeRoots.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: z.string(),
     access: READ_ACCESS,

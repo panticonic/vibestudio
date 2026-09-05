@@ -27,6 +27,8 @@ export const SERVER_WORKER_ENTRIES = Object.freeze({
 
 export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/server.mjs",
+  "dist/fs-disk-worker.cjs",
+  process.platform === "win32" ? "dist/vibestudio-isolation.exe" : "dist/vibestudio-isolation",
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/internal-do.bundle.mjs",

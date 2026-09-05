@@ -17,6 +17,9 @@ asarUnpack:
   # Desktop phone provisioning executes the canonical CLI primitives locally.
   - "scripts/cli/**/*"
   - "package.json"
+  # Installed native storage cleanup / Windows admission must be executable.
+  - "dist/vibestudio-isolation*"
+  - "dist/fs-disk-worker.cjs"
   # utilityProcess.fork() needs a physical server entry point.
   - "dist/server-electron.cjs"
   # Spawned after startup for low-priority dependency content maintenance.

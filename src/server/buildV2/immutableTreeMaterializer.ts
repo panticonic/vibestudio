@@ -34,6 +34,7 @@ async function mapConcurrent<T>(
  * dependency projection cannot monopolize its control-plane event loop.
  */
 export async function materializeImmutableTree(source: string, target: string): Promise<void> {
+  if (process.platform === "win32") return materializePrivateTree(source, target);
   const sourceRoot = path.resolve(source);
   const targetRoot = path.resolve(target);
   const pendingDirectories = [{ source: sourceRoot, target: targetRoot }];
@@ -80,4 +81,33 @@ export async function materializeImmutableTree(source: string, target: string): 
       await fs.promises.copyFile(entry.source, entry.target, fs.constants.COPYFILE_FICLONE);
     }
   });
+}
+
+/** Publish an independently owned Windows resource tree. Symlinks in an
+ * installed dependency closure are resolved only within that closure; the
+ * result contains ordinary files so ACL changes cannot affect shared inodes. */
+export async function materializePrivateTree(source: string, target: string): Promise<void> {
+  const root = await fs.promises.realpath(source);
+  const visit = async (
+    input: string,
+    output: string,
+    ancestors: ReadonlySet<string>
+  ): Promise<void> => {
+    const resolved = await fs.promises.realpath(input);
+    const relative = path.relative(root, resolved);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
+      throw new Error(`Dependency escapes installed resource closure: ${input}`);
+    if (ancestors.has(resolved)) throw new Error(`Cyclic dependency resource link: ${input}`);
+    const metadata = await fs.promises.stat(resolved);
+    if (metadata.isDirectory()) {
+      const next = new Set(ancestors).add(resolved);
+      await fs.promises.mkdir(output, { recursive: true, mode: metadata.mode });
+      for (const child of await fs.promises.readdir(resolved))
+        await visit(path.join(resolved, child), path.join(output, child), next);
+    } else if (metadata.isFile()) {
+      await fs.promises.copyFile(resolved, output, fs.constants.COPYFILE_EXCL);
+      await fs.promises.chmod(output, metadata.mode);
+    } else throw new Error(`Unsupported native resource: ${input}`);
+  };
+  await visit(root, target, new Set());
 }

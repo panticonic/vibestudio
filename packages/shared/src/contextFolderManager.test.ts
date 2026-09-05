@@ -21,6 +21,15 @@ describe("ContextFolderManager", () => {
   function manager(materialize?: (contextId: string) => Promise<{ dir: string }>) {
     return new ContextFolderManager({
       contextProjectionsRoot,
+      contextScratchRoot: path.join(root, "scratch"),
+      scratch: {
+        ensure: async (contextId) => {
+          await fs.mkdir(path.join(root, "scratch", contextId), { recursive: true });
+        },
+        remove: async (contextId) => {
+          await fs.rm(path.join(root, "scratch", contextId), { recursive: true, force: true });
+        },
+      },
       materialize:
         materialize ??
         (async (contextId) => {

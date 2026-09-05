@@ -71,7 +71,7 @@ export interface WorkspaceServiceDeps {
    * path. Backs `workspace.ensureContextFolder`; delegates to the
    * ContextFolderManager. Absent in remote-server/mobile-client mode.
    */
-  ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
+  ensureContextFolder?: (contextId: string) => Promise<{ source: string; scratch: string }>;
   /** Resolve the owning context for runtime callers that request context materialization directly. */
   resolveCallerContext?: (callerId: string) => Promise<string | null> | string | null;
 }

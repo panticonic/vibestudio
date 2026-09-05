@@ -68,6 +68,17 @@ describe("resolved execution resource policy", () => {
     expect(result.environment["HOME"]).toBe(p.home);
     expect(result.cwd).toBe(p.cwd);
   });
+  it("limits macOS local IPC to workspace storage and explicit sockets", () => {
+    const result = compileExecution(
+      { ...policy(), sockets: ["/owned/broker.sock"] },
+      { platform: "darwin", launcher: "/usr/bin/sandbox-exec" }
+    );
+    expect(result.args[1]).toContain("(allow system-socket (socket-domain AF_UNIX))");
+    expect(result.args[1]).toContain('(remote unix-socket (literal "/owned/broker.sock"))');
+    expect(result.args[1]).toContain('(local unix-socket (subpath "/owned/job/state"))');
+    expect(result.args[1]).not.toContain("(local ip");
+    expect(result.args[1]).not.toContain("(remote ip");
+  });
   it("requires private staging on Windows and keeps policy outside guest roots", () => {
     const p: ExecutionPolicy = {
       ...policy(),
@@ -84,7 +95,9 @@ describe("resolved execution resource policy", () => {
       launcher: "C:\\Program Files\\Vibestudio\\isolation.exe",
     });
     expect(result.mechanism).toBe("windows-lpac-job");
-    expect(result.controlFiles[0]?.path).toBe("C:\\owned\\job\\.isolation-policy.json");
+    expect(result.controlFiles[0]?.path).toMatch(
+      /^C:\\owned\\job\\\.isolation-[a-f0-9]{64}\.json$/
+    );
     expect(() =>
       compileExecution(
         { ...p, read: [...p.read, "C:\\Users\\somebody"] },

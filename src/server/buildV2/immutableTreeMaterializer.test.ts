@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { materializeImmutableTree } from "./immutableTreeMaterializer.js";
+import { materializeImmutableTree, materializePrivateTree } from "./immutableTreeMaterializer.js";
 
 const roots: string[] = [];
 
@@ -39,4 +39,23 @@ describe("materializeImmutableTree", () => {
       fs.promises.readFile(path.join(target, "package", "nested", "value.txt"), "utf8")
     ).resolves.toBe("value\n");
   });
+});
+
+it("publishes independent native files while resolving only contained dependency links", async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "private-native-tree-"));
+  roots.push(root);
+  const source = path.join(root, "source");
+  const target = path.join(root, "target");
+  await fs.promises.mkdir(path.join(source, "package"), { recursive: true });
+  await fs.promises.writeFile(path.join(source, "package/value"), "immutable");
+  await fs.promises.symlink("package", path.join(source, "alias"), "dir");
+  await materializePrivateTree(source, target);
+  expect((await fs.promises.lstat(path.join(target, "alias"))).isSymbolicLink()).toBe(false);
+  expect((await fs.promises.stat(path.join(target, "package/value"))).nlink).toBe(1);
+  await fs.promises.writeFile(path.join(target, "alias/value"), "private");
+  expect(await fs.promises.readFile(path.join(source, "package/value"), "utf8")).toBe("immutable");
+  await fs.promises.symlink(root, path.join(source, "escape"), "dir");
+  await expect(materializePrivateTree(source, path.join(root, "rejected"))).rejects.toThrow(
+    /escapes installed resource closure/
+  );
 });

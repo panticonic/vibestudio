@@ -1,3 +1,4 @@
+import type { RunNativeWorkspaceJob } from "../nativeWorkspaceJob.js";
 /**
  * Builder — esbuild orchestration for panels, about pages, workers, and extensions.
  *
@@ -20,11 +21,8 @@ import * as esbuild from "esbuild";
 import { ASSET_URL_EXTENSIONS } from "@vibestudio/shared/assetModules";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import { createHash } from "crypto";
-import { execFile } from "child_process";
 import { builtinModules, createRequire } from "module";
-import { promisify } from "util";
 import { pathToFileURL } from "url";
 import { panelRuntimeHelperHref } from "../panelRuntimeHelpers.js";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
@@ -116,6 +114,7 @@ export { generatePanelEntry } from "./panelEntryProtocol.js";
  */
 let _appNodeModules: string[] = [];
 let _appRoot = "";
+let _runNativeJob: RunNativeWorkspaceJob;
 let _libraryLoweringWorker: LibraryLoweringWorkerClient | null = null;
 let _workspaceRpcCatalogWorker: WorkspaceRpcCatalogWorkerClient | null = null;
 let _immutableTreeWorker: ImmutableTreeWorkerClient | null = null;
@@ -143,9 +142,14 @@ function resolveHostDependency(specifier: string): string {
  * Initialize the builder with the app's node_modules paths.
  * Must be called once before any buildUnit() calls.
  */
-export function initBuilder(appNodeModules: string | string[], appRoot: string): void {
+export function initBuilder(
+  appNodeModules: string | string[],
+  appRoot: string,
+  runNativeJob: RunNativeWorkspaceJob
+): void {
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
   _appRoot = path.resolve(appRoot);
+  _runNativeJob = runNativeJob;
   void _libraryLoweringWorker?.close();
   _libraryLoweringWorker = new LibraryLoweringWorkerClient(_appRoot);
   void _workspaceRpcCatalogWorker?.close();
@@ -227,8 +231,6 @@ export interface ExtensionDependencyDiagnostics {
   bundledDeps: Record<string, string>;
   notes: string[];
 }
-
-const execFileAsync = promisify(execFile);
 
 function isVerboseBuildLogEnabled(): boolean {
   return (
@@ -4380,35 +4382,13 @@ async function smokeTestExtensionBuild(
     runtimeNodeModulesDir: string;
   }
 ): Promise<void> {
-  const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-smoke-"));
-  const smokeScript = path.join(smokeDir, "smoke.mjs");
-  const runtimeLink = path.join(result.dir, "node_modules");
   try {
-    if (details.runtimeNodeModulesDir) {
-      await fs.promises.symlink(
-        details.runtimeNodeModulesDir,
-        runtimeLink,
-        process.platform === "win32" ? "junction" : "dir"
-      );
-    }
-    fs.writeFileSync(
-      smokeScript,
-      generateExtensionSmokeScript(
-        primaryArtifactFilePath(result),
+    await _runNativeJob({
+      script: generateExtensionSmokeScript(
         Object.keys(details.dependencyDiagnostics.runtimeExternalDeps)
-      )
-    );
-    const bundlePath = primaryArtifactFilePath(result);
-    await execFileAsync(process.execPath, [smokeScript], {
-      cwd: result.dir,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: "1",
-        VIBESTUDIO_EXTENSION_SMOKE: "1",
-        VIBESTUDIO_EXTENSION_SMOKE_BUNDLE: bundlePath,
-      },
-      timeout: 15_000,
-      maxBuffer: 1024 * 1024,
+      ),
+      bundle: fs.readFileSync(primaryArtifactFilePath(result), "utf8"),
+      dependencies: details.runtimeNodeModulesDir,
     });
   } catch (err) {
     const diagnostics = details.dependencyDiagnostics;
@@ -4436,19 +4416,16 @@ async function smokeTestExtensionBuild(
       (smokeError as Error & { cause?: unknown }).cause = err;
     }
     throw smokeError;
-  } finally {
-    if (details.runtimeNodeModulesDir) {
-      await fs.promises.rm(runtimeLink, { recursive: true, force: true }).catch(() => undefined);
-    }
-    await fs.promises.rm(smokeDir, { recursive: true, force: true });
   }
 }
 
-function generateExtensionSmokeScript(bundlePath: string, runtimeExternalDeps: string[]): string {
+function generateExtensionSmokeScript(runtimeExternalDeps: string[]): string {
   return `
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
-const bundlePath = ${JSON.stringify(bundlePath)};
+import { pathToFileURL, fileURLToPath } from "node:url";
+process.chdir(fileURLToPath(new URL(".", import.meta.url)));
+const bundlePath = process.env.VIBESTUDIO_EXTENSION_SMOKE_BUNDLE;
+if (!bundlePath) throw new Error("Missing native smoke bundle");
 const runtimeExternalDeps = ${JSON.stringify(runtimeExternalDeps)};
 const require = createRequire(pathToFileURL(bundlePath).href);
 for (const dep of runtimeExternalDeps) {
@@ -4466,6 +4443,7 @@ function createExtensionSmokeContext() {
   const asyncNull = createAsyncNullProxy();
   const storage = new Proxy(Object.create(null), {
     get(_target, prop) {
+      if (prop === "root") return process.cwd();
       if (prop === "readdir") return async () => [];
       if (prop === "readFile") {
         return async () => {

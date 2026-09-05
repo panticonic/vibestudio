@@ -1,3 +1,4 @@
+import { nativeWorkspaceCleanup } from "./nativeWorkspaceCleanup.js";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -1404,7 +1405,7 @@ async function executeHubControl(
         });
       }
     } catch (error) {
-      deleteAndUnregisterWorkspace(name, state.centralData);
+      deleteAndUnregisterWorkspace(name, state.centralData, nativeWorkspaceCleanup(state.appRoot));
       throw error;
     }
     respond({ ...entry, running: false });
@@ -1460,8 +1461,16 @@ async function executeHubControl(
       state.workspacePresence.delete(workspaceId);
     }
     const removedWorkspaceId = isWorkspaceEphemeral(state, name)
-      ? removeOwnedEphemeralWorkspace(state.centralData, state.serverBootId)
-      : deleteAndUnregisterWorkspace(name, state.centralData);
+      ? removeOwnedEphemeralWorkspace(
+          state.centralData,
+          state.serverBootId,
+          nativeWorkspaceCleanup(state.appRoot)
+        )
+      : deleteAndUnregisterWorkspace(
+          name,
+          state.centralData,
+          nativeWorkspaceCleanup(state.appRoot)
+        );
     respond({ deleted: removedWorkspaceId !== null, workspaceId: removedWorkspaceId });
     return;
   }
@@ -2245,6 +2254,7 @@ export function prepareEphemeralWorkspaceDisk(
   ownerBootId: string,
   workspaceId: string,
   nextDiskName: string,
+  removeTree: import("@vibestudio/workspace/loader").WorkspaceTrashRemoval,
   removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
 ): void {
   const cleanup = centralData.rotateEphemeralWorkspaceDiskName(
@@ -2253,7 +2263,7 @@ export function prepareEphemeralWorkspaceDisk(
     nextDiskName
   );
   if (cleanup) {
-    removeWorkspace(cleanup, centralData, ownerBootId);
+    removeWorkspace(cleanup, centralData, ownerBootId, removeTree);
   }
 }
 
@@ -2265,10 +2275,11 @@ export function prepareEphemeralWorkspaceDisk(
 export function removeOwnedEphemeralWorkspace(
   centralData: CentralDataManager,
   ownerBootId: string,
+  removeTree: import("@vibestudio/workspace/loader").WorkspaceTrashRemoval,
   removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
 ): string | null {
   const removal = centralData.removeEphemeralWorkspace(ownerBootId, ownerBootId);
-  if (removal?.cleanup) removeWorkspace(removal.cleanup, centralData, ownerBootId);
+  if (removal?.cleanup) removeWorkspace(removal.cleanup, centralData, ownerBootId, removeTree);
   return removal?.workspace.workspaceId ?? null;
 }
 
@@ -2336,7 +2347,8 @@ async function startWorkspaceRuntime(
       state.centralData,
       state.serverBootId,
       workspaceId,
-      childWorkspaceName
+      childWorkspaceName,
+      nativeWorkspaceCleanup(state.appRoot)
     );
   }
   if (semverMajor(state.version) !== WORKSPACE_SYSTEM_EPOCH) {
@@ -2944,9 +2956,14 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     centralData.removeEphemeralWorkspace(serverBootId, staleEphemeral.ownerBootId);
   }
   for (const cleanup of centralData.listEphemeralWorkspaceCleanups(serverBootId)) {
-    deleteUnregisteredWorkspace(cleanup, centralData, serverBootId);
+    deleteUnregisteredWorkspace(
+      cleanup,
+      centralData,
+      serverBootId,
+      nativeWorkspaceCleanup(appRoot)
+    );
   }
-  recoverStagedWorkspaceDeletions(centralData);
+  recoverStagedWorkspaceDeletions(centralData, nativeWorkspaceCleanup(appRoot));
   const version =
     process.env["VIBESTUDIO_APP_VERSION"] ?? process.env["npm_package_version"] ?? "0.1.0";
   const serverEntryPath = process.argv[1];
@@ -3152,7 +3169,11 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
     if (state.centralData.getEphemeralWorkspace()?.ownerBootId === state.serverBootId) {
       try {
-        removeOwnedEphemeralWorkspace(state.centralData, state.serverBootId);
+        removeOwnedEphemeralWorkspace(
+          state.centralData,
+          state.serverBootId,
+          nativeWorkspaceCleanup(state.appRoot)
+        );
       } catch (error) {
         // Keep the lifecycle marker intact so the next startup retries cleanup.
         console.error("[Hub] Ephemeral workspace cleanup will retry on next startup:", error);
