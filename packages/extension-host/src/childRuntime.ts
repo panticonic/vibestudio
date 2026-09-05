@@ -15,19 +15,13 @@ import {
   type StreamingMethodFrame,
 } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
-import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { createExtensionProxy, type ExtensionsClient } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
-import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/remoteSession";
-import {
-  requestRpcWebSocketAdmission,
-  rpcWebSocketAdmissionUrl,
-} from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 
 import type { ExtensionInvocation } from "./types.js";
 import {
@@ -516,34 +510,27 @@ function createContext() {
 let runtimeBridge: RpcClient | null = null;
 
 function getRuntimeBridge(): RpcClient {
-  if (!runtimeBridge) throw new Error("Extension WebSocket RPC is not connected");
+  if (!runtimeBridge) throw new Error("Extension process RPC is not connected");
   return runtimeBridge;
-}
-
-function gatewayWebSocketUrl(): string {
-  return serverRpcWsUrl(requiredEnv("VIBESTUDIO_EXTENSION_GATEWAY_URL"));
 }
 
 async function connectRuntimeBridge(): Promise<RpcClient> {
   const token = requiredEnv("VIBESTUDIO_EXTENSION_RPC_TOKEN");
   const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
-  const wsUrl = gatewayWebSocketUrl();
-  const admission = await requestRpcWebSocketAdmission(rpcWebSocketAdmissionUrl(wsUrl), {
-    credential: token,
-  });
-  if (!admission.ok) {
-    throw new Error(
-      `Extension WebSocket admission failed (${admission.code}): ${admission.message}` +
-        (admission.retryAfterMs === undefined ? "" : `; retry after ${admission.retryAfterMs}ms`)
-    );
-  }
-  const ws = new WebSocket(wsUrl, [webSocketAuthProtocol("rpc", admission.grant)]);
+  if (!process.send || !process.connected)
+    throw new Error("Extension requires its launcher's IPC channel");
   const listeners = new Set<(envelope: RpcEnvelope) => void>();
+  let connected = true;
+  const send = (message: WsClientMessage): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (!connected || !process.connected || !process.send) {
+        reject(new Error("Extension process RPC is disconnected"));
+        return;
+      }
+      process.send(JSON.stringify(message), (error) => (error ? reject(error) : resolve()));
+    });
   const transport: EnvelopeRpcTransport = {
     async send(envelope: RpcEnvelope): Promise<void> {
-      if (ws.readyState !== WebSocket.OPEN) {
-        throw new Error("Extension WebSocket RPC is not connected");
-      }
       const parentRequestId = invocationStore.getStore()?.invocation.requestId;
       const stampedMessage =
         parentRequestId &&
@@ -552,76 +539,58 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
           : envelope.message;
       const stampedEnvelope =
         stampedMessage === envelope.message ? envelope : { ...envelope, message: stampedMessage };
-      const frame: WsClientMessage =
+      await send(
         stampedEnvelope.target === "main" || stampedEnvelope.target === "server"
           ? { type: "ws:rpc", envelope: stampedEnvelope }
-          : { type: "ws:route", envelope: stampedEnvelope };
-      ws.send(JSON.stringify(frame));
+          : { type: "ws:route", envelope: stampedEnvelope }
+      );
     },
-    onMessage(handler: (envelope: RpcEnvelope) => void): () => void {
+    onMessage(handler) {
       listeners.add(handler);
-      return () => listeners.delete(handler);
+      return () => {
+        listeners.delete(handler);
+      };
     },
-    status: () => (ws.readyState === WebSocket.OPEN ? "connected" : "disconnected"),
+    status: () => (connected ? "connected" : "disconnected"),
     ready: () => Promise.resolve(),
     onStatusChange: () => () => {},
   };
-
   const bridge = createRpcClient({
     selfId: extensionName,
     callerKind: "extension",
     transport,
     authorityAcquisition: "wait",
   });
-
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Extension WebSocket auth timeout")), 10_000);
-    const fail = (err: unknown) => {
-      clearTimeout(timeout);
-      reject(err instanceof Error ? err : new Error(String(err)));
-    };
-    ws.addEventListener("error", fail, { once: true });
-    ws.addEventListener(
-      "open",
-      () => {
-        ws.send(
-          JSON.stringify({
-            type: "ws:auth",
-            contractVersion: RPC_CONTRACT_VERSION,
-            token: admission.grant,
-            connectionId: `extension:${extensionName}`,
-          } satisfies WsClientMessage)
+  let accept!: () => void;
+  let rejectAuth!: (error: Error) => void;
+  const authenticated = new Promise<void>((resolve, reject) => {
+    accept = resolve;
+    rejectAuth = reject;
+  });
+  const timeout = setTimeout(
+    () => rejectAuth(new Error("Extension process RPC auth timeout")),
+    10_000
+  );
+  const receive = (raw: unknown) => {
+    if (typeof raw !== "string") return; // Shutdown is a lifecycle object, not an RPC frame.
+    let message: WsServerMessage;
+    try {
+      message = JSON.parse(raw) as WsServerMessage;
+    } catch {
+      return;
+    }
+    if (message.type === "ws:auth-result") {
+      if (!message.success)
+        rejectAuth(
+          new Error(`Extension process RPC auth failed: ${message.error ?? "unknown error"}`)
         );
-      },
-      { once: true }
-    );
-    ws.addEventListener("message", function onAuth(event) {
-      const message = JSON.parse(String(event.data)) as WsServerMessage;
-      if (message.type !== "ws:auth-result") return;
-      ws.removeEventListener("message", onAuth);
-      clearTimeout(timeout);
-      if (!message.success) {
-        reject(new Error(`Extension WebSocket auth failed: ${message.error ?? "unknown error"}`));
-        return;
-      }
-      if (message.contractVersion !== RPC_CONTRACT_VERSION) {
-        reject(
+      else if (message.contractVersion !== RPC_CONTRACT_VERSION)
+        rejectAuth(
           new Error(
             `Extension RPC contract mismatch: server ${String(message.contractVersion)} (want ${RPC_CONTRACT_VERSION})`
           )
         );
-        ws.close(4005, "Incompatible RPC contract");
-        return;
-      }
-      resolve();
-    });
-  });
-
-  ws.addEventListener("message", (event) => {
-    let message: WsServerMessage;
-    try {
-      message = JSON.parse(String(event.data)) as WsServerMessage;
-    } catch {
+      else accept();
       return;
     }
     if (message.type === "ws:rpc" || message.type === "ws:routed") {
@@ -654,13 +623,25 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
         `[ExtensionRuntime] routed event "${message.event}" to ${message.targetId} dropped: ${message.error}`
       );
     }
-  });
-
-  ws.addEventListener("close", () => {
-    console.error("[ExtensionRuntime] WebSocket RPC disconnected");
+  };
+  process.on("message", receive);
+  process.once("disconnect", () => {
+    connected = false;
+    process.off("message", receive);
+    rejectAuth(new Error("Extension process RPC disconnected"));
     process.exit(1);
   });
-
+  try {
+    await send({
+      type: "ws:auth",
+      contractVersion: RPC_CONTRACT_VERSION,
+      token,
+      connectionId: `extension:${extensionName}`,
+    });
+    await authenticated;
+  } finally {
+    clearTimeout(timeout);
+  }
   return bridge;
 }
 

@@ -1,5 +1,7 @@
 # Explicit Capability Manifests and No-Silent-Drift Plan
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Manifest and static-analysis requirements remain subordinate detail; they neither establish native confinement nor grant OS access.
+
 Status: implementation plan, revision 3 (2026-07-21).
 
 Depends on `capability-model-redesign.md`, especially D1–D5, D8, D12, D13. This plan

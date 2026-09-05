@@ -915,34 +915,18 @@ describe("FsService", () => {
   });
 
   describe("extension callers", () => {
-    it("fails loud for an extension fs call without an on-behalf-of context or host-fs capability", async () => {
+    it("rejects host reads and writes from an extension without an on-behalf-of context", async () => {
       const ctx = makeExtensionCtx("@workspace-extensions/fs-test");
       const absolutePath = path.join(tmpRoot, "outside-context.txt");
       writeFileSync(absolutePath, "extension-visible");
 
-      // Phase 3: no silent unrestricted-host-fs fallback — the call throws
-      // instead of reading `/`.
       await expect(service.handleCall(ctx, "readFile", [absolutePath, "utf8"])).rejects.toThrow(
-        /host-fs-access capability/i
+        /on-behalf-of context/i
       );
-    });
-
-    it("grants unrestricted host fs only to an extension holding the explicit host-fs capability", async () => {
-      const capableService = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
-        contextAuthority: { kind: "scratch-only" },
-        hostFsCapableExtensions: ["@workspace-extensions/fs-test"],
-      });
-      const ctx = makeExtensionCtx("@workspace-extensions/fs-test");
-      const absolutePath = path.join(tmpRoot, "outside-context.txt");
-      writeFileSync(absolutePath, "extension-visible");
-
-      await expect(
-        capableService.handleCall(ctx, "readFile", [absolutePath, "utf8"])
-      ).resolves.toBe("extension-visible");
-      await capableService.handleCall(ctx, "writeFile", [absolutePath, "updated"]);
-      await expect(
-        capableService.handleCall(ctx, "readFile", [absolutePath, "utf8"])
-      ).resolves.toBe("updated");
+      await expect(service.handleCall(ctx, "writeFile", [absolutePath, "changed"])).rejects.toThrow(
+        /on-behalf-of context/i
+      );
+      expect(readFileSync(absolutePath, "utf8")).toBe("extension-visible");
     });
 
     it("binds extension fs calls to the chained caller context when present", async () => {

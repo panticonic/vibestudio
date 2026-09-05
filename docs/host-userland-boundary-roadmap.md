@@ -1,5 +1,7 @@
 # Host/userland boundary roadmap
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Code ownership and current-schema discipline remain. Host residency does not imply unrestricted OS access; all isolation sequencing and gates are consolidated here.
+
 Status: implementation and acceptance roadmap, updated 2026-08-13. Candidate
 boundary cuts are present in the integration worktree; final combined evidence
 and pre-release promotion are still pending.

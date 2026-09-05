@@ -34,5 +34,6 @@ describe("extension caller sessions", () => {
     expect(generatedHostMethodAuthority("extensions.invoke")?.tier.session).toBe("family");
     expect(generatedHostMethodAuthority("extensions.invokeStream")?.tier.session).toBe("family");
     expect(generatedHostMethodAuthority("extensions.invokeProvider")?.tier.session).toBe("family");
+    expect(generatedHostMethodAuthority("extensions.streamingMethods")?.tier.session).toBe("family");
   });
 });

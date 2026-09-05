@@ -1,5 +1,7 @@
 # Claude Code Sessions as First-Class Channel Agents
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Claude identity, channel and launch-profile behavior remain requirements. Its independent Linux-only confinement policy is replaced through the common executor in U2/U4.
+
 Status: ACTIVE ARCHITECTURE CHECKPOINT (2026-08-09, rev 6). The interactive and
 extension-headless managed launchers provision one isolated ordinary CLI login for
 the linked agent; a filesystem/network confidentiality envelope and permission relay

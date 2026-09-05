@@ -1,5 +1,7 @@
 # Dynamic iframe authority and userland-defined capabilities
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Frame/document identity and receiver contracts remain requirements; their confinement implementation and acceptance are consolidated into U4.
+
 **Status:** design direction
 **Date:** 2026-07-27
 

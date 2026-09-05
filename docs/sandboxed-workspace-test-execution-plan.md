@@ -1,5 +1,7 @@
 # Production-Runtime Workspace Test Execution
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Production browser/workerd/native suite selection remains. Native confinement and adversarial acceptance are owned by U4/U6, not a separate test sandbox.
+
 ## Status
 
 Implemented for `verify({ operation: "test" })`.

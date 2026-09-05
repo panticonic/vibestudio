@@ -309,9 +309,12 @@ function makeHost(
       filePath === "extensions/git-tools/package.json"
         ? fs.readFileSync(path.join(extensionNode.path, "package.json"), "utf8")
         : ((await overrides.readWorkspaceFileAtState?.(stateHash, filePath)) ?? null),
-    extensionTransport: overrides.extensionTransport ?? {
-      call: vi.fn(async () => {
-        throw new Error("extensionTransport.call should not be invoked in this test");
+    extensionTransport: {
+      attachProcess: vi.fn(() => vi.fn()),
+      ...(overrides.extensionTransport ?? {
+        call: vi.fn(async () => {
+          throw new Error("extensionTransport.call should not be invoked in this test");
+        }),
       }),
     },
     registerBuildProvider: overrides.registerBuildProvider,

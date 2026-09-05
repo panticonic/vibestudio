@@ -1,0 +1,411 @@
+{
+  "kind": "mechanism feasibility, not production isolation certification",
+  "platform": "linux",
+  "release": "7.1.1-76070101-generic",
+  "orchestratorNode": "v25.4.0",
+  "guestNode": "v24.0.1",
+  "bwrap": "bubblewrap 0.6.1",
+  "results": [
+    {
+      "scope": "different-workspaces",
+      "job": 0,
+      "ready": true,
+      "checks": [
+        {
+          "name": "selected input readable",
+          "ok": true
+        },
+        {
+          "name": "input read only",
+          "ok": true,
+          "detail": "EROFS"
+        },
+        {
+          "name": "private state writable",
+          "ok": true
+        },
+        {
+          "name": "host canary absent",
+          "ok": true
+        },
+        {
+          "name": "sibling input absent",
+          "ok": true
+        },
+        {
+          "name": "host control socket absent",
+          "ok": true
+        },
+        {
+          "name": "host X11 socket absent",
+          "ok": true
+        },
+        {
+          "name": "host environment absent",
+          "ok": true
+        },
+        {
+          "name": "host process absent",
+          "ok": true
+        },
+        {
+          "name": "host loopback denied",
+          "ok": true
+        },
+        {
+          "name": "generated child preserves scope",
+          "ok": true
+        },
+        {
+          "name": "installed ripgrep",
+          "ok": true
+        },
+        {
+          "name": "installed node-pty and bash",
+          "ok": true,
+          "detail": "pty-ok"
+        },
+        {
+          "name": "installed workerd serves in private network",
+          "ok": true
+        },
+        {
+          "name": "broker selected file",
+          "ok": true
+        },
+        {
+          "name": "broker mediated network",
+          "ok": true
+        },
+        {
+          "name": "broker wrong resource denied",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "scope": "different-workspaces",
+      "job": 1,
+      "ready": true,
+      "checks": [
+        {
+          "name": "selected input readable",
+          "ok": true
+        },
+        {
+          "name": "input read only",
+          "ok": true,
+          "detail": "EROFS"
+        },
+        {
+          "name": "private state writable",
+          "ok": true
+        },
+        {
+          "name": "host canary absent",
+          "ok": true
+        },
+        {
+          "name": "sibling input absent",
+          "ok": true
+        },
+        {
+          "name": "host control socket absent",
+          "ok": true
+        },
+        {
+          "name": "host X11 socket absent",
+          "ok": true
+        },
+        {
+          "name": "host environment absent",
+          "ok": true
+        },
+        {
+          "name": "host process absent",
+          "ok": true
+        },
+        {
+          "name": "host loopback denied",
+          "ok": true
+        },
+        {
+          "name": "generated child preserves scope",
+          "ok": true
+        },
+        {
+          "name": "installed ripgrep",
+          "ok": true
+        },
+        {
+          "name": "installed node-pty and bash",
+          "ok": true,
+          "detail": "pty-ok"
+        },
+        {
+          "name": "installed workerd serves in private network",
+          "ok": true
+        },
+        {
+          "name": "broker selected file",
+          "ok": true
+        },
+        {
+          "name": "broker mediated network",
+          "ok": true
+        },
+        {
+          "name": "broker wrong resource denied",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "scope": "different-workspaces",
+      "revoked": true
+    },
+    {
+      "scope": "different-workspaces",
+      "detachedDescendantRetired": true
+    },
+    {
+      "scope": "different-workspaces",
+      "peerUnaffected": true
+    },
+    {
+      "scope": "different-workspaces",
+      "restart": {
+        "oldInputAbsent": true
+      }
+    },
+    {
+      "scope": "different-contexts",
+      "job": 0,
+      "ready": true,
+      "checks": [
+        {
+          "name": "selected input readable",
+          "ok": true
+        },
+        {
+          "name": "input read only",
+          "ok": true,
+          "detail": "EROFS"
+        },
+        {
+          "name": "private state writable",
+          "ok": true
+        },
+        {
+          "name": "host canary absent",
+          "ok": true
+        },
+        {
+          "name": "sibling input absent",
+          "ok": true
+        },
+        {
+          "name": "host control socket absent",
+          "ok": true
+        },
+        {
+          "name": "host X11 socket absent",
+          "ok": true
+        },
+        {
+          "name": "host environment absent",
+          "ok": true
+        },
+        {
+          "name": "host process absent",
+          "ok": true
+        },
+        {
+          "name": "host loopback denied",
+          "ok": true
+        },
+        {
+          "name": "generated child preserves scope",
+          "ok": true
+        },
+        {
+          "name": "installed ripgrep",
+          "ok": true
+        },
+        {
+          "name": "installed node-pty and bash",
+          "ok": true,
+          "detail": "pty-ok"
+        },
+        {
+          "name": "installed workerd serves in private network",
+          "ok": true
+        },
+        {
+          "name": "broker selected file",
+          "ok": true
+        },
+        {
+          "name": "broker mediated network",
+          "ok": true
+        },
+        {
+          "name": "broker wrong resource denied",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "scope": "different-contexts",
+      "job": 1,
+      "ready": true,
+      "checks": [
+        {
+          "name": "selected input readable",
+          "ok": true
+        },
+        {
+          "name": "input read only",
+          "ok": true,
+          "detail": "EROFS"
+        },
+        {
+          "name": "private state writable",
+          "ok": true
+        },
+        {
+          "name": "host canary absent",
+          "ok": true
+        },
+        {
+          "name": "sibling input absent",
+          "ok": true
+        },
+        {
+          "name": "host control socket absent",
+          "ok": true
+        },
+        {
+          "name": "host X11 socket absent",
+          "ok": true
+        },
+        {
+          "name": "host environment absent",
+          "ok": true
+        },
+        {
+          "name": "host process absent",
+          "ok": true
+        },
+        {
+          "name": "host loopback denied",
+          "ok": true
+        },
+        {
+          "name": "generated child preserves scope",
+          "ok": true
+        },
+        {
+          "name": "installed ripgrep",
+          "ok": true
+        },
+        {
+          "name": "installed node-pty and bash",
+          "ok": true,
+          "detail": "pty-ok"
+        },
+        {
+          "name": "installed workerd serves in private network",
+          "ok": true
+        },
+        {
+          "name": "broker selected file",
+          "ok": true
+        },
+        {
+          "name": "broker mediated network",
+          "ok": true
+        },
+        {
+          "name": "broker wrong resource denied",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "scope": "different-contexts",
+      "revoked": true
+    },
+    {
+      "scope": "different-contexts",
+      "detachedDescendantRetired": true
+    },
+    {
+      "scope": "different-contexts",
+      "peerUnaffected": true
+    },
+    {
+      "scope": "different-contexts",
+      "restart": {
+        "oldInputAbsent": true
+      }
+    },
+    {
+      "hubFixture": [
+        {
+          "hubReady": false,
+          "exit": {
+            "code": 1,
+            "signal": null
+          },
+          "errors": [
+            "Fatal: Error: Iroh endpoint did not become online within 15000ms"
+          ],
+          "startupTail": [
+            "(node:12) ExperimentalWarning: SQLite is an experimental feature and might change at any time",
+            "(Use `node --trace-warnings ...` to show where the warning was created)",
+            "[Perf] server module evaluated at 247ms uptime",
+            "[Perf] server core imports ready at 270ms uptime",
+            "Fatal: Error: Iroh endpoint did not become online within 15000ms",
+            "    at Timeout.<anonymous> (file:///app/dist/server.mjs:1466:74123)",
+            "    at listOnTimeout (node:internal/timers:608:17)",
+            "    at process.processTimers (node:internal/timers:543:7)",
+            ""
+          ],
+          "network": [
+            "{sa_family=AF_INET, sin_port=htons(1), sin_addr=inet_addr(\"10.254.254.254\")}, 16) = -1 ENETUNREACH (Network is unreachable)",
+            "{sa_family=AF_INET6, sin6_port=htons(1), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, \"fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff\", &sin6_addr), sin6_scope_id=0}, 28) = -1 ENETUNREACH (Network is unreachable)",
+            "{sa_family=AF_INET6, sin6_port=htons(53), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, \"2001:4860:4860::8844\", &sin6_addr), sin6_scope_id=0}, 28) = -1 ENETUNREACH (Network is unreachable)",
+            "{sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr(\"8.8.8.8\")}, 16) = -1 ENETUNREACH (Network is unreachable)",
+            "{sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr(\"8.8.4.4\")}, 16) = -1 ENETUNREACH (Network is unreachable)",
+            "{sa_family=AF_INET6, sin6_port=htons(53), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, \"2001:4860:4860::8888\", &sin6_addr), sin6_scope_id=0}, 28) = -1 ENETUNREACH (Network is unreachable)"
+          ]
+        }
+      ],
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "log": "",
+      "scope": "prebuilt hub, no workspace bootstrap"
+    },
+    {
+      "graphicalFixture": [
+        {
+          "electron": true,
+          "rendererSandboxRequested": true,
+          "hostCanaryDeniedFromMain": true,
+          "hostLoopbackDeniedFromChromiumNetwork": true
+        }
+      ],
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "log": "_XSERVTransmkdir: Owner of /tmp/.X11-unix should be set to root\n[2:0905/101037.262037:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\nFontconfig error: Cannot load default config file: File not found\n[2:0905/101037.587049:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n[2:0905/101037.587242:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\n[2:0905/101037.587271:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory\nFontconfig error: Cannot load default config file\n[2:0905/101037.603335:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n[2:0905/101037.627080:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \n[2:0905/101037.627147:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n[2:0905/101037.629934:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \n",
+      "scope": "private Xvfb, no host desktop or GPU"
+    }
+  ],
+  "cleanup": "all owned bwrap processes awaited, fixture sockets closed, temporary directory removed",
+  "status": "incomplete: at least one probed requirement failed"
+}

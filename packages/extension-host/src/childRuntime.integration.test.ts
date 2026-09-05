@@ -3,11 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:http";
-import * as esbuild from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
-import { createNodeProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
+import {
+  createNodeProcessAdapter,
+  WorkspaceSandbox,
+  type ProcessAdapter,
+} from "@vibestudio/process-adapter";
 import {
   envelopeFromMessage,
   type RpcEnvelope,
@@ -49,40 +50,45 @@ function makeEnvelope(
   });
 }
 
-describe("extension child runtime process", () => {
+const modes = ["node", ...(process.platform === "linux" ? ["linux-workspace"] : [])];
+describe.each(modes)("extension child runtime (%s)", (mode) => {
   let childRuntimeBundle = "";
   let root: string | null = null;
   let proc: ProcessAdapter | null = null;
-  let server: WebSocketServer | null = null;
-  let httpServer: Server | null = null;
+  let sandbox: WorkspaceSandbox | null = null;
 
   beforeAll(async () => {
-    const result = await esbuild.build({
-      entryPoints: [path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts")],
-      bundle: true,
-      platform: "node",
-      target: "node20",
-      format: "esm",
-      write: false,
-      external: ["@vibestudio/process-adapter"],
-      logLevel: "silent",
-    });
-    childRuntimeBundle = result.outputFiles[0]!.text;
+    childRuntimeBundle = fs.readFileSync(
+      fileURLToPath(new URL("../dist/childRuntime.js", import.meta.url)),
+      "utf8"
+    );
   });
 
   afterEach(async () => {
-    proc?.kill();
+    if (proc) {
+      const child = proc;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Extension fixture did not stop")),
+          5_000
+        );
+        child.on("exit", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        child.kill();
+      });
+    }
     proc = null;
-    for (const client of server?.clients ?? []) client.terminate();
-    await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
-    server = null;
-    await new Promise<void>((resolve) => httpServer?.close(() => resolve()) ?? resolve());
-    httpServer = null;
+    if (sandbox) {
+      expect((await sandbox.stop()).launcherExited).toBe(true);
+      sandbox = null;
+    }
     if (root) fs.rmSync(root, { recursive: true, force: true });
     root = null;
   });
 
-  it("starts through the process adapter, reports ready, and handles invoke", async () => {
+  it("authenticates over process IPC, reports ready, and handles invoke without a network listener", async () => {
     root = tempDir();
     const childRuntimePath = path.join(root, "childRuntime.mjs");
     fs.writeFileSync(childRuntimePath, childRuntimeBundle);
@@ -127,115 +133,125 @@ describe("extension child runtime process", () => {
       ].join("\n")
     );
 
-    const admissionGrant = "extension-admission-grant";
-    httpServer = createServer((req, res) => {
-      if (req.method === "POST" && req.url === "/rpc/ws-admission") {
-        expect(req.headers.authorization).toBe("Bearer test-token");
-        res.writeHead(201, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            ok: true,
-            grant: admissionGrant,
-            expiresAt: Date.now() + 15_000,
-          })
-        );
-        return;
-      }
-      res.writeHead(404);
-      res.end();
-    });
-    server = new WebSocketServer({ noServer: true });
-    httpServer.on("upgrade", (req, socket, head) => {
-      expect(req.headers["sec-websocket-protocol"]).toContain("vibestudio.auth.rpc.");
-      server!.handleUpgrade(req, socket, head, (ws) => server!.emit("connection", ws, req));
-    });
-    httpServer.listen(0, "127.0.0.1");
-    await new Promise<void>((resolve, reject) => {
-      httpServer!.once("listening", resolve);
-      httpServer!.once("error", reject);
-    });
-    const address = httpServer.address();
-    if (!address || typeof address === "string") throw new Error("WebSocket server did not bind");
-    const gatewayUrl = `http://127.0.0.1:${address.port}`;
-
+    const commandEnv = {
+      VIBESTUDIO_EXTENSION_NAME: "@workspace-extensions/process-test",
+      VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
+      VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
+      VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
+      VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
+    };
+    if (mode === "linux-workspace") {
+      const runtime = fs.realpathSync(
+        fileURLToPath(new URL("../../process-adapter/dist/isolation", import.meta.url))
+      );
+      const home = path.join(root, "storage");
+      fs.mkdirSync(path.join(home, "tmp"), { recursive: true });
+      sandbox = await WorkspaceSandbox.start(
+        {
+          version: 1,
+          owner: {
+            workspaceId: "extension-fixture",
+            contextId: null,
+            runtimeId: "native-workspace",
+            incarnation: "fixture",
+            executionDigest: "fixture",
+          },
+          privateRoot: root,
+          executable: "/usr/bin/node",
+          args: [],
+          cwd: home,
+          home,
+          environment: { PATH: "/usr/bin:/bin" },
+          read: ["/usr", runtime, childRuntimePath, extensionDir],
+          write: [home],
+          sockets: [],
+        },
+        {
+          platform: "linux",
+          launcher: "/usr/bin/bwrap",
+          workspaceEntry: path.join(runtime, "workspaceChild.js"),
+        }
+      );
+      proc = sandbox.fork(childRuntimePath, commandEnv);
+    } else {
+      proc = createNodeProcessAdapter(childRuntimePath, commandEnv);
+    }
+    const channel = {
+      on(event: "message", listener: (message: unknown) => void) {
+        proc!.on(event, listener);
+      },
+      send(frame: string) {
+        proc!.postMessage(frame);
+      },
+    };
     let extensionLogArgs: unknown[] | undefined;
-    const readyPromise = waitForMessage<{ ws: import("ws").WebSocket; message: RpcRequest }>(
+    const readyPromise = waitForMessage<{ ws: typeof channel; message: RpcRequest }>(
       (resolve, reject) => {
-        server!.once("connection", (ws) => {
-          ws.on("message", (raw) => {
-            try {
-              const message = JSON.parse(String(raw)) as WsClientMessage;
-              if (message.type === "ws:auth") {
-                expect(message.token).toBe(admissionGrant);
-                ws.send(
-                  JSON.stringify({
-                    type: "ws:auth-result",
-                    success: true,
-                    contractVersion: RPC_CONTRACT_VERSION,
-                  } satisfies WsServerMessage)
-                );
-                return;
-              }
-              if (message.type === "ws:route") {
-                const envelope = message.envelope as RpcEnvelope | undefined;
-                const rpc = envelope?.message as RpcMessage | undefined;
-                if (!envelope || rpc?.type !== "request") return;
-                const response: RpcResponse = {
-                  type: "response",
-                  requestId: rpc.requestId,
-                  result: {
-                    targetId: envelope.target,
-                    method: rpc.method,
-                    args: rpc.args,
-                    parentRequestId: rpc.parentRequestId,
-                  },
-                };
-                ws.send(
-                  JSON.stringify({
-                    type: "ws:routed",
-                    envelope: makeEnvelope(envelope.target, envelope.from, "do", response),
-                  } satisfies WsServerMessage)
-                );
-                return;
-              }
-              if (message.type !== "ws:rpc") return;
+        const ws = channel;
+        ws.on("message", (raw) => {
+          try {
+            const message = JSON.parse(String(raw)) as WsClientMessage;
+            if (message.type === "ws:auth") {
+              expect(message.token).toBe("test-token");
+              ws.send(
+                JSON.stringify({
+                  type: "ws:auth-result",
+                  success: true,
+                  contractVersion: RPC_CONTRACT_VERSION,
+                } satisfies WsServerMessage)
+              );
+              return;
+            }
+            if (message.type === "ws:route") {
               const envelope = message.envelope as RpcEnvelope | undefined;
               const rpc = envelope?.message as RpcMessage | undefined;
               if (!envelope || rpc?.type !== "request") return;
               const response: RpcResponse = {
                 type: "response",
                 requestId: rpc.requestId,
-                result: null,
+                result: {
+                  targetId: envelope.target,
+                  method: rpc.method,
+                  args: rpc.args,
+                  parentRequestId: rpc.parentRequestId,
+                },
               };
               ws.send(
                 JSON.stringify({
-                  type: "ws:rpc",
-                  envelope: makeEnvelope("main", envelope.from, "server", response),
+                  type: "ws:routed",
+                  envelope: makeEnvelope(envelope.target, envelope.from, "do", response),
                 } satisfies WsServerMessage)
               );
-              if (rpc.method === "runtime.supervision.appendLog") {
-                extensionLogArgs = rpc.args;
-              }
-              if (rpc.method === "runtime.supervision.reportReady") {
-                resolve({ ws, message: rpc });
-              }
-            } catch (err) {
-              reject(err instanceof Error ? err : new Error(String(err)));
+              return;
             }
-          });
+            if (message.type !== "ws:rpc") return;
+            const envelope = message.envelope as RpcEnvelope | undefined;
+            const rpc = envelope?.message as RpcMessage | undefined;
+            if (!envelope || rpc?.type !== "request") return;
+            const response: RpcResponse = {
+              type: "response",
+              requestId: rpc.requestId,
+              result: null,
+            };
+            ws.send(
+              JSON.stringify({
+                type: "ws:rpc",
+                envelope: makeEnvelope("main", envelope.from, "server", response),
+              } satisfies WsServerMessage)
+            );
+            if (rpc.method === "runtime.supervision.appendLog") {
+              extensionLogArgs = rpc.args;
+            }
+            if (rpc.method === "runtime.supervision.reportReady") {
+              resolve({ ws, message: rpc });
+            }
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
         });
       }
     );
 
-    proc = createNodeProcessAdapter(childRuntimePath, {
-      ...process.env,
-      VIBESTUDIO_EXTENSION_NAME: "@workspace-extensions/process-test",
-      VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
-      VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
-      VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
-      VIBESTUDIO_EXTENSION_GATEWAY_URL: gatewayUrl,
-      VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
-    });
     const ready = await readyPromise;
     expect(ready.message.args[0]).toEqual({
       methods: ["ping", "replaceStorage", "callerContext", "targetEcho", "structuredFailure"],

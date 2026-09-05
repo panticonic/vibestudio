@@ -1,6 +1,4 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 
 import type { ExtensionHealth, ExtensionProcessState } from "./types.js";
@@ -8,6 +6,7 @@ import type { ExtensionHealth, ExtensionProcessState } from "./types.js";
 interface RunningExtension {
   state: ExtensionProcessState;
   proc: ProcessAdapter;
+  retireRpc: () => void;
   ready: boolean;
   methods: string[];
   hasFetch: boolean;
@@ -45,6 +44,7 @@ const CRASH_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 const CRASH_WINDOW_MS = 60_000;
 
 export interface ExtensionProcessManagerDeps {
+  attachProcess(proc: ProcessAdapter, credential: string): () => void;
   onStatus(name: string, status: "running" | "stopped" | "error", error?: string | null): void;
   onError?(name: string, error: string, attempts: number): void;
   onHealth(name: string, health: ExtensionHealth): void;
@@ -90,11 +90,19 @@ export class ExtensionProcessManager {
         preferNode: true,
       }
     );
+    let retireRpc: () => void;
+    try {
+      retireRpc = this.deps.attachProcess(proc, state.rpcToken);
+    } catch (error) {
+      proc.kill();
+      throw error;
+    }
     let running!: RunningExtension;
     const exitHandler = (code: number | null) => this.handleExit(running, code);
     running = {
       state,
       proc,
+      retireRpc,
       ready: false,
       methods: [],
       hasFetch: false,
@@ -114,6 +122,7 @@ export class ExtensionProcessManager {
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
+        running.retireRpc();
         running.proc.kill();
         reject(new Error(`Extension ${state.name} did not become ready within 10s`));
       }, 10_000);
@@ -138,7 +147,7 @@ export class ExtensionProcessManager {
     const running = this.running.get(name);
     if (!running) return;
     running.stopping = true;
-    running.proc.postMessage({ type: "shutdown" });
+    running.retireRpc();
     await new Promise<void>((resolve) => {
       let settled = false;
       const settle = () => {
@@ -254,6 +263,7 @@ export class ExtensionProcessManager {
     // report its exit after the replacement has occupied the same name; that
     // stale event must never delete or crash-restart the replacement.
     if (this.running.get(state.name) !== running) return;
+    running.retireRpc();
     this.running.delete(state.name);
     const ready = running.pending.get("__ready__");
     if (ready) {
@@ -405,18 +415,14 @@ function abortError(signal: AbortSignal): Error {
 }
 
 export function resolveChildRuntimePath(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const dist = path.join(here, "childRuntime.js");
-  if (fs.existsSync(dist)) return dist;
-  const source = path.join(here, "childRuntime.ts");
-  if (fs.existsSync(source)) return source;
-  return dist;
+  // Development and installed hosts use the same built executable. Missing
+  // artifacts fail resolution; authored TypeScript and host loaders are never
+  // an alternate extension bootstrap.
+  return createRequire(import.meta.url).resolve("@vibestudio/extension-host/child-runtime");
 }
 
-export function extensionRuntimeExecArgv(): string[] | undefined {
-  const execArgv = [...process.execArgv];
-  if (extensionInspectorEnabled()) execArgv.push("--inspect=0");
-  return execArgv.length > 0 ? execArgv : undefined;
+export function extensionRuntimeExecArgv(): string[] {
+  return extensionInspectorEnabled() ? ["--inspect=0"] : [];
 }
 
 function extensionInspectorEnabled(): boolean {

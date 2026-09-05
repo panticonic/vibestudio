@@ -23,8 +23,7 @@ fs.mkdirSync(outdir, { recursive: true });
 // Bundle JS for the host entry and the forked-child runtime entry. Runtime JS
 // must not resolve @vibestudio/shared directly: shared is a source-only package
 // whose exports point at .ts files with NodeNext-style .js specifiers.
-await esbuild.build({
-  entryPoints: ["src/index.ts", "src/childRuntime.ts"],
+const runtimeBuild = {
   bundle: true,
   platform: "node",
   target: "node20",
@@ -37,9 +36,19 @@ import { createRequire as __createRequire } from "node:module";
 const require = __createRequire(import.meta.url);
 `.trim(),
   },
-  // electron is never bundled: process-adapter loads it lazily via createRequire
-  // only inside Electron, so it stays a runtime-optional require in both modes.
+};
+await esbuild.build({
+  ...runtimeBuild,
+  entryPoints: ["src/index.ts"],
   external: PUBLISH ? ["electron"] : ["@vibestudio/extension", "@vibestudio/process-adapter"],
+});
+// The child is an installed executable closure on every launch path. It must
+// run with no ambient workspace node_modules or TypeScript loader. Inlining its
+// client libraries cannot cause a dual-package hazard across a process boundary.
+await esbuild.build({
+  ...runtimeBuild,
+  entryPoints: ["src/childRuntime.ts"],
+  external: ["electron"],
 });
 
 if (PUBLISH) {

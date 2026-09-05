@@ -122,9 +122,14 @@ describe("ConnectionRegistry", () => {
     const transport = { close: vi.fn() } as unknown as SessionServerTransportInternal;
     const bridge = {} as RpcClient;
     registry.addClient(oldClient);
+    const oldLifetime = registry.connectionSignal(oldClient);
     registry.setBridge("panel-a", "conn-a", bridge, transport);
 
     registry.addClient(replacement);
+    const newLifetime = registry.connectionSignal(replacement);
+    expect(oldLifetime.aborted).toBe(true);
+    expect(newLifetime).not.toBe(oldLifetime);
+    expect(newLifetime.aborted).toBe(false);
 
     expect(transport.close).toHaveBeenCalledOnce();
     expect(registry.getBySocket(oldClient.ws)).toBeUndefined();
@@ -133,7 +138,10 @@ describe("ConnectionRegistry", () => {
     expect(registry.isUserOnline("user-old")).toBe(false);
     expect(registry.isUserOnline("user-new")).toBe(true);
     expect(registry.removeClient(oldClient)).toBe(false);
+    expect(newLifetime.aborted).toBe(false);
     expect(registry.getConnection("panel-a", "conn-a")).toBe(replacement);
+    registry.closeAll(1001, "test complete");
+    expect(newLifetime.aborted).toBe(true);
   });
 
   it("isolates connection-change listener failures and reports them through the injected sink", () => {

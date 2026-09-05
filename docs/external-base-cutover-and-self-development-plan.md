@@ -1,5 +1,7 @@
 # External Base cutover and host/system self-development
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Source-development behavior remains subject to the newer bundle/Base ownership model. Confined builds and selected host source effects are owned by U2–U5.
+
 Status: implementation and cutover checklist, updated 2026-08-13. The code
 cut is present in the integration worktree; release and operational acceptance
 remain provisional until the final gates below pass.

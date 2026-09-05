@@ -278,7 +278,7 @@ Authority principals: `code`, `host`, `user`
 
 ## `fs`
 
-Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
+Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. Extension calls require an on-behalf-of context; this service never grants unrestricted host filesystem access.
 
 Authority principals: `code`, `host`, `user`
 
@@ -355,6 +355,20 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `hostPerformance.snapshot` | Capture workspace-server memory/CPU counters, retained event-loop responsiveness samples, and workerd RSS/occupancy. Pass since to correlate samples with one workload. |
+
+## `hostTerminal`
+
+Explicitly approved terminals with full host-user access outside workspace confinement
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `hostTerminal.open` | Open an explicitly approved terminal with full host access as the app's OS user. This is outside workspace confinement and does not elevate to administrator. |
+| `hostTerminal.read` | Read bounded output from an owned host terminal; cursor advances only over returned bytes. |
+| `hostTerminal.write` | Write ordered terminal input. Retry only the latest sequence with identical bytes; out-of-order input is rejected. |
+| `hostTerminal.resize` | Resize an owned host terminal. |
+| `hostTerminal.close` | Retire terminal control before attempting process cleanup. Host descendants may survive. |
 
 ## `mirror`
 

@@ -34,6 +34,7 @@ export interface ConnectionRegistryOptions {
  */
 export class ConnectionRegistry {
   private clients = new Map<RpcSessionChannel, WsClientState>();
+  private readonly lifetimes = new WeakMap<WsClientState, AbortController>();
   private callerConnections = new Map<string, Map<string, WsClientState>>();
   private bridges = new Map<string, Map<string, RpcClient>>();
   private transports = new Map<string, Map<string, SessionServerTransportInternal>>();
@@ -55,6 +56,12 @@ export class ConnectionRegistry {
 
   getBySocket(ws: RpcSessionChannel): WsClientState | undefined {
     return this.clients.get(ws);
+  }
+
+  connectionSignal(client: WsClientState): AbortSignal {
+    const lifetime = this.lifetimes.get(client);
+    if (!lifetime) throw new Error("RPC connection was not admitted");
+    return lifetime.signal;
   }
 
   getConnection(callerId: string, connectionId: string): WsClientState | undefined {
@@ -99,6 +106,8 @@ export class ConnectionRegistry {
   }
 
   addClient(client: WsClientState): void {
+    if (this.lifetimes.has(client)) throw new Error("Cannot readmit an RPC connection instance");
+    this.lifetimes.set(client, new AbortController());
     let callerClients = this.callerConnections.get(client.caller.runtime.id);
     if (!callerClients) {
       callerClients = new Map();
@@ -129,6 +138,7 @@ export class ConnectionRegistry {
   }
 
   removeClient(client: WsClientState): boolean {
+    this.lifetimes.get(client)?.abort(new Error("RPC connection retired"));
     const current = this.callerConnections.get(client.caller.runtime.id)?.get(client.connectionId);
     const removedActive = current === client;
     if (removedActive) {
@@ -251,6 +261,9 @@ export class ConnectionRegistry {
   }
 
   closeAll(code: number, reason: string): void {
+    for (const client of this.clients.values()) {
+      this.lifetimes.get(client)?.abort(new Error("RPC server stopped"));
+    }
     for (const transports of this.transports.values()) {
       for (const transport of transports.values()) {
         transport.close();

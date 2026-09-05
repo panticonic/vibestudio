@@ -1,5 +1,7 @@
 # Capability-Grant Approval Model for System Modification
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Approval requirements remain subordinate detail; use the one canonical authority owner rather than an additional native grant system.
+
 Status: design (pre-implementation). Authored alongside the DO-authorization
 closures (Findings 1 + 2) and the workspace-realm default-deny migration, which
 this design shapes.

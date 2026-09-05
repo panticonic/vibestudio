@@ -112,11 +112,11 @@ export const extensionsMethods = defineServiceMethods({
   streamingMethods: {
     tier: {
       tier: "open",
-      session: "codeOnly",
+      session: "family",
       residency: "transport",
       family: "extensions.control",
       rationale:
-        "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+        "Streaming-method discovery is required by the extension invocation router and shares its admitted execution-session scope; it returns manifest metadata and grants no invocation authority",
     },
     description:
       "List the method names an extension's manifest declares as streaming, so callers route them through invokeStream. Unknown extensions return an empty list.",

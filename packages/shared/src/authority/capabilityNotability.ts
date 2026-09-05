@@ -188,6 +188,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "subagents.create", notability: "headline" },
   { key: "extensions.reload", notability: "headline" },
   { key: "workspace-units.manage", notability: "headline" },
+  { key: "host-terminal.open", notability: "headline" },
   { key: "workspace-host.manage", notability: "headline" },
   { key: "workspaces.create", notability: "headline" },
   { key: "workspaces.delete", notability: "headline" },

@@ -16269,10 +16269,10 @@
       "owner": "extensions",
       "method": "streamingMethods",
       "tier": "open",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "residency": "transport",
       "mechanismFamily": "extensions.control",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "Streaming-method discovery is required by the extension invocation router and shares its admitted execution-session scope; it returns manifest metadata and grants no invocation authority",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:extensions.streamingMethods"
@@ -16303,8 +16303,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:extensions.streamingMethods),allOf(capability(user,service:extensions.streamingMethods),workspace-member),allOf(capability(code,service:extensions.streamingMethods),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "admitted-session-extension-metadata",
+        "change": "Allows admitted execution sessions to discover the extension streaming method manifest required by the invocation router. Metadata grants no invocation authority; the selected extension receiver still authorizes every effect."
       },
       "capability": "service:extensions.streamingMethods",
       "parityAssertion": "generated-census:host-authority"
@@ -18005,6 +18005,276 @@
         "change": "Adds an open read-only snapshot of workspace-server CPU and memory counters, at most 240 retained event-loop summaries, and workerd RSS plus aggregate occupancy. It exposes no process control, command execution, host filesystem, URLs, payloads, credentials, or inspector endpoint and cannot enable or extend profiling."
       },
       "capability": "service:hostPerformance.snapshot",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostTerminal.close",
+      "rpcPlane": "host-service",
+      "owner": "hostTerminal",
+      "method": "close",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "host-terminal.session",
+      "reviewRationale": "Controls only a receiver-owned terminal bound to the approved caller and connection",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hostTerminal.close"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:hostTerminal.close),workspace-member),allOf(capability(code,service:hostTerminal.close),workspace-member))",
+      "r3b": {
+        "review": "connection-owned-host-terminal-control",
+        "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+      },
+      "capability": "service:hostTerminal.close",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostTerminal.open",
+      "rpcPlane": "host-service",
+      "owner": "hostTerminal",
+      "method": "open",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "host-terminal.open",
+      "reviewRationale": "Opening always prepares a fresh critical host-terminal authorization before spawning",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "host-terminal.open"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"host-terminal.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"host-terminal.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"host-terminal.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "fresh-critical-full-host-terminal",
+        "change": "The open method prepares a critical exact-host/workspace leaf before launching a host-selected shell. Every launch consumes fresh invocation-bound critical confirmation; standing grants cannot substitute. Prepared ownership is sealed to the verified user, code and exact live connection and rechecked before spawn. Full host-user authority is an explicit user-approved exception to workspace confinement, without administrator elevation."
+      },
+      "capability": "service:hostTerminal.open",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostTerminal.open#capability:host-terminal.open",
+      "rpcPlane": "host-service",
+      "owner": "hostTerminal",
+      "method": "open",
+      "tier": "critical",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "host-terminal.open",
+      "reviewRationale": "Opening always prepares a fresh critical host-terminal authorization before spawning",
+      "capability": "host-terminal.open",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "hostTerminal.open"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"host-terminal.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"host-terminal.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"host-terminal.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostTerminal.read",
+      "rpcPlane": "host-service",
+      "owner": "hostTerminal",
+      "method": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "host-terminal.session",
+      "reviewRationale": "Controls only a receiver-owned terminal bound to the approved caller and connection",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hostTerminal.read"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:hostTerminal.read),workspace-member),allOf(capability(code,service:hostTerminal.read),workspace-member))",
+      "r3b": {
+        "review": "connection-owned-host-terminal-control",
+        "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+      },
+      "capability": "service:hostTerminal.read",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostTerminal.resize",
+      "rpcPlane": "host-service",
+      "owner": "hostTerminal",
+      "method": "resize",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "host-terminal.session",
+      "reviewRationale": "Controls only a receiver-owned terminal bound to the approved caller and connection",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hostTerminal.resize"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:hostTerminal.resize),workspace-member),allOf(capability(code,service:hostTerminal.resize),workspace-member))",
+      "r3b": {
+        "review": "connection-owned-host-terminal-control",
+        "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+      },
+      "capability": "service:hostTerminal.resize",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostTerminal.write",
+      "rpcPlane": "host-service",
+      "owner": "hostTerminal",
+      "method": "write",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "host-terminal.session",
+      "reviewRationale": "Controls only a receiver-owned terminal bound to the approved caller and connection",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hostTerminal.write"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:hostTerminal.write),workspace-member),allOf(capability(code,service:hostTerminal.write),workspace-member))",
+      "r3b": {
+        "review": "connection-owned-host-terminal-control",
+        "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+      },
+      "capability": "service:hostTerminal.write",
       "parityAssertion": "generated-census:host-authority"
     },
     {

@@ -1,5 +1,7 @@
 # Read-only mode
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Read-only product semantics remain. RPC delivery metadata alone is not native confinement; U4 binds restrictions to enforced runtime and filesystem authority.
+
 A dispatcher-enforced containment: a caller can request that a single service call —
 or a whole eval run / agent session — be **read-only**, in which case the server
 dispatcher refuses any method not declared `access.sensitivity: "read"`. Default-deny:

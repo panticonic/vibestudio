@@ -1,5 +1,7 @@
 # Local Models Extension — Design
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. Model product behavior remains. GPU, external files, secrets, networking and native-process confinement are governed by the canonical plan.
+
 Local LLM inference as a first-class provider, delivered as a workspace extension
 (`@workspace-extensions/local-models`) that installs and supervises **llama.cpp**,
 auto-tunes it to the host hardware, exposes local models through the existing pi-ai

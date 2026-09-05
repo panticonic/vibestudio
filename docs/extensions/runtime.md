@@ -1,5 +1,7 @@
 # Extension Runtime Contract
 
+> Isolation planning (2026-09-05): [Cross-platform isolation](../isolation-plan.md) is canonical for isolation architecture, implementation order and acceptance gates. This runtime contract does not establish OS confinement by itself. Native execution and resource boundaries are implemented through U2–U4.
+
 Vibestudio extensions are workspace packages under `workspace/extensions/` with a
 `vibestudio.extension` manifest block. The build output is an ESM bundle that runs
 in a Node child process, not in the browser or a workerd isolate.

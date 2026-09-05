@@ -71,6 +71,7 @@ import {
 import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
 import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
+import { ProcessSessionChannel } from "./rpcServer/processSessionChannel.js";
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { operationSubstanceForAuthority } from "@vibestudio/shared/approvals";
@@ -1257,12 +1258,16 @@ export class RpcServer {
       parentRequestId?: string;
       causalParent?: import("@vibestudio/rpc").RpcCausalParent;
     },
-    extras: Omit<ServiceContext, "caller" | "connectionId" | "wsClient" | "chainCaller"> = {},
+    extras: Omit<
+      ServiceContext,
+      "caller" | "connectionId" | "connectionSignal" | "wsClient" | "chainCaller"
+    > = {},
     invocationCaller: VerifiedCaller = client.caller
   ): ServiceContext {
     const ctx: ServiceContext = {
       caller: invocationCaller,
       connectionId: client.connectionId,
+      connectionSignal: this.connections.connectionSignal(client),
       wsClient: client,
       ...extras,
     };
@@ -1543,6 +1548,19 @@ export class RpcServer {
     });
   }
   private handlersInitialized = false;
+
+  /** Attach only a process created by this workspace's native lifecycle owner.
+   * It enters the same authentication, dispatch and revocation machinery as
+   * the network carriers, without requiring host-loopback access. */
+  attachNativeProcess(
+    process: import("@vibestudio/process-adapter").ProcessAdapter,
+    credential: string
+  ): () => void {
+    this.initHandlers();
+    const channel = new ProcessSessionChannel(process, credential);
+    this.handleConnection(channel);
+    return () => channel.close(1001, "Native lifecycle owner retired the session");
+  }
 
   private handleConnection(
     ws: RpcSessionChannel,
