@@ -112,6 +112,8 @@ describe("npm CLI packaging", () => {
     const packageRoot = path.join(appRoot, "package");
     mkdirSync(path.join(sourceRoot, "dist", "node", "linux-x64", "bin"), { recursive: true });
     writeFileSync(path.join(sourceRoot, "dist", "node", "linux-x64", "bin", "node"), "node");
+    if (process.platform !== "win32")
+      fs.symlinkSync("node", path.join(sourceRoot, "dist", "node", "linux-x64", "bin", "npm"));
     writeFileSync(path.join(sourceRoot, "dist", "node", "linux-x64", "runtime.json"), "{}");
     try {
       stageNodeRuntimeArtifacts(packageRoot, {
@@ -123,6 +125,11 @@ describe("npm CLI packaging", () => {
       expect(
         fs.existsSync(path.join(packageRoot, "dist", "node", "linux-x64", "runtime.json"))
       ).toBe(true);
+      if (process.platform !== "win32") {
+        const npmLink = path.join(packageRoot, "dist", "node", "linux-x64", "bin", "npm");
+        expect(fs.lstatSync(npmLink).isSymbolicLink()).toBe(true);
+        expect(fs.readlinkSync(npmLink)).toBe("node");
+      }
     } finally {
       fs.rmSync(appRoot, { recursive: true, force: true });
     }
