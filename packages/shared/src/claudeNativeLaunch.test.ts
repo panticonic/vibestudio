@@ -10,15 +10,8 @@ function canRunMxc(): boolean {
   return true;
 }
 
-const launcher = path.resolve(
-  "dist/mxc",
-  `${process.platform}-${process.arch}`,
-  process.platform === "win32"
-    ? "wxc-exec.exe"
-    : process.platform === "darwin"
-      ? "mxc-exec-mac"
-      : "lxc-exec"
-);
+// This optional execution probe exercises the Linux read-only mount contract.
+const launcher = path.resolve("dist/mxc", `linux-${process.arch}`, "lxc-exec");
 
 describe("prepareClaudeNativeLaunch", () => {
   const roots: string[] = [];
@@ -26,35 +19,53 @@ describe("prepareClaudeNativeLaunch", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("declares network-capable linked-provider policy with explicit filesystem resources", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "claude-mxc-policy-"));
+  it("compiles the native platform contract with explicit profile and runtime resources", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "claude-native-policy-"));
     roots.push(root);
     const profileDir = path.join(root, "profile");
     const contextDirectory = path.join(root, "context");
+    const platform = process.platform;
+    if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
+      throw new Error(`Unsupported test platform: ${platform}`);
+    const executable = path.join(root, "runtime", platform === "win32" ? "claude.exe" : "claude");
+    const args = ["", "argument with ' and $shell", 'quote"and&operator', "trailing\\"];
+    const installedLauncher = path.join(root, "installed", "mxc");
     const launch = prepareClaudeNativeLaunch({
-      argv: ["/runtime/claude", "argument with ' and $shell"],
+      argv: [executable, ...args],
       profileDir,
       contextDirectory,
-      installation: { platform: "linux", mechanism: "mxc-process", launcher: "/installed/mxc" },
-      readPaths: ["/runtime"],
-      launchEnv: {},
+      installation:
+        platform === "win32"
+          ? { platform, mechanism: "host-process" }
+          : { platform, mechanism: "mxc-process", launcher: installedLauncher },
+      readPaths: [path.dirname(executable)],
+      launchEnv: { VIBESTUDIO_ENTITY_ID: "entity", ANTHROPIC_API_KEY: "unprovisioned-secret" },
     });
-    const config = JSON.parse(Buffer.from(launch.args[1]!, "base64").toString());
-    expect(launch.command).toBe("/installed/mxc");
-    expect(config.filesystem).toEqual({
-      readonlyPaths: ["/runtime", contextDirectory],
-      readwritePaths: [profileDir],
-    });
-    expect(config.network).toEqual({
-      defaultPolicy: "allow",
-      allowLocalNetwork: true,
-    });
-    expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
-    expect(config.process.commandLine).toContain("$shell");
-    expect(config.process.env).toContain(`TMPDIR=${path.join(profileDir, "tmp")}`);
-    expect(launch.env["HOME"]).toBe(process.env["HOME"]);
-    expect(launch.env["TMPDIR"]).toBe(process.env["TMPDIR"]);
-    expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
+    if (platform === "win32") {
+      expect(launch.command).toBe(executable);
+      expect(launch.args).toEqual(args);
+      expect(launch.env["HOME"]).toBe(path.join(profileDir, "home"));
+      expect(launch.env["TMPDIR"]).toBe(path.join(profileDir, "tmp"));
+      expect(launch.env["VIBESTUDIO_ENTITY_ID"]).toBe("entity");
+      expect(launch.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    } else {
+      const config = JSON.parse(Buffer.from(launch.args[1]!, "base64").toString());
+      expect(launch.command).toBe(installedLauncher);
+      expect(config.filesystem).toEqual({
+        readonlyPaths: [path.dirname(executable), contextDirectory],
+        readwritePaths: [profileDir, ...(platform === "darwin" ? ["/dev"] : [])],
+      });
+      expect(config.network).toEqual({ defaultPolicy: "allow", allowLocalNetwork: true });
+      expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
+      expect(config.process.env).toContain(`TMPDIR=${path.join(profileDir, "tmp")}`);
+      expect(config.process.env).toContain("VIBESTUDIO_ENTITY_ID=entity");
+      expect(config.process.env).not.toContain("ANTHROPIC_API_KEY=unprovisioned-secret");
+      expect(config.process.commandLine).toContain("$shell");
+      expect(launch.env["HOME"]).toBe(process.env["HOME"]);
+      expect(launch.env["TMPDIR"]).toBe(process.env["TMPDIR"]);
+    }
+    expect(existsSync(launch.scratchDirectory)).toBe(true);
+    expect(existsSync(launch.claudeConfigDirectory)).toBe(true);
   });
 
   it("rejects host-root grants and overlapping writable profiles before provisioning", () => {

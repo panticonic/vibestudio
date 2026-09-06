@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       "tests/packageManagerInvocation.test.ts",
       "packages/process-adapter/src/isolation/**/*.test.ts",
+      "packages/shared/src/claudeNativeLaunch.test.ts",
       "packages/shared/src/claudeCredentialExtraction.integration.test.ts",
       "packages/shared/src/npmInstaller.integration.test.ts",
       "src/server/nativeWorkspaceCleanup.integration.test.ts",
