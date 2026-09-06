@@ -156,71 +156,83 @@ describe("buildUnit app builds", () => {
     });
   });
 
-  it("includes declared dynamic startup modules in the initial transfer graph", async () => {
-    const appDir = path.join(workspaceRoot, "apps", "startup-shell");
-    fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(appDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace-apps/startup-shell",
-        version: "0.1.0",
-        private: true,
-        vibestudio: {
-          authority: { provides: [], requests: [] },
-          app: {
-            target: "electron",
-            renderer: "index.ts",
-            capabilities: [],
-            startupModules: ["./App"],
+  it.each(["direct", "symlinked"])(
+    "includes declared dynamic startup modules from %s source in the initial transfer graph",
+    async (sourceLayout) => {
+      if (sourceLayout === "symlinked") {
+        const physicalSource = path.join(root, "physical", "nested", "workspace");
+        fs.mkdirSync(physicalSource, { recursive: true });
+        fs.symlinkSync(
+          physicalSource,
+          workspaceRoot,
+          process.platform === "win32" ? "junction" : "dir"
+        );
+      }
+      const appDir = path.join(workspaceRoot, "apps", "startup-shell");
+      fs.mkdirSync(appDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(appDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace-apps/startup-shell",
+          version: "0.1.0",
+          private: true,
+          vibestudio: {
+            authority: { provides: [], requests: [] },
+            app: {
+              target: "electron",
+              renderer: "index.ts",
+              capabilities: [],
+              startupModules: ["./App"],
+            },
           },
-        },
-      })
-    );
-    fs.writeFileSync(
-      path.join(appDir, "index.ts"),
-      'void import("./App"); void import("./Overlay");\n'
-    );
-    fs.writeFileSync(
-      path.join(appDir, "App.ts"),
-      'import { marker } from "./startup-heavy"; globalThis.name = marker;\n'
-    );
-    fs.writeFileSync(
-      path.join(appDir, "startup-heavy.ts"),
-      'export const marker = "declared-startup-marker";\n'
-    );
-    fs.writeFileSync(
-      path.join(appDir, "Overlay.ts"),
-      'globalThis.name = "optional-overlay-marker";\n'
-    );
-    git(appDir, ["init", "-b", "main"]);
-    git(appDir, ["add", "."]);
-    git(appDir, [
-      "-c",
-      "user.name=Vibestudio Test",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-m",
-      "initial app",
-    ]);
+        })
+      );
+      fs.writeFileSync(
+        path.join(appDir, "index.ts"),
+        'void import("./App"); void import("./Overlay");\n'
+      );
+      fs.writeFileSync(
+        path.join(appDir, "App.ts"),
+        'import { marker } from "./startup-heavy"; globalThis.name = marker;\n'
+      );
+      fs.writeFileSync(
+        path.join(appDir, "startup-heavy.ts"),
+        'export const marker = "declared-startup-marker";\n'
+      );
+      fs.writeFileSync(
+        path.join(appDir, "Overlay.ts"),
+        'globalThis.name = "optional-overlay-marker";\n'
+      );
+      git(appDir, ["init", "-b", "main"]);
+      git(appDir, ["add", "."]);
+      git(appDir, [
+        "-c",
+        "user.name=Vibestudio Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "initial app",
+      ]);
 
-    const graph = discoverPackageGraph(workspaceRoot);
-    const result = await buildUnit(
-      graph.get("@workspace-apps/startup-shell"),
-      "d".repeat(64),
-      graph,
-      workspaceRoot,
-      SOURCE_STATE_HASH
-    );
-    const initial = new Set(result.metadata.bundleReport?.initialArtifacts ?? []);
-    const initialCode = result.artifacts
-      .filter((artifact) => initial.has(artifact.path))
-      .map((artifact) => artifact.content)
-      .join("\n");
+      const graph = discoverPackageGraph(workspaceRoot);
+      const result = await buildUnit(
+        graph.get("@workspace-apps/startup-shell"),
+        "d".repeat(64),
+        graph,
+        workspaceRoot,
+        SOURCE_STATE_HASH
+      );
+      const initial = new Set(result.metadata.bundleReport?.initialArtifacts ?? []);
+      const initialCode = result.artifacts
+        .filter((artifact) => initial.has(artifact.path))
+        .map((artifact) => artifact.content)
+        .join("\n");
 
-    expect(initialCode).toContain("declared-startup-marker");
-    expect(initialCode).not.toContain("optional-overlay-marker");
-  });
+      expect(initialCode).toContain("declared-startup-marker");
+      expect(initialCode).not.toContain("optional-overlay-marker");
+    }
+  );
 
   it("builds browser-viewable document and media assets with inline content types", async () => {
     const appDir = path.join(workspaceRoot, "apps", "asset-viewer");

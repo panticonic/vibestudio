@@ -11,6 +11,7 @@ export default defineConfig({
       "src/server/claudeProfileRetirement.integration.test.ts",
       "src/server/nativeNetwork.integration.test.ts",
       "src/server/nativeWorkspaceRuntime.integration.test.ts",
+      "src/server/storage/blobCas.test.ts",
     ],
     fileParallelism: false,
     testTimeout: 30_000,

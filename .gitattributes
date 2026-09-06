@@ -2,3 +2,8 @@
 native/isolation/** text eol=lf
 scripts/build-native-isolation.mjs text eol=lf
 scripts/native-isolation-artifacts.mjs text eol=lf
+
+# Canonical manifests are compared byte-for-byte after every checkout,
+# including the external Base checkout used by Windows acceptance jobs.
+*.yml text eol=lf
+*.yaml text eol=lf

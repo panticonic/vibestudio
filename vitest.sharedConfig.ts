@@ -50,6 +50,13 @@ export const vitestSharedConfig = {
         find: /^react-native$/,
         replacement: path.resolve(__dirname, "tests/stubs/reactNative.ts"),
       },
+      // The process-adapter package is consumed from source in host and
+      // userland Vitest projects. Its MXC subpath is intentionally a source
+      // export during tests because the package dist tree is not built first.
+      {
+        find: /^@vibestudio\/process-adapter\/mxc$/,
+        replacement: path.resolve(__dirname, "packages/process-adapter/src/isolation/mxc.ts"),
+      },
     ],
     dedupe: ["react", "react-dom"],
   },

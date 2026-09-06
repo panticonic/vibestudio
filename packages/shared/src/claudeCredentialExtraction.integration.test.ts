@@ -21,11 +21,18 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
-  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "claude-credential-extraction-")));
+  // Match materializeClaudeLaunch's native realpath boundary. The JavaScript
+  // realpathSync implementation preserves Windows component spelling while
+  // promises.realpath/native resolve the filesystem's canonical spelling.
+  const root = realpathSync.native(
+    mkdtempSync(path.join(os.tmpdir(), "claude-credential-extraction-"))
+  );
   roots.push(root);
-  const profileDir = path.join(root, "profile");
-  mkdirSync(profileDir);
-  const metadata = lstatSync(profileDir, { bigint: true });
+  const staging = path.join(root, ".profile-stage");
+  mkdirSync(staging);
+  const metadata = lstatSync(staging, { bigint: true });
+  renameSync(staging, path.join(root, "profile"));
+  const profileDir = realpathSync.native(path.join(root, "profile"));
   return {
     root,
     profileDir,

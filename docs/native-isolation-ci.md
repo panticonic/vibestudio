@@ -111,9 +111,30 @@ implementation enumerates `/dev` to resolve that name. MXC 0.8.0's stock
 [`nestedPty` policy](https://github.com/microsoft/mxc/blob/7dac1a952f0c9ad13f0a4cb089c4e0e8b3e0013a/src/backends/seatbelt/common/src/profile_builder.rs)
 permits terminal devices but omits directory enumeration. Its public filesystem
 configuration cannot grant enumeration alone: a read grant to `/dev` also grants
-device contents. The application deliberately permits read-only `/dev` access
-on macOS to preserve normal terminals using stock MXC. Device reads remain subject
-to the account's normal OS permissions; this grants neither root privileges nor
-additional filesystem writes. This is an accepted device-access tradeoff in the
-workspace-code containment boundary. The controlling-terminal and resize tests
-remain required, alongside the private-file and immutable-resource denial tests.
+device contents. A subsequent hosted run established that `readonlyPaths: ["/dev"]`
+also emits a write denial that overrides MXC's normal terminal and null-device
+write grants. It therefore does not preserve working terminals. The controlling-
+terminal and resize tests remain required; this policy is not accepted as working.
+Normal account-level device access or a narrower upstream MXC enumeration rule
+must resolve this before macOS acceptance can pass.
+
+## Native runtime compatibility
+
+Windows console Node imports USER32. MXC's `ui.disable` enables the Win32k
+system-call mitigation and prevents that DLL from initializing (guest exit
+`0xC0000142` before JavaScript runs). Windows guests therefore keep UI system
+calls available. Stock MXC still applies its job restrictions on clipboard,
+external UI handles, global atoms, desktop switching, logoff, and system-setting
+changes. It uses the shared `winsta0\\default` desktop; this is not a private
+desktop. The requested injection restriction depends on OS support and is not
+enforced by MXC on builds older than 26100. Filesystem confinement is unchanged.
+
+On macOS, CoreFoundation's installed Electron startup performs libc account
+lookup. The Seatbelt policy allows the `com.apple.system.opendirectoryd.libinfo`
+Mach service for that operation, without enabling MXC's keychain access.
+
+Workspace server shutdown waits for its owned child to exit and attempts process-
+group cleanup. Descendant termination remains best effort: children can create
+new sessions, and a macOS group containing only zombies can return `EPERM`.
+Cleanup diagnostics do not claim proof of termination or prevent an otherwise
+orderly shutdown or workspace restart.

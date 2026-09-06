@@ -2662,40 +2662,27 @@ export async function handleWorkspaceChildExit(
   }
 }
 
-/** Kill and prove absence of the exact detached process group owned by a child. */
+/** Best-effort cleanup of the detached process group after its owner exits.
+ *
+ * The child exit event proves that the workspace server stopped. Descendants
+ * may create their own sessions, and macOS can return EPERM for a group with
+ * only zombies. Neither group probing nor a successful signal proves tree
+ * termination. Cleanup must not turn an orderly exit into a failed restart.
+ */
 export async function reapWorkspaceChildProcessGroup(
   child: ChildProcess,
-  deps: ProcessSignalDeps & {
-    now?: () => number;
-    pause?: (ms: number) => Promise<void>;
-    timeoutMs?: number;
-  } = {}
+  deps: ProcessSignalDeps & { warn?: (message: string) => void } = {}
 ): Promise<void> {
   const platform = deps.platform ?? process.platform;
   const pid = child.pid;
   if (platform === "win32" || !Number.isInteger(pid) || (pid ?? 0) <= 0) return;
-  const killProcess = deps.killProcess ?? process.kill;
   try {
-    killProcess(-(pid as number), "SIGKILL");
+    (deps.killProcess ?? process.kill)(-(pid as number), "SIGKILL");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-    throw error;
-  }
-
-  const now = deps.now ?? Date.now;
-  const pause = deps.pause ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline = now() + (deps.timeoutMs ?? 5_000);
-  while (true) {
-    try {
-      killProcess(-(pid as number), 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-      throw error;
-    }
-    if (now() >= deadline) {
-      throw new Error(`Workspace child process group ${pid} survived SIGKILL`);
-    }
-    await pause(25);
+    (deps.warn ?? console.warn)(
+      `[Hub] Workspace child ${pid} stopped; descendant cleanup is unverified: ${String(error)}`
+    );
   }
 }
 

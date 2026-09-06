@@ -2741,8 +2741,10 @@ async function buildPanel(
     fs.writeFileSync(entryFile, panelTestEntry(outdir, env.sourcePath, runtimeTest));
   }
 
-  // Read extracted manifest for ref-correct build decisions
-  const panelSourcePath = path.join(sourceRoot, node.relativePath);
+  // esbuild identifies inputs by their physical paths. Keep the package root
+  // used for manifest-relative startup modules in that same namespace (e.g.
+  // macOS /var and /private/var name the same materialized source directory).
+  const panelSourcePath = fs.realpathSync(env.sourcePath);
   const extractedPkgPath = path.join(panelSourcePath, "package.json");
   const pkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
   const extractedManifest = pkg.vibestudio ?? {};
