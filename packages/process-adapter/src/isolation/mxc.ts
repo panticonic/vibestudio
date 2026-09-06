@@ -87,13 +87,13 @@ export function compileMxcLaunch(
       timeout: 0,
     },
     filesystem: {
-      // macOS ttyname() enumerates /dev to attach a controlling terminal.
-      // Stock MXC expresses this as a recursive read grant. Device reads remain
-      // subject to the owner's OS permissions; no additional writes are granted.
-      readonlyPaths: [
-        ...new Set([...input.readPaths, ...(input.platform === "darwin" ? ["/dev"] : [])]),
+      readonlyPaths: [...input.readPaths],
+      // Account-level device access is intentional on macOS: ttyname() needs
+      // enumeration and terminals need writes. A read-only /dev rule overrides
+      // MXC's terminal write permissions and breaks controlling-terminal setup.
+      readwritePaths: [
+        ...new Set([...input.writePaths, ...(input.platform === "darwin" ? ["/dev"] : [])]),
       ],
-      readwritePaths: [...input.writePaths],
     },
     // The supported stock open-network shape shares Linux's host network.
     // Directional ingress fields select filtered namespaces and cannot express

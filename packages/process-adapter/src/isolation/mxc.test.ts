@@ -92,6 +92,10 @@ describe("stock MXC adapter", () => {
           keychainAccess: false,
           extraMachLookups: ["com.apple.system.opendirectoryd.libinfo"],
         });
+      expect(result.filesystem).toEqual({
+        readonlyPaths: [],
+        readwritePaths: platform === "darwin" ? ["/dev"] : [],
+      });
     }
   );
 
