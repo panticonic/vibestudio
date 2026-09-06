@@ -25,7 +25,7 @@ const path = require('node:path');
 const tool = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 if (tool === 'uname') { process.stdout.write('Darwin\\n'); process.exit(0); }
-if (tool === 'node') { process.stdout.write(process.env.FIXTURE_ELECTRON); process.exit(0); }
+if (tool === 'node') { fs.writeFileSync(args.at(-1), process.env.FIXTURE_ELECTRON); process.stdout.write('Downloading Electron binary...'); process.exit(0); }
 const safe = args.map((arg,i) => ['-p','-w'].includes(args[i-1]) ? '<redacted>' : arg);
 fs.appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify(safe)+'\\n');
 if (args[0] === process.env.FIXTURE_FAILURE) process.exit(9);
