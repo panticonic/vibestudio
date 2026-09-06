@@ -35,6 +35,7 @@ import {
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
+import { createMacosTestKeychain } from "./macos-test-keychain.mjs";
 import {
   formatDesktopDiagnostics,
   unexpectedDesktopDiagnostics,
@@ -1213,6 +1214,7 @@ async function main() {
   let electronApp = null;
   let cleanedUp = false;
   let tempRoot = "";
+  let desktopEnvironment;
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = async () => {
@@ -1245,6 +1247,7 @@ async function main() {
     try {
       await fsp.unlink(options.readyFile);
     } catch {}
+    desktopEnvironment?.dispose?.();
     if (tempRoot) {
       await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -1262,7 +1265,10 @@ async function main() {
       await fsp.unlink(options.readyFile);
     } catch {}
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
-    const desktopEnvironment = await startEphemeralLinuxSecretService(tempRoot, children);
+    desktopEnvironment =
+      process.platform === "darwin"
+        ? createMacosTestKeychain({ home: path.join(tempRoot, "home"), electronBinary })
+        : await startEphemeralLinuxSecretService(tempRoot, children);
 
     // 1. Start the same remote-serve launcher users run. No relay override is
     // supplied, so this exercises the production public-relay defaults.
