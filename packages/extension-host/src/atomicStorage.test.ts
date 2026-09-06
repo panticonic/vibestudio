@@ -17,14 +17,19 @@ describe("replaceExtensionStorageFile", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("atomically replaces a regular file with synced private bytes", async () => {
+  it("atomically replaces a regular file with flushed bytes and platform file permissions", async () => {
     const target = path.join(root, "records", "state.json");
     await fs.writeFile(target, "old", { mode: 0o644 });
 
-    await replaceExtensionStorageFile(root, "records/state.json", "new");
+    await replaceExtensionStorageFile(root, "records/state.json", "new", {
+      beforeRename: async () => {
+        expect(await fs.readFile(target, "utf8")).toBe("old");
+      },
+    });
 
     expect(await fs.readFile(target, "utf8")).toBe("new");
-    expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+    else expect((await fs.stat(target)).mode & 0o200).toBe(0o200);
     expect(await fs.readdir(path.dirname(target))).toEqual(["state.json"]);
   });
 
@@ -45,9 +50,15 @@ describe("replaceExtensionStorageFile", () => {
   });
 
   it("rejects a symlink destination without changing its referent", async () => {
-    const outside = path.join(root, "outside.json");
+    const outsideDirectory = path.join(root, "outside");
+    await fs.mkdir(outsideDirectory);
+    const outside = path.join(outsideDirectory, "value.json");
     await fs.writeFile(outside, "outside");
-    await fs.symlink(outside, path.join(root, "records", "state.json"));
+    await fs.symlink(
+      process.platform === "win32" ? outsideDirectory : outside,
+      path.join(root, "records", "state.json"),
+      process.platform === "win32" ? "junction" : "file"
+    );
 
     await expect(
       replaceExtensionStorageFile(root, "records/state.json", "replacement")
@@ -62,15 +73,23 @@ describe("replaceExtensionStorageFile", () => {
     ).rejects.toMatchObject({ code: "EINVAL" });
 
     await fs.mkdir(path.join(root, "real"));
-    await fs.symlink(path.join(root, "real"), path.join(root, "linked"));
-    await expect(replaceExtensionStorageFile(root, "linked/state.json", "replacement")).rejects.toMatchObject({
+    await fs.symlink(
+      path.join(root, "real"),
+      path.join(root, "linked"),
+      process.platform === "win32" ? "junction" : "dir"
+    );
+    await expect(
+      replaceExtensionStorageFile(root, "linked/state.json", "replacement")
+    ).rejects.toMatchObject({
       code: "EACCES",
     });
   });
 
   it("rejects paths outside the private storage root", async () => {
-    await expect(replaceExtensionStorageFile(root, "../escape.json", "nope")).rejects.toMatchObject({
-      code: "EACCES",
-    });
+    await expect(replaceExtensionStorageFile(root, "../escape.json", "nope")).rejects.toMatchObject(
+      {
+        code: "EACCES",
+      }
+    );
   });
 });

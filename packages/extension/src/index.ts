@@ -368,7 +368,8 @@ export interface ExtensionContext {
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
     readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
     writeFile(path: string, data: string | Uint8Array): Promise<void>;
-    /** Durably replace one regular file with an atomic same-directory name switch. */
+    /** Atomically replace a regular file after flushing its bytes. Unix also
+     * flushes the parent directory; Windows has no directory-fsync guarantee. */
     replaceFile(path: string, data: string | Uint8Array): Promise<void>;
     rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void>;
     readdir(path?: string): Promise<string[]>;
