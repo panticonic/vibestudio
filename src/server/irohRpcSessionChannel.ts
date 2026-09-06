@@ -128,18 +128,26 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
         ...(reason === undefined ? {} : { reason }),
         terminal: code !== undefined && code >= 4000,
       })
-      .finally(() => this.fireClosed(code, reason));
+      .then(
+        () => this.fireClosed(code, reason),
+        (error) => {
+          this.logCloseNotificationFailure(error);
+          this.fireClosed(code, reason);
+        }
+      );
   }
 
   terminate(): void {
     if (this.state !== OPEN) return;
-    void this.options.writeControl({
-      t: IROH_SESSION_CLOSED,
-      sid: this.options.sid,
-      code: 1006,
-      reason: "terminated",
-      terminal: true,
-    });
+    void this.options
+      .writeControl({
+        t: IROH_SESSION_CLOSED,
+        sid: this.options.sid,
+        code: 1006,
+        reason: "terminated",
+        terminal: true,
+      })
+      .catch((error) => this.logCloseNotificationFailure(error));
     this.fireClosed(1006, "terminated");
   }
 
@@ -479,6 +487,17 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
       settle();
       throw error;
     });
+  }
+
+  private logCloseNotificationFailure(error: unknown): void {
+    // The peer can retire the physical connection as soon as it receives an
+    // authentication rejection. Failure to send the subsequent close notice
+    // must still retire the local logical session.
+    this.options.log?.(
+      `Iroh session ${this.options.sid} close notification failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 
   private fireClosed(code?: number, reason?: string): void {

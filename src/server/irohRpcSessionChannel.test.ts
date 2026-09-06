@@ -142,3 +142,44 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
     });
   });
 });
+
+describe("IrohRpcSessionChannel close notification ownership", () => {
+  it.each(["close", "terminate"] as const)(
+    "retires locally when %s races a peer connection shutdown",
+    async (operation) => {
+      let rejectWrite!: (error: Error) => void;
+      const write = new Promise<void>((_resolve, reject) => {
+        rejectWrite = reject;
+      });
+      const onClosed = vi.fn();
+      const log = vi.fn();
+      const channel = new IrohRpcSessionChannel({
+        sid: "replay",
+        connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+        writeControl: vi.fn(() => write),
+        onClosed,
+        log,
+      });
+      const onClose = vi.fn();
+      channel.onClose(onClose);
+      if (operation === "close") channel.close(4001, "pairing rejected");
+      else channel.terminate();
+      if (operation === "terminate") expect(onClosed).toHaveBeenCalledOnce();
+      else expect(onClosed).not.toHaveBeenCalled();
+      rejectWrite(new Error("ConnectionLost(ApplicationClosed)"));
+      await vi.waitFor(() =>
+        expect(log).toHaveBeenCalledWith(
+          "Iroh session replay close notification failed: ConnectionLost(ApplicationClosed)"
+        )
+      );
+      expect(channel.readyState).toBe(channel.CLOSED);
+      expect(onClosed).toHaveBeenCalledExactlyOnceWith("replay");
+      expect(onClose).toHaveBeenCalledExactlyOnceWith(
+        operation === "close" ? 4001 : 1006,
+        operation === "close" ? "pairing rejected" : "terminated"
+      );
+      channel.remoteClosed(1006, "physical connection closed");
+      expect(onClosed).toHaveBeenCalledOnce();
+    }
+  );
+});
