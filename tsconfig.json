@@ -55,6 +55,7 @@
       "@vibestudio/identity/*": ["./packages/identity/src/*"],
       "@vibestudio/trajectory-identity": ["./packages/trajectory-identity/src/index.ts"],
       "@vibestudio/process-adapter": ["./packages/process-adapter/src/index.ts"],
+      "@vibestudio/process-adapter/mxc": ["./packages/process-adapter/src/isolation/mxc.ts"],
       "@vibestudio/rpc": ["./packages/rpc/src/index.ts"],
       "@vibestudio/rpc/*": ["./packages/rpc/src/*"],
       "@vibestudio/service-schemas/bindings/*": ["./packages/service-schemas/src/bindings/*"],

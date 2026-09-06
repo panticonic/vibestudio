@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceSandbox } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
+import { prepareNativeRuntime } from "../../../../src/server/nativeRuntimeResources.js";
 
 const owned: WorkspaceSandbox[] = [];
 const directories: string[] = [];
@@ -78,8 +79,8 @@ async function fixture() {
   directories.push(root);
   const runtime = path.join(root, "runtime");
   await mkdir(runtime);
-  const executable = path.join(runtime, platform === "win32" ? "node.exe" : "node");
-  await copyFile(platform === "linux" ? "/usr/bin/node" : process.execPath, executable);
+  const prepared = prepareNativeRuntime({ runtimeRoot: runtime });
+  const { executable } = prepared;
   const installed = fileURLToPath(new URL("../../dist/isolation/", import.meta.url));
   for (const file of ["workspaceChild.js", "control.js"])
     await copyFile(path.join(installed, file), path.join(runtime, file));
@@ -141,9 +142,9 @@ async function fixture() {
       home,
       environment: {
         PATH: runtime,
-        ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {}),
+        ...prepared.environment,
       },
-      read: [runtime],
+      read: prepared.readPaths,
       write: [home],
       sockets: [],
     };

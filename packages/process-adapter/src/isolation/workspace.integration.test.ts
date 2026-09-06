@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceSandbox } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
+import { prepareNativeRuntime } from "../../../../src/server/nativeRuntimeResources.js";
 
 const sandboxes: WorkspaceSandbox[] = [];
 const directories: string[] = [];
@@ -71,8 +72,8 @@ describe("shared workspace sandbox on the native platform", () => {
     await mkdir(path.join(home, "tmp"), { recursive: true });
     const hostCanary = path.join(root, "host-secret");
     await writeFile(hostCanary, "host-only");
-    const executable = path.join(runtime, platform === "win32" ? "node.exe" : "node");
-    await copyFile(platform === "linux" ? "/usr/bin/node" : process.execPath, executable);
+    const prepared = prepareNativeRuntime({ runtimeRoot: runtime });
+    const { executable } = prepared;
     const installedRuntime = await realpath(
       fileURLToPath(new URL("../../dist/isolation", import.meta.url))
     );
@@ -199,16 +200,9 @@ describe("shared workspace sandbox on the native platform", () => {
         home,
         environment: {
           PATH: runtime,
-          ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {}),
+          ...prepared.environment,
         },
-        read: [
-          ...(platform === "linux"
-            ? ["/usr"]
-            : platform === "darwin"
-              ? ["/usr/lib", "/System/Library"]
-              : []),
-          runtime,
-        ],
+        read: prepared.readPaths,
         write: [home],
         sockets: [],
       },
@@ -299,12 +293,8 @@ describe("shared workspace sandbox on the native platform", () => {
         const home = path.join(privateRoot, "state");
         const runtime = path.join(privateRoot, "runtime");
         await mkdir(runtime, { recursive: true });
-        // Each Windows LPAC receives only its own staged closure. Use that same
-        // layout on Unix; no workspace can acquire another workspace's runtime.
-        const executable = path.join(runtime, platform === "win32" ? "node.exe" : "node");
-        // The Linux fixture uses the system ABI closure below. A developer's
-        // Homebrew Node may embed an ELF interpreter outside that closure.
-        await copyFile(platform === "linux" ? "/usr/bin/node" : process.execPath, executable);
+        const prepared = prepareNativeRuntime({ runtimeRoot: runtime });
+        const { executable } = prepared;
         await writeFile(path.join(runtime, "package.json"), '{"type":"module"}');
         for (const name of ["workspaceChild.js", "control.js"]) {
           await copyFile(path.join(installedRuntime, name), path.join(runtime, name));
@@ -387,17 +377,9 @@ describe("shared workspace sandbox on the native platform", () => {
           home,
           environment: {
             PATH: runtime,
-            ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {}),
+            ...prepared.environment,
           },
-          read: [
-            ...(platform === "linux"
-              ? ["/usr"]
-              : platform === "darwin"
-                ? ["/usr/lib", "/System/Library"]
-                : []),
-            runtime,
-            input,
-          ],
+          read: [...prepared.readPaths, input],
           write: [home],
           sockets: [],
         };

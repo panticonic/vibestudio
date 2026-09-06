@@ -15,6 +15,20 @@ function fixture(): string {
 }
 
 describe("installed runtime directory admission", () => {
+  it.runIf(process.platform !== "win32")(
+    "recognizes Darwin shared-cache images without admitting nonexistent filesystem roots",
+    () => {
+      const images = [
+        "/System/Library/Frameworks/VibestudioFixture.framework/Versions/A/VibestudioFixture",
+        "/usr/lib/libVibestudioFixture.dylib",
+      ];
+      expect(collectInstalledRuntimeReadRoots(images, "darwin")).toEqual([]);
+      expect(() => collectInstalledRuntimeReadRoots(images, "linux")).toThrow(/ENOENT/);
+      expect(() =>
+        collectInstalledRuntimeReadRoots([path.join(fixture(), "missing.dylib")], "darwin")
+      ).toThrow(/ENOENT/);
+    }
+  );
   it("retains intermediate loader aliases and physical directory roots", () => {
     const root = fixture();
     for (const directory of ["links", "opt", "store/runtime/bin", "store/runtime/lib"])

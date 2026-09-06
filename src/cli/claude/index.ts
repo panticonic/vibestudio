@@ -229,7 +229,7 @@ export async function spawnClaude(
   const sharedObjects = Array.isArray(report.sharedObjects)
     ? report.sharedObjects
         .filter((value): value is string => typeof value === "string" && path.isAbsolute(value))
-        .flatMap((value) => [path.normalize(value), fs.realpathSync(value)])
+        .map((value) => path.normalize(value))
     : [];
   const confined = confineClaudeReadOnly({
     argv: [executable, ...launch.argv.slice(1)],
