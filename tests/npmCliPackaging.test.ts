@@ -12,7 +12,6 @@ import {
 } from "../scripts/build-npm-packages.mjs";
 import {
   NATIVE_ISOLATION_TARGETS,
-  nativeIsolationTarget,
 } from "../scripts/native-isolation-artifacts.mjs";
 
 describe("npm CLI packaging", () => {
@@ -20,8 +19,6 @@ describe("npm CLI packaging", () => {
     expect(SERVER_RUNTIME_ARTIFACTS).toEqual([
       "dist/server.mjs",
       "dist/fs-disk-worker.cjs",
-      nativeIsolationTarget().artifact,
-      `dist/mxc/${process.platform}-${process.arch}/manifest.json`,
       "dist/browserTransport.js",
       "dist/authority-analysis-worker.mjs",
       "dist/library-lowering-worker.mjs",

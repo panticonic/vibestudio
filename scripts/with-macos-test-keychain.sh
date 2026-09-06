@@ -49,10 +49,13 @@ security list-keychains -d user -s "$keychain_path"
 # Provisioning an exact application ACL prevents a first-use Keychain dialog
 # from blocking the unattended main thread. Never use security's allow-all -A.
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-electron_binary=$(node --input-type=module -e '
+node --input-type=module -e '
   const {resolveElectronExecutableForVibestudio} = await import(process.argv[1]);
-  process.stdout.write(resolveElectronExecutableForVibestudio());
-' "$script_dir/branded-electron.mjs")
+  const {writeFileSync} = await import("node:fs");
+  writeFileSync(process.argv[2], resolveElectronExecutableForVibestudio());
+' "$script_dir/branded-electron.mjs" "$keychain_dir/electron-path"
+electron_binary=$(cat "$keychain_dir/electron-path")
+rm "$keychain_dir/electron-path"
 safe_storage_password=$(openssl rand -base64 16)
 security add-generic-password -a Vibestudio -s 'Vibestudio Safe Storage' \
   -w "$safe_storage_password" -T "$electron_binary" "$keychain_path"

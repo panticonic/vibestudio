@@ -1,5 +1,3 @@
-import { nativeIsolationTarget } from "./native-isolation-artifacts.mjs";
-
 const workerStemByRole = Object.freeze({
   authorityAnalysis: "authority-analysis-worker",
   libraryLowering: "library-lowering-worker",
@@ -30,8 +28,6 @@ export const SERVER_WORKER_ENTRIES = Object.freeze({
 export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/server.mjs",
   "dist/fs-disk-worker.cjs",
-  nativeIsolationTarget().artifact,
-  `${nativeIsolationTarget().artifact.replace(/[^/]+$/, "")}manifest.json`,
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/internal-do.bundle.mjs",

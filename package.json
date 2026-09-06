@@ -181,10 +181,10 @@
     "oxlint": "^1.77.0",
     "oxlint-tsgolint": "7.0.2001",
     "vitest": "^3.2.7",
-    "extract-zip": "2.0.1"
+    "extract-zip": "2.0.1",
+    "@microsoft/mxc-sdk": "0.8.0"
   },
   "dependencies": {
-    "@microsoft/mxc-sdk": "0.8.0",
     "@panticonic/builtin": "workspace:*",
     "@number0/iroh": "1.1.0",
     "@vibestudio/automation": "workspace:*",
