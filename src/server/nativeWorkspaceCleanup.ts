@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
 import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
 import type { WorkspaceTrashRemoval } from "@vibestudio/workspace/loader";
-import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
+import { NATIVE_RUNTIME_CERTIFICATES, prepareNativeRuntime } from "./nativeRuntimeResources.js";
 
 // The write-granted directory is a mount root on Linux. Delete its children in
 // confinement; only the owner can remove that now-empty anchor afterward.
@@ -33,6 +33,11 @@ function removeStagedRuntimes(trashRoot: string): void {
     try {
       for (const file of readdirSync(node)) unlinkSync(path.join(node, file));
       rmdirSync(node);
+    } catch (error) {
+      if (!absent(error)) throw error;
+    }
+    try {
+      unlinkSync(path.join(runtime, NATIVE_RUNTIME_CERTIFICATES));
     } catch (error) {
       if (!absent(error)) throw error;
     }

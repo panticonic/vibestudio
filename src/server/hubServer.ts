@@ -25,6 +25,7 @@ import type {
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { getPhysicalAppPath } from "@vibestudio/shared/runtimePaths";
 import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { readWorkspaceHostLaunchRecord } from "@vibestudio/workspace/hostLaunchRecord";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -2422,7 +2423,7 @@ async function startWorkspaceRuntime(
     launchSet.executable,
     [...(launchSet.historical ? [] : process.execArgv), ...childArgs],
     {
-      cwd: launchSet.appRoot,
+      cwd: getPhysicalAppPath(launchSet.appRoot, ""),
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
       // The hub owns this complete runtime tree. A distinct POSIX process group

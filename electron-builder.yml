@@ -1,5 +1,6 @@
 appId: app.vibestudio.app
 beforePack: ./scripts/stage-electron-native-isolation.mjs
+onNodeModuleFile: ./scripts/electron-runtime-module-files.mjs
 productName: Vibestudio
 
 directories:
@@ -20,7 +21,8 @@ asarUnpack:
   - "package.json"
   # MXC enforcement payloads must be executable outside ASAR.
   - "dist/mxc/**/*"
-  - "dist/fs-disk-worker.cjs"
+  # Worker threads resolve their entries beside the physical server bundle.
+  - "dist/*-worker.cjs"
   # utilityProcess.fork() needs a physical server entry point.
   - "dist/server-electron.cjs"
   # Spawned after startup for low-priority dependency content maintenance.
