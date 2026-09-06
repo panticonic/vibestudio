@@ -102,3 +102,25 @@ it("bounds retained stderr", () => {
   expect(error.message.length).toBeLessThan(17_000);
   expect(error.message.endsWith("last failure")).toBe(true);
 });
+it("identifies drive-root metadata denial without suggesting a drive read grant", () => {
+  const error = formatMxcStartupError({
+    platform: "win32",
+    launcher: "D:\\app\\wxc-exec.exe",
+    error: new Error("closed"),
+    stderr: "Error: EPERM: operation not permitted, lstat 'C:\\'",
+  });
+  expect(error.message).toContain(
+    '"D:\\app\\wxc-host-prep.exe" prepare-system-drive --target C:\\'
+  );
+  expect(error.message).toContain("metadata only");
+});
+it("explains the stock NUL-device repair and its reboot lifetime", () => {
+  const error = formatMxcStartupError({
+    platform: "win32",
+    launcher: "D:\\app\\wxc-exec.exe",
+    error: new Error("closed"),
+    stderr: "Access denied opening \\Device\\Null",
+  });
+  expect(error.message).toContain("prepare-null-device");
+  expect(error.message).toContain("at reboot");
+});

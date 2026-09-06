@@ -90,8 +90,23 @@ export function formatMxcStartupError(input: {
   } else if (input.platform === "darwin") {
     remedy = "Check the installed helper's signing and macOS execution/Seatbelt diagnostics.";
   } else {
-    remedy =
-      "Check the Windows ProcessContainer/ACL diagnostic below. If MXC requests host preparation, use the shipped wxc-host-prep.exe with administrator approval.";
+    const drive = /(?:EPERM|EACCES)[^\n]*(?:lstat|stat) ['"]([A-Za-z]:\\+)['"]/u.exec(
+      evidence
+    )?.[1];
+    const helper = path.win32.join(path.win32.dirname(input.launcher), "wxc-host-prep.exe");
+    if (drive) {
+      remedy =
+        `Windows sandbox drive metadata preparation is missing. With administrator approval, run "${helper}" prepare-system-drive --target ${drive.slice(0, 2)}\\. ` +
+        "This stock MXC prerequisite permits drive-root metadata only, without listing or reading drive contents. Re-run the installer to prepare the system and installation drives.";
+    } else if (
+      /prepare-null-device|(?:access|denied|open).*?(?:\\Device\\Null|\bNUL\b)/iu.test(evidence)
+    ) {
+      remedy =
+        `Windows sandbox NUL-device preparation is missing. With administrator approval, run "${helper}" prepare-null-device. ` +
+        "Windows resets this device policy at reboot, so this preparation may need to be repeated.";
+    } else {
+      remedy = `Check the Windows ProcessContainer/ACL diagnostic below. Re-run the installer or use "${helper}" with administrator approval if MXC reports missing host preparation.`;
+    }
   }
   return new IsolationError(
     `MXC workspace startup failed on ${input.platform} (${input.launcher}` +

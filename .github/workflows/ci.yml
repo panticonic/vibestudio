@@ -88,7 +88,7 @@ jobs:
         run: pnpm test:host-build-without-workspace
 
       - name: Production Electron Node-mode native workspace receiver
-        run: ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron node_modules/vitest/vitest.mjs run src/server/nativeWorkspaceRuntime.integration.test.ts
+        run: ELECTRON_RUN_AS_NODE=1 pnpm exec electron node_modules/vitest/vitest.mjs run src/server/nativeWorkspaceRuntime.integration.test.ts
 
       - name: Linux native Claude launch contract
         run: pnpm vitest run packages/shared/src/claudeReadOnlyLaunch.test.ts
@@ -210,6 +210,18 @@ jobs:
 
       - name: Stage MXC executor payload
         run: node scripts/build-native-isolation.mjs
+
+      - name: Prepare stock MXC Windows prerequisites
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $driveRoots = @("$env:SystemDrive\", "$(Split-Path -Qualifier $env:GITHUB_WORKSPACE)\") | Select-Object -Unique
+          foreach ($driveRoot in $driveRoots) {
+            & ./dist/mxc/win32-x64/wxc-host-prep.exe prepare-system-drive --target $driveRoot
+            if ($LASTEXITCODE -ne 0) { throw "MXC metadata preparation failed for $driveRoot" }
+          }
+          & ./dist/mxc/win32-x64/wxc-host-prep.exe prepare-null-device
+          if ($LASTEXITCODE -ne 0) { throw 'MXC null-device preparation failed.' }
 
       - name: Build production application and headless host
         id: production-build
@@ -338,6 +350,17 @@ jobs:
         run: |
           mkdir installed
           tar -xf candidate/packaged-app.tar -C installed
+      - name: Prepare installed stock MXC Windows prerequisites
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $driveRoots = @("$env:SystemDrive\", "$(Split-Path -Qualifier $env:GITHUB_WORKSPACE)\") | Select-Object -Unique
+          foreach ($driveRoot in $driveRoots) {
+            & ./installed/resources/app.asar.unpacked/dist/mxc/win32-x64/wxc-host-prep.exe prepare-system-drive --target $driveRoot
+            if ($LASTEXITCODE -ne 0) { throw "Installed MXC metadata preparation failed for $driveRoot" }
+          }
+          & ./installed/resources/app.asar.unpacked/dist/mxc/win32-x64/wxc-host-prep.exe prepare-null-device
+          if ($LASTEXITCODE -ne 0) { throw 'Installed MXC null-device preparation failed.' }
       - name: Launch installed desktop and workspace containment smoke
         id: installed-smoke
         run: node scripts/packaged-isolation-smoke.mjs --app "installed/${{ matrix.app }}" --out-dir test-results/packaged-isolation

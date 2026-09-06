@@ -138,3 +138,12 @@ group cleanup. Descendant termination remains best effort: children can create
 new sessions, and a macOS group containing only zombies can return `EPERM`.
 Cleanup diagnostics do not claim proof of termination or prevent an otherwise
 orderly shutdown or workspace restart.
+
+Windows setup uses the shipped `wxc-host-prep` tool with explicit administrator
+approval. Each relevant drive root receives MXC's non-inheriting metadata-only
+ACE; this grants neither directory listing nor file-content access. Setup also
+prepares the NUL device. MXC documents that Windows resets the NUL policy at
+reboot, so installing once is not evidence of working after a reboot. Runtime
+errors identify the corresponding preparation command. CI prepares these stock
+prerequisites before exercising both the runner account and an actual standard
+user, and repeats preparation on the fresh installed-application runner.
