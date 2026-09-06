@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
+import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   createNodeProcessAdapter,
@@ -24,7 +26,9 @@ import type {
 } from "@vibestudio/shared/ws/protocol";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-runtime-"));
+  return fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-runtime-"))
+  );
 }
 
 function waitForMessage<T>(
@@ -50,7 +54,7 @@ function makeEnvelope(
   });
 }
 
-const modes = ["node", ...(process.platform === "linux" ? ["linux-workspace"] : [])];
+const modes = ["node", "native-workspace"] as const;
 describe.each(modes)("extension child runtime (%s)", (mode) => {
   let childRuntimeBundle = "";
   let root: string | null = null;
@@ -140,10 +144,17 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
       VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
     };
-    if (mode === "linux-workspace") {
-      const runtime = fs.realpathSync(
-        fileURLToPath(new URL("../../process-adapter/dist/isolation", import.meta.url))
+    if (mode === "native-workspace") {
+      const appRoot = fs.realpathSync.native(fileURLToPath(new URL("../../../", import.meta.url)));
+      const runtimeRoot = path.join(root, "runtime");
+      fs.mkdirSync(runtimeRoot);
+      const runtime = prepareNativeRuntime({ appRoot, runtimeRoot });
+      const installedWorkspaceRuntime = fileURLToPath(
+        new URL("../../process-adapter/dist/isolation", import.meta.url)
       );
+      for (const file of ["workspaceChild.js", "control.js"])
+        fs.copyFileSync(path.join(installedWorkspaceRuntime, file), path.join(runtimeRoot, file));
+      fs.writeFileSync(path.join(runtimeRoot, "package.json"), '{"type":"module"}');
       const home = path.join(root, "storage");
       fs.mkdirSync(path.join(home, "tmp"), { recursive: true });
       sandbox = await WorkspaceRuntime.start(
@@ -157,20 +168,18 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
             executionDigest: "fixture",
           },
           privateRoot: root,
-          executable: "/usr/bin/node",
+          executable: runtime.executable,
           args: [],
           cwd: home,
           home,
-          environment: { PATH: "/usr/bin:/bin" },
-          read: ["/usr", runtime, childRuntimePath, extensionDir],
+          environment: { PATH: path.dirname(runtime.executable), ...runtime.environment },
+          read: [...runtime.readPaths, childRuntimePath, extensionDir],
           write: [home],
           sockets: [],
         },
         {
-          platform: "linux",
-          mechanism: "mxc-process",
-          launcher: path.resolve("dist/mxc/linux-x64/lxc-exec"),
-          workspaceEntry: path.join(runtime, "workspaceChild.js"),
+          ...getNativeExecutionInstallation(appRoot),
+          workspaceEntry: path.join(runtimeRoot, "workspaceChild.js"),
         }
       );
       proc = sandbox.fork(childRuntimePath, commandEnv);
