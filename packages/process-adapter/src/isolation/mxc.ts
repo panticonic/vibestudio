@@ -104,7 +104,10 @@ export function compileMxcLaunch(
         ? { defaultPolicy: "allow", allowLocalNetwork: true }
         : { egress: { default: "deny" }, ingress: { default: "deny", hostLoopback: "deny" } },
     lifecycle: { destroyOnExit: true, preservePolicy: false },
-    ui: { disable: true, clipboard: "none", injection: false },
+    // Windows console runtimes (including Node) import USER32 during startup.
+    // Disabling win32k prevents DLL initialization; MXC still applies its job
+    // restrictions to clipboard, external UI objects and desktop control.
+    ui: { disable: input.platform !== "win32", clipboard: "none", injection: false },
     ...(input.platform === "win32"
       ? {
           processContainer: {
@@ -117,7 +120,15 @@ export function compileMxcLaunch(
         }
       : {}),
     ...(input.platform === "darwin"
-      ? { seatbelt: { nestedPty: true, keychainAccess: false } }
+      ? {
+          seatbelt: {
+            nestedPty: true,
+            keychainAccess: false,
+            // libc account lookup is used by CoreFoundation while starting
+            // the installed Electron runtime, even in ELECTRON_RUN_AS_NODE.
+            extraMachLookups: ["com.apple.system.opendirectoryd.libinfo"],
+          },
+        }
       : {}),
   };
   return {

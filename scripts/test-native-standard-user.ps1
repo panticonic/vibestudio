@@ -71,8 +71,29 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) 
     @($identity.Groups | ForEach-Object { $_.Value }) -contains 'S-1-5-32-544') {
     throw 'Native tests require an account outside Administrators, not an administrator with a filtered token.'
 }
-$profileRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-$localData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+# Start-Process -Credential loads the account's profile but inherits the
+# launcher's environment. Ask userenv for this token's loaded profile rather
+# than resolving known folders through the elevated runner's environment.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class NativeAcceptanceProfile {
+    [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetUserProfileDirectory(IntPtr token, StringBuilder path, ref uint size);
+}
+"@
+[uint32] $profileSize = 0
+[void][NativeAcceptanceProfile]::GetUserProfileDirectory($identity.Token, $null, [ref]$profileSize)
+if ($profileSize -eq 0) { throw 'Cannot determine the standard-user token profile directory.' }
+$profileBuffer = [Text.StringBuilder]::new([int]$profileSize)
+if (-not [NativeAcceptanceProfile]::GetUserProfileDirectory($identity.Token, $profileBuffer, [ref]$profileSize)) {
+    throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+}
+$profileRoot = $profileBuffer.ToString()
+# This account was just created by this script and has no redirected folders.
+$localData = Join-Path $profileRoot 'AppData\Local'
 $systemRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
 if (-not $profileRoot -or -not $localData -or -not $systemRoot) { throw 'The standard-user profile was not loaded.' }
 # Retain installed tool discovery, while preventing the elevated runner's home,

@@ -24,7 +24,7 @@ describe("blobCas", () => {
     await fsp.rm(rootDir, { recursive: true, force: true });
   });
 
-  it("syncs source bytes before linking and the target directory after linking", async () => {
+  it("flushes bytes before publication and flushes the directory where supported", async () => {
     ensureBlobCasLayout(rootDir);
     const probePath = path.join(rootDir, "tmp", "file-handle-probe");
     const probe = await fsp.open(probePath, "wx");
@@ -41,7 +41,10 @@ describe("blobCas", () => {
     const linkOrder = link.mock.invocationCallOrder[0];
     expect(linkOrder).toBeDefined();
     expect(sync.mock.invocationCallOrder.some((order) => order < linkOrder!)).toBe(true);
-    expect(sync.mock.invocationCallOrder.some((order) => order > linkOrder!)).toBe(true);
+    // Windows FlushFileBuffers supports writable files, not directory handles.
+    expect(sync.mock.invocationCallOrder.some((order) => order > linkOrder!)).toBe(
+      process.platform !== "win32"
+    );
   });
 
   it("applies the same durable publication protocol to already-hashed files", async () => {

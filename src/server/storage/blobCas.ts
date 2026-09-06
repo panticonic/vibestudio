@@ -201,7 +201,9 @@ async function existingBlob(
 }
 
 function syncFileSync(filePath: string): void {
-  const fd = fs.openSync(filePath, "r");
+  // Windows FlushFileBuffers requires a handle with GENERIC_WRITE. Opening
+  // without truncation preserves the inode and bytes being published.
+  const fd = fs.openSync(filePath, process.platform === "win32" ? "r+" : "r");
   try {
     fs.fsyncSync(fd);
   } finally {
@@ -210,7 +212,7 @@ function syncFileSync(filePath: string): void {
 }
 
 async function syncFile(filePath: string): Promise<void> {
-  const handle = await fsp.open(filePath, "r");
+  const handle = await fsp.open(filePath, process.platform === "win32" ? "r+" : "r");
   try {
     await handle.sync();
   } finally {

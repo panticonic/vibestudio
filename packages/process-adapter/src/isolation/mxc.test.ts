@@ -87,7 +87,11 @@ describe("stock MXC adapter", () => {
           capabilities: ["internetClient", "internetClientServer", "privateNetworkClientServer"],
         });
       if (platform === "darwin")
-        expect(result.seatbelt).toEqual({ nestedPty: true, keychainAccess: false });
+        expect(result.seatbelt).toEqual({
+          nestedPty: true,
+          keychainAccess: false,
+          extraMachLookups: ["com.apple.system.opendirectoryd.libinfo"],
+        });
     }
   );
 

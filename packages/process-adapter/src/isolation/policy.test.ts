@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { compileExecution, type ExecutionPolicy } from "./index.js";
+import { windowsEnvironmentValue } from "./windowsEnvironment.js";
 import { validateExecutionPolicy } from "./policy.js";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -98,12 +99,15 @@ describe("resolved execution resource policy", () => {
           leastPrivilege: false,
           capabilities: ["internetClient", "internetClientServer", "privateNetworkClientServer"],
         });
-        expect(result.environment).toMatchObject({
-          PATH: process.env["PATH"],
-          SystemRoot: "C:\\Windows",
-          USERPROFILE: "C:\\Users\\host-owner",
-          LOCALAPPDATA: "C:\\Users\\host-owner\\AppData\\Local",
-        });
+        expect(config.ui).toEqual({ disable: false, clipboard: "none", injection: false });
+        expect(windowsEnvironmentValue(result.environment, "PATH")).toBe(process.env["PATH"]);
+        expect(windowsEnvironmentValue(result.environment, "SystemRoot")).toBe("C:\\Windows");
+        expect(windowsEnvironmentValue(result.environment, "USERPROFILE")).toBe(
+          "C:\\Users\\host-owner"
+        );
+        expect(windowsEnvironmentValue(result.environment, "LOCALAPPDATA")).toBe(
+          "C:\\Users\\host-owner\\AppData\\Local"
+        );
         expect(config.process.env).toContain(`USERPROFILE=${p.home}`);
         expect(config.process.env).toContain(`LOCALAPPDATA=${p.home}\\data`);
         expect(config.process.env.some((entry: string) => entry.includes("host-owner"))).toBe(

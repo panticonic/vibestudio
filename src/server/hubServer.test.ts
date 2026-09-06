@@ -248,7 +248,7 @@ describe("workspace child process-tree ownership", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("reaps the exact detached child process group and proves it disappeared", async () => {
+  it("attempts cleanup of the exact detached child process group", async () => {
     const child = fakeChild();
     const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
     const killProcess = vi.fn((_pid: number, signal?: NodeJS.Signals | number): true => {
@@ -259,7 +259,23 @@ describe("workspace child process-tree ownership", () => {
     await reapWorkspaceChildProcessGroup(child, { platform: "linux", killProcess });
 
     expect(killProcess).toHaveBeenNthCalledWith(1, -4321, "SIGKILL");
-    expect(killProcess).toHaveBeenNthCalledWith(2, -4321, 0);
+    expect(killProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fail an orderly exit when descendant cleanup cannot be verified", async () => {
+    const child = fakeChild({ exitCode: 0 });
+    const warn = vi.fn();
+    const killProcess = vi.fn((): true => {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    });
+    await expect(
+      reapWorkspaceChildProcessGroup(child, {
+        platform: "darwin",
+        killProcess,
+        warn,
+      })
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("descendant cleanup is unverified"));
   });
 
   it("does not signal a child whose OS exit is already recorded", async () => {
