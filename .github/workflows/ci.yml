@@ -273,17 +273,6 @@ jobs:
           path: vibestudio-workspace-base
           persist-credentials: false
 
-      - name: Desktop pairing, approvals, panels, relaunch, and recovery
-        if: ${{ !cancelled() && steps.desktop-base.outcome == 'success' }}
-        shell: bash
-        run: |
-          git -C vibestudio-workspace-base switch -c ci-acceptance-base
-          if [[ "$RUNNER_OS" == macOS ]]; then
-            bash scripts/with-macos-test-keychain.sh node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
-          else
-            node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
-          fi
-
       # Native, desktop and installed acceptance report independently. A failed
       # native assertion still fails this required job and cannot publish a release.
       - name: Assemble packaging input
@@ -321,6 +310,18 @@ jobs:
           path: packaged-app.tar
           if-no-files-found: error
           retention-days: 7
+
+      # Source bootstrap can rebuild dist; capture the production candidate first.
+      - name: Desktop pairing, approvals, panels, relaunch, and recovery
+        if: ${{ !cancelled() && steps.desktop-base.outcome == 'success' }}
+        shell: bash
+        run: |
+          git -C vibestudio-workspace-base switch -c ci-acceptance-base
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            bash scripts/with-macos-test-keychain.sh node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+          else
+            node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+          fi
 
   packaged-acceptance:
     name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})
