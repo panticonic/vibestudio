@@ -13,6 +13,7 @@ export default defineConfig({
       "src/server/nativeWorkspaceCleanup.integration.test.ts",
       "src/server/claudeProfileRetirement.integration.test.ts",
       "src/server/nativeNetwork.integration.test.ts",
+      "src/server/workerdNative.integration.test.ts",
       "src/server/nativeWorkspaceRuntime.integration.test.ts",
       "src/server/storage/blobCas.test.ts",
       "src/server/buildV2/dependencyContentStore.test.ts",
