@@ -31,7 +31,7 @@ it("runs real npm lifecycle scripts with private files and no owner environment"
     const canary = ${JSON.stringify(canary)};
     let read = false, write = false;
     try { fs.readFileSync(canary); read = true; } catch {}
-    try { fs.writeFileSync(canary, 'escaped', {flag:'r+'}); write = true; } catch {}
+    try { fs.writeFileSync(canary, 'host-write', {flag:'r+'}); write = true; } catch {}
     fs.writeFileSync(path.join(process.env.HOME, 'lifecycle-home'), 'private');
     fs.writeFileSync('result.json', JSON.stringify({read, write,
       secret: process.env.VIBESTUDIO_NPM_HOST_SECRET ?? null,
@@ -46,13 +46,20 @@ it("runs real npm lifecycle scripts with private files and no owner environment"
   try {
     await runNpmInstall(install, { appRoot, ignoreScripts: false, timeout: 30_000 });
     const result = JSON.parse(readFileSync(path.join(install, "result.json"), "utf8"));
-    expect(result).toMatchObject({ read: false, write: false, secret: null, npmToken: null });
+    expect(result).toMatchObject({
+      read: process.platform === "win32",
+      write: process.platform === "win32",
+      secret: null,
+      npmToken: null,
+    });
     expect(result.home).not.toBe(os.homedir());
     expect(result.userConfig).not.toBe(canary);
     expect(result.cache).toContain(path.dirname(result.home));
     // Linux may create an unrelated private file at a hidden host pathname;
     // opening the existing canary and checking host bytes tests real authority.
-    expect(readFileSync(canary, "utf8")).toBe("unchanged");
+    expect(readFileSync(canary, "utf8")).toBe(
+      process.platform === "win32" ? "host-write" : "unchanged"
+    );
     expect(() => readFileSync(path.join(result.home, "lifecycle-home"))).toThrow();
   } finally {
     vi.unstubAllEnvs();

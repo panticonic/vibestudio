@@ -1,18 +1,23 @@
 # Native isolation acceptance
 
-The `CI` workflow runs real MXC processes on Linux x64/ARM64, macOS 14 and 26
-(Apple Silicon), and Windows Server 2025 (x64). It builds the production host on
-each platform. Missing executors or unavailable sandbox facilities fail these
-jobs; mocked configuration tests alone cannot satisfy the gate.
+The `CI` workflow tests native workspace execution on Linux x64/ARM64, macOS
+14 and 26 (Apple Silicon), and Windows Server 2025 x64. Linux/macOS run through
+stock MXC; Windows deliberately runs as the app's normal account, without OS
+filesystem, network, clipboard, or process isolation. Windows is not a sandbox
+fallback selected after failure: it is the explicit platform contract.
 
-The native suite covers filesystem denial, workspace sharing, interactive PTYs,
-process lifetime and restart, concurrent owners, offline trash deletion, symlink
-and directory replacement attacks, and Windows ACL restoration. Normal workspace
-networking must connect to a host loopback server and expose a development server
-to the host. Windows connectivity errors are failures, including errors caused by
-AppContainer restrictions. CI does not apply firewall changes or loopback
-exemptions to make those tests pass. The existing application egress proxy remains
-separate and retains its own regression coverage.
+Every platform tests interactive PTYs, process lifecycle/restart, dependency
+installation, cleanup, private runtime environments, and both directions of
+localhost networking. Unix additionally tests filesystem denial, read-only
+resources, offline utility jobs, and adversarial cleanup races. Windows tests
+positively verify host-file access and ordinary networking; those tests must not
+be presented as proof of containment. Workspace code on Windows can access files
+and credentials available to the account, even though secret environment
+variables are not automatically copied into commands.
+
+No Windows administrator setup, AppContainer profiles, host ACL mutations, or
+loopback exemptions are required. The existing application egress proxy remains
+separate and retains its permission and filtering behavior on all platforms.
 
 The Ubuntu 24.04 quality runner keeps its AppArmor hardening enabled. Ubuntu
 restricts unprivileged user namespaces unless the invoking application has an
@@ -26,7 +31,7 @@ AppArmor. Other Linux hosts must provide an equivalent narrowly scoped profile
 when their AppArmor policy denies MXC's user namespace setup.
 
 Linked Claude regression coverage uses synthetic credentials and real MXC for
-credential extraction and profile retirement. Host tests also check session
+credential extraction and profile retirement under the platform execution policy. Host tests also check session
 ownership, connection loss, startup failure, and cleanup retries. Paid-provider
 authentication is outside this CI suite. Linked execution requires Claude Code
 2.1.139 or newer: hooks invoke the installed Vibestudio CLI with direct argument
@@ -36,8 +41,8 @@ Windows also runs the native suite as a temporary standard user. This matters
 because GitHub's Windows hosted runner normally runs with administrative rights.
 The account runner verifies the child identity and token, uses that user's profile
 and temporary directory, and retires its processes, account and profile afterward.
-Its host checkout permission is for the temporary developer account; it does not
-change the MXC AppContainer policy.
+Its checkout permission is for the temporary developer account; the application
+does not alter sandbox ACLs.
 
 The macOS and Windows jobs also run the existing desktop pairing smoke against
 a fresh, locally named Base checkout, covering connection approval, panels,
@@ -57,7 +62,7 @@ installs harness dependencies but never builds the application. This distinguish
 installed-resource failures from a source checkout that happens to work.
 
 The smoke uses the installed Electron executable, GUI entry point, server bundle,
-and MXC payload. It exercises provider-independent startup and workspace
+and the platform native runtime payload. It exercises provider-independent startup and workspace
 containment; it does not invoke a paid model or require provider credentials.
 The pinned Base release must be accessible for real workspace bootstrap. The
 shutdown check requires the actual ephemeral workspace and deletion receipts to
@@ -105,8 +110,8 @@ alternative platform automatically.
 Passing CI establishes the cases tested on those images. It does not establish
 coverage of physical devices, third-party endpoint security, every OS version,
 interactive OS permission prompts, or every extension/provider workflow. Native
-Windows networking failures indicate a product compatibility issue that must be
-resolved or explicitly reconsidered before calling that platform supported.
+Windows networking failures are product compatibility failures, just as they are
+on Unix; host execution must preserve normal developer networking.
 
 ## macOS device access
 
@@ -131,21 +136,12 @@ official archive digest and the complete extracted inventory. Electron and
 standalone server packages retain upstream npm files and relative executable
 symlinks. Extension dependency cache identity includes this Node version.
 
-Npm lifecycle scripts run inside MXC with only their installation tree and
-private home/cache directories writable. Native acceptance executes a real
-lifecycle script and checks host-file denial and cleanup. Ambient host npm
-profiles, registry tokens and Node options are not inherited; authenticated
-private registries require an explicit credential interface before they can be
-supported by this installation path.
-
-Windows console Node imports USER32. MXC's `ui.disable` enables the Win32k
-system-call mitigation and prevents that DLL from initializing (guest exit
-`0xC0000142` before JavaScript runs). Windows guests therefore keep UI system
-calls available. Stock MXC still applies its job restrictions on clipboard,
-external UI handles, global atoms, desktop switching, logoff, and system-setting
-changes. It uses the shared `winsta0\\default` desktop; this is not a private
-desktop. The requested injection restriction depends on OS support and is not
-enforced by MXC on builds older than 26100. Filesystem confinement is unchanged.
+Npm lifecycle scripts use the same platform execution policy, with a private
+home/cache and an explicit environment. Unix restricts writes to the installation
+and private state; Windows has account-level host access. Ambient host npm
+profiles, registry tokens and Node options are not inherited. Authenticated
+private registries require an explicit credential interface for this install
+path; this environment hygiene does not prevent Windows code reading host files.
 
 On macOS, CoreFoundation's installed Electron startup performs libc account
 lookup. The Seatbelt policy allows the `com.apple.system.opendirectoryd.libinfo`
@@ -156,19 +152,3 @@ group cleanup. Descendant termination remains best effort: children can create
 new sessions, and a macOS group containing only zombies can return `EPERM`.
 Cleanup diagnostics do not claim proof of termination or prevent an otherwise
 orderly shutdown or workspace restart.
-
-Windows setup uses the shipped `wxc-host-prep` tool with explicit administrator
-approval. Each relevant drive root receives MXC's non-inheriting metadata-only
-ACE; this grants neither directory listing nor file-content access. Setup also
-prepares the NUL device. MXC documents that Windows resets the NUL policy at
-reboot, so installing once is not evidence of working after a reboot. Runtime
-errors identify the corresponding preparation command. CI prepares these stock
-prerequisites before exercising both the runner account and an actual standard
-user, and repeats preparation on the fresh installed-application runner.
-
-The September 6 Windows Server 2025 run demonstrates that these prerequisites
-are insufficient: Node's path resolution next fails to read metadata at
-`C:\Users`. Stock MXC 0.8.0 exposes recursive filesystem grants and drive-root
-preparation, but no metadata-only ancestor grants. Broad user-directory access
-is not an acceptable substitute. This remains an upstream compatibility blocker,
-and the drive preparation itself took several minutes on the hosted runner.

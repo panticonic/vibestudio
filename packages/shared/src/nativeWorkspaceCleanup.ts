@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
-import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
+import { compileNativeLaunch } from "@vibestudio/process-adapter/native-launch";
+import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
 // The write-granted directory is a mount root on Linux. Delete its children in
@@ -30,7 +30,7 @@ function absent(error: unknown): boolean {
 }
 
 /** These are host-created, guest-readonly runtime distributions. The discarded
- * workspace itself is removed only by the confined job below. */
+ * workspace itself is removed by the platform execution job below. */
 function removeStagedRuntimes(trashRoot: string): void {
   for (const name of readdirSync(trashRoot)) {
     if (name.startsWith(".runtime-"))
@@ -39,13 +39,13 @@ function removeStagedRuntimes(trashRoot: string): void {
 }
 
 /** Catalog-owned effect. A surviving guest may race deletion, so recursive
- * traversal runs with MXC's restricted filesystem authority, never the host's.
+ * traversal is confined by MXC on Unix. Windows uses normal host authority.
  * Failure retains the receipt and runtime staging for the existing retry path. */
 export function nativeWorkspaceCleanup(appRoot: string): (target: string) => void {
   const platform = process.platform;
   if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
     throw new Error(`Unsupported workspace cleanup platform: ${platform}`);
-  const launcher = getMxcExecutable(appRoot);
+  const installation = getNativeExecutionInstallation(appRoot);
   return (target) => {
     if (!path.isAbsolute(target) || !path.basename(target).startsWith(".delete-"))
       throw new Error("Expected owned workspace trash");
@@ -77,9 +77,8 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
       const runtimeRoot = mkdtempSync(path.join(trashRoot, ".runtime-"));
       const runtime = prepareNativeRuntime({ appRoot: appRoot, runtimeRoot, platform });
       console.log(`[NativeCleanup] Runtime prepared (${Date.now() - startedAt}ms)`);
-      const launch = compileMxcLaunch({
-        platform,
-        launcher,
+      const launch = compileNativeLaunch({
+        installation,
         containerId: `vibestudio-cleanup-${randomUUID()}`,
         argv: [runtime.executable, "-e", CLEANUP_SCRIPT],
         cwd: workspace,
@@ -94,7 +93,7 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
         network: "deny",
       });
       try {
-        console.log("[NativeCleanup] Confined deletion started");
+        console.log("[NativeCleanup] Native deletion started");
         execFileSync(launch.command, launch.args, {
           cwd: launch.cwd,
           env: launch.environment,
@@ -104,7 +103,7 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
           killSignal: "SIGKILL",
           maxBuffer: 64 * 1024,
         });
-        console.log(`[NativeCleanup] Confined deletion completed (${Date.now() - startedAt}ms)`);
+        console.log(`[NativeCleanup] Native deletion completed (${Date.now() - startedAt}ms)`);
       } catch (error) {
         const failure = error as NodeJS.ErrnoException & {
           stderr?: Buffer;

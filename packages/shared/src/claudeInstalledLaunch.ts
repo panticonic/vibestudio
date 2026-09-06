@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import { assertMxcPrerequisites } from "@vibestudio/process-adapter/mxc";
-import { resolveClaudeRuntimeCommand, confineClaudeReadOnly } from "./claudeReadOnlyLaunch.js";
+import { assertNativePrerequisites } from "@vibestudio/process-adapter/native-launch";
+import { resolveClaudeRuntimeCommand, prepareClaudeNativeLaunch } from "./claudeNativeLaunch.js";
 import {
   collectInstalledRuntimeReadRoots,
-  getMxcExecutable,
+  getNativeExecutionInstallation,
   getPhysicalAppPath,
   getInstalledNodeRuntime,
 } from "./runtimePaths.js";
@@ -33,23 +33,24 @@ export async function prepareInstalledClaudeLaunch(
   if (!appRoot) throw new Error("Linked Claude requires the installed Vibestudio launcher");
   const executableAlias = resolveClaudeRuntimeCommand(launch.argv[0]!);
   const executable = fs.realpathSync(executableAlias);
-  const confined = confineClaudeReadOnly({
+  const confined = prepareClaudeNativeLaunch({
     argv: [executable, ...launch.argv.slice(1)],
-    launcher: getMxcExecutable(appRoot),
+    installation: getNativeExecutionInstallation(appRoot),
     readPaths: [
       ...new Set([
         getPhysicalAppPath(appRoot, ""),
-        ...collectInstalledRuntimeReadRoots([executableAlias]),
-        ...installedNodeReadPaths(appRoot),
+        ...(process.platform === "win32"
+          ? []
+          : collectInstalledRuntimeReadRoots([executableAlias])),
+        ...(process.platform === "win32" ? [] : installedNodeReadPaths(appRoot)),
       ]),
     ],
     launchEnv: launch.env,
     profileDir: launch.profileDir,
     contextDirectory,
   });
-  await assertMxcPrerequisites({
-    platform: process.platform as "linux" | "darwin" | "win32",
-    launcher: confined.command,
+  await assertNativePrerequisites({
+    installation: getNativeExecutionInstallation(appRoot),
     environment: confined.env,
   });
   return confined;

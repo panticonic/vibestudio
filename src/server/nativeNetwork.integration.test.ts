@@ -6,8 +6,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertMxcPrerequisites, compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
-import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
+import {
+  assertNativePrerequisites,
+  compileNativeLaunch,
+} from "@vibestudio/process-adapter/native-launch";
+import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
 const roots: string[] = [];
@@ -68,7 +71,7 @@ function request(port: number): Promise<{ connected: boolean; body?: string; err
   });
 }
 
-it("permits developer HTTP clients/listeners and keeps internal cleanup offline", async () => {
+it("exercises host networking on Windows and MXC network policy on Unix", async () => {
   const platform = process.platform;
   if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
     throw new Error(`Unsupported MXC target: ${platform}`);
@@ -80,7 +83,7 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
   mkdirSync(home);
   const appRoot = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
   const runtime = prepareNativeRuntime({ appRoot, runtimeRoot, platform });
-  const launcher = getMxcExecutable(appRoot);
+  const installation = getNativeExecutionInstallation(appRoot);
   let hostRequests = 0;
   const server = createServer((_req, res) => {
     hostRequests++;
@@ -137,10 +140,9 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
   `
   );
   for (const network of ["allow", "deny"] as const) {
-    const launch = compileMxcLaunch(
+    const launch = compileNativeLaunch(
       {
-        platform,
-        launcher,
+        installation,
         containerId: `vibestudio-network-${network}-${Date.now()}`,
         argv: [runtime.executable, entry, network],
         cwd: home,
@@ -156,8 +158,10 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
       },
       { ...process.env, MXC_TRUSTED_OWNER_SECRET: "synthetic-owner-only" }
     );
-    expect(launch.environment["MXC_TRUSTED_OWNER_SECRET"]).toBe("synthetic-owner-only");
-    await assertMxcPrerequisites({ platform, launcher, environment: launch.environment });
+    expect(launch.environment["MXC_TRUSTED_OWNER_SECRET"]).toBe(
+      platform === "win32" ? undefined : "synthetic-owner-only"
+    );
+    await assertNativePrerequisites({ installation, environment: launch.environment });
     const before = hostRequests;
     const child = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
@@ -198,8 +202,9 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
       ownerSecret: null,
     });
     if (network === "deny") {
-      expect(outbound["connected"]).toBe(false);
-      expect(hostRequests).toBe(before);
+      // Windows host execution has no network-denial primitive.
+      expect(outbound["connected"]).toBe(platform === "win32");
+      expect(hostRequests).toBe(before + (platform === "win32" ? 1 : 0));
     } else {
       const listener = records.find((value) => value["type"] === "listener")!;
       const inbound = listener["listening"]
@@ -223,7 +228,7 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
         status: 200,
         tlsAuthenticated: true,
         dnsLookup: true,
-        trustWriteDenied: true,
+        trustWriteDenied: platform !== "win32",
         robots: true,
       });
     }

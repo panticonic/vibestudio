@@ -17,9 +17,9 @@
       "types": "./dist/isolation/workspaceChild.d.ts",
       "default": "./dist/isolation/workspaceChild.js"
     },
-    "./mxc": {
-      "types": "./dist/isolation/mxc.d.ts",
-      "default": "./dist/isolation/mxc.js"
+    "./native-launch": {
+      "types": "./dist/isolation/native-launch.d.ts",
+      "default": "./dist/isolation/native-launch.js"
     }
   },
   "scripts": {

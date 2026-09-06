@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -16,6 +17,7 @@ import {
   assertNativeIsolationArtifacts,
   nativeIsolationTarget,
 } from "../scripts/native-isolation-artifacts.mjs";
+import { writeNodeRuntimeFixture } from "./helpers/nodeRuntimeArtifacts.js";
 import stageElectronNativeIsolation, {
   assertPackagedNativeIsolation,
 } from "../scripts/stage-electron-native-isolation.mjs";
@@ -64,12 +66,13 @@ describe("native isolation artifact matrix", () => {
     );
   });
 
-  it("stages a requested ARM64 helper without using the host target", () => {
+  it("stages a requested ARM64 helper without using the host target", async () => {
     const { root, artifactRoot } = fixture();
     const target = nativeIsolationTarget("linux", "arm64");
+    writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(root, artifactRoot, [target]);
     try {
-      stageElectronNativeIsolation({
+      await stageElectronNativeIsolation({
         electronPlatformName: "linux",
         arch: 3,
         packager: { projectDir: root },
@@ -77,22 +80,23 @@ describe("native isolation artifact matrix", () => {
       const destination = path.join(root, target.artifact);
       expect(readFileSync(destination)).toEqual(binary(target));
       if (process.platform !== "win32") expect(statSync(destination).mode & 0o111).toBeTruthy();
-      expect(() =>
+      await expect(
         stageElectronNativeIsolation({
           electronPlatformName: "linux",
           arch: 99,
           packager: { projectDir: root },
         } as never)
-      ).toThrow(/Unknown Electron packaging architecture/);
+      ).rejects.toThrow(/Unknown Electron packaging architecture/);
     } finally {
       rmSync(root, { recursive: true, force: true });
       roots.splice(roots.indexOf(root), 1);
     }
   });
 
-  it("verifies the unpacked helper before signing", () => {
+  it("verifies the unpacked helper before signing", async () => {
     const { root, artifactRoot } = fixture();
     const target = nativeIsolationTarget("linux", "arm64");
+    writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(root, artifactRoot, [target]);
     const source = path.join(
       artifactRoot,
@@ -103,7 +107,7 @@ describe("native isolation artifact matrix", () => {
     const installed = path.join(resources, "app.asar.unpacked", target.artifact);
     const context = { electronPlatformName: "linux", arch: 3, packager: { projectDir: root } };
     try {
-      expect(() => assertPackagedNativeIsolation(resources, context as never)).toThrow(
+      await expect(assertPackagedNativeIsolation(resources, context as never)).rejects.toThrow(
         /differs|ENOENT/
       );
       mkdirSync(path.dirname(installed), { recursive: true });
@@ -115,14 +119,39 @@ describe("native isolation artifact matrix", () => {
         "app.asar.unpacked",
         target.artifact.replace(/[^/]+$/, "manifest.json")
       );
+      cpSync(
+        path.join(root, "dist/node/linux-arm64"),
+        path.join(resources, "app.asar.unpacked/dist/node/linux-arm64"),
+        { recursive: true }
+      );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
-      expect(() => assertPackagedNativeIsolation(resources, context as never)).not.toThrow();
+      await expect(
+        assertPackagedNativeIsolation(resources, context as never)
+      ).resolves.not.toThrow();
       writeFileSync(installed, Buffer.from("changed"));
-      expect(() => assertPackagedNativeIsolation(resources, context as never)).toThrow(/differs/);
+      await expect(assertPackagedNativeIsolation(resources, context as never)).rejects.toThrow(
+        /differs/
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
       roots.splice(roots.indexOf(root), 1);
     }
+  });
+
+  it("stages Windows Node without requiring or shipping an MXC executor", async () => {
+    const { root } = fixture();
+    writeNodeRuntimeFixture(root, "win32", "x64");
+    const context = { electronPlatformName: "win32", arch: 1, packager: { projectDir: root } };
+    await stageElectronNativeIsolation(context as never);
+    const resources = path.join(root, "resources");
+    cpSync(path.join(root, "dist/node"), path.join(resources, "app.asar.unpacked/dist/node"), {
+      recursive: true,
+    });
+    await expect(
+      assertPackagedNativeIsolation(resources, context as never)
+    ).resolves.toBeUndefined();
+    expect(() => statSync(path.join(root, "dist/mxc"))).toThrow();
+    expect(() => statSync(path.join(resources, "app.asar.unpacked/dist/mxc"))).toThrow();
   });
 
   it.each(["source", "target", "checksum", "machine"] as const)(

@@ -1,4 +1,4 @@
-import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
+import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
 import { waitForNativeJob, type NativeWorkspaceJob } from "./nativeWorkspaceJob.js";
@@ -7,7 +7,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  WorkspaceSandbox,
+  WorkspaceRuntime,
   type ProcessAdapter,
   type ProcessAdapterOptions,
 } from "@vibestudio/process-adapter";
@@ -85,7 +85,7 @@ export async function startNativeWorkspaceRuntime(input: {
     extensionEntry,
   ])
     identity.update(await readFile(resource));
-  const sandbox = await WorkspaceSandbox.start(
+  const sandbox = await WorkspaceRuntime.start(
     {
       version: 1,
       owner: {
@@ -101,22 +101,24 @@ export async function startNativeWorkspaceRuntime(input: {
       cwd: home,
       home,
       environment: {
-        PATH:
-          platform === "win32"
-            ? [path.dirname(executable), runtimeRoot].join(path.delimiter)
-            : `${runtimeRoot}:/usr/bin:/bin`,
+        PATH: [
+          path.dirname(executable),
+          runtimeRoot,
+          ...(platform === "win32"
+            ? (process.env["PATH"] ?? process.env["Path"] ?? "").split(path.delimiter)
+            : ["/usr/bin", "/bin"]),
+        ].join(path.delimiter),
         LANG: "C.UTF-8",
         ...runtime.environment,
       },
       read: [...runtime.readPaths, sourceRoot, buildsRoot],
       // These are owner-selected anchors, never the destinations of guest links.
-      // MXC enforces access to the declared private resource trees.
+      // Unix MXC enforces these grants; Windows uses normal host permissions.
       write: [home, scratchRoot, extensionStorage],
       sockets: [],
     },
     {
-      platform,
-      launcher: getMxcExecutable(input.appRoot),
+      ...getNativeExecutionInstallation(input.appRoot),
       workspaceEntry,
     }
   );

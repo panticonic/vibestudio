@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
-import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
+import { stageNodeRuntime, NODE_RUNTIME_TARGETS } from "./node-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
 
@@ -47,12 +47,14 @@ async function main() {
   console.log(`Staging npm packages @ v${VERSION}`);
   assertBuilt();
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
-  // The standalone server cannot rely on Electron's beforePack hook to stage
-  // the pinned stock Node runtime used for workspace execution.
-  const nodeRuntime = await stageNodeRuntime(repoRoot);
+  // This npm package is portable across the supported targets, so retain every
+  // pinned Node distribution alongside the complete Unix MXC artifact matrix.
+  const nodeRuntimes = await Promise.all(
+    NODE_RUNTIME_TARGETS.map((target) => stageNodeRuntime(repoRoot, target))
+  );
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
-  stageServer(nativeArtifacts, nodeRuntime);
+  stageServer(nativeArtifacts, nodeRuntimes);
   stageApp(nativeArtifacts);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   assertNoBundledUserlandSource(path.join(outRoot, "app"), "staged app npm package");
@@ -81,7 +83,7 @@ function buildSelfContainedExtensionHost() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-function stageServer(nativeArtifacts, nodeRuntime) {
+function stageServer(nativeArtifacts, nodeRuntimes) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -91,7 +93,7 @@ function stageServer(nativeArtifacts, nodeRuntime) {
     copyFile(artifact, path.join(root, artifact));
   }
   stageNativeIsolationArtifacts(root, nativeArtifacts);
-  stageNodeRuntimeArtifacts(root, nodeRuntime);
+  for (const runtime of nodeRuntimes) stageNodeRuntimeArtifacts(root, runtime);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),

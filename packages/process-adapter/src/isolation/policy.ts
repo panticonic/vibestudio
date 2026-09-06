@@ -1,7 +1,7 @@
 import path from "node:path";
 
-/** Resolved kernel resources, supplied by the installed authority owner. This
- * is an enforcement contract, not a permission request or approval document. */
+/** Owner-resolved workspace resources. MXC enforces these resources on Unix;
+ * Windows host execution uses them for ownership bookkeeping only. */
 export interface ExecutionPolicy {
   version: 1;
   owner: {
@@ -46,7 +46,7 @@ function hasControlByte(value: string): boolean {
   return false;
 }
 
-/** Validate before creating files, changing ACLs or starting any executable.
+/** Validate before creating files or starting any executable.
  * Filesystem anchoring and admission identity are also checked by the owner;
  * lexical validation alone cannot establish resource authorization. */
 export function validateExecutionPolicy(policy: ExecutionPolicy, platform: NodeJS.Platform): void {

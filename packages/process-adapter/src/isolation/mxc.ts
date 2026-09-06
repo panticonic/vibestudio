@@ -1,9 +1,7 @@
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { windowsEnvironmentValue } from "./windowsEnvironment.js";
-export { windowsEnvironmentValue } from "./windowsEnvironment.js";
 
-export type MxcPlatform = "linux" | "darwin" | "win32";
+export type MxcPlatform = "linux" | "darwin";
 
 export interface MxcLaunchInput {
   platform: MxcPlatform;
@@ -29,11 +27,10 @@ export function mxcLauncherEnvironment(
   );
 }
 
-/** MXC's Unix command is interpreted by a shell; Windows uses CreateProcess/CRT. */
-function quoteArgument(value: string, platform: MxcPlatform): string {
+/** MXC's Unix command is interpreted by a shell. */
+function quoteArgument(value: string): string {
   if (value.includes("\0")) throw new Error("MXC command argument contains NUL");
-  if (platform !== "win32") return "'" + value.replaceAll("'", "'\"'\"'") + "'";
-  return '"' + value.replace(/(\\*)"/gu, '$1$1\\"').replace(/(\\+)$/u, "$1$1") + '"';
+  return "'" + value.replaceAll("'", "'\"'\"'") + "'";
 }
 
 /** One stock MXC adapter. Callers own resource admission and guest authority;
@@ -47,41 +44,22 @@ export function compileMxcLaunch(
   cwd: string;
   environment: Record<string, string>;
 } {
-  const paths = input.platform === "win32" ? path.win32 : path.posix;
+  const paths = path.posix;
   if (!paths.isAbsolute(input.launcher) || input.launcher.includes("\0")) {
     throw new Error("The MXC launcher must be an installed absolute path");
   }
   if (!input.argv.length || !input.argv[0]) throw new Error("MXC launch has no executable");
-  if (input.platform === "win32" && /\.(?:cmd|bat)$/iu.test(input.argv[0])) {
-    throw new Error(
-      "MXC requires a native Windows executable; command-script shims are unsupported"
-    );
-  }
   const environment = Object.entries(input.guestEnvironment).map(([key, value]) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || value.includes("\0"))
       throw new Error("Invalid MXC guest environment");
     return `${key}=${value}`;
   });
-  // AppContainer creation needs a local profile coordinate. Requiring it also
-  // prevents legacy SBOX's empty-environment inheritance behavior.
-  if (input.platform === "win32") {
-    const localData = windowsEnvironmentValue(input.guestEnvironment, "LOCALAPPDATA");
-    if (!localData || !path.win32.isAbsolute(localData))
-      throw new Error(
-        "MXC Windows guests require an absolute private LOCALAPPDATA environment coordinate"
-      );
-  }
   const config: ContainerConfig = {
     version: "0.8.0-alpha",
-    containment:
-      input.platform === "linux"
-        ? "bubblewrap"
-        : input.platform === "darwin"
-          ? "seatbelt"
-          : "processcontainer",
+    containment: input.platform === "linux" ? "bubblewrap" : "seatbelt",
     containerId: input.containerId,
     process: {
-      commandLine: input.argv.map((arg) => quoteArgument(arg, input.platform)).join(" "),
+      commandLine: input.argv.map((arg) => quoteArgument(arg)).join(" "),
       cwd: input.cwd,
       env: environment,
       timeout: 0,
@@ -98,27 +76,13 @@ export function compileMxcLaunch(
     // The supported stock open-network shape shares Linux's host network.
     // Directional ingress fields select filtered namespaces and cannot express
     // unrestricted ingress on that backend. We impose no application network
-    // policy; Windows AppContainer can retain intrinsic loopback limitations.
+    // policy.
     network:
       input.network === "allow"
         ? { defaultPolicy: "allow", allowLocalNetwork: true }
         : { egress: { default: "deny" }, ingress: { default: "deny", hostLoopback: "deny" } },
     lifecycle: { destroyOnExit: true, preservePolicy: false },
-    // Windows console runtimes (including Node) import USER32 during startup.
-    // Disabling win32k prevents DLL initialization; MXC still applies its job
-    // restrictions to clipboard, external UI objects and desktop control.
-    ui: { disable: input.platform !== "win32", clipboard: "none", injection: false },
-    ...(input.platform === "win32"
-      ? {
-          processContainer: {
-            leastPrivilege: false,
-            capabilities:
-              input.network === "allow"
-                ? ["internetClient", "internetClientServer", "privateNetworkClientServer"]
-                : [],
-          },
-        }
-      : {}),
+    ui: { disable: true, clipboard: "none", injection: false },
     ...(input.platform === "darwin"
       ? {
           seatbelt: {
@@ -138,5 +102,3 @@ export function compileMxcLaunch(
     environment: mxcLauncherEnvironment(hostEnvironment),
   };
 }
-
-export { assertMxcPrerequisites, formatMxcStartupError } from "./prerequisites.js";

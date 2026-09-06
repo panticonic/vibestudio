@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
-import { claudeContainedSpawnEnvironment, confineClaudeReadOnly } from "./claudeReadOnlyLaunch.js";
+import { claudeSpawnEnvironment, prepareClaudeNativeLaunch } from "./claudeNativeLaunch.js";
 
 function canRunMxc(): boolean {
   if (process.platform !== "linux" || !existsSync(launcher)) return false;
@@ -20,7 +20,7 @@ const launcher = path.resolve(
       : "lxc-exec"
 );
 
-describe("confineClaudeReadOnly", () => {
+describe("prepareClaudeNativeLaunch", () => {
   const roots: string[] = [];
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -31,12 +31,11 @@ describe("confineClaudeReadOnly", () => {
     roots.push(root);
     const profileDir = path.join(root, "profile");
     const contextDirectory = path.join(root, "context");
-    const launch = confineClaudeReadOnly({
+    const launch = prepareClaudeNativeLaunch({
       argv: ["/runtime/claude", "argument with ' and $shell"],
       profileDir,
       contextDirectory,
-      platform: "linux",
-      launcher: "/installed/mxc",
+      installation: { platform: "linux", mechanism: "mxc-process", launcher: "/installed/mxc" },
       readPaths: ["/runtime"],
       launchEnv: {},
     });
@@ -63,24 +62,26 @@ describe("confineClaudeReadOnly", () => {
       argv: ["/runtime/claude"],
       profileDir: "/state/profile",
       contextDirectory: "/context",
-      launcher: "/installed/mxc",
+      installation: {
+        platform: "linux" as const,
+        mechanism: "mxc-process" as const,
+        launcher: "/installed/mxc",
+      },
       readPaths: ["/runtime"],
       launchEnv: {},
-      platform: "linux" as const,
     };
-    expect(() => confineClaudeReadOnly({ ...input, readPaths: ["/"] })).toThrow(
+    expect(() => prepareClaudeNativeLaunch({ ...input, readPaths: ["/"] })).toThrow(
       /below the host root/
     );
-    expect(() => confineClaudeReadOnly({ ...input, readPaths: ["/runtime", "/state"] })).toThrow(
-      /disjoint/
-    );
-    expect(() => confineClaudeReadOnly({ ...input, platform: "freebsd" })).toThrow(/unsupported/);
+    expect(() =>
+      prepareClaudeNativeLaunch({ ...input, readPaths: ["/runtime", "/state"] })
+    ).toThrow(/disjoint/);
   });
 
   it("allows runtime coordinates while excluding ambient credentials and agent sockets", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "claude-contained-env-"));
     roots.push(root);
-    const env = claudeContainedSpawnEnvironment({
+    const env = claudeSpawnEnvironment({
       profileDir: path.join(root, "profile"),
       launchEnv: {
         VIBESTUDIO_ENTITY_ID: "entity-1",
@@ -155,11 +156,11 @@ describe("confineClaudeReadOnly", () => {
       const contextDirectory = path.join(root, "context");
       mkdirSync(profileDir);
       mkdirSync(contextDirectory);
-      const launch = confineClaudeReadOnly({
+      const launch = prepareClaudeNativeLaunch({
         argv: ["/bin/sh", "-c", 'touch "$VIBESTUDIO_LINKED_SCRATCH/allowed"; touch ./blocked'],
         profileDir,
         contextDirectory,
-        launcher,
+        installation: { platform: "linux", mechanism: "mxc-process", launcher },
         readPaths: ["/bin/sh"],
         launchEnv: {},
       });

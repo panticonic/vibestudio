@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MIN_CLAUDE_CODE_VERSION } from "@vibestudio/shared/claudeLaunchProfile";
 import { createNativeDevelopmentController } from "./nativeDevelopmentComposition.js";
 
 const roots: string[] = [];
@@ -19,7 +20,9 @@ describe("native development production composition", () => {
       const cli = path.join(root, "claude");
       await fs.writeFile(
         cli,
-        '#!/usr/bin/env node\nif (process.argv.includes("--version")) process.stdout.write("2.1.81\\n");\nelse setInterval(() => {}, 1000);\n',
+        '#!/usr/bin/env node\nif (process.argv.includes("--version")) process.stdout.write("' +
+          MIN_CLAUDE_CODE_VERSION +
+          '\\n");\nelse setInterval(() => {}, 1000);\n',
         { mode: 0o700 }
       );
       const planSource = vi.fn();

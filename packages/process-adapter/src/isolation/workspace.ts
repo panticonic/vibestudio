@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import path from "node:path";
 import type { ProcessAdapter, ProcessAdapterOptions } from "../index.js";
-import { compileExecution, type IsolationInstallation } from "./index.js";
+import { compileExecution, type NativeInstallation } from "./index.js";
 import {
   containsPath,
   executionEnvironment,
@@ -13,12 +13,12 @@ import {
   type ExecutionPolicy,
 } from "./policy.js";
 import { readControl, writeControl } from "./control.js";
-import { assertMxcPrerequisites, formatMxcStartupError } from "./prerequisites.js";
+import { assertNativePrerequisites, formatNativeStartupError } from "./prerequisites.js";
 
-export interface WorkspaceSandboxInstallation extends IsolationInstallation {
+export type WorkspaceRuntimeInstallation = NativeInstallation & {
   /** Installed workspaceChild.js and its adjacent control.js, visible read-only. */
   workspaceEntry: string;
-}
+};
 
 export interface WorkspaceStopResult {
   launcherExited: boolean;
@@ -86,7 +86,7 @@ class WorkspaceCommand extends EventEmitter implements ProcessAdapter {
  * owner supplies sealed resources and authorization; guest messages never admit
  * resources, create host processes, select a host PID, or report kernel proof.
  * Broker revocation is separately owned and must precede workspace retirement. */
-export class WorkspaceSandbox {
+export class WorkspaceRuntime {
   private readonly commands = new Map<string, WorkspaceCommand>();
   private readonly environment: Record<string, string>;
   private readonly child: ChildProcessWithoutNullStreams;
@@ -104,7 +104,7 @@ export class WorkspaceSandbox {
 
   private constructor(
     private readonly policy: ExecutionPolicy,
-    installation: WorkspaceSandboxInstallation,
+    installation: WorkspaceRuntimeInstallation,
     launch: ReturnType<typeof compileExecution>
   ) {
     this.environment = executionEnvironment(policy, installation.platform);
@@ -132,9 +132,8 @@ export class WorkspaceSandbox {
       let ready = false;
       let startupFailure: Error | undefined;
       const startupError = (error: Error, code?: number | null, signal?: string | null) =>
-        formatMxcStartupError({
-          platform: installation.platform,
-          launcher: installation.launcher,
+        formatNativeStartupError({
+          installation,
           error,
           stderr: this.stderrTail,
           code,
@@ -144,7 +143,7 @@ export class WorkspaceSandbox {
         this.endSession();
         this.child.kill("SIGKILL");
         reject(
-          startupError(startupFailure ?? new IsolationError("Workspace sandbox startup timed out"))
+          startupError(startupFailure ?? new IsolationError("Workspace runtime startup timed out"))
         );
       }, 10_000);
       const fail = (error: Error) => {
@@ -169,7 +168,7 @@ export class WorkspaceSandbox {
         if (!ready)
           reject(
             startupError(
-              startupFailure ?? new IsolationError("Workspace sandbox exited before ready"),
+              startupFailure ?? new IsolationError("Workspace runtime exited before ready"),
               code,
               signal
             )
@@ -197,13 +196,13 @@ export class WorkspaceSandbox {
 
   static async start(
     policy: ExecutionPolicy,
-    installation: WorkspaceSandboxInstallation
-  ): Promise<WorkspaceSandbox> {
+    installation: WorkspaceRuntimeInstallation
+  ): Promise<WorkspaceRuntime> {
     if (installation.platform !== process.platform) {
-      throw new IsolationError("Cannot execute a different platform's confinement backend");
+      throw new IsolationError("Cannot execute a different platform's runtime");
     }
     if (policy.owner.contextId !== null) {
-      throw new IsolationError("A shared workspace sandbox cannot be owned by one context");
+      throw new IsolationError("A shared workspace runtime cannot be owned by one context");
     }
     const paths = installation.platform === "win32" ? path.win32 : path.posix;
     if (
@@ -215,9 +214,8 @@ export class WorkspaceSandbox {
       throw new IsolationError("Workspace bootstrap must be in the admitted read-only runtime");
     const resolved = { ...policy, args: [installation.workspaceEntry] };
     const launch = compileExecution(resolved, installation);
-    await assertMxcPrerequisites({
-      platform: installation.platform,
-      launcher: installation.launcher,
+    await assertNativePrerequisites({
+      installation,
       environment: launch.environment,
     });
     // Resources must already exist and be anchored/sealed by the installed
@@ -225,13 +223,13 @@ export class WorkspaceSandbox {
     for (const resource of [
       policy.privateRoot,
       installation.workspaceEntry,
-      installation.launcher,
+      ...(installation.mechanism === "mxc-process" ? [installation.launcher] : []),
     ]) {
       if ((await realpath(resource)) !== resource) {
         throw new IsolationError(`Workspace admission requires a canonical resource: ${resource}`);
       }
     }
-    const sandbox = new WorkspaceSandbox(resolved, installation, launch);
+    const sandbox = new WorkspaceRuntime(resolved, installation, launch);
     try {
       await sandbox.ready;
       return sandbox;
@@ -241,7 +239,7 @@ export class WorkspaceSandbox {
     }
   }
 
-  /** Commands share the sandbox's resource ceiling and private home. This is
+  /** Commands share a private home and, on Unix, an MXC resource ceiling. This is
    * a ProcessAdapter factory, not a new per-command security admission. */
   fork(
     entry: string,
@@ -249,9 +247,9 @@ export class WorkspaceSandbox {
     options: ProcessAdapterOptions = {}
   ): ProcessAdapter {
     if (!this.running || this.stopping)
-      throw new IsolationError("Workspace sandbox is not running");
+      throw new IsolationError("Workspace runtime is not running");
     if (options.stdio === "inherit") {
-      throw new IsolationError("Interactive TTYs must be opened inside the workspace sandbox");
+      throw new IsolationError("Interactive TTYs must be opened through the workspace runtime");
     }
     if (this.commands.size >= 256) {
       throw new IsolationError("Workspace command admission limit");
@@ -264,7 +262,7 @@ export class WorkspaceSandbox {
     );
     this.commands.set(id, command);
     // The base environment is closed. Caller-supplied values are command data
-    // inside this already-confined workspace, never launcher environment.
+    // inside this workspace runtime, never launcher environment.
     const environment = { ...this.environment };
     for (const [key, value] of Object.entries(env)) {
       if (value !== undefined) environment[key] = value;

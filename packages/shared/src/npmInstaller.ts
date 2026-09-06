@@ -3,10 +3,13 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
-import { assertMxcPrerequisites, compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
+import {
+  assertNativePrerequisites,
+  compileNativeLaunch,
+} from "@vibestudio/process-adapter/native-launch";
 import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
 import { nativeWorkspaceCleanup } from "./nativeWorkspaceCleanup.js";
-import { getMxcExecutable } from "./runtimePaths.js";
+import { getNativeExecutionInstallation } from "./runtimePaths.js";
 
 const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 let npmInstallTail: Promise<void> = Promise.resolve();
@@ -81,7 +84,7 @@ async function runNpmInstallInSlot(
     fs.mkdirSync(runtimeRoot);
     fs.mkdirSync(temporary, { recursive: true });
     const runtime = prepareNativeRuntime({ appRoot: options.appRoot, runtimeRoot, platform });
-    const launcher = getMxcExecutable(options.appRoot);
+    const installation = getNativeExecutionInstallation(options.appRoot);
     const guestEnvironment = {
       ...runtime.environment,
       HOME: home,
@@ -96,7 +99,9 @@ async function runNpmInstallInSlot(
       TMPDIR: temporary,
       PATH: [
         path.dirname(runtime.executable),
-        ...(platform === "win32" ? [] : ["/usr/bin", "/bin"]),
+        ...(platform === "win32"
+          ? (process.env["PATH"] ?? process.env["Path"] ?? "").split(path.delimiter)
+          : ["/usr/bin", "/bin"]),
       ].join(path.delimiter),
       ...(platform === "win32"
         ? { ComSpec: path.join(runtime.environment["SystemRoot"]!, "System32", "cmd.exe") }
@@ -138,9 +143,8 @@ async function runNpmInstallInSlot(
         installCacheDir,
       ];
       if (ignoreScripts) args.push("--ignore-scripts");
-      const launch = compileMxcLaunch({
-        platform,
-        launcher,
+      const launch = compileNativeLaunch({
+        installation,
         containerId: `vibestudio-npm-${randomUUID()}`,
         argv: [runtime.executable, "-e", invokeNpm, resetInstall ? "1" : "0", ...args],
         cwd: installRoot,
@@ -149,7 +153,7 @@ async function runNpmInstallInSlot(
         writePaths: [installRoot, stateRoot],
         network: "allow",
       });
-      await assertMxcPrerequisites({ platform, launcher, environment: launch.environment });
+      await assertNativePrerequisites({ installation, environment: launch.environment });
       resetInstall = false;
       await new Promise<void>((resolve, reject) => {
         let timedOut = false;

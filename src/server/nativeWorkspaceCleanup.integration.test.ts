@@ -67,7 +67,7 @@ async function stopAttacker(attacker: ChildProcess): Promise<void> {
   await closed;
 }
 
-describe("MXC workspace trash cleanup", () => {
+describe("workspace trash retirement", () => {
   it("removes the staged tree and links without modifying outside targets", () => {
     const f = fixture();
     mkdirSync(path.join(f.tree, "nested"));
@@ -98,18 +98,22 @@ describe("MXC workspace trash cleanup", () => {
     expect(existsSync(f.trash)).toBe(false);
   });
 
-  it("contains recursive deletion while a separate process replaces directories with outside links", async () => {
-    const f = fixture();
-    const node = path.join(f.tree, "node");
-    const parked = path.join(f.tree, "parked");
-    mkdirSync(node);
-    for (let index = 0; index < 500; index++)
-      writeFileSync(path.join(node, String(index)), "workspace");
-    const attacker = spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+  // A Windows workspace already has host authority; adversarial confinement is
+  // a Unix contract. Static link handling and retirement still run everywhere.
+  it.runIf(process.platform !== "win32")(
+    "contains recursive deletion while a separate process replaces directories with outside links (Unix confinement contract)",
+    async () => {
+      const f = fixture();
+      const node = path.join(f.tree, "node");
+      const parked = path.join(f.tree, "parked");
+      mkdirSync(node);
+      for (let index = 0; index < 500; index++)
+        writeFileSync(path.join(node, String(index)), "workspace");
+      const attacker = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
       const fs = require('node:fs');
       const [node, parked, outside] = process.argv.slice(1);
       let swaps = 0;
@@ -130,53 +134,55 @@ describe("MXC workspace trash cleanup", () => {
       const deadline = Date.now() + 15000;
       while (Date.now() < deadline && fs.existsSync(require('node:path').dirname(node))) swap();
     `,
-        node,
-        parked,
-        f.outside,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
-    );
-    attackers.push(attacker);
-    await new Promise<void>((resolve, reject) => {
-      let output = "";
-      let stderr = "";
-      const deadline = setTimeout(
-        () => reject(new Error(`Cleanup adversary did not start: ${stderr}`)),
-        5000
+          node,
+          parked,
+          f.outside,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
       );
-      attacker.stderr?.on("data", (chunk) => {
-        stderr = (stderr + String(chunk)).slice(-4096);
-      });
-      attacker.stdout?.on("data", (chunk) => {
-        output += String(chunk);
-        if (output.includes("ready\n")) {
+      attackers.push(attacker);
+      await new Promise<void>((resolve, reject) => {
+        let output = "";
+        let stderr = "";
+        const deadline = setTimeout(
+          () => reject(new Error(`Cleanup adversary did not start: ${stderr}`)),
+          5000
+        );
+        attacker.stderr?.on("data", (chunk) => {
+          stderr = (stderr + String(chunk)).slice(-4096);
+        });
+        attacker.stdout?.on("data", (chunk) => {
+          output += String(chunk);
+          if (output.includes("ready\n")) {
+            clearTimeout(deadline);
+            resolve();
+          }
+        });
+        attacker.once("error", (error) => {
           clearTimeout(deadline);
-          resolve();
-        }
+          reject(error);
+        });
+        attacker.once("exit", () => {
+          clearTimeout(deadline);
+          reject(new Error(`Cleanup adversary exited: ${stderr}`));
+        });
       });
-      attacker.once("error", (error) => {
-        clearTimeout(deadline);
-        reject(error);
-      });
-      attacker.once("exit", () => {
-        clearTimeout(deadline);
-        reject(new Error(`Cleanup adversary exited: ${stderr}`));
-      });
-    });
-    try {
       try {
-        nativeWorkspaceCleanup(appRoot)(f.trash);
-      } catch {
-        // Concurrent mutation may prevent completion. It must retain catalog
-        // authority for retry whenever the guest subtree still exists.
-        if (existsSync(f.tree)) expect(readFileSync(f.receipt, "utf8")).toBe(f.marker);
+        try {
+          nativeWorkspaceCleanup(appRoot)(f.trash);
+        } catch {
+          // Concurrent mutation may prevent completion. It must retain catalog
+          // authority for retry whenever the guest subtree still exists.
+          if (existsSync(f.tree)) expect(readFileSync(f.receipt, "utf8")).toBe(f.marker);
+        }
+        expect(readFileSync(path.join(f.outside, "canary"), "utf8")).toBe("host-owned contents");
+      } finally {
+        await stopAttacker(attacker);
       }
+      if (existsSync(f.trash)) nativeWorkspaceCleanup(appRoot)(f.trash);
+      expect(existsSync(f.trash)).toBe(false);
       expect(readFileSync(path.join(f.outside, "canary"), "utf8")).toBe("host-owned contents");
-    } finally {
-      await stopAttacker(attacker);
-    }
-    if (existsSync(f.trash)) nativeWorkspaceCleanup(appRoot)(f.trash);
-    expect(existsSync(f.trash)).toBe(false);
-    expect(readFileSync(path.join(f.outside, "canary"), "utf8")).toBe("host-owned contents");
-  }, 30000);
+    },
+    30000
+  );
 });

@@ -3,12 +3,12 @@ import { PassThrough } from "node:stream";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { WorkspaceSandbox } from "./workspace.js";
+import { WorkspaceRuntime } from "./workspace.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFile: vi.fn() }));
 vi.mock("./prerequisites.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./prerequisites.js")>()),
-  assertMxcPrerequisites: vi.fn(async () => {}),
+  assertNativePrerequisites: vi.fn(async () => {}),
 }));
 vi.mock("node:fs/promises", () => ({
   realpath: async (value: string) => value,
@@ -43,7 +43,7 @@ it.each([false, true])(
     const root = path.resolve("fixture");
     const runtime = path.join(root, "runtime");
     const home = path.join(root, "state");
-    const sandbox = await WorkspaceSandbox.start(
+    const sandbox = await WorkspaceRuntime.start(
       {
         version: 1,
         owner: {
@@ -64,8 +64,13 @@ it.each([false, true])(
         sockets: [],
       },
       {
-        platform: process.platform as "linux" | "darwin" | "win32",
-        launcher: path.join(root, "launcher"),
+        ...(process.platform === "win32"
+          ? ({ platform: "win32", mechanism: "host-process" } as const)
+          : ({
+              platform: process.platform as "linux" | "darwin",
+              mechanism: "mxc-process",
+              launcher: path.join(root, "launcher"),
+            } as const)),
         workspaceEntry: path.join(runtime, "workspaceChild.js"),
       }
     );
@@ -133,7 +138,7 @@ it.each([false, true])(
     const root = path.resolve("fixture");
     const runtime = path.join(root, "runtime");
     const home = path.join(root, "state");
-    const pending = WorkspaceSandbox.start(
+    const pending = WorkspaceRuntime.start(
       {
         version: 1,
         owner: {
@@ -154,8 +159,13 @@ it.each([false, true])(
         sockets: [],
       },
       {
-        platform: process.platform as "linux" | "darwin" | "win32",
-        launcher: path.join(root, "launcher"),
+        ...(process.platform === "win32"
+          ? ({ platform: "win32", mechanism: "host-process" } as const)
+          : ({
+              platform: process.platform as "linux" | "darwin",
+              mechanism: "mxc-process",
+              launcher: path.join(root, "launcher"),
+            } as const)),
         workspaceEntry: path.join(runtime, "workspaceChild.js"),
       }
     );

@@ -126,7 +126,6 @@ win:
   icon: build-resources/icon.ico
 
 nsis:
-  include: build-resources/windows-isolation.nsh
   oneClick: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false

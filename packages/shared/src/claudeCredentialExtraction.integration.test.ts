@@ -41,7 +41,7 @@ function fixture() {
   };
 }
 
-it("extracts bounded credential bytes using installed code inside MXC", async () => {
+it("extracts bounded credential bytes using the installed native runtime", async () => {
   const f = fixture();
   const directory = path.join(f.profileDir, "claude-config");
   mkdirSync(directory);
@@ -55,7 +55,7 @@ it("extracts bounded credential bytes using installed code inside MXC", async ()
   );
 });
 
-it("does not read an outside credential through a guest-authored directory link", async () => {
+it("applies the platform execution contract to guest-authored directory links", async () => {
   const f = fixture();
   const outside = path.join(f.root, "outside");
   mkdirSync(outside);
@@ -66,9 +66,14 @@ it("does not read an outside credential through a guest-authored directory link"
     path.join(f.profileDir, "claude-config"),
     process.platform === "win32" ? "junction" : "dir"
   );
-  await expect(extractClaudeCredential(f)).rejects.toThrow(
-    "Confined Claude credential extraction failed"
-  );
+  if (process.platform === "win32") {
+    // Windows workspace code already has normal account host-file authority.
+    expect((await extractClaudeCredential(f)).toString()).toBe("outside-secret-canary");
+  } else {
+    await expect(extractClaudeCredential(f)).rejects.toThrow(
+      "Confined Claude credential extraction failed"
+    );
+  }
   expect(readFileSync(credential, "utf8")).toBe("outside-secret-canary");
 });
 

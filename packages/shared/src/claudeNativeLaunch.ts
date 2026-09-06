@@ -1,9 +1,13 @@
 import { accessSync, constants, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { compileMxcLaunch, windowsEnvironmentValue } from "@vibestudio/process-adapter/mxc";
+import {
+  compileNativeLaunch,
+  windowsEnvironmentValue,
+  type NativeInstallation,
+} from "@vibestudio/process-adapter/native-launch";
 import * as path from "node:path";
 
-export interface ClaudeReadOnlyLaunch {
+export interface ClaudeNativeLaunch {
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -61,7 +65,7 @@ function credentialFreeProxy(value: string): string | null {
  * denied by default; only runtime coordinates are copied. Provider login lives
  * in the isolated Claude config, never in an inherited API-key variable.
  */
-export function claudeContainedSpawnEnvironment(input: {
+export function claudeSpawnEnvironment(input: {
   profileDir: string;
   launchEnv: Record<string, string>;
   confinementEnv: Record<string, string>;
@@ -122,16 +126,14 @@ export function claudeContainedSpawnEnvironment(input: {
   return env;
 }
 
-export interface ClaudeReadOnlyLaunchInput {
+export interface ClaudeNativeLaunchInput {
   argv: string[];
   profileDir: string;
   contextDirectory: string;
-  /** Pinned installed MXC binary, supplied by the trusted launcher. */
-  launcher: string;
+  installation: NativeInstallation;
   /** Explicit CLI/runtime resources; never the host filesystem root. */
   readPaths: string[];
   launchEnv: Record<string, string>;
-  platform?: NodeJS.Platform;
 }
 
 /** Resolve a command from the trusted owner's PATH before constructing policy. */
@@ -157,30 +159,29 @@ export function resolveClaudeRuntimeCommand(name: string, pathValue = process.en
   throw new Error(`Linked Claude runtime command is not installed: ${name}`);
 }
 
-/**
- * Linked Claude is a network-capable provider with an explicitly provisioned
- * agent identity. MXC protects managed context from writes and limits filesystem
- * reads to its installed runtime and admitted context. Its provider/Iroh network
- * is intentionally available; this is not the network-denied workspace-command
- * contract and does not claim HTTP mediation. No host-root filesystem grant is
- * made (particularly important for Windows ACL-based confinement).
- */
-export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeReadOnlyLaunch {
-  const platform = input.platform ?? process.platform;
+/** Prepare linked Claude with private runtime state. Unix confines filesystem
+ * access through MXC; Windows deliberately runs with normal host permissions. */
+export function prepareClaudeNativeLaunch(input: ClaudeNativeLaunchInput): ClaudeNativeLaunch {
+  const platform = input.installation.platform;
   if (platform !== "linux" && platform !== "darwin" && platform !== "win32") {
-    throw new Error(`Linked Claude MXC execution is unsupported on ${platform}`);
+    throw new Error(`Linked Claude native execution is unsupported on ${platform}`);
   }
   const paths = platform === "win32" ? path.win32 : path.posix;
   if (platform === "win32" && /\.(?:cmd|bat)$/iu.test(input.argv[0] ?? "")) {
     throw new Error(
-      "Linked Claude requires its native Windows executable; command-script shims cannot be launched by MXC"
+      "Linked Claude requires its native Windows executable; command-script shims require an explicit command interpreter"
     );
   }
   if (!input.argv.length) throw new Error("Claude launch has no executable");
   const profileDir = paths.resolve(input.profileDir);
   const contextDirectory = paths.resolve(input.contextDirectory);
   const readPaths = [...new Set([...input.readPaths, contextDirectory])];
-  for (const resource of [input.launcher, input.argv[0]!, profileDir, ...readPaths]) {
+  for (const resource of [
+    ...(input.installation.mechanism === "mxc-process" ? [input.installation.launcher] : []),
+    input.argv[0]!,
+    profileDir,
+    ...readPaths,
+  ]) {
     if (
       !paths.isAbsolute(resource) ||
       resource.includes("\0") ||
@@ -197,11 +198,15 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
     );
   };
   if (
+    input.installation.mechanism === "mxc-process" &&
     readPaths.some((resource) => contains(resource, profileDir) || contains(profileDir, resource))
   ) {
     throw new Error("Linked Claude writable profile and readonly resources must be disjoint");
   }
-  if (!readPaths.some((resource) => contains(resource, input.argv[0]!))) {
+  if (
+    input.installation.mechanism === "mxc-process" &&
+    !readPaths.some((resource) => contains(resource, input.argv[0]!))
+  ) {
     throw new Error("Claude executable must belong to the admitted runtime");
   }
   const scratchDirectory = paths.join(profileDir, "scratch");
@@ -217,15 +222,14 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
     VIBESTUDIO_LINKED_SCRATCH: scratchDirectory,
     CLAUDE_CONFIG_DIR: claudeConfigDirectory,
   };
-  const environment = claudeContainedSpawnEnvironment({
+  const environment = claudeSpawnEnvironment({
     profileDir,
     launchEnv: input.launchEnv,
     confinementEnv: env,
   });
-  const launch = compileMxcLaunch({
+  const launch = compileNativeLaunch({
     network: "allow",
-    platform,
-    launcher: input.launcher,
+    installation: input.installation,
     containerId: `vibestudio-claude-${randomUUID()}`,
     argv: input.argv,
     cwd: contextDirectory,

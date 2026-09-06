@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { beforeEach, expect, it, vi } from "vitest";
-import { assertMxcPrerequisites, formatMxcStartupError } from "./prerequisites.js";
+import { assertNativePrerequisites, formatNativeStartupError } from "./prerequisites.js";
 
 vi.mock("node:fs/promises", () => ({ access: vi.fn() }));
 vi.mock("node:child_process", () => ({
@@ -12,15 +12,17 @@ beforeEach(() => {
   vi.mocked(access).mockResolvedValue(undefined);
 });
 const input = {
-  platform: "linux" as const,
-  launcher: "/installed/mxc",
+  installation: {
+    platform: "linux",
+    mechanism: "mxc-process",
+    launcher: "/installed/mxc",
+  } as const,
   environment: { PATH: "/owner/bin:/usr/bin" },
 };
 it("accepts Windows owner coordinates independent of environment key casing", async () => {
   await expect(
-    assertMxcPrerequisites({
-      platform: "win32",
-      launcher: "C:\\installed\\mxc.exe",
+    assertNativePrerequisites({
+      installation: { platform: "win32", mechanism: "host-process" },
       environment: {
         SYSTEMROOT: "C:\\Windows",
         userprofile: "C:\\owner",
@@ -31,11 +33,11 @@ it("accepts Windows owner coordinates independent of environment key casing", as
 });
 it("reports a missing packaged executor before launching any helper", async () => {
   vi.mocked(access).mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }));
-  await expect(assertMxcPrerequisites(input)).rejects.toThrow(/Repair the app installation/);
+  await expect(assertNativePrerequisites(input)).rejects.toThrow(/Repair the app installation/);
   expect(execFile).not.toHaveBeenCalled();
 });
 it("probes only relevant helpers with the same closed owner environment and bounded execution", async () => {
-  await assertMxcPrerequisites(input);
+  await assertNativePrerequisites(input);
   expect(execFile).toHaveBeenCalledExactlyOnceWith(
     "bwrap",
     ["--version"],
@@ -52,29 +54,30 @@ it("reports a missing filesystem containment helper", async () => {
   vi.mocked(execFile).mockImplementationOnce((...args: any[]) =>
     args.at(-1)(new Error("spawn bwrap ENOENT"))
   );
-  await expect(assertMxcPrerequisites(input)).rejects.toThrow(/Install bubblewrap/);
+  await expect(assertNativePrerequisites(input)).rejects.toThrow(/Install bubblewrap/);
 });
-it("requires Windows owner coordinates for lifecycle cleanup", async () => {
-  await expect(assertMxcPrerequisites({ ...input, platform: "win32" })).rejects.toThrow(
-    /SystemRoot/
-  );
+it("requires only Windows OS coordinates, without probing containment helpers", async () => {
   await expect(
-    assertMxcPrerequisites({
-      ...input,
-      platform: "win32",
-      environment: {
-        SystemRoot: "C:\\Windows",
-        USERPROFILE: "C:\\Users\\owner",
-        LOCALAPPDATA: "relative",
-      },
+    assertNativePrerequisites({
+      installation: { platform: "win32", mechanism: "host-process" },
+      environment: {},
     })
-  ).rejects.toThrow(/LOCALAPPDATA/);
+  ).rejects.toThrow(/SystemRoot/);
+  await assertNativePrerequisites({
+    installation: { platform: "win32", mechanism: "host-process" },
+    environment: { SYSTEMROOT: "C:\\Windows" },
+  });
+  expect(execFile).not.toHaveBeenCalled();
+  expect(access).not.toHaveBeenCalled();
 });
 it("checks Seatbelt availability without inferring it from macOS version", async () => {
   vi.mocked(access).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("missing"));
-  await expect(assertMxcPrerequisites({ ...input, platform: "darwin" })).rejects.toThrow(
-    /sandbox-exec/
-  );
+  await expect(
+    assertNativePrerequisites({
+      ...input,
+      installation: { ...input.installation, platform: "darwin" },
+    })
+  ).rejects.toThrow(/sandbox-exec/);
 });
 it.each([
   [
@@ -83,7 +86,7 @@ it.each([
   ],
   ["bwrap: Creating new namespace failed: Operation not permitted", /security policy/],
 ])("retains the native diagnostic and identifies its remedy", (stderr, remedy) => {
-  const error = formatMxcStartupError({
+  const error = formatNativeStartupError({
     ...input,
     error: new Error("Exited before readiness"),
     stderr,
@@ -94,7 +97,7 @@ it.each([
   expect(error.message).toMatch(remedy);
 });
 it("bounds retained stderr", () => {
-  const error = formatMxcStartupError({
+  const error = formatNativeStartupError({
     ...input,
     error: new Error("closed"),
     stderr: "x".repeat(20_000) + "last failure",
@@ -102,25 +105,13 @@ it("bounds retained stderr", () => {
   expect(error.message.length).toBeLessThan(17_000);
   expect(error.message.endsWith("last failure")).toBe(true);
 });
-it("identifies drive-root metadata denial without suggesting a drive read grant", () => {
-  const error = formatMxcStartupError({
-    platform: "win32",
-    launcher: "D:\\app\\wxc-exec.exe",
+it("reports Windows native failure without suggesting sandbox provisioning", () => {
+  const error = formatNativeStartupError({
+    installation: { platform: "win32", mechanism: "host-process" },
     error: new Error("closed"),
-    stderr: "Error: EPERM: operation not permitted, lstat 'C:\\'",
+    stderr: "native failure",
   });
-  expect(error.message).toContain(
-    '"D:\\app\\wxc-host-prep.exe" prepare-system-drive --target C:\\'
-  );
-  expect(error.message).toContain("metadata only");
-});
-it("explains the stock NUL-device repair and its reboot lifetime", () => {
-  const error = formatMxcStartupError({
-    platform: "win32",
-    launcher: "D:\\app\\wxc-exec.exe",
-    error: new Error("closed"),
-    stderr: "Access denied opening \\Device\\Null",
-  });
-  expect(error.message).toContain("prepare-null-device");
-  expect(error.message).toContain("at reboot");
+  expect(error.message).toContain("host-process");
+  expect(error.message).toContain("no sandbox setup is required");
+  expect(error.message).toContain("native failure");
 });

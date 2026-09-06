@@ -15,6 +15,7 @@ import {
 
 /** electron-builder's requested architecture is independent of its build host. */
 function electronNativeArtifacts(context) {
+  if (context.electronPlatformName === "win32") return [];
   const architecture = Arch[context.arch];
   if (typeof architecture !== "string") throw new Error("Unknown Electron packaging architecture");
   const target = nativeIsolationTarget(context.electronPlatformName, architecture);
@@ -24,6 +25,8 @@ function electronNativeArtifacts(context) {
 }
 
 export default async function stageElectronNativeIsolation(context) {
+  if (typeof Arch[context.arch] !== "string")
+    throw new Error("Unknown Electron packaging architecture");
   await stageNodeRuntime(
     context.packager.projectDir,
     nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
