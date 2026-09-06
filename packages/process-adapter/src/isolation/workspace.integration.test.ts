@@ -116,6 +116,7 @@ describe("shared workspace sandbox on the native platform", () => {
       const fs = require('node:fs');
       const emit = value => process.stdout.write('PTY_RESULT:' + JSON.stringify(value) + '\\n');
       const dimensions = () => ({ columns: process.stdout.columns, rows: process.stdout.rows });
+      process.stdout.on('resize', () => emit({ resized: true, ...dimensions() }));
       const deadline = setTimeout(() => process.exit(124), 8000);
       emit({ ready: true, tty: process.stdin.isTTY && process.stdout.isTTY, ...dimensions() });
       require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
@@ -230,7 +231,17 @@ describe("shared workspace sandbox on the native platform", () => {
         },
         { timeout: 5000 }
       );
-      command.postMessage({ resize: { columns: 120, rows: 40 }, input: "workspace-input\r" });
+      command.postMessage({ resize: { columns: 120, rows: 40 } });
+      // The kernel resize and Node's SIGWINCH delivery are asynchronous. Wait
+      // for the terminal to observe its dimensions before sending input.
+      await vi.waitFor(
+        () => {
+          if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);
+          expect(records).toContainEqual({ resized: true, columns: 120, rows: 40 });
+        },
+        { timeout: 5000 }
+      );
+      command.postMessage({ input: "workspace-input\r" });
       await vi.waitFor(
         () => {
           if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);

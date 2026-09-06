@@ -14,17 +14,29 @@ const dependencyContracts = [
   {
     packageName: "node-pty",
     smoke: `const mod = require("node-pty");
+       console.error("PTY probe: native module loaded; spawning child");
        const terminal = mod.spawn(process.execPath, ["-e", "process.stdout.write('native-pty-ready')"], {
          name: "xterm-256color", cols: 80, rows: 24, cwd: process.cwd(), env: process.env
        });
+       console.error("PTY probe: child spawned; awaiting output and exit");
        let output = "";
-       const timer = setTimeout(() => { terminal.kill(); console.error("PTY startup timed out"); process.exit(1); }, 5000);
-       terminal.onData(data => { output = (output + data).slice(-4096); });
-       terminal.onExit(({exitCode}) => {
-         clearTimeout(timer);
-         if (exitCode !== 0 || !output.includes("native-pty-ready")) {
-           console.error("PTY child did not complete its startup probe"); process.exitCode = 1;
+       let exited = false;
+       const timer = setTimeout(() => {
+         console.error("PTY startup timed out: childExited=" + exited + ", markerReceived=" + output.includes("native-pty-ready"));
+         terminal.kill(); process.exit(1);
+       }, 5000);
+       const complete = () => {
+         if (exited && output.includes("native-pty-ready")) {
+           clearTimeout(timer); process.exit(0);
          }
+       };
+       terminal.onData(data => { output = (output + data).slice(-4096); complete(); });
+       terminal.onExit(({exitCode}) => {
+         if (exitCode !== 0) {
+           console.error("PTY child exited unsuccessfully: " + exitCode); process.exit(1);
+         }
+         exited = true;
+         complete();
        });`,
   },
   {
