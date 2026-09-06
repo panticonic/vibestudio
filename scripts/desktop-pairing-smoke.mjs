@@ -1329,10 +1329,15 @@ async function main() {
     if (parsed.kind !== "ok") {
       throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
     }
+    // Pairing links are credentials. Also mask launch-error diagnostics, which
+    // Playwright can include with the Electron argument list in hosted CI.
+    if (process.env.GITHUB_ACTIONS === "true") {
+      console.log(`::add-mask::${loggedLink}`);
+      console.log(`::add-mask::${deepLink}`);
+    }
     console.log(
       `[desktop-smoke] Iroh pairing: endpoint=${parsed.endpointId}; relays=${parsed.relays.join(",")}`
     );
-    console.log(`[desktop-smoke] Deep link: ${deepLink}`);
 
     electronApp = await launchDesktopApp(
       deepLink,
