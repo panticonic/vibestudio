@@ -269,7 +269,9 @@ Native helper builds require Rust 1.95.0. Source builds emit the helper for the 
 gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/artifacts
 ```
 
-Generic npm packages require the complete Linux/macOS x64 and ARM64 plus Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
+Generic npm packages require the complete Linux/macOS x64 and ARM64 plus Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. The native macOS backend targets macOS 14 or later, matching the helper deployment target and installer minimum version. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency. The Windows helper uses a static C runtime, with CI checking its imports for unexpected Visual C++ redistributable dependencies.
+
+The five helper targets are not a product support matrix. Current required native dependencies cover Linux x64/ARM64, native Apple Silicon macOS, and Windows x64. Intel macOS has a helper implementation but lacks the required Iroh native binding; full app and standalone server support require that dependency and startup validation. Native macOS/Windows sandbox enforcement and packaged-app conformance must still pass on their respective systems before release.
 
 ## Scripts
 

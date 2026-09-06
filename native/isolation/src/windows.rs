@@ -5,6 +5,7 @@ use std::{
     fs, io,
     mem::{size_of, zeroed},
     ptr::{null, null_mut},
+    time::{Duration, Instant},
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -40,31 +41,76 @@ impl Drop for Handle {
         }
     }
 }
+
+/// Undo successful mutations in the opposite order, including during an early
+/// return. A Vec's element-drop order is not a transaction rollback order.
+struct RollbackStack<T> {
+    entries: Vec<T>,
+}
+impl<T> RollbackStack<T> {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+    fn push(&mut self, value: T) {
+        self.entries.push(value);
+    }
+}
+impl<T> Drop for RollbackStack<T> {
+    fn drop(&mut self) {
+        while let Some(value) = self.entries.pop() {
+            drop(value);
+        }
+    }
+}
+
 struct OwnedJob {
     handle: Handle,
     retired: bool,
+    retirement_deadline: Option<Instant>,
 }
+
+fn wait_for_empty_job(mut active: impl FnMut() -> Result<u32>, deadline: Instant) -> Result<()> {
+    loop {
+        if active()? == 0 {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Job termination deadline exceeded; descendant exit is unconfirmed".into());
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
+}
+
 impl OwnedJob {
     fn retire(&mut self) -> Result<()> {
         if self.retired {
             return Ok(());
         }
+        // Termination can wait on pending kernel I/O. Never hold the launcher
+        // and its private storage lock forever. Drop shares this deadline, so
+        // an explicit failed retirement cannot start another unbounded wait.
+        let deadline = *self
+            .retirement_deadline
+            .get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
         unsafe {
             check(TerminateJobObject(self.handle.0, 125))?;
-            loop {
-                let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = zeroed();
-                check(QueryInformationJobObject(
-                    self.handle.0,
-                    JobObjectBasicAccountingInformation,
-                    (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
-                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-                    null_mut(),
-                ))?;
-                if accounting.ActiveProcesses == 0 {
-                    break;
-                }
-                Sleep(10);
-            }
+            wait_for_empty_job(
+                || {
+                    let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = zeroed();
+                    check(QueryInformationJobObject(
+                        self.handle.0,
+                        JobObjectBasicAccountingInformation,
+                        (&mut accounting as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                        size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                        null_mut(),
+                    ))?;
+                    Ok(accounting.ActiveProcesses)
+                },
+                deadline,
+            )?;
         }
         self.retired = true;
         Ok(())
@@ -163,6 +209,50 @@ fn quote(value: &str) -> String {
     out.push_str(&"\\".repeat(slashes * 2));
     out.push('"');
     out
+}
+
+/// Windows environment names are case-insensitive and the Unicode block must
+/// be sorted accordingly. The common policy already uses ASCII identifier
+/// names; enforcing it here avoids locale-dependent aliasing in native input.
+fn environment_block(
+    environment: &BTreeMap<String, String>,
+    home: &str,
+    system_root: &str,
+) -> Result<Vec<u16>> {
+    let mut entries = BTreeMap::new();
+    for (key, value) in environment {
+        let mut chars = key.bytes();
+        if !chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+            || !chars.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            || value.contains('\0')
+        {
+            return Err("Invalid environment entry".into());
+        }
+        if entries
+            .insert(key.to_ascii_uppercase(), value.clone())
+            .is_some()
+        {
+            return Err("Duplicate case-insensitive environment entry".into());
+        }
+    }
+    for (key, value) in [
+        ("HOME", home),
+        ("USERPROFILE", home),
+        ("SYSTEMROOT", system_root),
+    ] {
+        if value.contains('\0') {
+            return Err("Invalid runtime environment coordinate".into());
+        }
+        entries.insert(key.into(), value.into());
+    }
+    let mut block = Vec::new();
+    for (key, value) in entries {
+        block.extend(wide(&format!("{key}={value}")));
+    }
+    block.push(0);
+    Ok(block)
 }
 
 fn canonical(value: &str) -> Result<String> {
@@ -350,8 +440,14 @@ impl IntegrityGrant {
             if present == 0 || acl.is_null() {
                 return Err("Cannot construct private-state integrity label".into());
             }
+            let grant = Self {
+                object,
+                descriptor,
+                original,
+                persistent: false,
+            };
             status(SetSecurityInfo(
-                object.0,
+                grant.object.0,
                 SE_FILE_OBJECT,
                 LABEL_SECURITY_INFORMATION,
                 null_mut(),
@@ -359,12 +455,7 @@ impl IntegrityGrant {
                 null_mut(),
                 acl,
             ))?;
-            Ok(Self {
-                object,
-                descriptor,
-                original,
-                persistent: false,
-            })
+            Ok(grant)
         }
     }
 }
@@ -374,18 +465,50 @@ impl Drop for IntegrityGrant {
             return;
         }
         unsafe {
-            if SetKernelObjectSecurity(self.object.0, LABEL_SECURITY_INFORMATION, self.descriptor.0)
-                == 0
-            {
+            // This rollback is only armed before the first guest is started.
+            // Use the filesystem API so inherited labels are restored too.
+            let code = SetSecurityInfo(
+                self.object.0,
+                SE_FILE_OBJECT,
+                LABEL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                self.original,
+            );
+            if code != ERROR_SUCCESS {
                 eprintln!(
                     "Cannot restore retired private-state integrity label: {}",
-                    io::Error::last_os_error()
+                    io::Error::from_raw_os_error(code as i32)
                 );
             }
         }
     }
 }
 impl AclGrant {
+    unsafe fn restore(&mut self) -> Result<()> {
+        if self.persistent {
+            return Ok(());
+        }
+        unsafe {
+            // Only immutable read trees or pre-guest provisioning roll back.
+            // Guest-writable grants are persistent and never traverse here.
+            // Restore inherited child ACEs as well as the pinned root: the
+            // persistent storage SID must not retain a past read admission.
+            status(SetSecurityInfo(
+                self.object.0,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                self.original,
+                null_mut(),
+            ))?;
+        }
+        self.persistent = true;
+        Ok(())
+    }
+
     unsafe fn install(resource: &str, sid: PSID, access: ResourceAccess) -> Result<Self> {
         unsafe {
             let object = pin_security_object(resource)?;
@@ -433,8 +556,14 @@ impl AclGrant {
                 &mut updated,
             ))?;
             let _updated = Local(updated.cast());
+            let grant = Self {
+                object,
+                descriptor,
+                original,
+                persistent: false,
+            };
             status(SetSecurityInfo(
-                object.0,
+                grant.object.0,
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION,
                 null_mut(),
@@ -442,30 +571,15 @@ impl AclGrant {
                 updated,
                 null_mut(),
             ))?;
-            Ok(Self {
-                object,
-                descriptor,
-                original,
-                persistent: false,
-            })
+            Ok(grant)
         }
     }
 }
 impl Drop for AclGrant {
     fn drop(&mut self) {
-        if self.persistent {
-            return;
-        }
         unsafe {
-            // Restore the pinned object, never a pathname that guest code could
-            // have replaced. Kernel-object mutation does not walk a changed tree.
-            if SetKernelObjectSecurity(self.object.0, DACL_SECURITY_INFORMATION, self.descriptor.0)
-                == 0
-            {
-                eprintln!(
-                    "Cannot restore retired private-state ACL: {}",
-                    io::Error::last_os_error()
-                );
+            if let Err(error) = self.restore() {
+                eprintln!("Cannot restore retired private-state ACL: {error}");
             }
         }
     }
@@ -677,6 +791,18 @@ pub fn run() -> Result<u32> {
     }
 
     unsafe {
+        let mut system = vec![0u16; 32768];
+        let length = GetWindowsDirectoryW(system.as_mut_ptr(), system.len() as u32);
+        if length == 0 || length as usize >= system.len() {
+            return Err("Cannot resolve Windows runtime directory".into());
+        }
+        // Validate before persistent storage security is changed. These are
+        // exact closed inputs, never the launcher's inherited environment.
+        let block = environment_block(
+            &p.environment,
+            &p.home,
+            &String::from_utf16(&system[..length as usize])?,
+        )?;
         let _lock = lock_domain(&p.private_root)?;
         let _write_anchors = p
             .write
@@ -741,8 +867,8 @@ pub fn run() -> Result<u32> {
             sid,
             persistent: !fresh,
         };
-        let mut integrity = Vec::new();
-        let mut storage_grants = Vec::new();
+        let mut integrity = RollbackStack::new();
+        let mut storage_grants = RollbackStack::new();
         if fresh {
             // Only first provisioning sees a host-prepared, link-free tree.
             // Never walk or rewrite security on guest-controlled descendants at restart.
@@ -751,10 +877,19 @@ pub fn run() -> Result<u32> {
                 .iter()
                 .map(|resource| staged_tree(resource))
                 .collect::<Result<Vec<_>>>()?;
-            for tree in &writable_tree {
-                for resource in tree {
-                    integrity.push(IntegrityGrant::install(resource)?);
-                }
+            // Capture descendants before a parent's inheritable low label
+            // changes them, including when write roots overlap. Every saved
+            // descriptor must predate provisioning, not an earlier mutation.
+            let mut writable_objects: Vec<_> = writable_tree.into_iter().flatten().collect();
+            writable_objects.sort_by_key(|resource| {
+                (
+                    std::cmp::Reverse(resource.matches('\\').count()),
+                    resource.to_ascii_lowercase(),
+                )
+            });
+            writable_objects.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            for resource in &writable_objects {
+                integrity.push(IntegrityGrant::install(resource)?);
             }
             for resource in &p.write {
                 storage_grants.push(AclGrant::install(
@@ -765,10 +900,10 @@ pub fn run() -> Result<u32> {
             }
             write_storage_domain(&domain_path, &domain)?;
             profile.persistent = true;
-            for grant in &mut storage_grants {
+            for grant in &mut storage_grants.entries {
                 grant.persistent = true;
             }
-            for grant in &mut integrity {
+            for grant in &mut integrity.entries {
                 grant.persistent = true;
             }
         }
@@ -776,7 +911,7 @@ pub fn run() -> Result<u32> {
         // per-file handles. Only immutable anchors are pinned for the lifetime.
         drop(storage_grants);
         drop(integrity);
-        let mut grants = Vec::new();
+        let mut grants = RollbackStack::new();
         for resource in &p.read {
             grants.push(AclGrant::install(resource, sid, ResourceAccess::Immutable)?);
         }
@@ -787,6 +922,7 @@ pub fn run() -> Result<u32> {
         let mut job = OwnedJob {
             handle: Handle(job_raw),
             retired: false,
+            retirement_deadline: None,
         };
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
         limits.BasicLimitInformation.LimitFlags =
@@ -848,30 +984,6 @@ pub fn run() -> Result<u32> {
         startup.StartupInfo.hStdOutput = handles[1];
         startup.StartupInfo.hStdError = handles[2];
         startup.lpAttributeList = attributes.list;
-        let mut environment = p.environment;
-        for (key, value) in &environment {
-            if key.contains(['=', '\0']) || value.contains('\0') {
-                return Err("Invalid environment entry".into());
-            }
-        }
-        // The caller supplies a closed environment, including the private home.
-        // It cannot smuggle inherited native helper handles through environment.
-        environment.insert("HOME".into(), p.home.clone());
-        environment.insert("USERPROFILE".into(), p.home.clone());
-        let mut system = vec![0u16; 32768];
-        let length = GetWindowsDirectoryW(system.as_mut_ptr(), system.len() as u32);
-        if length == 0 || length as usize >= system.len() {
-            return Err("Cannot resolve Windows runtime directory".into());
-        }
-        environment.insert(
-            "SystemRoot".into(),
-            String::from_utf16(&system[..length as usize])?,
-        );
-        let mut block = Vec::new();
-        for (key, value) in environment {
-            block.extend(wide(&format!("{key}={value}")));
-        }
-        block.push(0);
         let mut command = wide(
             &std::iter::once(&p.executable)
                 .chain(&p.args)
@@ -950,6 +1062,11 @@ pub fn run() -> Result<u32> {
         check(GetExitCodeProcess(process.0, &mut code))?;
         job.retire()?;
         drop(job);
+        // A failed read-grant cleanup is not a successful helper teardown.
+        // All guest processes are observed gone before walking immutable inputs.
+        for grant in grants.entries.iter_mut().rev() {
+            grant.restore()?;
+        }
         drop(grants);
         Ok(code)
     }
@@ -962,12 +1079,360 @@ unsafe extern "system" {
 
 #[cfg(test)]
 mod tests {
-    use super::quote;
+    use super::{RollbackStack, environment_block, quote, wait_for_empty_job};
+    use std::{
+        collections::BTreeMap,
+        time::{Duration, Instant},
+    };
     #[test]
     fn command_line_preserves_empty_quotes_and_trailing_slashes() {
         assert_eq!(quote(""), "\"\"");
         assert_eq!(quote("two words"), "\"two words\"");
         assert_eq!(quote("a\"b"), "\"a\\\"b\"");
         assert_eq!(quote("C:\\dir\\"), "\"C:\\dir\\\\\"");
+    }
+
+    #[test]
+    fn rollback_restores_parent_before_previously_installed_descendants() {
+        use std::{cell::RefCell, rc::Rc};
+        struct Mutation(&'static str, Rc<RefCell<Vec<&'static str>>>);
+        impl Drop for Mutation {
+            fn drop(&mut self) {
+                self.1.borrow_mut().push(self.0);
+            }
+        }
+        let restored = Rc::new(RefCell::new(Vec::new()));
+        let provision = || -> std::result::Result<(), &'static str> {
+            let mut mutations = RollbackStack::new();
+            for resource in ["leaf", "directory", "root"] {
+                mutations.push(Mutation(resource, restored.clone()));
+            }
+            Err("later provisioning failed")
+        };
+        assert!(provision().is_err());
+        assert_eq!(&*restored.borrow(), &["root", "directory", "leaf"]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn pinned_anchor_preserves_child_acl_and_integrity_inheritance() -> super::Result<()> {
+        use super::*;
+        // WinNT.h ACE_HEADER values; avoid enabling SystemServices solely for
+        // these two constants in this native regression.
+        const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+        const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).expect("remove native security fixture");
+            }
+        }
+        unsafe fn has_sid(
+            resource: &str,
+            information: u32,
+            sid: PSID,
+            ace_type: u8,
+        ) -> Result<bool> {
+            unsafe {
+                let handle = pin_security_object(resource)?;
+                let mut acl = null_mut();
+                let mut descriptor = null_mut();
+                status(GetSecurityInfo(
+                    handle.0,
+                    SE_FILE_OBJECT,
+                    information,
+                    null_mut(),
+                    null_mut(),
+                    if information == DACL_SECURITY_INFORMATION {
+                        &mut acl
+                    } else {
+                        null_mut()
+                    },
+                    if information == LABEL_SECURITY_INFORMATION {
+                        &mut acl
+                    } else {
+                        null_mut()
+                    },
+                    &mut descriptor,
+                ))?;
+                let _descriptor = Local(descriptor);
+                if acl.is_null() {
+                    return Ok(false);
+                }
+                let mut size: ACL_SIZE_INFORMATION = zeroed();
+                check(GetAclInformation(
+                    acl,
+                    (&mut size as *mut ACL_SIZE_INFORMATION).cast(),
+                    size_of::<ACL_SIZE_INFORMATION>() as u32,
+                    AclSizeInformation,
+                ))?;
+                for index in 0..size.AceCount {
+                    let mut ace = null_mut();
+                    check(GetAce(acl, index, &mut ace))?;
+                    if (*(ace as *const ACE_HEADER)).AceType == ace_type {
+                        // Both tested ACE forms carry Mask followed by SidStart.
+                        let actual =
+                            std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart);
+                        if EqualSid(actual.cast_mut().cast(), sid) != 0 {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(false)
+            }
+        }
+        unsafe fn security_snapshot(
+            resource: &str,
+            information: u32,
+        ) -> Result<(u16, Vec<Vec<u8>>)> {
+            unsafe {
+                let handle = pin_security_object(resource)?;
+                let mut acl = null_mut();
+                let mut descriptor = null_mut();
+                status(GetSecurityInfo(
+                    handle.0,
+                    SE_FILE_OBJECT,
+                    information,
+                    null_mut(),
+                    null_mut(),
+                    if information == DACL_SECURITY_INFORMATION {
+                        &mut acl
+                    } else {
+                        null_mut()
+                    },
+                    if information == LABEL_SECURITY_INFORMATION {
+                        &mut acl
+                    } else {
+                        null_mut()
+                    },
+                    &mut descriptor,
+                ))?;
+                let _descriptor = Local(descriptor);
+                let mut control = 0;
+                let mut revision = 0;
+                check(GetSecurityDescriptorControl(
+                    descriptor,
+                    &mut control,
+                    &mut revision,
+                ))?;
+                // Ignore automatic-inheritance bookkeeping and unused ACL
+                // capacity. An absent/empty label SACL both mean no explicit
+                // label; DACL presence and protection still affect authority.
+                let control = control
+                    & if information == DACL_SECURITY_INFORMATION {
+                        SE_DACL_PRESENT | SE_DACL_PROTECTED
+                    } else {
+                        SE_SACL_PROTECTED
+                    };
+                let mut aces = Vec::new();
+                if !acl.is_null() {
+                    let mut size: ACL_SIZE_INFORMATION = zeroed();
+                    check(GetAclInformation(
+                        acl,
+                        (&mut size as *mut ACL_SIZE_INFORMATION).cast(),
+                        size_of::<ACL_SIZE_INFORMATION>() as u32,
+                        AclSizeInformation,
+                    ))?;
+                    for index in 0..size.AceCount {
+                        let mut ace = null_mut();
+                        check(GetAce(acl, index, &mut ace))?;
+                        let size = (*(ace as *const ACE_HEADER)).AceSize as usize;
+                        aces.push(std::slice::from_raw_parts(ace.cast::<u8>(), size).to_vec());
+                    }
+                }
+                Ok((control, aces))
+            }
+        }
+        let directory = std::env::temp_dir().join(format!(
+            "vibestudio-anchor-inheritance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        fs::create_dir(&directory)?;
+        let _fixture = Fixture(directory.clone());
+        let directory = directory.to_string_lossy().to_string();
+        let child = format!("{directory}\\existing-child");
+        fs::write(&child, "fixture")?;
+        let inherited_child = format!("{directory}\\inheritance-only-child");
+        fs::write(&inherited_child, "fixture")?;
+        unsafe {
+            let mut sid = null_mut();
+            check(ConvertStringSidToSidW(
+                wide("S-1-15-2-999-998-997-996-995-994-993").as_ptr(),
+                &mut sid,
+            ))?;
+            let _sid = Local(sid);
+            let mut low = null_mut();
+            check(ConvertStringSidToSidW(
+                wide("S-1-16-4096").as_ptr(),
+                &mut low,
+            ))?;
+            let _low = Local(low);
+            let _anchor = pin_write_anchor(&directory)?;
+            let original_root_acl = security_snapshot(&directory, DACL_SECURITY_INFORMATION)?;
+            let original_child_acl = security_snapshot(&child, DACL_SECURITY_INFORMATION)?;
+            let original_root_label = security_snapshot(&directory, LABEL_SECURITY_INFORMATION)?;
+            let original_child_label = security_snapshot(&child, LABEL_SECURITY_INFORMATION)?;
+            let original_inherited_label =
+                security_snapshot(&inherited_child, LABEL_SECURITY_INFORMATION)?;
+            assert!(!has_sid(
+                &child,
+                DACL_SECURITY_INFORMATION,
+                sid,
+                ACCESS_ALLOWED_ACE_TYPE
+            )?);
+            let mut integrity = RollbackStack::new();
+            integrity.push(IntegrityGrant::install(&child)?);
+            integrity.push(IntegrityGrant::install(&directory)?);
+            // This pre-existing file gets no direct label mutation; only root
+            // inheritance can establish the low label while the anchor is held.
+            assert!(has_sid(
+                &inherited_child,
+                LABEL_SECURITY_INFORMATION,
+                low,
+                SYSTEM_MANDATORY_LABEL_ACE_TYPE
+            )?);
+            assert!(has_sid(
+                &child,
+                LABEL_SECURITY_INFORMATION,
+                low,
+                SYSTEM_MANDATORY_LABEL_ACE_TYPE
+            )?);
+            let mut grants = RollbackStack::new();
+            grants.push(AclGrant::install(
+                &directory,
+                sid,
+                ResourceAccess::WritableRoot,
+            )?);
+            assert!(has_sid(
+                &child,
+                DACL_SECURITY_INFORMATION,
+                sid,
+                ACCESS_ALLOWED_ACE_TYPE
+            )?);
+            // A host create is a mechanism check here; LPAC guest writes are
+            // separately exercised by the native workspace conformance test.
+            let added = format!("{directory}\\new-child");
+            fs::write(&added, "new")?;
+            assert!(has_sid(
+                &added,
+                DACL_SECURITY_INFORMATION,
+                sid,
+                ACCESS_ALLOWED_ACE_TYPE
+            )?);
+            drop(grants);
+            assert!(!has_sid(
+                &child,
+                DACL_SECURITY_INFORMATION,
+                sid,
+                ACCESS_ALLOWED_ACE_TYPE
+            )?);
+            assert!(!has_sid(
+                &added,
+                DACL_SECURITY_INFORMATION,
+                sid,
+                ACCESS_ALLOWED_ACE_TYPE
+            )?);
+            drop(integrity);
+            assert_eq!(
+                security_snapshot(&directory, DACL_SECURITY_INFORMATION)?,
+                original_root_acl
+            );
+            assert_eq!(
+                security_snapshot(&child, DACL_SECURITY_INFORMATION)?,
+                original_child_acl
+            );
+            assert_eq!(
+                security_snapshot(&directory, LABEL_SECURITY_INFORMATION)?,
+                original_root_label
+            );
+            assert_eq!(
+                security_snapshot(&child, LABEL_SECURITY_INFORMATION)?,
+                original_child_label
+            );
+            assert_eq!(
+                security_snapshot(&inherited_child, LABEL_SECURITY_INFORMATION)?,
+                original_inherited_label
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn environment_is_sorted_case_insensitively_and_owner_coordinates_win() {
+        let environment = BTreeMap::from([
+            ("z_last".into(), "unicode: café".into()),
+            ("Path".into(), "C:\\runtime".into()),
+            ("home".into(), "C:\\host-home".into()),
+            ("systemroot".into(), "C:\\forged-system".into()),
+            ("userprofile".into(), "C:\\host-profile".into()),
+            ("A_FIRST".into(), "value=with=equals".into()),
+        ]);
+        let block = environment_block(&environment, "C:\\private", "C:\\Windows").unwrap();
+        assert_eq!(
+            String::from_utf16(&block).unwrap(),
+            concat!(
+                "A_FIRST=value=with=equals\0",
+                "HOME=C:\\private\0",
+                "PATH=C:\\runtime\0",
+                "SYSTEMROOT=C:\\Windows\0",
+                "USERPROFILE=C:\\private\0",
+                "Z_LAST=unicode: café\0\0"
+            )
+        );
+    }
+
+    #[test]
+    fn environment_rejects_ambiguous_names_and_embedded_entries() {
+        let duplicate = BTreeMap::from([
+            ("PATH".into(), "first".into()),
+            ("Path".into(), "second".into()),
+        ]);
+        assert!(environment_block(&duplicate, "home", "system").is_err());
+        for (key, value) in [
+            ("", "value"),
+            ("=C:", "value"),
+            ("KEY=OTHER", "value"),
+            ("HÖME", "value"),
+            ("KEY", "one\0OTHER=two"),
+        ] {
+            assert!(
+                environment_block(
+                    &BTreeMap::from([(key.into(), value.into())]),
+                    "home",
+                    "system"
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn job_retirement_observes_empty_and_bounds_stuck_descendants() {
+        assert!(wait_for_empty_job(|| Ok(0), Instant::now()).is_ok());
+        let mut queries = 0;
+        let result = wait_for_empty_job(
+            || {
+                queries += 1;
+                Ok(1)
+            },
+            Instant::now(),
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("descendant exit is unconfirmed")
+        );
+        assert_eq!(queries, 1);
+        assert!(
+            wait_for_empty_job(
+                || Err("accounting query failed".into()),
+                Instant::now() + Duration::from_secs(1)
+            )
+            .is_err()
+        );
     }
 }
