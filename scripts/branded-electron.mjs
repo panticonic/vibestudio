@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const APP_NAME = "Vibestudio";
 const APP_BUNDLE_IDENTIFIER = "app.vibestudio.app.dev";
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -16,11 +16,12 @@ const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 /**
  * Resolve the Electron executable, branded as "Vibestudio" on macOS.
  *
- * @param {{ installed?: boolean, requireCodesign?: boolean }} [opts] When `installed` is true (the npm
+ * @param {{ installed?: boolean }} [opts] When `installed` is true (the npm
  *   global-install launcher), the branded copy is cached under the per-user
  *   data dir (the package prefix may be root-owned), uses the production bundle
- *   id, and is ad-hoc re-signed so it launches on Apple Silicon. The default
- *   (dev) path keeps the repo-local cache and the `.dev` bundle id.
+ *   id. The default (dev) path keeps the repo-local cache and `.dev` bundle id.
+ *   Both paths re-sign and verify the modified bundle before publishing it;
+ *   Keychain application identity requires a valid seal even during development.
  */
 export function resolveElectronExecutableForVibestudio(opts = {}) {
   const electronExecutable = require("electron");
@@ -53,6 +54,7 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
   };
 
   if (!isCurrentBrandedApp(brandedApp, markerPath, marker)) {
+    fs.rmSync(markerPath, { force: true });
     fs.rmSync(brandedApp, { recursive: true, force: true });
     fs.mkdirSync(cacheRoot, { recursive: true });
     fs.cpSync(sourceApp, brandedApp, {
@@ -65,7 +67,7 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
     // Apple Silicon refuses to launch an invalidly-signed bundle, so re-seal the
     // copy with an ad-hoc signature (free, no Developer ID). The npm-delivered
     // app is non-quarantined, so Gatekeeper's hard-block never applies.
-    if (installed) adhocCodesign(brandedApp, opts.requireCodesign === true);
+    adhocCodesign(brandedApp);
     fs.writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
     if (installed) pruneSupersededCaches(cacheBase, cacheRoot);
   }
@@ -73,17 +75,17 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
   return path.join(brandedApp, path.relative(sourceApp, electronExecutable));
 }
 
-function adhocCodesign(appPath, required) {
+function adhocCodesign(appPath) {
   try {
     execFileSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
       stdio: "ignore",
     });
+    execFileSync("codesign", ["--verify", "--deep", "--strict", appPath], { stdio: "ignore" });
   } catch (error) {
     const message = `Could not ad-hoc sign the branded Electron bundle: ${
       error instanceof Error ? error.message : String(error)
     }`;
-    if (required) throw new Error(message, { cause: error });
-    console.warn(`[branded-electron] ${message} (the app may not launch on Apple Silicon)`);
+    throw new Error(message, { cause: error });
   }
 }
 

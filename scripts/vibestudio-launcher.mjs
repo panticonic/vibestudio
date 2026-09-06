@@ -89,7 +89,6 @@ async function launchGui(args) {
     );
     electronBinary = resolveElectronExecutableForVibestudio({
       installed: true,
-      requireCodesign: Boolean(process.env[NPM_UPDATE_ENV.resultPath]),
     });
   } catch (error) {
     recordRelaunchFailure(error);
