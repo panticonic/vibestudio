@@ -233,6 +233,13 @@ jobs:
         id: production-build
         run: pnpm build
 
+      - name: Report Windows long-path operating system policy
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $value = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction SilentlyContinue
+          Write-Host "Windows LongPathsEnabled=$value (1 is required for long workspace database paths; CI does not change this policy)"
+
       - name: Check native execution and platform permissions
         id: native-check
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts --reporter=default --reporter=json --outputFile=.cache/native-acceptance.json

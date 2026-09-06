@@ -104,6 +104,7 @@ function stageServer(nativeArtifacts, nodeRuntimes) {
   stageBaseTemplateRelease(root);
 
   // Bin shims.
+  copyWorkerdWindowsMetadata(root);
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
   copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
   stageNpmUpdateLauncherFiles(root);
@@ -160,6 +161,7 @@ function stageApp(nativeArtifacts) {
   copyTree(path.join(repoRoot, "dist"), path.join(root, "dist"), defaultSkip);
   stageNativeIsolationArtifacts(root, nativeArtifacts);
 
+  copyWorkerdWindowsMetadata(root);
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
   copyFile("scripts/desktop-launch-args.mjs", path.join(root, "scripts/desktop-launch-args.mjs"));
   stageNpmUpdateLauncherFiles(root);
@@ -204,6 +206,11 @@ function stageApp(nativeArtifacts) {
     dependencies: computeHostDependencies({ electron: true }),
     publishConfig: { access: "public" },
   });
+}
+
+function copyWorkerdWindowsMetadata(root) {
+  copyFile("scripts/workerd-windows-metadata.mjs", path.join(root, "scripts/workerd-windows-metadata.mjs"));
+  copyFile("scripts/workerd.exe.manifest", path.join(root, "scripts/workerd.exe.manifest"));
 }
 
 export function assertPassthroughScriptsStaged(root) {

@@ -144,17 +144,35 @@ describe("native isolation artifact matrix", () => {
   it("stages Windows Node without requiring or shipping an MXC executor", async () => {
     const { root } = fixture();
     writeNodeRuntimeFixture(root, "win32", "x64");
+    const workerdPackage = path.join(
+      root,
+      "node_modules/@cloudflare/workerd-windows-64"
+    );
+    mkdirSync(path.join(workerdPackage, "bin"), { recursive: true });
+    writeFileSync(
+      path.join(workerdPackage, "package.json"),
+      JSON.stringify({ name: "@cloudflare/workerd-windows-64", version: "test" })
+    );
+    writeFileSync(path.join(workerdPackage, "bin/workerd.exe"), "vendor workerd");
     const context = { electronPlatformName: "win32", arch: 1, packager: { projectDir: root } };
     await stageElectronNativeIsolation(context as never);
     const resources = path.join(root, "resources");
     cpSync(path.join(root, "dist/node"), path.join(resources, "app.asar.unpacked/dist/node"), {
       recursive: true,
     });
+    cpSync(
+      workerdPackage,
+      path.join(resources, "app.asar.unpacked/node_modules/@cloudflare/workerd-windows-64"),
+      { recursive: true }
+    );
     await expect(
       assertPackagedNativeIsolation(resources, context as never)
     ).resolves.toBeUndefined();
     expect(() => statSync(path.join(root, "dist/mxc"))).toThrow();
     expect(() => statSync(path.join(resources, "app.asar.unpacked/dist/mxc"))).toThrow();
+    expect(readFileSync(path.join(workerdPackage, "bin/workerd.exe.manifest"))).toEqual(
+      readFileSync("scripts/workerd.exe.manifest")
+    );
   });
 
   it("uses Electron Builder's real resource filter without dropping vendored node_modules", async () => {

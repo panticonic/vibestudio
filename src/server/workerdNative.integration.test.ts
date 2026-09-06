@@ -2,7 +2,7 @@ import { it, expect } from "vitest";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -56,22 +56,35 @@ it.each([
     let stderr = "";
     let stdout = "";
     try {
+      if (process.platform === "win32") {
+        expect(await readFile(`${installedWorkerd()}.manifest`, "utf8")).toContain(
+          '<longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>'
+        );
+      }
       const port = await unusedPort();
       const inspectorPort = feature === "inspector" ? await unusedPort() : undefined;
       const sqlite = feature.startsWith("sqlite");
       const facet = feature.startsWith("sqlite-facet");
+      // Keep the admitted directory below MAX_PATH, including its namespace, while
+      // generated SQLite filenames cross it. This isolates database opening
+      // from workerd's directory-service startup behavior.
+      const storageSuffix = path.join(
+        "instance",
+        "workspaces",
+        "workspace-native-test",
+        "state",
+        ".databases",
+        "workerd-universal-do"
+      );
+      const padding = Math.max(1, 190 - path.join(root, storageSuffix).length - 1);
       const storageRoot = feature.endsWith("long-path")
-        ? path.join(
-            root,
-            "profile-" + "x".repeat(80),
-            "instance",
-            "workspaces",
-            "workspace-native-test",
-            "state",
-            ".databases",
-            "workerd-universal-do"
-          )
+        ? path.join(root, "x".repeat(padding), storageSuffix)
         : path.join(root, "storage");
+      if (sqlite)
+        console.log(
+          "[workerd native storage root]",
+          JSON.stringify({ feature, path: storageRoot, length: storageRoot.length })
+        );
       if (sqlite) await mkdir(storageRoot, { recursive: true });
       let source = 'export default { fetch() { return new Response("http-ok"); } };';
       let fields = "";
