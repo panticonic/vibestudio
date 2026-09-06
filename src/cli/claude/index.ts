@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { assertMxcPrerequisites } from "@vibestudio/process-adapter/mxc";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -215,7 +216,7 @@ export async function executePreparedClaudeLaunch(input: {
   return outcome.exitCode;
 }
 
-export function spawnClaude(
+export async function spawnClaude(
   launch: MaterializedClaudeLaunch,
   contextDirectory: string
 ): Promise<number> {
@@ -247,6 +248,12 @@ export function spawnClaude(
     launchEnv: launch.env,
     profileDir: launch.profileDir,
     contextDirectory,
+  });
+  await assertMxcPrerequisites({
+    platform: process.platform as "linux" | "darwin" | "win32",
+    launcher: confined.command,
+    network: "allow",
+    environment: confined.env,
   });
   return new Promise((resolve, reject) => {
     const child = spawn(confined.command, confined.args, {

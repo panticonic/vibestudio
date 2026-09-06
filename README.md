@@ -263,7 +263,7 @@ ports, ready files, CLI credentials, and sessions. The checkout-scoped lock
 prevents two launchers from competing for one instance, while different
 instances run concurrently. Stopping one never targets another hub.
 
-MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. The separate Rust helper only performs installed workspace-storage cleanup. Source builds stage both for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging npm packages or installers, download the native artifacts from a successful CI run:
+MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. Workspace cleanup also runs through MXC; no Rust toolchain or app-owned native helper is required. Source builds stage the executor for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging npm packages or installers, download the native artifacts from a successful CI run:
 
 ```bash
 gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/artifacts

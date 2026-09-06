@@ -1,0 +1,110 @@
+import path from "node:path";
+import type { ContainerConfig } from "@microsoft/mxc-sdk";
+
+export type MxcPlatform = "linux" | "darwin" | "win32";
+
+export interface MxcLaunchInput {
+  platform: MxcPlatform;
+  launcher: string;
+  containerId: string;
+  argv: readonly string[];
+  cwd: string;
+  guestEnvironment: Readonly<Record<string, string>>;
+  readPaths: readonly string[];
+  writePaths: readonly string[];
+  /** Workspace commands deny networking; linked providers explicitly allow it. */
+  network: "deny" | "allow";
+}
+
+/** Keep helper discovery on the trusted owner's PATH. Windows ACL journal
+ * coordinates stay host-owned, never copied from guestEnvironment. */
+export function mxcLauncherEnvironment(
+  platform: MxcPlatform,
+  ambient: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const keys =
+    platform === "win32" ? ["PATH", "SystemRoot", "USERPROFILE", "LOCALAPPDATA"] : ["PATH"];
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const value = ambient[key];
+      return value === undefined ? [] : [[key, value]];
+    })
+  );
+}
+
+/** MXC's Unix command is interpreted by a shell; Windows uses CreateProcess/CRT. */
+function quoteArgument(value: string, platform: MxcPlatform): string {
+  if (value.includes("\0")) throw new Error("MXC command argument contains NUL");
+  if (platform !== "win32") return "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  return '"' + value.replace(/(\\*)"/gu, '$1$1\\"').replace(/(\\+)$/u, "$1$1") + '"';
+}
+
+/** One stock MXC adapter. Callers own resource admission and guest authority;
+ * this function only translates those decisions to the installed executor. */
+export function compileMxcLaunch(
+  input: MxcLaunchInput,
+  hostEnvironment: NodeJS.ProcessEnv = process.env
+): {
+  command: string;
+  args: string[];
+  cwd: string;
+  environment: Record<string, string>;
+} {
+  const paths = input.platform === "win32" ? path.win32 : path.posix;
+  if (!paths.isAbsolute(input.launcher) || input.launcher.includes("\0")) {
+    throw new Error("The MXC launcher must be an installed absolute path");
+  }
+  if (!input.argv.length || !input.argv[0]) throw new Error("MXC launch has no executable");
+  if (input.platform === "win32" && /\.(?:cmd|bat)$/iu.test(input.argv[0])) {
+    throw new Error(
+      "MXC requires a native Windows executable; command-script shims are unsupported"
+    );
+  }
+  const environment = Object.entries(input.guestEnvironment).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || value.includes("\0"))
+      throw new Error("Invalid MXC guest environment");
+    return `${key}=${value}`;
+  });
+  const config: ContainerConfig = {
+    version: "0.8.0-alpha",
+    containment:
+      input.platform === "linux"
+        ? "bubblewrap"
+        : input.platform === "darwin"
+          ? "seatbelt"
+          : "processcontainer",
+    containerId: input.containerId,
+    process: {
+      commandLine: input.argv.map((arg) => quoteArgument(arg, input.platform)).join(" "),
+      cwd: input.cwd,
+      env: environment,
+      timeout: 0,
+    },
+    filesystem: { readonlyPaths: [...input.readPaths], readwritePaths: [...input.writePaths] },
+    network: {
+      egress: { default: input.network },
+      ingress: { default: "deny", hostLoopback: "deny" },
+    },
+    lifecycle: { destroyOnExit: true, preservePolicy: false },
+    ui: { disable: true, clipboard: "none", injection: false },
+    ...(input.platform === "win32"
+      ? {
+          processContainer: {
+            leastPrivilege: false,
+            capabilities: input.network === "allow" ? ["internetClient"] : [],
+          },
+        }
+      : {}),
+    ...(input.platform === "darwin"
+      ? { seatbelt: { nestedPty: true, keychainAccess: false } }
+      : {}),
+  };
+  return {
+    command: input.launcher,
+    args: ["--config-base64", Buffer.from(JSON.stringify(config)).toString("base64")],
+    cwd: input.cwd,
+    environment: mxcLauncherEnvironment(input.platform, hostEnvironment),
+  };
+}
+
+export { assertMxcPrerequisites, formatMxcStartupError } from "./prerequisites.js";

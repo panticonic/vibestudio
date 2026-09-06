@@ -3,11 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  claudeContainedSpawnEnvironment,
-  claudeMxcLauncherEnvironment,
-  confineClaudeReadOnly,
-} from "./claudeReadOnlyLaunch.js";
+import { claudeContainedSpawnEnvironment, confineClaudeReadOnly } from "./claudeReadOnlyLaunch.js";
 
 function canRunMxc(): boolean {
   if (process.platform !== "linux" || !existsSync(launcher)) return false;
@@ -79,35 +75,6 @@ describe("confineClaudeReadOnly", () => {
       /disjoint/
     );
     expect(() => confineClaudeReadOnly({ ...input, platform: "freebsd" })).toThrow(/unsupported/);
-  });
-
-  it("keeps Windows MXC lifecycle coordinates in the host environment only", () => {
-    expect(
-      claudeMxcLauncherEnvironment("win32", {
-        PATH: "C:\\runtime",
-        SystemRoot: "C:\\Windows",
-        USERPROFILE: "C:\\Users\\owner",
-        LOCALAPPDATA: "C:\\Users\\owner\\AppData\\Local",
-        HOME: "guest-home",
-        OPENAI_API_KEY: "secret",
-      })
-    ).toEqual({
-      PATH: "C:\\runtime",
-      SystemRoot: "C:\\Windows",
-      USERPROFILE: "C:\\Users\\owner",
-      LOCALAPPDATA: "C:\\Users\\owner\\AppData\\Local",
-    });
-    expect(() =>
-      confineClaudeReadOnly({
-        argv: ["C:\\runtime\\claude.cmd"],
-        launcher: "C:\\mxc.exe",
-        profileDir: "C:\\profile",
-        contextDirectory: "C:\\context",
-        readPaths: ["C:\\runtime"],
-        launchEnv: {},
-        platform: "win32",
-      })
-    ).toThrow(/native Windows executable/);
   });
 
   it("allows runtime coordinates while excluding ambient credentials and agent sockets", () => {

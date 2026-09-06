@@ -16,6 +16,10 @@
     "./workspace-runtime": {
       "types": "./dist/isolation/workspaceChild.d.ts",
       "default": "./dist/isolation/workspaceChild.js"
+    },
+    "./mxc": {
+      "types": "./dist/isolation/mxc.d.ts",
+      "default": "./dist/isolation/mxc.js"
     }
   },
   "scripts": {

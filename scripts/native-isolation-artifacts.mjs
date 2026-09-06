@@ -1,14 +1,11 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, lstatSync, existsSync } from "node:fs";
+import { readFileSync, lstatSync } from "node:fs";
 import path from "node:path";
 
-export const NATIVE_ISOLATION_RUST_VERSION = "1.95.0";
 export const MXC_SDK_VERSION = "0.8.0";
-
 export const NATIVE_ISOLATION_TARGETS = Object.freeze(
   JSON.parse(readFileSync(new URL("../native/isolation/targets.json", import.meta.url), "utf8"))
 );
-
 export function nativeIsolationTarget(platform = process.platform, arch = process.arch) {
   const target = NATIVE_ISOLATION_TARGETS.find(
     (entry) => entry.platform === platform && entry.arch === arch
@@ -16,118 +13,70 @@ export function nativeIsolationTarget(platform = process.platform, arch = proces
   if (!target) throw new Error(`Unsupported native isolation target: ${platform}-${arch}`);
   return target;
 }
-
-export function nativeIsolationSourceDigest(appRoot) {
-  const sourceRoot = path.join(appRoot, "native/isolation");
-  const files = [];
-  function visit(dir) {
-    for (const entry of readdirSync(path.join(sourceRoot, dir), { withFileTypes: true })) {
-      const relative = `${dir}/${entry.name}`;
-      if (dir === "." && ["target", "artifacts"].includes(entry.name)) continue;
-      if (entry.isDirectory()) visit(relative);
-      else if (entry.isFile()) files.push(relative);
-      else throw new Error(`Native isolation source must be a regular file: ${relative}`);
-    }
-  }
-  visit(".");
-  for (const name of ["build-native-isolation.mjs", "native-isolation-artifacts.mjs"]) {
-    files.push(`../../scripts/${name}`);
-  }
-  const hash = createHash("sha256");
-  for (const name of files.sort()) {
-    const bytes = readFileSync(path.join(sourceRoot, name));
-    hash.update(`${name}\0${bytes.length}\0`);
-    hash.update(bytes);
-  }
-  return hash.digest("hex");
-}
-
 export function nativeIsolationManifestPath(target) {
   return `${path.posix.dirname(target.artifact)}/manifest.json`;
 }
-
-export function nativeCleanupManifestPath(target) {
-  return `${path.posix.dirname(target.cleanupArtifact)}/manifest.json`;
-}
-
 export function nativeIsolationBinaryDigest(file) {
   if (!lstatSync(file).isFile())
     throw new Error(`Native isolation artifact must be a regular file: ${file}`);
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
-
-/** Universal npm packages require the complete matrix from one source closure. */
 export function assertNativeIsolationArtifacts(
   appRoot,
   artifactRoot = path.join(appRoot, "native/isolation/artifacts"),
   targets = NATIVE_ISOLATION_TARGETS
 ) {
   const artifacts = [];
-  const cleanupSourceDigest = nativeIsolationSourceDigest(appRoot);
   for (const target of targets) {
-    const manifestPath = nativeIsolationManifestPath(target);
     const inputRoot = path.join(artifactRoot, `native-isolation-${target.platform}-${target.arch}`);
-    const inputManifest = path.join(inputRoot, "manifest.json");
-    const inputBinary = path.join(inputRoot, path.basename(target.artifact));
+    const manifestPath = path.join(inputRoot, "manifest.json");
     let manifest;
     try {
-      manifest = JSON.parse(readFileSync(inputManifest, "utf8"));
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     } catch {
       throw new Error(
-        `Missing native isolation release artifact: ${target.platform}-${target.arch}. Assemble the complete CI native artifact matrix before staging npm packages.`
+        `Missing MXC release artifact: ${target.platform}-${target.arch}. Assemble the complete CI matrix.`
       );
     }
-    if (manifest.version !== 1 || manifest.sdk !== "@microsoft/mxc-sdk" || manifest.sdkVersion !== MXC_SDK_VERSION || manifest.binary !== target.mxcBinary || !manifest.files) {
+    if (
+      manifest.version !== 1 ||
+      manifest.sdk !== "@microsoft/mxc-sdk" ||
+      manifest.sdkVersion !== MXC_SDK_VERSION ||
+      manifest.binary !== target.mxcBinary ||
+      !manifest.files
+    )
       throw new Error(
         `MXC isolation artifact is from a different target or SDK version: ${target.artifact}`
       );
-    }
     for (const binary of target.mxcFiles) {
-      const file = path.join(inputRoot, binary);
-      if (!existsSync(file) || manifest.files[binary] !== nativeIsolationBinaryDigest(file))
-        throw new Error(`Missing or checksum mismatch in MXC payload file: ${target.platform}-${target.arch}/${binary}`);
-      artifacts.push({ source: file, artifact: `${path.posix.dirname(target.artifact)}/${binary}` });
+      const source = path.join(inputRoot, binary);
+      if (manifest.files[binary] !== nativeIsolationBinaryDigest(source))
+        throw new Error(
+          `MXC payload checksum mismatch: ${target.platform}-${target.arch}/${binary}`
+        );
+      assertNativeIsolationBinaryTarget(source, target);
+      artifacts.push({ source, artifact: `${path.posix.dirname(target.artifact)}/${binary}` });
     }
-    if (manifest.binaryDigest !== nativeIsolationBinaryDigest(inputBinary)) {
-      throw new Error(`Native isolation artifact checksum mismatch: ${target.artifact}`);
-    }
-    assertNativeIsolationBinaryTarget(inputBinary, target);
-    artifacts.push({ source: inputManifest, artifact: manifestPath });
-    const cleanupInput = path.join(inputRoot, path.basename(target.cleanupArtifact));
-    const cleanupManifest = path.join(inputRoot, "cleanup-manifest.json");
-    if (!existsSync(cleanupInput) || !existsSync(cleanupManifest))
-      throw new Error(`Missing native cleanup receipt: ${target.platform}-${target.arch}`);
-    const cleanup = JSON.parse(readFileSync(cleanupManifest, "utf8"));
-    if (cleanup.version !== 1 || cleanup.rustVersion !== NATIVE_ISOLATION_RUST_VERSION || cleanup.rustTarget !== target.rustTarget || cleanup.sourceDigest !== cleanupSourceDigest || cleanup.binaryDigest !== nativeIsolationBinaryDigest(cleanupInput))
-      throw new Error(`Native cleanup receipt does not match target: ${target.platform}-${target.arch}`);
-    assertNativeIsolationBinaryTarget(cleanupInput, target);
-    artifacts.push(
-      { source: cleanupInput, artifact: target.cleanupArtifact },
-      { source: cleanupManifest, artifact: nativeCleanupManifestPath(target) }
-    );
+    if (manifest.binaryDigest !== manifest.files[target.mxcBinary])
+      throw new Error(`MXC executor checksum receipt mismatch: ${target.platform}-${target.arch}`);
+    artifacts.push({ source: manifestPath, artifact: nativeIsolationManifestPath(target) });
   }
   return artifacts;
 }
-
-/** Reject a correctly hashed binary for the wrong ABI before packaging it. */
 export function assertNativeIsolationBinaryTarget(file, target) {
   const bytes = readFileSync(file);
   let matches = false;
-  if (target.platform === "linux" && bytes.length >= 64) {
+  if (target.platform === "linux" && bytes.length >= 64)
     matches =
       bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) &&
       bytes[4] === 2 &&
       bytes[5] === 1 &&
       bytes.readUInt16LE(18) === (target.arch === "x64" ? 62 : 183);
-  } else if (target.platform === "darwin" && bytes.length >= 32) {
+  else if (target.platform === "darwin" && bytes.length >= 32)
     matches =
       bytes.readUInt32LE(0) === 0xfeedfacf &&
       bytes.readUInt32LE(4) === (target.arch === "x64" ? 0x01000007 : 0x0100000c);
-  } else if (
-    target.platform === "win32" &&
-    bytes.length >= 64 &&
-    bytes.readUInt16LE(0) === 0x5a4d
-  ) {
+  else if (target.platform === "win32" && bytes.length >= 64 && bytes.readUInt16LE(0) === 0x5a4d) {
     const offset = bytes.readUInt32LE(0x3c);
     matches =
       offset <= bytes.length - 26 &&

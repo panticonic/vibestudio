@@ -18,8 +18,8 @@ asarUnpack:
   # Desktop phone provisioning executes the canonical CLI primitives locally.
   - "scripts/cli/**/*"
   - "package.json"
-  # Installed native storage cleanup / Windows admission must be executable.
-  - "dist/native/**/*"
+  # MXC enforcement payloads must be executable outside ASAR.
+  - "dist/mxc/**/*"
   - "dist/fs-disk-worker.cjs"
   # utilityProcess.fork() needs a physical server entry point.
   - "dist/server-electron.cjs"

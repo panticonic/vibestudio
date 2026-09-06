@@ -43,11 +43,6 @@ jobs:
       - name: Install Linux sandbox runtime
         run: sudo apt-get update && sudo apt-get install -y bubblewrap slirp4netns
 
-      - name: Install the reviewed Rust toolchain
-        run: |
-          rustup set profile minimal
-          rustup default 1.95.0
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -185,31 +180,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap slirp4netns
 
-      - name: Install the reviewed Rust toolchain
-        run: |
-          rustup set profile minimal
-          rustup default 1.95.0
-
-      - name: Build MXC executor and native storage cleanup helper
+      - name: Stage MXC executor payload
         run: node scripts/build-native-isolation.mjs
-
-      - name: Verify the Windows helper needs no Visual C++ redistributable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          rustup component add llvm-tools-preview
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $sysroot = rustc --print sysroot
-          $inspect = Join-Path $sysroot 'lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-readobj.exe'
-          $imports = & $inspect --coff-imports dist/native/win32-x64/vibestudio-isolation.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($imports -match '(?i)Name: (vcruntime|msvcp|msvcr)[^ ]*\.dll') {
-            throw 'Native helper unexpectedly depends on the Visual C++ redistributable'
-          }
-
-      - name: Test native storage primitives
-        working-directory: native/isolation
-        run: cargo test --locked
 
       - name: Build shared command host
         run: pnpm --filter @vibestudio/process-adapter build
@@ -217,19 +189,10 @@ jobs:
       - name: Check native confinement and workspace sharing
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
 
-      - name: Assemble immutable native release input
-        shell: bash
-        run: |
-          input="native/isolation/artifacts/native-isolation-${{ matrix.target }}"
-          mkdir -p "$input"
-          cp "dist/mxc/${{ matrix.target }}"/* "$input"/
-          cp dist/native/${{ matrix.target }}/vibestudio-isolation* "$input"/
-          cp "dist/native/${{ matrix.target }}/manifest.json" "$input/cleanup-manifest.json"
-
       - name: Upload tested native release input
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-isolation-${{ matrix.target }}
-          path: native/isolation/artifacts/native-isolation-${{ matrix.target }}/
+          path: dist/mxc/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 30

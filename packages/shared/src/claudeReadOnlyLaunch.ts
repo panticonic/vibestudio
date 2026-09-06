@@ -1,6 +1,6 @@
 import { accessSync, constants, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import { compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
 import * as path from "node:path";
 
 export interface ClaudeReadOnlyLaunch {
@@ -154,27 +154,6 @@ export function resolveClaudeRuntimeCommand(name: string, pathValue = process.en
   throw new Error(`Linked Claude runtime command is not installed: ${name}`);
 }
 
-/** MXC journals host ACL ownership outside the guest's writable profile. */
-export function claudeMxcLauncherEnvironment(
-  platform: NodeJS.Platform,
-  ambient: NodeJS.ProcessEnv = process.env
-): Record<string, string> {
-  const keys =
-    platform === "win32" ? ["PATH", "SystemRoot", "USERPROFILE", "LOCALAPPDATA"] : ["PATH"];
-  return Object.fromEntries(
-    keys.flatMap((key) => {
-      const value = ambient[key];
-      return value === undefined ? [] : [[key, value]];
-    })
-  );
-}
-
-function quoteArgument(value: string, platform: NodeJS.Platform): string {
-  if (value.includes("\0")) throw new Error("Claude launch argument contains NUL");
-  if (platform !== "win32") return "'" + value.replaceAll("'", "'\"'\"'") + "'";
-  return '\"' + value.replace(/(\\*)"/gu, '$1$1\\"').replace(/(\\+)$/u, "$1$1") + '\"';
-}
-
 /**
  * Linked Claude is a network-capable provider with an explicitly provisioned
  * agent identity. MXC protects managed context from writes and limits filesystem
@@ -240,34 +219,21 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
     launchEnv: input.launchEnv,
     confinementEnv: env,
   });
-  const config: ContainerConfig = {
-    version: "0.8.0-alpha",
-    containment:
-      platform === "linux" ? "bubblewrap" : platform === "darwin" ? "seatbelt" : "processcontainer",
+  const launch = compileMxcLaunch({
+    platform,
+    launcher: input.launcher,
     containerId: `vibestudio-claude-${randomUUID()}`,
-    process: {
-      commandLine: input.argv.map((arg) => quoteArgument(arg, platform)).join(" "),
-      cwd: contextDirectory,
-      env: Object.entries(environment).map(([key, value]) => `${key}=${value}`),
-    },
-    filesystem: { readonlyPaths: readPaths, readwritePaths: [profileDir] },
-    network: { egress: { default: "allow" }, ingress: { default: "deny", hostLoopback: "deny" } },
-    lifecycle: { destroyOnExit: true, preservePolicy: false },
-    ui: { disable: true, clipboard: "none", injection: false },
-    ...(platform === "darwin" ? { seatbelt: { nestedPty: true, keychainAccess: false } } : {}),
-    ...(platform === "win32"
-      ? {
-          processContainer: {
-            leastPrivilege: false,
-            capabilities: ["internetClient"],
-          },
-        }
-      : {}),
-  };
+    argv: input.argv,
+    cwd: contextDirectory,
+    guestEnvironment: environment,
+    readPaths,
+    writePaths: [profileDir],
+    network: "allow",
+  });
   return {
-    command: input.launcher,
-    args: ["--config-base64", Buffer.from(JSON.stringify(config)).toString("base64")],
-    env: claudeMxcLauncherEnvironment(platform),
+    command: launch.command,
+    args: launch.args,
+    env: launch.environment,
     scratchDirectory,
     claudeConfigDirectory,
   };
