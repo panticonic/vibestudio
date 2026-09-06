@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,6 +13,8 @@ import {
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { copyFiles, getFileMatchers } from "app-builder-lib/out/fileMatcher.js";
 import {
   NATIVE_ISOLATION_TARGETS,
   assertNativeIsolationArtifacts,
@@ -152,6 +155,38 @@ describe("native isolation artifact matrix", () => {
     ).resolves.toBeUndefined();
     expect(() => statSync(path.join(root, "dist/mxc"))).toThrow();
     expect(() => statSync(path.join(resources, "app.asar.unpacked/dist/mxc"))).toThrow();
+  });
+
+  it("uses Electron Builder's real resource filter without dropping vendored node_modules", async () => {
+    const { root } = fixture();
+    const runtime = path.join(root, "dist/node");
+    mkdirSync(path.join(runtime, "win32-x64/node_modules/corepack/dist"), { recursive: true });
+    mkdirSync(path.join(runtime, "linux-x64/node_modules/other"), { recursive: true });
+    writeFileSync(path.join(runtime, "win32-x64/node.exe"), "windows node");
+    writeFileSync(
+      path.join(runtime, "win32-x64/node_modules/corepack/dist/corepack.js"),
+      "corepack"
+    );
+    writeFileSync(path.join(runtime, "linux-x64/node_modules/other/index.js"), "other");
+
+    const builderConfig = parseYaml(readFileSync("electron-builder.yml", "utf8")) as {
+      win?: { extraResources?: unknown };
+    };
+    const resources = path.join(root, "release/resources");
+    const matchers = getFileMatchers({}, "extraResources", resources, {
+      defaultSrc: root,
+      globalOutDir: path.join(root, "release"),
+      customBuildOptions: builderConfig.win,
+      macroExpander: (value: string) => value.replaceAll("${arch}", "x64"),
+    });
+    await copyFiles(matchers);
+
+    const installed = path.join(resources, "app.asar.unpacked/dist/node");
+    expect(existsSync(path.join(installed, "win32-x64/node.exe"))).toBe(true);
+    expect(
+      existsSync(path.join(installed, "win32-x64/node_modules/corepack/dist/corepack.js"))
+    ).toBe(true);
+    expect(existsSync(path.join(installed, "linux-x64/node_modules/other/index.js"))).toBe(false);
   });
 
   it.each(["source", "target", "checksum", "machine"] as const)(
