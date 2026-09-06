@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Unit tests exercise real npm-shaped processes; native enforcement has its
 // own integration fixture using the installed executor.
-vi.mock("@vibestudio/process-adapter/mxc", () => ({
-  assertMxcPrerequisites: vi.fn(),
-  compileMxcLaunch: vi.fn((input) => ({
+vi.mock("@vibestudio/process-adapter/native-launch", () => ({
+  assertNativePrerequisites: vi.fn(),
+  compileNativeLaunch: vi.fn((input) => ({
     command: input.argv[0],
     args: input.argv.slice(1),
     cwd: input.cwd,

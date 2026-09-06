@@ -9,6 +9,7 @@ import {
 } from "./native-isolation-artifacts.mjs";
 
 export function buildNativeIsolation(appRoot = process.cwd()) {
+  if (process.platform === "win32") return;
   const target = nativeIsolationTarget();
   const require = createRequire(path.join(appRoot, "package.json"));
   const sdkPackage = require.resolve("@microsoft/mxc-sdk/package.json");

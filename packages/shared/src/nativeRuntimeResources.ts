@@ -1,4 +1,4 @@
-import { constants, copyFileSync, cpSync, lstatSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { getCACertificates } from "node:tls";
@@ -6,7 +6,7 @@ import {
   collectInstalledRuntimeReadRoots,
   getInstalledNodeRuntime,
 } from "@vibestudio/shared/runtimePaths";
-import { windowsEnvironmentValue } from "@vibestudio/process-adapter/mxc";
+import { windowsEnvironmentValue } from "@vibestudio/process-adapter/native-launch";
 
 export const NATIVE_RUNTIME_CERTIFICATES = "ca-certificates.pem";
 
@@ -38,9 +38,12 @@ export function prepareNativeRuntime(input: {
   const installed = getInstalledNodeRuntime(input.appRoot, platform);
   const installedRoot = realpathSync(installed.root);
   const installedExecutable = realpathSync(installed.executable);
-  const sharedObjects = installedNodeLibraries(installedExecutable, installed.version, platform);
-  let executable = installedExecutable;
-  let npmCli = realpathSync(installed.npmCli);
+  const sharedObjects =
+    platform === "win32"
+      ? []
+      : installedNodeLibraries(installedExecutable, installed.version, platform);
+  const executable = installedExecutable;
+  const npmCli = realpathSync(installed.npmCli);
   const read = [runtimeRoot];
   const environment: Record<string, string> = {};
   if (platform === "win32") {
@@ -48,22 +51,8 @@ export function prepareNativeRuntime(input: {
     if (!systemRoot || !path.win32.isAbsolute(systemRoot))
       throw new Error("Windows native runtime requires the host SystemRoot");
     environment["SystemRoot"] = systemRoot;
-    const nodeRoot = path.join(runtimeRoot, "node");
-    // MXC applies Windows ACLs to admitted resources. Copy the complete real
-    // Node/npm distribution so these grants cannot change the installed app.
-    cpSync(installedRoot, nodeRoot, { recursive: true, errorOnExist: true, force: false });
-    const systemPrefix = path.normalize(systemRoot).toLowerCase() + path.sep;
-    for (const file of sharedObjects) {
-      const resource = realpathSync(file);
-      if (
-        resource.toLowerCase().startsWith(systemPrefix) ||
-        resource.toLowerCase().startsWith(installedRoot.toLowerCase() + path.sep)
-      )
-        continue;
-      copyFileSync(resource, path.join(nodeRoot, path.basename(resource)), constants.COPYFILE_EXCL);
-    }
-    executable = path.join(nodeRoot, path.relative(installedRoot, installedExecutable));
-    npmCli = path.join(nodeRoot, path.relative(installedRoot, npmCli));
+    environment["ComSpec"] = path.win32.join(systemRoot, "System32", "cmd.exe");
+    read.push(installedRoot);
   } else {
     read.push(
       installedRoot,

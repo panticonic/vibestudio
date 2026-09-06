@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
-import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 
-it("runs the production disk receiver inside the workspace resource boundary", async () => {
-  // This same fixture is run with Electron's Node mode to cover its distinct
-  // shared-library report and resource directory, not just the system Node ABI.
+it("runs the production disk receiver under its platform execution contract", async () => {
+  // An Electron-hosted invocation still launches the installed standalone Node
+  // runtime used by the production disk receiver.
   if (process.env["ELECTRON_RUN_AS_NODE"] === "1")
     expect(process.versions["electron"]).toBeTruthy();
   const root = await mkdtemp(path.join(tmpdir(), "native-workspace-receiver-"));
@@ -34,13 +34,26 @@ it("runs the production disk receiver inside the workspace resource boundary", a
     expect(
       await runtime.disk.call({ ...scope, root: sourceRoot }, "readFile", ["source.txt", "utf8"])
     ).toBe("immutable source");
-    await expect(
-      runtime.disk.call({ ...scope, root: sourceRoot }, "writeFile", ["source.txt", "modified"])
-    ).rejects.toThrow();
-    // Even a forged scope cannot make the worker perform a host disk read.
-    await expect(
-      runtime.disk.call({ ...scope, root }, "readFile", ["host-canary", "utf8"])
-    ).rejects.toThrow();
+    if (process.platform === "win32") {
+      // This platform deliberately runs workspace code as the normal host user.
+      await runtime.disk.call({ ...scope, root: sourceRoot }, "writeFile", [
+        "source.txt",
+        "modified",
+      ]);
+      expect(await runtime.disk.call({ ...scope, root }, "readFile", ["host-canary", "utf8"])).toBe(
+        "host secret"
+      );
+      await runtime.disk.call({ ...scope, root }, "writeFile", ["host-canary", "host write"]);
+      expect(await readFile(path.join(root, "host-canary"), "utf8")).toBe("host write");
+    } else {
+      await expect(
+        runtime.disk.call({ ...scope, root: sourceRoot }, "writeFile", ["source.txt", "modified"])
+      ).rejects.toThrow();
+      // Even a forged scope cannot make the worker perform a host disk read.
+      await expect(
+        runtime.disk.call({ ...scope, root }, "readFile", ["host-canary", "utf8"])
+      ).rejects.toThrow();
+    }
   } finally {
     const stopped = await runtime?.stop();
     if (stopped) expect(stopped.launcherExited).toBe(true);

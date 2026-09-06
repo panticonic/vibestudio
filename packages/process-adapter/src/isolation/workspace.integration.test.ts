@@ -6,11 +6,11 @@ import { createServer, type Server } from "node:net";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ProcessAdapter } from "../index.js";
-import { WorkspaceSandbox } from "./workspace.js";
+import { WorkspaceRuntime } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
-const sandboxes: WorkspaceSandbox[] = [];
+const sandboxes: WorkspaceRuntime[] = [];
 const directories: string[] = [];
 const listeners: Server[] = [];
 afterEach(async () => {
@@ -58,11 +58,11 @@ function message(command: ProcessAdapter): Promise<unknown> {
 
 // These are real kernel checks, not mocked launch assertions. Build the package
 // before running: the same installed JS entry used by production is exercised.
-describe("shared workspace sandbox on the native platform", () => {
+describe("shared workspace runtime on the native platform", () => {
   it("opens a real PTY inside the workspace and carries input and resize", async () => {
     const platform = process.platform;
     if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
-      throw new Error(`No confinement backend for ${platform}`);
+      throw new Error(`No execution mechanism for ${platform}`);
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibestudio-workspace-pty-")));
     directories.push(root);
     const privateRoot = path.join(root, "workspace");
@@ -135,7 +135,7 @@ describe("shared workspace sandbox on the native platform", () => {
         let hostDenied = false;
         let inputWriteDenied = false;
         try { fs.readFileSync(${JSON.stringify(hostCanary)}); } catch { hostDenied = true; }
-        try { fs.writeFileSync(__filename, 'tampered'); } catch { inputWriteDenied = true; }
+        if (process.platform !== 'win32') { try { fs.writeFileSync(__filename, 'tampered'); } catch { inputWriteDenied = true; } }
         emit({ input: line, ...dimensions() });
         emit({ hostDenied, inputWriteDenied });
       });
@@ -182,20 +182,26 @@ describe("shared workspace sandbox on the native platform", () => {
       }
     `
     );
-    const launcher = await realpath(
-      fileURLToPath(
-        new URL(
-          `../../../../dist/mxc/${platform}-${process.arch}/${platform === "win32" ? "wxc-exec.exe" : platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
-          import.meta.url
-        )
-      )
-    );
+    const installationBase =
+      platform === "win32"
+        ? ({ platform, mechanism: "host-process" } as const)
+        : ({
+            platform,
+            mechanism: "mxc-process",
+            launcher: await realpath(
+              fileURLToPath(
+                new URL(
+                  `../../../../dist/mxc/${platform}-${process.arch}/${platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
+                  import.meta.url
+                )
+              )
+            ),
+          } as const);
     const installation = {
-      platform,
-      launcher,
+      ...installationBase,
       workspaceEntry: path.join(runtime, "workspaceChild.js"),
     };
-    const sandbox = await WorkspaceSandbox.start(
+    const sandbox = await WorkspaceRuntime.start(
       {
         version: 1,
         owner: {
@@ -259,7 +265,10 @@ describe("shared workspace sandbox on the native platform", () => {
         () => {
           if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);
           expect(records).toContainEqual({ input: "workspace-input", columns: 120, rows: 40 });
-          expect(records).toContainEqual({ hostDenied: true, inputWriteDenied: true });
+          expect(records).toContainEqual({
+            hostDenied: platform !== "win32",
+            inputWriteDenied: platform !== "win32",
+          });
         },
         { timeout: 5000 }
       );
@@ -275,7 +284,7 @@ describe("shared workspace sandbox on the native platform", () => {
     }
   }, 20_000);
 
-  it("shares commands within a workspace, denies host/sibling access and cancels independently", async () => {
+  it("shares commands, applies the platform access contract and cancels independently", async () => {
     vi.stubEnv("ISOLATION_PARENT_SECRET", "synthetic-host-secret");
     const root = await realpath(
       await mkdtemp(path.join(os.tmpdir(), "vibestudio-shared-workspace-"))
@@ -300,16 +309,23 @@ describe("shared workspace sandbox on the native platform", () => {
     );
     const platform = process.platform;
     if (platform !== "linux" && platform !== "darwin" && platform !== "win32") {
-      throw new Error(`No confinement backend for ${platform}`);
+      throw new Error(`No execution mechanism for ${platform}`);
     }
-    const launcher = await realpath(
-      fileURLToPath(
-        new URL(
-          `../../../../dist/mxc/${platform}-${process.arch}/${platform === "win32" ? "wxc-exec.exe" : platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
-          import.meta.url
-        )
-      )
-    );
+    const installationBase =
+      platform === "win32"
+        ? ({ platform, mechanism: "host-process" } as const)
+        : ({
+            platform,
+            mechanism: "mxc-process",
+            launcher: await realpath(
+              fileURLToPath(
+                new URL(
+                  `../../../../dist/mxc/${platform}-${process.arch}/${platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
+                  import.meta.url
+                )
+              )
+            ),
+          } as const);
     const starts = await Promise.allSettled(
       ["A", "B"].map(async (id) => {
         const privateRoot = path.join(root, id);
@@ -353,6 +369,12 @@ describe("shared workspace sandbox on the native platform", () => {
         });
         connected.then(networkConnected => process.send({
           networkConnected,
+          ...(process.platform === 'win32' ? { hostWrite: (() => {
+            const probe = ${JSON.stringify(path.join(root, "host-write-" + id))};
+            fs.writeFileSync(probe, 'host-access');
+            return fs.readFileSync(probe, 'utf8');
+          })() } : {}),
+          ...(process.platform === 'win32' ? {} : {
           anchorRenameDenied: (() => { try { fs.renameSync(process.env.HOME, process.env.HOME + '-replaced'); return false; } catch { return true; } })(),
           inputWriteDenied: (() => { try { fs.writeFileSync(__filename, 'tampered'); return false; } catch { return true; } })(),
           hardlinkWriteDenied: (() => {
@@ -371,6 +393,7 @@ describe("shared workspace sandbox on the native platform", () => {
               return false;
             } catch { return true; }
           })(),
+          }),
           own: fs.readFileSync(process.env.HOME + '/shared', 'utf8'),
           hostDenied: denied(${JSON.stringify(hostCanary)}),
           siblingDenied: denied(${JSON.stringify(path.join(root, id === "A" ? "B" : "A", "state", "shared"))}),
@@ -411,11 +434,10 @@ describe("shared workspace sandbox on the native platform", () => {
           sockets: [],
         };
         const launch = {
-          platform,
-          launcher,
+          ...installationBase,
           workspaceEntry: path.join(runtime, "workspaceChild.js"),
         };
-        const sandbox = await WorkspaceSandbox.start(policy, launch);
+        const sandbox = await WorkspaceRuntime.start(policy, launch);
         sandboxes.push(sandbox);
         return { sandbox, entry, id, policy, launch };
       })
@@ -467,14 +489,19 @@ describe("shared workspace sandbox on the native platform", () => {
       const secondMessage = await message(second);
       expect(firstMessage).toMatchObject({
         own: fixture.id,
-        hostDenied: true,
-        siblingDenied: true,
+        hostDenied: platform !== "win32",
+        siblingDenied: platform !== "win32",
         ambientSecret: null,
-        anchorRenameDenied: true,
-        inputWriteDenied: true,
-        hardlinkWriteDenied: true,
-        symlinkHostReadDenied: true,
-        descendant: 0,
+        ...(platform === "win32" ? { hostWrite: "host-access" } : {}),
+        ...(platform === "win32"
+          ? {}
+          : {
+              anchorRenameDenied: true,
+              inputWriteDenied: true,
+              hardlinkWriteDenied: true,
+              symlinkHostReadDenied: true,
+            }),
+        descendant: platform === "win32" ? 1 : 0,
       });
       expect(firstMessage).toMatchObject({ networkConnected: true });
       expect(secondMessage).toEqual(firstMessage);
@@ -504,7 +531,7 @@ describe("shared workspace sandbox on the native platform", () => {
     observations[1]!.second.postMessage({ read: true });
     expect(await remaining).toEqual({ value: "shared-by-commands" });
     const prior = fixtures[0]!;
-    const restarted = await WorkspaceSandbox.start(
+    const restarted = await WorkspaceRuntime.start(
       {
         ...prior.policy,
         owner: { ...prior.policy.owner, incarnation: "restart" },
@@ -514,9 +541,9 @@ describe("shared workspace sandbox on the native platform", () => {
     sandboxes.push(restarted);
     expect(await message(restarted.fork(prior.entry, {}))).toMatchObject({
       own: "shared-by-commands",
-      hostDenied: true,
-      siblingDenied: true,
-      anchorRenameDenied: true,
+      hostDenied: platform !== "win32",
+      siblingDenied: platform !== "win32",
+      ...(platform === "win32" ? {} : { anchorRenameDenied: true }),
     });
     expect(hostConnections).toBeGreaterThan(0);
   }, 20_000);

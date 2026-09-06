@@ -400,7 +400,8 @@ describe("approvalCopy", () => {
       category: "Add a template",
       title: "Add News",
       summaryIncludes: "news briefings",
-      warning: "Extensions run outside Vibestudio's protections, with access to this computer.",
+      warning:
+        "On Windows, workspace commands and extensions run with your account's host permissions. Linux and macOS contain workspace code; separately approved host actions can access the host.",
       detailsOpen: true,
       // Native code is the one thing here worth a raised voice, and a raised
       // voice is amber — the warning above says it in full either way.

@@ -1,178 +1,172 @@
-# Isolation programme
+# Native execution and isolation
 
-Status: workspace containment implemented; cross-platform release validation pending (2026-09-06).
+Status: accepted platform architecture; release acceptance requires native and packaged evidence for each supported target (2026-09-06).
 
-The installed application, controller, hub and runtime engines are trusted. We
-contain workspace-authored code; we do not attempt to contain a compromised
-installed controller. Outer application containment is no longer a requirement.
+The installed application, controller, hub, runtime engines and protected
+receivers are trusted. Workspace-authored code executes through a common native
+runtime with an explicit platform contract. Containing the installed application
+itself is not a requirement.
 
-Vibestudio uses the stock, pinned `@microsoft/mxc-sdk` 0.8.0 as its native
-process boundary. MXC owns platform policy generation and enforcement. The
-host owns workspace identity, resource selection, approvals, control channels,
-and lifecycle records. Vibestudio must not recreate bubblewrap, Seatbelt, or
-Windows admission logic beside MXC.
+## Platform contracts
 
-## Accepted design
+| Platform            | Native execution                            | Filesystem and operating-system guarantees                                                                                                                                    |
+| ------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linux x64 and ARM64 | Stock pinned MXC 0.8.0, using bubblewrap    | Read-only installed runtime and selected inputs; writable workspace state. Unadmitted host and sibling files are inaccessible.                                                |
+| macOS ARM64         | Stock pinned MXC 0.8.0, using Seatbelt      | Selected filesystem resources, with read/write access to `/dev` for working native terminals and tools. Device and unrelated terminal isolation are not promised.             |
+| Windows x64         | Direct host process under the app's OS user | Normal user access to host files, sibling workspace files, processes, devices, desktop facilities and networking. No native filesystem, network or UI confinement is claimed. |
 
-There is one resident native sandbox per workspace for workspace commands,
-shells, builds, tests, and native extensions. Linked Claude provider launches
-use their own separate MXC process with a provider-specific policy and
-disposable profile. Context IDs and command IDs provide routing and provenance;
-they are not native security domains. Cancellation and descendant cleanup are
-best effort, and a launcher exit is not evidence that every descendant
-stopped.
+Windows host execution is the selected architecture, not a fallback after a
+sandbox failure. Windows ships no MXC executor and needs no AppContainer ACL or
+loopback provisioning. Private workspace directories, homes and explicit
+process environments still organize execution and prevent accidental ambient
+configuration inheritance; they do not protect host data from Windows native
+workspace code. Windows workspace commands must be treated as trusted to act
+with the user's operating-system permissions.
 
-The supported product targets are Linux x64 and ARM64, macOS ARM64, and
-Windows x64. The shipped MXC executor is selected from the installed SDK and
-is staged under `dist/mxc/<platform>-<arch>`. The payload and its manifest are validated before npm or Electron packaging.
-Vibestudio builds no native sandbox or cleanup executable and requires no Rust
-toolchain for this integration.
+On Unix, MXC owns native policy generation and enforcement. Vibestudio supplies
+resource admission and does not maintain a parallel bubblewrap or Seatbelt
+implementation. MXC is preview software whose upstream documentation cautions
+against treating its generated profiles as a hardened security boundary. The
+product does not promise protection against compromised kernels, administrators,
+other unrestricted processes belonging to the user, or all resource exhaustion
+and side channels.
 
-Ordinary native workspace commands and linked Claude use stock open networking
-so package downloads, CLI services and local development connections need no
-new sandbox-specific proxy machinery. Internal workspace-trash deletion remains
-offline. Linux uses the host network and requires no slirp4netns helper. Windows
-uses stock networking capabilities; intrinsic AppContainer host-loopback limits
-remain a native validation concern, not a promise of transparent connectivity.
-Restrictions on normal commands must not be retained at the expense of expected
-workflows without revisiting the design.
+## Shared execution model
 
-The pre-existing egress proxy, its destination checks, approvals, credential
-handling and callers remain unchanged. Native command networking does not imply
-that all traffic is forced through that proxy. Existing browser origin/CORS
-protections and account authentication remain unchanged as well. Full-host
-terminals still require fresh approval for their wider filesystem/process access.
+One resident native runtime serves each workspace's commands, shells, builds,
+tests and native extensions. Context and command IDs establish routing and
+provenance; they are not separate native security domains. Linked Claude uses a
+separate native launch with selected runtime/context inputs, a disposable profile
+and deliberately provisioned login. It follows the same platform contract:
+MXC on Unix and direct host execution on Windows.
 
-MXC is preview software; upstream explicitly cautions that its generated profiles
-are not yet security boundaries. We use its resource restrictions without
-claiming hardened hostile-code isolation. On macOS the stock baseline permits
-host terminal slave devices and some host process metadata; isolation from
-unrelated terminals is not promised. Windows uses stock ProcessContainer
-selection with leastPrivilege disabled and its native ACL lifecycle. Custom
-LPAC, storage SIDs, or stronger rollback guarantees are not requirements. The product does not claim protection from an administrator, a
-compromised kernel or driver, another unrestricted process owned by the user,
-or all resource exhaustion and side channels. These limits must be visible in
-release and security documentation.
+The installed standalone Node distribution supplies the actual Node executable,
+npm and runtime resources. Source, npm and Electron products use the same
+installed resource resolvers and explicit execution mechanism. Unix MXC payloads
+are staged under `dist/mxc/<platform>-<arch>`; Node distributions are staged under
+`dist/node/<platform>-<arch>`. Packaging validates the selected target's payloads.
 
-## Required boundaries
+Cancellation and descendant cleanup are best effort. Closing a command or the
+root process does not prove every descendant stopped. Commands in one workspace
+share its exposed resources. Separate Unix workspaces provide separate native
+resource admission; separate Windows workspaces do not establish an OS security
+boundary.
 
-The host must derive every MXC policy from authenticated workspace ownership,
-the exact installed runtime, selected source and scratch roots, explicit
-environment and handles, and the live authority decision. Guest labels,
-manifests, paths, PIDs, readiness responses, and self-reported sandbox state
-are not proof of identity or enforcement.
+## Application authority and resources
 
-Workspace A cannot read another workspace's files, controller state, protected
-credential stores or broker credentials. Local network endpoints remain
-reachable under normal networking; their existing authentication and resource
-authorization protect workspace data. Network-level endpoint invisibility is
-not a requirement.
-Managed source and authority state remain receiver-owned and native read-only;
-scratch and generated output are workspace-owned. Semantic import/publication
-is the only path into protected managed state. Symlinks, reparse points,
-hardlinks, traversal, case aliases, and check/use races require explicit
-tests at every direct-resource receiver.
+The trusted owner derives launches from authenticated workspace ownership,
+installed executable identity, selected source and scratch roots, explicit
+environment, control handles and the live authority decision. Workspace-supplied
+labels, paths, PIDs and readiness responses are not proof of identity or
+containment. Services continue to authenticate requests, enforce workspace and
+context provenance, check approvals, and authorize protected effects.
 
-The environment is default-deny. Do not inherit host home directories, shell
-startup files, SSH agents, package-manager credentials, arbitrary API keys,
-or ambient IPC handles. Native provider credentials are scoped to the selected
-workspace and must be treated as available to all commands in that workspace.
-Protected stores and broker signing material remain outside the native domain.
+Managed source, authority records, credential stores and broker signing material
+remain owned by protected services. Semantic import/publication is the authorized
+application path into managed state. On Unix, native admission additionally keeps
+those unexposed files outside workspace code's filesystem access. On Windows,
+service ownership and protocol checks do not prevent a native process with the
+same user's host permissions from accessing or tampering with their underlying
+files. Documentation and UI must not present service authorization as equivalent
+to OS containment.
 
-Network policy for existing proxy clients stays with the existing egress
-implementation. Do not extend that proxy into a universal native network
-mediation system. For the OS sandbox, validate both outbound connections and
-usable local development listeners alongside filesystem denial. Narrow internal
-tasks with no network needs retain the inexpensive offline configuration.
+The process environment is explicitly constructed. Host shell startup files,
+SSH agents, arbitrary API keys and ambient IPC handles are not automatically
+inherited. Required credentials and tool configuration are deliberately
+provisioned. Credentials exposed to a shared workspace must be considered
+available to its commands. On Windows, a closed environment alone cannot stop
+native code reading other user-accessible credential files or contacting host
+services.
 
-Browser, workerd, and mobile app boundaries remain required. They provide
-their own origins, runtime and platform permissions; they do not inherit a
-desktop executor's grants. Websites never receive native workspace authority.
+Direct-resource receivers must validate their own requests and ownership.
+Symlinks, reparse points, hardlinks, traversal, case aliases and check/use races
+require meaningful tests. Browser, workerd and mobile boundaries retain their
+own origins, permissions and authentication. Websites do not receive native
+workspace authority merely because a desktop process has it.
 
-## Ownership and lifecycle
+## Networking and terminals
 
-The installed launcher and protected receivers establish the workspace
-incarnation, resolve resources, and record the applied MXC policy. The trusted hub authenticates requests, coordinates routes and enforces
-application approvals. Separating these responsibilities does not require
-additional OS boundaries inside the installed application. Revocation prevents new broker effects and
-closes broker-owned routes. Direct filesystem or device exposure can survive
-process cancellation while a descendant remains alive and must be reported as
-such.
+Ordinary native commands and linked Claude have normal networking for package
+downloads, CLI services and local development servers. Unix uses MXC's stock
+open-network configuration; Linux shares the host network without a
+slirp4netns dependency. Windows uses the user's normal host networking.
 
-Workspace stop retires the control session before storage is reclaimed. Any
-residual process state is recorded and quarantined; storage is never reassigned
-on the assumption that a PID or root launcher exit proves complete cleanup.
-An ordinary restart does not promise a fresh security domain. Separate
-workspaces are required for mutually untrusted native workloads.
+The pre-existing egress proxy, destination checks, approvals, credential handling
+and callers remain unchanged. Native traffic is not universally forced through
+that proxy. Reachable local services must continue to authenticate and authorize
+requests. Existing browser origin/CORS and account protections remain in force.
 
-## Workspace deletion
+Narrow internal Unix utilities, including credential extraction and workspace
+trash deletion, use MXC's offline configuration. Windows utilities run directly;
+no offline enforcement is claimed there.
 
-The catalog first renames a discarded workspace into a protected trash directory
-with a deletion receipt. Recursive deletion runs as installed Node inside MXC,
-with write access only to the discarded workspace subtree and networking denied.
-Its installed runtime is read-only; Windows stages that runtime beside the
-workspace, under the protected trash parent. The host never recursively removes
-workspace-authored contents. It removes the empty workspace anchor, its own
-runtime files, the receipt, and the empty trash directory.
+The terminal panel must accurately identify its execution scope. A full-host
+terminal on Unix crosses the workspace filesystem boundary and requires fresh
+explicit approval. Windows workspace terminals already execute with host user
+access; a private home or workspace label must not imply otherwise. Approved
+host-terminal flows retain their application approval and provenance records.
 
-This reuses the accepted MXC filesystem restrictions instead of maintaining a
-Rust executable for symlink-race-resistant deletion. A surviving workspace
-process can interrupt cleanup by changing contents, but cannot expand the
-cleanup process's resource grants. Failure, timeout, or a nonempty directory
-retains the deletion receipt and staged runtime for the existing recovery path.
-MXC failure never falls back to unrestricted recursive deletion.
+## Ownership and retirement
 
-## Verification and unfinished programme
+The trusted hub establishes the workspace incarnation, authenticates requests,
+coordinates routes and applies application approvals. Revocation prevents new
+broker effects and closes broker-owned routes. It cannot retract filesystem,
+device or network access from a surviving native process.
 
-The following work remains open and is required before calling the programme
-complete:
+Workspace stop retires its control session before storage reclamation. Cleanup
+records must distinguish confirmed root-process exit from unverified descendant
+retirement. Storage must not be reassigned on the assumption that a PID's exit
+proves complete cleanup; an ordinary restart does not promise a new security
+domain.
 
-1. Run the native workspace, Claude, receiver, and adversarial suites on real
-   supported Linux, macOS, and Windows systems, including packaged Electron
-   and headless npm products.
-2. Extend the implemented production disk worker and receiver wiring with
-   cross-platform and packaged evidence. Raw disk operations stay in the shared
-   workspace process over one bounded typed port; there is no host-local
-   execution fallback or trusted context construction in that worker.
-3. Prove expected native tool networking on supported systems, including local
-   servers and client connections. Keep existing proxy enforcement unchanged;
-   no universal native network integration is planned.
-4. Complete credential acquisition, external
-   file effects, device effects, and host-terminal review against the accepted
-   shared-workspace model.
-5. Verify source, bundle, Base, system-test, installer signing, update, and
-   crash-recovery paths. The same policy and ownership facts must hold in
-   source, packaged, desktop, headless, and managed test launches.
-6. Publish a release acceptance ledger containing backend identity, policy
-   identity, target, owner/incarnation, residual cleanup result, and the exact
-   test evidence. A Linux pass or a successful readiness response is not a
-   cross-platform security certification.
+For deletion, the catalog renames discarded storage into a protected trash
+location with a receipt. The installed Node cleanup utility removes its contents;
+the owner removes empty anchors and its own staging and receipt files. On Unix,
+that utility runs inside MXC with only the discarded subtree writable and
+networking denied. On Windows it runs directly with the user's host permissions.
+The Windows operation must not be described as race-resistant containment of a
+hostile surviving workspace process. Failure or interruption preserves the
+receipt for recovery. No Rust cleanup executable or alternate native sandbox is
+part of this design.
 
-There is no legacy launch fallback, alternate enforcement implementation,
-state migration, or compatibility reader in this cutover. If a required
-operation cannot be confined under the accepted MXC contract, the design must
-be revisited before release rather than silently running it on the host.
+## Feature obligations
 
-## Feature obligations and related plans
+The [Base extension survey](base-extension-host-access-survey.md) is the historical
+inventory of host effects. Current integrations follow these requirements:
 
-The [Base extension survey](base-extension-host-access-survey.md) remains the
-inventory of host effects. Required integration work is tracked here:
+| Feature                                                        | Required treatment                                                                                                                            |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser import                                                 | Protected acquisition of selected browser profiles/categories, bounded parsing and selected disclosure. Unix parsing uses admitted resources. |
+| Mobile debug                                                   | Receiver-authorized devices and operations; preserve signing, installation and launch workflows without handing out general broker authority. |
+| Local models                                                   | Selected model/runtime resources, accelerator access, owned caches and authenticated service interfaces.                                      |
+| Linked Claude                                                  | Separate native launch, installed CLI/runtime closure, disposable profile and explicit credential acquisition/refresh reconciliation.         |
+| Shell, builds and tests                                        | Real PTYs and toolchains, normal package/network workflows, correct platform execution disclosures and host-terminal approvals.               |
+| File tools, image/PDF ingestion, React Native and typechecking | Workspace resource selection and owned outputs; Unix confinement and Windows host execution according to the platform table.                  |
+| Other extensions                                               | Preserve portable runtimes and bounded service APIs; native dependencies alone do not confer additional application authority.                |
 
-| Feature                            | Required treatment                                                                                                                                                                  |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser import                     | Select browser/profile/categories at a protected receiver; parse bounded snapshots in confinement and disclose selected results. Keep sensitive stores outside ordinary workspaces. |
-| Mobile debug                       | Select devices and operations at the receiver; no general adb socket exposure. Separate confined builds from authorized signing, installation and launch.                           |
-| Local models                       | Admit selected model files and GPU resources, owned caches and scoped listeners. Persistent model-file reads may survive cancellation.                                              |
-| Linked Claude                      | Separate stock MXC provider launch with explicit runtime/context reads, disposable profile and provisioned login. Provider networking is explicit and not broker-mediated.          |
-| Shell and test runner              | Confined PTYs and toolchains; preserve browser/workerd/native runtime selection. Host terminals require fresh explicit approval for each opening.                                   |
-| File tools, images, PDF ingestion  | Confined native operations and bundled runtime assets; ordinary use needs no external host grant.                                                                                   |
-| React Native and typecheck service | Confined jobs with selected sources, dependencies and caches. Ordinary registry networking is available within the sandbox.                                                         |
-| Other surveyed extensions          | Retain portable runtimes and bounded service calls; do not add host access merely because an extension has native dependencies.                                                     |
+## Release acceptance
 
-This plan owns isolation work in the runtime, authority, credential, browser,
-network, workspace-test and host/userland plans. Their product and protocol
-requirements remain in force. Existing browser/workerd boundaries remain;
-there must be no parallel native confinement implementation. Findings in
-historical security reviews feed the same release evidence rather than a
-separate claim of completion. Context attribution is provenance, not native
-command separation or perfect information-flow tracking.
+Acceptance must exercise each supported operating system and packaged product,
+including ordinary-user Windows execution. Tests must establish:
+
+1. Correct installed executable selection, literal argv, explicitly constructed
+   environments, source and packaged startup, real PTY input/resize and native
+   dependency execution.
+2. Unix host/sibling filesystem denial alongside required resource access;
+   Windows actual host access with no MXC installation or ACL changes required.
+3. Working DNS/HTTPS, outbound local connections and local listeners; unchanged
+   existing proxy authorization.
+4. Shared workspace command behavior, cancellation, forced termination,
+   concurrent resource owners, restart and interrupted cleanup recovery.
+5. Protected receiver authorization, credential acquisition and reconciliation,
+   source publication, browser/workerd boundaries and accurate approval UI.
+
+Record target, execution mechanism, workspace/incarnation, residual cleanup
+result and exact test evidence. A successful readiness response or Linux test
+run is not cross-platform acceptance. Unexecuted platform tests remain unverified.
+
+This document supersedes conflicting isolation requirements in runtime,
+authority, credential, browser, network, workspace-test and host/userland plans.
+Their product and protocol requirements remain in force. Dated feasibility and
+review documents remain historical evidence. There is no legacy launch fallback,
+state migration, compatibility reader or second native enforcement system.

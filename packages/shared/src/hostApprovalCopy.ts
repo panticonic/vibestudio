@@ -470,9 +470,9 @@ export const HOST_APPROVAL_COPY = {
       notNow: "Leave your workspace exactly as it is.",
       keepOld: "Keep running the version you already reviewed.",
     },
-    /** Extensions run outside our protections; that sentence never hides. */
+    /** Disclose the platform execution contract before workspace code runs. */
     nativeCodeWarning:
-      "Extensions run outside Vibestudio's protections, with access to this computer.",
+      "On Windows, workspace commands and extensions run with your account's host permissions. Linux and macOS contain workspace code; separately approved host actions can access the host.",
   },
 
   headlines: {
@@ -774,8 +774,9 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     prefix: "runtime.code-execution.manage",
     authorityCategory: { domain: "automation", verb: "manage" },
     title: "Run code",
-    action: "run a program in a safe sandbox",
-    description: "Start, watch, or stop an isolated program run",
+    action: "run a workspace program",
+    description:
+      "Start, watch, or stop a workspace program. On Windows it runs with your account's host permissions; Linux and macOS apply workspace confinement.",
     group: "runtime",
   },
   {

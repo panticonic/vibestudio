@@ -111,7 +111,7 @@ export function createHostTerminalService(deps: {
               challenge: {
                 title: `Open a terminal with full access to ${deps.host}?`,
                 description:
-                  "This terminal runs outside the workspace sandbox. Commands can read or change your host files, credentials, processes, network and other workspaces. Closing it cannot undo changes or guarantee that background processes stop.",
+                  "This terminal runs with your normal account's host permissions. Commands can read or change your host files, credentials, processes, network and other workspaces. Closing it cannot undo changes or guarantee that background processes stop.",
                 severity: "severe",
                 deniedReason: "Full host terminal access was not approved",
                 resource,

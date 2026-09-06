@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   createNodeProcessAdapter,
-  WorkspaceSandbox,
+  WorkspaceRuntime,
   type ProcessAdapter,
 } from "@vibestudio/process-adapter";
 import {
@@ -55,7 +55,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
   let childRuntimeBundle = "";
   let root: string | null = null;
   let proc: ProcessAdapter | null = null;
-  let sandbox: WorkspaceSandbox | null = null;
+  let sandbox: WorkspaceRuntime | null = null;
 
   beforeAll(async () => {
     childRuntimeBundle = fs.readFileSync(
@@ -146,7 +146,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       );
       const home = path.join(root, "storage");
       fs.mkdirSync(path.join(home, "tmp"), { recursive: true });
-      sandbox = await WorkspaceSandbox.start(
+      sandbox = await WorkspaceRuntime.start(
         {
           version: 1,
           owner: {
@@ -168,6 +168,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
         },
         {
           platform: "linux",
+          mechanism: "mxc-process",
           launcher: path.resolve("dist/mxc/linux-x64/lxc-exec"),
           workspaceEntry: path.join(runtime, "workspaceChild.js"),
         }

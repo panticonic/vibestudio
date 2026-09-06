@@ -15,7 +15,7 @@ const owned: string[] = [];
 afterEach(() => {
   for (const directory of owned.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
-describe("linked Claude contained profile retirement", () => {
+describe("linked Claude profile retirement", () => {
   it("quarantines and retires only its exact profile, preserving sibling host files", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "claude-retirement-"));
     owned.push(root);

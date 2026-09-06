@@ -1,7 +1,7 @@
 # Run the native acceptance suite as a newly created, genuinely non-admin user.
 # This script is for a disposable Windows CI runner. It never installs network
-# exemptions or changes MXC policy. Administrator rights provision/retire the
-# test identity only; all assertions and sandbox launches use its normal token.
+# exemptions or changes application permissions. Administrator rights provision/retire the
+# test identity only; all assertions and native launches use its normal token.
 [CmdletBinding()]
 param(
     [string] $Workspace = (Split-Path -Parent $PSScriptRoot),

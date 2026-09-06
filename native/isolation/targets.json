@@ -4,36 +4,20 @@
     "arch": "x64",
     "artifact": "dist/mxc/linux-x64/lxc-exec",
     "mxcBinary": "lxc-exec",
-    "mxcFiles": [
-      "lxc-exec"
-    ]
+    "mxcFiles": ["lxc-exec"]
   },
   {
     "platform": "linux",
     "arch": "arm64",
     "artifact": "dist/mxc/linux-arm64/lxc-exec",
     "mxcBinary": "lxc-exec",
-    "mxcFiles": [
-      "lxc-exec"
-    ]
+    "mxcFiles": ["lxc-exec"]
   },
   {
     "platform": "darwin",
     "arch": "arm64",
     "artifact": "dist/mxc/darwin-arm64/mxc-exec-mac",
     "mxcBinary": "mxc-exec-mac",
-    "mxcFiles": [
-      "mxc-exec-mac"
-    ]
-  },
-  {
-    "platform": "win32",
-    "arch": "x64",
-    "artifact": "dist/mxc/win32-x64/wxc-exec.exe",
-    "mxcBinary": "wxc-exec.exe",
-    "mxcFiles": [
-      "wxc-exec.exe",
-      "wxc-host-prep.exe"
-    ]
+    "mxcFiles": ["mxc-exec-mac"]
   }
 ]

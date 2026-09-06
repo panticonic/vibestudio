@@ -105,7 +105,7 @@ jobs:
         run: ELECTRON_RUN_AS_NODE=1 pnpm exec electron node_modules/vitest/vitest.mjs run src/server/nativeWorkspaceRuntime.integration.test.ts
 
       - name: Linux native Claude launch contract
-        run: pnpm vitest run packages/shared/src/claudeReadOnlyLaunch.test.ts
+        run: pnpm vitest run packages/shared/src/claudeNativeLaunch.test.ts
 
       - name: Native Iroh remote transport
         run: pnpm test:remote-transport
@@ -177,7 +177,7 @@ jobs:
           test "$(wc -l < SHA256SUMS-macos)" -eq 1
 
   native-isolation:
-    name: Native workspace isolation (${{ matrix.target }}, ${{ matrix.runner }})
+    name: Native workspace execution (${{ matrix.target }}, ${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
@@ -229,23 +229,11 @@ jobs:
       - name: Stage MXC executor payload
         run: node scripts/build-native-isolation.mjs
 
-      - name: Prepare stock MXC Windows prerequisites
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $driveRoots = @("$env:SystemDrive\", "$(Split-Path -Qualifier $env:GITHUB_WORKSPACE)\") | Select-Object -Unique
-          foreach ($driveRoot in $driveRoots) {
-            & ./dist/mxc/win32-x64/wxc-host-prep.exe prepare-system-drive --target $driveRoot
-            if ($LASTEXITCODE -ne 0) { throw "MXC metadata preparation failed for $driveRoot" }
-          }
-          & ./dist/mxc/win32-x64/wxc-host-prep.exe prepare-null-device
-          if ($LASTEXITCODE -ne 0) { throw 'MXC null-device preparation failed.' }
-
       - name: Build production application and headless host
         id: production-build
         run: pnpm build
 
-      - name: Check native confinement and workspace sharing
+      - name: Check native execution and platform permissions
         id: native-check
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
 
@@ -253,13 +241,13 @@ jobs:
         if: ${{ failure() && runner.os == 'macOS' && steps.native-check.outcome == 'failure' }}
         run: sudo log show --last 3m --style compact --predicate 'eventMessage CONTAINS "Sandbox" AND eventMessage CONTAINS "deny"' | tail -100
 
-      - name: Check Windows confinement as a standard user
+      - name: Check Windows host execution as a standard user
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.production-build.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/test-native-standard-user.ps1
 
       - name: Upload tested native release input
-        if: ${{ !matrix.additional }}
+        if: ${{ !matrix.additional && matrix.target != 'win32-x64' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-isolation-${{ matrix.target }}
@@ -281,7 +269,7 @@ jobs:
       # native assertion still fails this required job and cannot publish a release.
       - name: Assemble packaging input
         id: packaging-input
-        if: ${{ !cancelled() && matrix.package && steps.production-build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.package && matrix.target != 'win32-x64' && steps.production-build.outcome == 'success' }}
         shell: bash
         run: |
           mkdir -p native/isolation/artifacts/native-isolation-${{ matrix.target }}
@@ -374,17 +362,6 @@ jobs:
         run: |
           mkdir installed
           tar -xf candidate/packaged-app.tar -C installed
-      - name: Prepare installed stock MXC Windows prerequisites
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $driveRoots = @("$env:SystemDrive\", "$(Split-Path -Qualifier $env:GITHUB_WORKSPACE)\") | Select-Object -Unique
-          foreach ($driveRoot in $driveRoots) {
-            & ./installed/resources/app.asar.unpacked/dist/mxc/win32-x64/wxc-host-prep.exe prepare-system-drive --target $driveRoot
-            if ($LASTEXITCODE -ne 0) { throw "Installed MXC metadata preparation failed for $driveRoot" }
-          }
-          & ./installed/resources/app.asar.unpacked/dist/mxc/win32-x64/wxc-host-prep.exe prepare-null-device
-          if ($LASTEXITCODE -ne 0) { throw 'Installed MXC null-device preparation failed.' }
       - name: Launch installed desktop and workspace containment smoke
         id: installed-smoke
         run: node scripts/packaged-isolation-smoke.mjs --app "installed/${{ matrix.app }}" --out-dir test-results/packaged-isolation

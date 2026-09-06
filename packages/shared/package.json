@@ -35,7 +35,7 @@
     "./channelInvites": "./src/channelInvites.ts",
     "./claudeLaunchProfile": "./src/claudeLaunchProfile.ts",
     "./claudeInstalledLaunch": "./src/claudeInstalledLaunch.ts",
-    "./claudeReadOnlyLaunch": "./src/claudeReadOnlyLaunch.ts",
+    "./claudeNativeLaunch": "./src/claudeNativeLaunch.ts",
     "./chromeTrust": "./src/chromeTrust.ts",
     "./cliCredentials": "./src/cliCredentials.ts",
     "./connect": "./src/connect.ts",

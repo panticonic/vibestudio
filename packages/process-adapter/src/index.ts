@@ -10,13 +10,9 @@ import type { Serializable } from "node:child_process";
 import { createRequire } from "node:module";
 
 export { compileExecution, validateExecutionPolicy, IsolationError } from "./isolation/index.js";
-export type {
-  ExecutionPolicy,
-  IsolationInstallation,
-  CompiledExecution,
-} from "./isolation/index.js";
-export { WorkspaceSandbox } from "./isolation/workspace.js";
-export type { WorkspaceSandboxInstallation, WorkspaceStopResult } from "./isolation/workspace.js";
+export type { ExecutionPolicy, NativeInstallation, CompiledExecution } from "./isolation/index.js";
+export { WorkspaceRuntime } from "./isolation/workspace.js";
+export type { WorkspaceRuntimeInstallation, WorkspaceStopResult } from "./isolation/workspace.js";
 
 // Electron is supplied by the runtime executable rather than the workspace or
 // launch directory. Anchoring the require at that executable works in both the

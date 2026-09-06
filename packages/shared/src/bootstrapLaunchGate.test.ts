@@ -103,7 +103,7 @@ describe("the common case", () => {
       approvals: [review([part({ kind: "extension", label: "Extension", target: null })])],
     });
     expect(withExtension.nativeCodeWarning).toBe(
-      "Extensions run outside Vibestudio's protections, with access to this computer."
+      "On Windows, workspace commands and extensions run with your account's host permissions. Linux and macOS contain workspace code; separately approved host actions can access the host."
     );
     expect(launchGateView({ approvals: [review([part()])] }).nativeCodeWarning).toBeNull();
   });
@@ -417,7 +417,7 @@ describe("the terminal form", () => {
     expect(text).toContain("https://github.com/acme/studio  at v2.1");
     expect(text).toContain('"Acme Studio" — name given by this template');
     expect(text).toContain("You haven't run code from github.com/acme before.");
-    expect(text).toContain("Extensions run outside Vibestudio's protections");
+    expect(text).toContain("On Windows, workspace commands and extensions");
     expect(text).toContain("Vibestudio won't start. Nothing is installed or changed.");
     expect(text).toContain("[Start] / [Quit]");
   });

@@ -51,7 +51,7 @@ describe("resolved execution resource policy", () => {
     }
   );
   it.each(["linux", "darwin", "win32"] as const)(
-    "compiles MXC policy with open networking and no guest inheritance of the owner environment on %s",
+    "compiles explicit platform execution without guest owner environment inheritance on %s",
     (platform) => {
       vi.stubEnv("SystemRoot", "C:\\Windows");
       vi.stubEnv("USERPROFILE", "C:\\Users\\host-owner");
@@ -70,10 +70,21 @@ describe("resolved execution resource policy", () => {
           write: p.write.map(win),
         };
       }
-      const result = compileExecution(p, {
-        platform,
-        launcher: platform === "win32" ? "C:\\installed\\mxc.exe" : "/installed/mxc",
-      });
+      const result = compileExecution(
+        p,
+        platform === "win32"
+          ? { platform, mechanism: "host-process" }
+          : { platform, mechanism: "mxc-process", launcher: "/installed/mxc" }
+      );
+      if (platform === "win32") {
+        expect(result.mechanism).toBe("host-process");
+        expect(result.command).toBe(p.executable);
+        expect(result.args).toEqual(p.args);
+        expect(result.environment["HOME"]).toBe(p.home);
+        expect(windowsEnvironmentValue(result.environment, "USERPROFILE")).toBe(p.home);
+        expect(result.environment["MXC_DACL_STATE_DIR"]).toBeUndefined();
+        return;
+      }
       const config = JSON.parse(Buffer.from(result.args[1]!, "base64").toString());
       expect(result.mechanism).toBe("mxc-process");
       expect(result.args[0]).toBe("--config-base64");
@@ -81,11 +92,11 @@ describe("resolved execution resource policy", () => {
         defaultPolicy: "allow",
         allowLocalNetwork: true,
       });
-      expect(config.filesystem.readonlyPaths).toEqual([
-        ...p.read,
+      expect(config.filesystem.readonlyPaths).toEqual(p.read);
+      expect(config.filesystem.readwritePaths).toEqual([
+        ...p.write,
         ...(platform === "darwin" ? ["/dev"] : []),
       ]);
-      expect(config.filesystem.readwritePaths).toEqual(p.write);
       expect(config.process.env).toContain(`HOME=${p.home}`);
       expect(result.environment["HOME"]).toBe(process.env["HOME"]);
       expect(config.process.env).not.toContain(`HOME=${process.env["HOME"]}`);
@@ -94,26 +105,6 @@ describe("resolved execution resource policy", () => {
       expect(
         config.process.env.some((entry: string) => entry.startsWith("MXC_DACL_STATE_DIR="))
       ).toBe(false);
-      if (platform === "win32") {
-        expect(config.processContainer).toEqual({
-          leastPrivilege: false,
-          capabilities: ["internetClient", "internetClientServer", "privateNetworkClientServer"],
-        });
-        expect(config.ui).toEqual({ disable: false, clipboard: "none", injection: false });
-        expect(windowsEnvironmentValue(result.environment, "PATH")).toBe(process.env["PATH"]);
-        expect(windowsEnvironmentValue(result.environment, "SystemRoot")).toBe("C:\\Windows");
-        expect(windowsEnvironmentValue(result.environment, "USERPROFILE")).toBe(
-          "C:\\Users\\host-owner"
-        );
-        expect(windowsEnvironmentValue(result.environment, "LOCALAPPDATA")).toBe(
-          "C:\\Users\\host-owner\\AppData\\Local"
-        );
-        expect(config.process.env).toContain(`USERPROFILE=${p.home}`);
-        expect(config.process.env).toContain(`LOCALAPPDATA=${p.home}\\data`);
-        expect(config.process.env.some((entry: string) => entry.includes("host-owner"))).toBe(
-          false
-        );
-      }
     }
   );
   it.skipIf(process.platform === "win32")(
@@ -134,7 +125,11 @@ describe("resolved execution resource policy", () => {
         read: [...policy().read, process.execPath],
         args: ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...args],
       };
-      const launch = compileExecution(p, { platform: "linux", launcher: "/installed/mxc" });
+      const launch = compileExecution(p, {
+        platform: "linux",
+        mechanism: "mxc-process",
+        launcher: "/installed/mxc",
+      });
       const config = JSON.parse(Buffer.from(launch.args[1]!, "base64").toString());
       expect(
         JSON.parse(
@@ -147,7 +142,7 @@ describe("resolved execution resource policy", () => {
     expect(() =>
       compileExecution(
         { ...policy(), sockets: ["/broker.sock"] },
-        { platform: "linux", launcher: "/installed/mxc" }
+        { platform: "linux", mechanism: "mxc-process", launcher: "/installed/mxc" }
       )
     ).toThrow("socket admission");
   });

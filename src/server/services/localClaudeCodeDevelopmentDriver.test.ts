@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLocalClaudeCodeDevelopmentDriver } from "./localClaudeCodeDevelopmentDriver.js";
 import type { NativeDevelopmentToolHandle } from "./nativeDevelopmentExecutor.js";
+import { MIN_CLAUDE_CODE_VERSION } from "@vibestudio/shared/claudeLaunchProfile";
 
 const roots: string[] = [];
 
@@ -21,7 +22,7 @@ afterEach(async () => {
   );
 });
 
-async function createClaudeFixture(version = "2.1.81") {
+async function createClaudeFixture(version: string = MIN_CLAUDE_CODE_VERSION) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-native-claude-"));
   roots.push(root);
   const cliPath = path.join(root, "claude");

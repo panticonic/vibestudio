@@ -2,9 +2,12 @@ import { execFile } from "node:child_process";
 import { lstat, mkdtemp, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { assertMxcPrerequisites, compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
+import {
+  assertNativePrerequisites,
+  compileNativeLaunch,
+} from "@vibestudio/process-adapter/native-launch";
 import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
-import { getMxcExecutable } from "./runtimePaths.js";
+import { getNativeExecutionInstallation } from "./runtimePaths.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
@@ -24,8 +27,8 @@ try {
 } catch { process.stderr.write('Credential extraction rejected'); process.exitCode = 1; }
 `;
 
-/** Extract guest-authored bytes behind MXC before the trusted owner parses them.
- * The profile's parent and the staging sibling remain owner-only throughout. */
+/** Extract bounded credential bytes before parsing. Unix runs behind MXC;
+ * Windows uses normal account access, including links outside the profile. */
 export async function extractClaudeCredential(input: {
   profileDir: string;
   profileIdentity: { dev: string; ino: string };
@@ -48,10 +51,9 @@ export async function extractClaudeCredential(input: {
     const platform = process.platform;
     if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
       throw new Error(`Unsupported Claude credential extraction platform: ${platform}`);
-    const launcher = getMxcExecutable(input.appRoot);
-    const launch = compileMxcLaunch({
-      platform,
-      launcher,
+    const installation = getNativeExecutionInstallation(input.appRoot);
+    const launch = compileNativeLaunch({
+      installation,
       containerId: `vibestudio-credential-${path.basename(runtimeRoot)}`,
       argv: [
         runtime.executable,
@@ -74,7 +76,7 @@ export async function extractClaudeCredential(input: {
       writePaths: [],
       network: "deny",
     });
-    await assertMxcPrerequisites({ platform, launcher, environment: launch.environment });
+    await assertNativePrerequisites({ installation, environment: launch.environment });
     try {
       const result = await execFileAsync(launch.command, launch.args, {
         cwd: launch.cwd,

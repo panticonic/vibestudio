@@ -5,16 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProcessAdapter } from "../index.js";
-import { WorkspaceSandbox } from "./workspace.js";
+import { WorkspaceRuntime } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
-const owned: WorkspaceSandbox[] = [];
+const owned: WorkspaceRuntime[] = [];
 const directories: string[] = [];
 let guestWatchdogDeadline = 0;
 afterEach(async () => {
   const stops = await Promise.allSettled(owned.splice(0).map((sandbox) => sandbox.stop()));
-  // Interrupted MXC retirement is best effort on macOS. Every supervisor in
+  // Descendant retirement is best effort on macOS and Windows. Every supervisor in
   // this fault-injection fixture has an independent eight-second watchdog.
   // Wait it out before deleting resources, even when the launcher exited.
   if (guestWatchdogDeadline > Date.now())
@@ -111,15 +111,22 @@ async function fixture() {
     process.send(read());
   `
   );
-  const launcher = await realpath(
-    fileURLToPath(
-      new URL(
-        `../../../../dist/mxc/${platform}-${process.arch}/${platform === "win32" ? "wxc-exec.exe" : platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
-        import.meta.url
-      )
-    )
-  );
-  const installation = { platform, launcher, workspaceEntry };
+  const installationBase =
+    platform === "win32"
+      ? ({ platform, mechanism: "host-process" } as const)
+      : ({
+          platform,
+          mechanism: "mxc-process",
+          launcher: await realpath(
+            fileURLToPath(
+              new URL(
+                `../../../../dist/mxc/${platform}-${process.arch}/${platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
+                import.meta.url
+              )
+            )
+          ),
+        } as const);
+  const installation = { ...installationBase, workspaceEntry };
   const start = async (id: string, incarnation: string) => {
     const privateRoot = path.join(root, id);
     const home = path.join(privateRoot, "state");
@@ -151,7 +158,7 @@ async function fixture() {
       write: [home],
       sockets: [],
     };
-    const sandbox = await WorkspaceSandbox.start(policy, installation);
+    const sandbox = await WorkspaceRuntime.start(policy, installation);
     owned.push(sandbox);
     guestWatchdogDeadline = Math.max(guestWatchdogDeadline, Date.now() + 8500);
     return sandbox;
@@ -159,7 +166,7 @@ async function fixture() {
   return { start, entry, platform, aclPaths: [runtime, marker] };
 }
 
-describe("MXC interrupted workspace lifecycle", () => {
+describe("Native interrupted workspace lifecycle", () => {
   it.each(["supervisor crash", "launcher termination"] as const)(
     "recovers from %s while another workspace retains the shared runtime",
     async (failure) => {

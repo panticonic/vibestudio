@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { compileMxcLaunch } from "./mxc.js";
+import { compileNativeLaunch, type NativeInstallation } from "./native-launch.js";
+export type { NativeInstallation } from "./native-launch.js";
 import {
   executionEnvironment,
   IsolationError,
@@ -9,25 +10,19 @@ import {
 
 export { IsolationError, validateExecutionPolicy, type ExecutionPolicy } from "./policy.js";
 
-export interface IsolationInstallation {
-  platform: "linux" | "darwin" | "win32";
-  /** Absolute path to the pinned, installed MXC executable, never guest PATH. */
-  launcher: string;
-}
-
 export interface CompiledExecution {
   command: string;
   args: string[];
   cwd: string;
   environment: Record<string, string>;
-  mechanism: "mxc-process";
+  mechanism: "mxc-process" | "host-process";
 }
 
-/** Translate application-owned resource admission into MXC's public policy.
- * MXC owns OS layout discovery, policy enforcement and native lifecycle. */
+/** Compile the explicit platform execution mechanism. Unix uses MXC policy;
+ * Windows executes directly with a closed environment and normal user access. */
 export function compileExecution(
   policy: ExecutionPolicy,
-  installation: IsolationInstallation
+  installation: NativeInstallation
 ): CompiledExecution {
   validateExecutionPolicy(policy, installation.platform);
   if (policy.sockets.length) {
@@ -36,10 +31,9 @@ export function compileExecution(
     );
   }
   return {
-    ...compileMxcLaunch({
+    ...compileNativeLaunch({
       network: "allow",
-      platform: installation.platform,
-      launcher: installation.launcher,
+      installation,
       containerId:
         "vibestudio-" +
         createHash("sha256").update(JSON.stringify(policy.owner)).digest("hex").slice(0, 32),
@@ -49,6 +43,5 @@ export function compileExecution(
       readPaths: policy.read,
       writePaths: policy.write,
     }),
-    mechanism: "mxc-process",
   };
 }

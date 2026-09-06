@@ -5,6 +5,7 @@ import { createPackage } from "@electron/asar";
 import { describe, expect, it } from "vitest";
 import { writeNativeIsolationArtifacts } from "./helpers/nativeIsolationArtifacts.js";
 import { afterPack } from "../scripts/check-electron-package-boundary.mjs";
+import { writeNodeRuntimeFixture } from "./helpers/nodeRuntimeArtifacts.js";
 import { nativeIsolationTarget } from "../scripts/native-isolation-artifacts.mjs";
 import {
   assertNoBundledUserlandPaths,
@@ -71,32 +72,39 @@ describe("packaged host/userland boundary", () => {
       fs.mkdirSync(path.dirname(artifact), { recursive: true });
       fs.writeFileSync(binding, "module.exports = {};\n");
       fs.writeFileSync(artifact, "native binding fixture\n");
-      const nativeTarget = nativeIsolationTarget(process.platform, process.arch);
-      const artifactRoot = path.join(app, "native/isolation/artifacts");
-      writeNativeIsolationArtifacts(app, artifactRoot, [nativeTarget]);
-      const nativeInput = path.join(
-        artifactRoot,
-        `native-isolation-${process.platform}-${process.arch}`
+      writeNodeRuntimeFixture(
+        path.join(resources, "app.asar.unpacked"),
+        process.platform,
+        process.arch
       );
-      for (const binary of nativeTarget.mxcFiles) {
-        const unpackedNative = path.join(
-          resources,
-          "app.asar.unpacked",
-          path.dirname(nativeTarget.artifact),
-          binary
+      if (process.platform !== "win32") {
+        const nativeTarget = nativeIsolationTarget(process.platform, process.arch);
+        const artifactRoot = path.join(app, "native/isolation/artifacts");
+        writeNativeIsolationArtifacts(app, artifactRoot, [nativeTarget]);
+        const nativeInput = path.join(
+          artifactRoot,
+          `native-isolation-${process.platform}-${process.arch}`
         );
-        fs.mkdirSync(path.dirname(unpackedNative), { recursive: true });
-        fs.copyFileSync(path.join(nativeInput, binary), unpackedNative);
-        fs.chmodSync(unpackedNative, 0o755);
+        for (const binary of nativeTarget.mxcFiles) {
+          const unpackedNative = path.join(
+            resources,
+            "app.asar.unpacked",
+            path.dirname(nativeTarget.artifact),
+            binary
+          );
+          fs.mkdirSync(path.dirname(unpackedNative), { recursive: true });
+          fs.copyFileSync(path.join(nativeInput, binary), unpackedNative);
+          fs.chmodSync(unpackedNative, 0o755);
+        }
+        fs.copyFileSync(
+          path.join(nativeInput, "manifest.json"),
+          path.join(
+            resources,
+            "app.asar.unpacked",
+            nativeTarget.artifact.replace(/[^/]+$/, "manifest.json")
+          )
+        );
       }
-      fs.copyFileSync(
-        path.join(nativeInput, "manifest.json"),
-        path.join(
-          resources,
-          "app.asar.unpacked",
-          nativeTarget.artifact.replace(/[^/]+$/, "manifest.json")
-        )
-      );
       fs.writeFileSync(path.join(app, "dist", "main.cjs"), "module.exports = {};\n");
       await createPackage(app, path.join(resources, "app.asar"));
       const context = {

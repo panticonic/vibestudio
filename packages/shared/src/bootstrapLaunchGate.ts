@@ -19,8 +19,8 @@ import type { HostTarget } from "./hostTargets.js";
  * the ONLY review these units ever get — including for a third-party root — so
  * it is specified properly rather than treated as chrome.
  *
- * **This decision is not about permissions.** Extensions are native code running
- * outside Vibestudio's protections with access to the computer, and apps are the
+ * **This decision is not about permissions.** Extensions execute workspace code under the host platform
+ * contract, including normal account permissions on Windows, and apps are the
  * client itself. Listing individual permissions here invites the user to weigh
  * details downstream of the only question that matters:
  *

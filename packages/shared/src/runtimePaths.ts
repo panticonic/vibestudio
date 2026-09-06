@@ -1,3 +1,4 @@
+import type { NativeInstallation } from "@vibestudio/process-adapter/native-launch";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -79,23 +80,26 @@ export function getPlatformPackageBinaryPath(
   );
 }
 
-/** Installed MXC release payload; never resolve enforcement from guest PATH. */
-export function getMxcExecutable(
+/** Windows intentionally uses host permissions; Unix uses installed MXC. */
+export function getNativeExecutionInstallation(
   appRoot: string,
   platform: string = process.platform,
   arch: string = process.arch
-): string {
+): NativeInstallation {
+  if (platform === "win32" && arch === "x64") return { platform, mechanism: "host-process" };
   if (
     !(
       (platform === "linux" && (arch === "x64" || arch === "arm64")) ||
-      (platform === "darwin" && arch === "arm64") ||
-      (platform === "win32" && arch === "x64")
+      (platform === "darwin" && arch === "arm64")
     )
   )
-    throw new Error(`Unsupported MXC product target: ${platform}-${arch}`);
-  const binary =
-    platform === "linux" ? "lxc-exec" : platform === "darwin" ? "mxc-exec-mac" : "wxc-exec.exe";
-  return getPhysicalAppPath(appRoot, `dist/mxc/${platform}-${arch}/${binary}`);
+    throw new Error(`Unsupported native execution target: ${platform}-${arch}`);
+  const binary = platform === "linux" ? "lxc-exec" : "mxc-exec-mac";
+  return {
+    platform,
+    mechanism: "mxc-process",
+    launcher: getPhysicalAppPath(appRoot, `dist/mxc/${platform}-${arch}/${binary}`),
+  };
 }
 
 /** The app ships a real Node distribution for workspace code and native tools. */
