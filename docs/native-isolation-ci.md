@@ -48,6 +48,15 @@ depends on its acceptance job. PR packaging is unsigned; it cannot prove Apple
 signing works. The release jobs continue to require the existing `RELEASE_MAC`
 and `RELEASE_WINDOWS` repository variables and Apple signing secrets.
 
+## Matched host and Base revisions
+
+The `base-ref` input selects the Base revision for source integration tests. It
+defaults to the published `main` branch, matching normal pull-request CI. For
+coordinated changes in both repositories, push each to a test branch and supply
+the exact Base commit; otherwise CI may combine incompatible dependency contracts
+from different development revisions. Packaged acceptance still acquires the
+committed product Base release pin, independently of this source-test input.
+
 ## Windows 11 and running CI
 
 Use the workflow's `windows-runner` dispatch input to select a configured Windows

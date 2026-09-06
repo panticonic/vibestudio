@@ -30,7 +30,7 @@ describe("host native dependency contracts", () => {
       .mockReturnValueOnce(result(0));
 
     expect(() => assertHostNativeDependencies({ run })).toThrow(
-      /pnpm rebuild @number0\/iroh node-pty/
+      /pnpm check:native-host-dependencies --repair/
     );
   });
 
@@ -48,7 +48,7 @@ describe("host native dependency contracts", () => {
 
     ensureHostNativeDependencies({ run, log });
 
-    expect(run.mock.calls[3]?.[1]).toEqual(["rebuild", "@number0/iroh"]);
+    expect(run.mock.calls[3]?.[1].slice(-2)).toEqual(["rebuild", "@number0/iroh"]);
     expect(log).toHaveBeenLastCalledWith(
       "[native-dependencies] Host runtime dependencies repaired and verified."
     );

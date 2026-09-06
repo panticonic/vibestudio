@@ -6,11 +6,19 @@ on:
   pull_request:
   workflow_call:
     inputs:
+      base-ref:
+        type: string
+        default: main
       windows-runner:
         type: string
         default: windows-2025
   workflow_dispatch:
     inputs:
+      base-ref:
+        description: Exact Base commit or branch paired with this host revision
+        type: string
+        default: main
+        required: true
       windows-runner:
         description: Windows runner label (use a configured Windows 11 desktop runner for desktop acceptance)
         type: string
@@ -38,6 +46,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: panticonic/vibestudio-workspace-base
+          ref: ${{ inputs.base-ref || 'main' }}
           path: vibestudio-workspace-base
           persist-credentials: false
 
@@ -57,8 +66,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check packaged acceptance harness
-        run: node --test scripts/packaged-isolation-smoke.test.mjs
+      - name: Check acceptance and native preparation harnesses
+        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs
 
       - name: Type-check
         run: pnpm type-check
@@ -193,8 +202,8 @@ jobs:
       - name: Install test dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build the native terminal dependency
-        run: pnpm rebuild node-pty
+      - name: Prepare and exercise native dependencies
+        run: pnpm check:native-host-dependencies --repair
 
       - name: Install bubblewrap
         if: runner.os == 'Linux'
@@ -228,6 +237,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: panticonic/vibestudio-workspace-base
+          ref: ${{ inputs.base-ref || 'main' }}
           path: vibestudio-workspace-base
           persist-credentials: false
 
@@ -271,6 +281,9 @@ jobs:
   packaged-acceptance:
     name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})
     needs: native-isolation
+    # Exercise available platform candidates even if another platform failed.
+    # Missing artifacts still fail acceptance; the native gate remains required.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
