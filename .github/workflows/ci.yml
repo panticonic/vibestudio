@@ -41,7 +41,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Linux sandbox runtime
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap slirp4netns
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -178,7 +178,7 @@ jobs:
 
       - name: Install bubblewrap
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap slirp4netns
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
       - name: Stage MXC executor payload
         run: node scripts/build-native-isolation.mjs

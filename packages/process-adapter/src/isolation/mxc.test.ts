@@ -5,6 +5,7 @@ import { compileMxcLaunch, type MxcLaunchInput, mxcLauncherEnvironment } from ".
 function input(platform: MxcLaunchInput["platform"] = "linux"): MxcLaunchInput {
   return {
     platform,
+    network: "allow",
     launcher: platform === "win32" ? "C:\\installed\\mxc.exe" : "/installed/mxc",
     containerId: "test",
     argv: [platform === "win32" ? "C:\\runtime\\node.exe" : process.execPath],
@@ -12,7 +13,6 @@ function input(platform: MxcLaunchInput["platform"] = "linux"): MxcLaunchInput {
     guestEnvironment: { HOME: "/guest/home", LOCALAPPDATA: "/guest/local" },
     readPaths: [],
     writePaths: [],
-    network: "deny",
   };
 }
 function config(value: MxcLaunchInput) {
@@ -75,25 +75,30 @@ describe("stock MXC adapter", () => {
   });
 
   it.each(["linux", "darwin", "win32"] as const)(
-    "uses common stock defaults and explicit network choice on %s",
+    "uses stock open networking with unchanged filesystem/lifecycle policy on %s",
     (platform) => {
-      const denied = config(input(platform));
-      const allowed = config({ ...input(platform), network: "allow" });
-      expect(denied.network).toEqual({
+      const result = config(input(platform));
+      expect(result.network).toEqual({ defaultPolicy: "allow", allowLocalNetwork: true });
+      expect(result.lifecycle).toEqual({ destroyOnExit: true, preservePolicy: false });
+      if (platform === "win32")
+        expect(result.processContainer).toEqual({
+          leastPrivilege: false,
+          capabilities: ["internetClient", "internetClientServer", "privateNetworkClientServer"],
+        });
+      if (platform === "darwin")
+        expect(result.seatbelt).toEqual({ nestedPty: true, keychainAccess: false });
+    }
+  );
+
+  it.each(["linux", "darwin", "win32"] as const)(
+    "keeps internal cleanup offline on %s",
+    (platform) => {
+      const result = config({ ...input(platform), network: "deny" });
+      expect(result.network).toEqual({
         egress: { default: "deny" },
         ingress: { default: "deny", hostLoopback: "deny" },
       });
-      expect(allowed.network.egress.default).toBe("allow");
-      expect(denied.lifecycle).toEqual({ destroyOnExit: true, preservePolicy: false });
-      if (platform === "win32") {
-        expect(denied.processContainer).toEqual({ leastPrivilege: false, capabilities: [] });
-        expect(allowed.processContainer).toEqual({
-          leastPrivilege: false,
-          capabilities: ["internetClient"],
-        });
-      }
-      if (platform === "darwin")
-        expect(denied.seatbelt).toEqual({ nestedPty: true, keychainAccess: false });
+      if (platform === "win32") expect(result.processContainer.capabilities).toEqual([]);
     }
   );
 

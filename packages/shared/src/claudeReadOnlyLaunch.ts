@@ -220,6 +220,7 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
     confinementEnv: env,
   });
   const launch = compileMxcLaunch({
+    network: "allow",
     platform,
     launcher: input.launcher,
     containerId: `vibestudio-claude-${randomUUID()}`,
@@ -228,7 +229,6 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
     guestEnvironment: environment,
     readPaths,
     writePaths: [profileDir],
-    network: "allow",
   });
   return {
     command: launch.command,

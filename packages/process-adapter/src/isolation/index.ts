@@ -37,6 +37,7 @@ export function compileExecution(
   }
   return {
     ...compileMxcLaunch({
+      network: "allow",
       platform: installation.platform,
       launcher: installation.launcher,
       containerId:
@@ -47,7 +48,6 @@ export function compileExecution(
       guestEnvironment: executionEnvironment(policy, installation.platform),
       readPaths: policy.read,
       writePaths: policy.write,
-      network: "deny",
     }),
     mechanism: "mxc-process",
   };

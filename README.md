@@ -273,7 +273,7 @@ Generic npm packages require the complete Linux x64/ARM64, Apple Silicon macOS, 
 
 The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release.
 
-On Linux, `slirp4netns` is required only for linked Claude launches that explicitly use a network-capable provider. Ordinary workspace network access remains disabled and does not require it.
+Native workspace commands and linked Claude use normal networking through stock MXC. Linux requires bubblewrap, with no slirp4netns dependency. Workspace trash deletion remains offline. The existing application egress proxy and its approvals are unchanged. Windows AppContainer may restrict host-loopback access; native Windows validation remains a release gate.
 
 Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its OS-preparation diagnostics refer to an installed tool. Preparation requiring elevation remains an explicit administrator operation; startup never applies it silently.
 

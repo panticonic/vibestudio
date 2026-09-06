@@ -12,8 +12,8 @@ export interface MxcLaunchInput {
   guestEnvironment: Readonly<Record<string, string>>;
   readPaths: readonly string[];
   writePaths: readonly string[];
-  /** Workspace commands deny networking; linked providers explicitly allow it. */
-  network: "deny" | "allow";
+  /** Developer commands use normal networking; internal file cleanup is offline. */
+  network: "allow" | "deny";
 }
 
 /** Keep helper discovery on the trusted owner's PATH. Windows ACL journal
@@ -81,17 +81,24 @@ export function compileMxcLaunch(
       timeout: 0,
     },
     filesystem: { readonlyPaths: [...input.readPaths], readwritePaths: [...input.writePaths] },
-    network: {
-      egress: { default: input.network },
-      ingress: { default: "deny", hostLoopback: "deny" },
-    },
+    // The supported stock open-network shape shares Linux's host network.
+    // Directional ingress fields select filtered namespaces and cannot express
+    // unrestricted ingress on that backend. We impose no application network
+    // policy; Windows AppContainer can retain intrinsic loopback limitations.
+    network:
+      input.network === "allow"
+        ? { defaultPolicy: "allow", allowLocalNetwork: true }
+        : { egress: { default: "deny" }, ingress: { default: "deny", hostLoopback: "deny" } },
     lifecycle: { destroyOnExit: true, preservePolicy: false },
     ui: { disable: true, clipboard: "none", injection: false },
     ...(input.platform === "win32"
       ? {
           processContainer: {
             leastPrivilege: false,
-            capabilities: input.network === "allow" ? ["internetClient"] : [],
+            capabilities:
+              input.network === "allow"
+                ? ["internetClient", "internetClientServer", "privateNetworkClientServer"]
+                : [],
           },
         }
       : {}),

@@ -14,7 +14,6 @@ beforeEach(() => {
 const input = {
   platform: "linux" as const,
   launcher: "/installed/mxc",
-  network: "deny" as const,
   environment: { PATH: "/owner/bin:/usr/bin" },
 };
 it("reports a missing packaged executor before launching any helper", async () => {
@@ -35,21 +34,12 @@ it("probes only relevant helpers with the same closed owner environment and boun
     },
     expect.any(Function)
   );
-  vi.mocked(execFile).mockClear();
-  await assertMxcPrerequisites({ ...input, network: "allow" });
-  expect(vi.mocked(execFile).mock.calls.map(([command]) => command)).toEqual([
-    "bwrap",
-    "slirp4netns",
-  ]);
 });
-it("gives a missing networking helper remedy without silently allowing host networking", async () => {
-  vi.mocked(execFile).mockImplementationOnce((...args: any[]) => args.at(-1)(null, "version", ""));
+it("reports a missing filesystem containment helper", async () => {
   vi.mocked(execFile).mockImplementationOnce((...args: any[]) =>
-    args.at(-1)(new Error("spawn slirp4netns ENOENT"))
+    args.at(-1)(new Error("spawn bwrap ENOENT"))
   );
-  await expect(assertMxcPrerequisites({ ...input, network: "allow" })).rejects.toThrow(
-    /Install slirp4netns.*linked-provider networking/
-  );
+  await expect(assertMxcPrerequisites(input)).rejects.toThrow(/Install bubblewrap/);
 });
 it("requires Windows owner coordinates for lifecycle cleanup", async () => {
   await expect(assertMxcPrerequisites({ ...input, platform: "win32" })).rejects.toThrow(

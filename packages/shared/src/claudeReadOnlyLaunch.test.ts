@@ -7,7 +7,6 @@ import { claudeContainedSpawnEnvironment, confineClaudeReadOnly } from "./claude
 
 function canRunMxc(): boolean {
   if (process.platform !== "linux" || !existsSync(launcher)) return false;
-  if (spawnSync("slirp4netns", ["--version"], { stdio: "ignore" }).status !== 0) return false;
   return true;
 }
 
@@ -48,8 +47,8 @@ describe("confineClaudeReadOnly", () => {
       readwritePaths: [profileDir],
     });
     expect(config.network).toEqual({
-      egress: { default: "allow" },
-      ingress: { default: "deny", hostLoopback: "deny" },
+      defaultPolicy: "allow",
+      allowLocalNetwork: true,
     });
     expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
     expect(config.process.commandLine).toContain("$shell");

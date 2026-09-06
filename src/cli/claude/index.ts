@@ -252,7 +252,6 @@ export async function spawnClaude(
   await assertMxcPrerequisites({
     platform: process.platform as "linux" | "darwin" | "win32",
     launcher: confined.command,
-    network: "allow",
     environment: confined.env,
   });
   return new Promise((resolve, reject) => {

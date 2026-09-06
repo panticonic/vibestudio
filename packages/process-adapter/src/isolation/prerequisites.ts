@@ -14,7 +14,6 @@ type Platform = "linux" | "darwin" | "win32";
 export async function assertMxcPrerequisites(input: {
   platform: Platform;
   launcher: string;
-  network: "allow" | "deny";
   environment: Record<string, string>;
 }): Promise<void> {
   try {
@@ -27,24 +26,20 @@ export async function assertMxcPrerequisites(input: {
     );
   }
   if (input.platform === "linux") {
-    const helpers = ["bwrap", ...(input.network === "allow" ? ["slirp4netns"] : [])];
-    for (const helper of helpers) {
-      try {
-        await execute(helper, ["--version"], {
-          env: input.environment,
-          timeout: 3_000,
-          maxBuffer: 16_384,
-          windowsHide: true,
-        });
-      } catch (error) {
-        const detail = error as Error & { stderr?: string };
-        throw new IsolationError(
-          `MXC prerequisite ${helper} is unavailable. Install ${helper === "bwrap" ? "bubblewrap" : helper} ` +
-            `using your distribution's package manager and make it available on the app owner's PATH. ` +
-            `${helper === "slirp4netns" ? "It is required for linked-provider networking. " : ""}` +
-            `Native diagnostic: ${(detail.stderr || detail.message).slice(-16_384)}`
-        );
-      }
+    try {
+      await execute("bwrap", ["--version"], {
+        env: input.environment,
+        timeout: 3_000,
+        maxBuffer: 16_384,
+        windowsHide: true,
+      });
+    } catch (error) {
+      const detail = error as Error & { stderr?: string };
+      throw new IsolationError(
+        "MXC prerequisite bwrap is unavailable. Install bubblewrap " +
+          "using your distribution's package manager and make it available on the app owner's PATH. " +
+          `Native diagnostic: ${(detail.stderr || detail.message).slice(-16_384)}`
+      );
     }
   } else if (input.platform === "darwin") {
     try {
