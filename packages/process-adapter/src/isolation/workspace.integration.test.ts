@@ -120,6 +120,10 @@ describe("shared workspace runtime on the native platform", () => {
       const emit = value => process.stdout.write('PTY_RESULT:' + JSON.stringify(value) + '\\n');
       const dimensions = () => ({ columns: process.stdout.columns, rows: process.stdout.rows });
       process.stdout.on('resize', () => emit({ resized: true, ...dimensions() }));
+      // Node observes Windows console resize events while readable TTY input
+      // is in raw mode. Configure that actual terminal mode before readiness;
+      // an idle cooked-mode stream need not receive SIGWINCH on Windows.
+      process.stdin.setRawMode(true);
       const deadline = setTimeout(() => process.exit(124), 8000);
       if (process.platform !== 'win32') {
         try { fs.readdirSync('/dev'); emit({ deviceDirectoryReadable: true }); }
@@ -130,7 +134,7 @@ describe("shared workspace runtime on the native platform", () => {
         } catch (error) { emit({ controllingTerminal: false, error: error.code }); }
       }
       emit({ ready: true, tty: process.stdin.isTTY && process.stdout.isTTY, ...dimensions() });
-      require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      require('node:readline').createInterface({ input: process.stdin, terminal: false }).on('line', line => {
         if (line === 'quit') { clearTimeout(deadline); process.exit(0); }
         let hostDenied = false;
         let inputWriteDenied = false;
