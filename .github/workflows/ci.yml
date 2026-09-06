@@ -273,7 +273,7 @@ jobs:
 
       - name: Package the application
         id: package
-        if: ${{ !cancelled() && steps.packaging-input.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.package && steps.production-build.outcome == 'success' && (matrix.target == 'win32-x64' || steps.packaging-input.outcome == 'success') }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: pnpm exec electron-builder --dir --publish never
