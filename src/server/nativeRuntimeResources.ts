@@ -74,7 +74,9 @@ export function prepareNativeRuntime(input: {
       copyFileSync(file, path.join(nodeRoot, path.basename(file)), constants.COPYFILE_EXCL);
     executable = path.join(nodeRoot, path.basename(installedExecutable));
   } else {
-    read.push(...collectInstalledRuntimeReadRoots([installedExecutable, ...sharedObjects]));
+    read.push(
+      ...collectInstalledRuntimeReadRoots([installedExecutable, ...sharedObjects], platform)
+    );
     const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
     if (process.versions["electron"] && resources) read.push(realpathSync(resources));
     for (const name of assets) {

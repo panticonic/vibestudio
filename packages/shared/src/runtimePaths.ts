@@ -107,7 +107,10 @@ export function getMxcExecutable(
  * physical directory. This deliberately grants directory-level runtime reads;
  * callers must never pass arbitrary workspace files or permission requests.
  */
-export function collectInstalledRuntimeReadRoots(files: readonly string[]): string[] {
+export function collectInstalledRuntimeReadRoots(
+  files: readonly string[],
+  platform: NodeJS.Platform = process.platform
+): string[] {
   const roots = new Set<string>();
   const addRoot = (root: string) => {
     if (root === path.parse(root).root) {
@@ -124,7 +127,22 @@ export function collectInstalledRuntimeReadRoots(files: readonly string[]): stri
     for (;;) {
       if (visited.has(current)) throw new Error(`Installed runtime symlink cycle: ${file}`);
       visited.add(current);
-      const info = fs.lstatSync(current);
+      let info: fs.Stats;
+      try {
+        info = fs.lstatSync(current);
+      } catch (error) {
+        // macOS reports dyld shared-cache image install names, which need not
+        // exist as standalone files. These protected OS libraries are supplied
+        // by MXC's stock platform profile, not additional application grants.
+        // Never ignore absent third-party images or missing files on Linux.
+        if (
+          platform === "darwin" &&
+          (error as NodeJS.ErrnoException).code === "ENOENT" &&
+          (current.startsWith("/System/Library/") || current.startsWith("/usr/lib/"))
+        )
+          break;
+        throw error;
+      }
       addRoot(path.dirname(current));
       if (info.isSymbolicLink()) {
         current = path.resolve(path.dirname(current), fs.readlinkSync(current));

@@ -2,7 +2,8 @@ import * as esbuild from "esbuild";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "node:child_process";
+import { createPnpmInvocation } from "./scripts/cli/lib/package-manager.mjs";
 import { randomUUID } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
@@ -635,7 +636,8 @@ async function buildVibestudioPackages() {
 async function buildHeadlessHost() {
   console.log("Building @vibestudio/headless-host...");
   try {
-    execSync('pnpm --filter "@vibestudio/headless-host" build', { stdio: "inherit" });
+    const invocation = createPnpmInvocation(["--filter", "@vibestudio/headless-host", "build"]);
+    execFileSync(invocation.command, invocation.args, { stdio: "inherit" });
     fs.rmSync("dist/headless-host", { recursive: true, force: true });
     copyDirectoryRecursive("apps/headless-host/dist", "dist/headless-host");
     console.log("@vibestudio/headless-host built successfully!");
@@ -648,7 +650,7 @@ async function buildHeadlessHost() {
 async function checkBuildArtifacts() {
   console.log("Checking build artifact contracts...");
   try {
-    execSync("node scripts/check-build-artifacts.mjs", { stdio: "inherit" });
+    execFileSync(process.execPath, ["scripts/check-build-artifacts.mjs"], { stdio: "inherit" });
   } catch (error) {
     console.error("Build artifact contract check failed:", error);
     throw error;

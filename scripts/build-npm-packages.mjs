@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createPnpmInvocation } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
 
@@ -66,7 +67,13 @@ function assertBuilt() {
 
 function buildSelfContainedExtensionHost() {
   console.log("• Building self-contained @vibestudio/extension-host (publish)…");
-  execFileSync("pnpm", ["--filter", "@vibestudio/extension-host", "run", "build"], {
+  const invocation = createPnpmInvocation([
+    "--filter",
+    "@vibestudio/extension-host",
+    "run",
+    "build",
+  ]);
+  execFileSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     stdio: "inherit",
     env: { ...process.env, VIBESTUDIO_EXTHOST_PUBLISH: "1" },
