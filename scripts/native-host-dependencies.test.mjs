@@ -4,7 +4,57 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync }
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
-import { prepareNativeDependencyFiles } from "./native-host-dependencies.mjs";
+import {
+  inspectHostNativeDependencies,
+  prepareNativeDependencyFiles,
+} from "./native-host-dependencies.mjs";
+
+test("PTY probe requires output and successful exit in either order despite retained helper handles", () => {
+  let smoke;
+  inspectHostNativeDependencies({
+    run: (_executable, args) => {
+      if (args[1].includes('require("node-pty")')) smoke = args[1];
+      return { status: 0 };
+    },
+  });
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "native-pty-probe-"));
+  try {
+    const moduleRoot = path.join(cwd, "node_modules", "node-pty");
+    mkdirSync(moduleRoot, { recursive: true });
+    for (const [order, exitCode] of [
+      ["data-first", 0],
+      ["exit-first", 0],
+      ["data-first", 7],
+    ]) {
+      writeFileSync(
+        path.join(moduleRoot, "index.js"),
+        `
+        exports.spawn = () => {
+          let data, exit;
+          setInterval(() => {}, 1000);
+          setImmediate(() => {
+            if (${JSON.stringify(order)} === "data-first") {
+              data("native-pty-ready"); setImmediate(() => exit({exitCode:${exitCode}}));
+            } else {
+              exit({exitCode:${exitCode}}); setImmediate(() => data("native-pty-ready"));
+            }
+          });
+          return { onData(fn) { data = fn; }, onExit(fn) { exit = fn; }, kill() {} };
+        };
+      `
+      );
+      const result = spawnSync(process.execPath, ["-e", smoke], {
+        cwd,
+        timeout: 2000,
+        encoding: "utf8",
+      });
+      assert.equal(result.error, undefined, result.stderr);
+      assert.equal(result.status, exitCode === 0 ? 0 : 1, result.stderr);
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test(
   "prepares the shipped macOS PTY executable without changing its bytes",

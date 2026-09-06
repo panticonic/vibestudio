@@ -111,6 +111,22 @@ function addDiscoveredPackagePaths(
   if (!config.compilerOptions?.paths) return;
   const paths = { ...(config.compilerOptions?.paths ?? {}) };
   paths["@exact-userland/*"] = ["./*"];
+  // Host package source aliases belong to the host, not to each Base revision.
+  // The projection links host packages beside workspace/, so rebase the host's
+  // authoritative mappings into this config instead of requiring built exports.
+  const hostConfig = JSON.parse(fs.readFileSync(path.join(appRoot, "tsconfig.json"), "utf8")) as {
+    compilerOptions: { paths: Record<string, string[]> };
+  };
+  const projectedHostRoot = path.dirname(path.dirname(configPath));
+  for (const [specifier, targets] of Object.entries(hostConfig.compilerOptions.paths)) {
+    if (!specifier.startsWith("@vibestudio/")) continue;
+    paths[specifier] = targets.map((target) =>
+      path
+        .relative(path.dirname(configPath), path.resolve(projectedHostRoot, target))
+        .split(path.sep)
+        .join("/")
+    );
+  }
   for (const unit of units) {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(unit.path, "package.json"), "utf8")
