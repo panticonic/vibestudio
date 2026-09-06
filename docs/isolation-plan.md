@@ -23,6 +23,17 @@ configuration inheritance; they do not protect host data from Windows native
 workspace code. Windows workspace commands must be treated as trusted to act
 with the user's operating-system permissions.
 
+Windows long workspace database paths require the operating system's
+`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled` policy to be
+`1`, in addition to the application manifest installed beside stock workerd.
+Vibestudio does not change this machine policy. The native acceptance suite
+reports its value and exercises long database paths under both administrator
+and standard-user identities; support is established by those execution tests,
+not by the presence of the manifest alone. SQLite's selected Windows VFS also
+has an upstream 1040-byte filename limit. See the
+[Windows long-path requirements](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+and [SQLite Windows VFS limits](https://www.sqlite.org/vfs.html).
+
 On Unix, MXC owns native policy generation and enforcement. Vibestudio supplies
 resource admission and does not maintain a parallel bubblewrap or Seatbelt
 implementation. MXC is preview software whose upstream documentation cautions

@@ -3,6 +3,7 @@ import { chmodSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { prepareWindowsWorkerdMetadata } from "./workerd-windows-metadata.mjs";
 import { spawnPnpmSync } from "./cli/lib/package-manager.mjs";
 
 const dependencyContracts = [
@@ -55,6 +56,7 @@ export function prepareNativeDependencyFiles({
   platform = process.platform,
   arch = process.arch,
 } = {}) {
+  prepareWindowsWorkerdMetadata({ cwd, platform, arch });
   if (platform !== "darwin") return;
   const require = createRequire(path.join(cwd, "package.json"));
   const root = path.dirname(require.resolve("node-pty/package.json"));

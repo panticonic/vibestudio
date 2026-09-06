@@ -3,7 +3,8 @@ import {
   nodeRuntimeTarget,
   assertNodeRuntimeArtifacts,
 } from "./node-runtime-artifacts.mjs";
-import { copyFileSync, chmodSync, mkdirSync, statSync } from "node:fs";
+import { copyFileSync, chmodSync, mkdirSync, statSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Arch } from "electron-builder";
 import { prepareNativeDependencyFiles } from "./native-host-dependencies.mjs";
@@ -51,6 +52,16 @@ export async function assertPackagedNativeIsolation(resources, context) {
     path.join(resources, "app.asar.unpacked"),
     nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
   );
+  if (context.electronPlatformName === "win32") {
+    const require = createRequire(path.join(context.packager.projectDir, "package.json"));
+    const source = `${require.resolve("@cloudflare/workerd-windows-64/bin/workerd.exe")}.manifest`;
+    const installed = path.join(
+      resources,
+      "app.asar.unpacked/node_modules/@cloudflare/workerd-windows-64/bin/workerd.exe.manifest"
+    );
+    if (!readFileSync(installed).equals(readFileSync(source)))
+      throw new Error("Packaged Windows workerd manifest differs from release input");
+  }
   for (const { source, artifact } of electronNativeArtifacts(context)) {
     const installed = path.join(resources, "app.asar.unpacked", artifact);
     if (nativeIsolationBinaryDigest(installed) !== nativeIsolationBinaryDigest(source)) {

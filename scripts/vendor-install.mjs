@@ -12,8 +12,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { prepareWindowsWorkerdMetadata } from "./workerd-windows-metadata.mjs";
 
 const pkgRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+prepareWindowsWorkerdMetadata({ cwd: pkgRoot });
 const src = path.join(pkgRoot, "vendor", "@vibestudio");
 if (!fs.existsSync(src)) process.exit(0); // dev checkout / nothing to vendor
 
