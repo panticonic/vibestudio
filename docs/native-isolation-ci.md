@@ -110,24 +110,17 @@ resolved or explicitly reconsidered before calling that platform supported.
 
 ## macOS device access
 
-The September 6, 2026 hosted macOS run confirmed that a nested `node-pty` child
-has terminal input/output but cannot open its controlling terminal (`ENXIO`),
-while enumerating `/dev` fails with `EPERM`. Terminal resize therefore fails
-acceptance. This is not a scheduling delay: the terminal was never attached.
+macOS workspace commands have recursive read/write access to `/dev`, subject to
+the account's ordinary OS permissions. This intentionally includes accessible
+serial and other device nodes, not only terminals. It does not grant elevated
+permissions. Ordinary filesystem access remains governed by workspace grants.
 
 [`node-pty`'s spawn helper](https://github.com/microsoft/node-pty/blob/v1.1.0/src/unix/spawn-helper.cc)
-uses `ttyname()` before attaching the terminal. Apple's
-[`devname_r`](https://github.com/apple-oss-distributions/Libc/blob/main/gen/devname.c)
-implementation enumerates `/dev` to resolve that name. MXC 0.8.0's stock
-[`nestedPty` policy](https://github.com/microsoft/mxc/blob/7dac1a952f0c9ad13f0a4cb089c4e0e8b3e0013a/src/backends/seatbelt/common/src/profile_builder.rs)
-permits terminal devices but omits directory enumeration. Its public filesystem
-configuration cannot grant enumeration alone: a read grant to `/dev` also grants
-device contents. A subsequent hosted run established that `readonlyPaths: ["/dev"]`
-also emits a write denial that overrides MXC's normal terminal and null-device
-write grants. It therefore does not preserve working terminals. The controlling-
-terminal and resize tests remain required; this policy is not accepted as working.
-Normal account-level device access or a narrower upstream MXC enumeration rule
-must resolve this before macOS acceptance can pass.
+uses `ttyname()` before attaching the terminal; Apple's libc enumerates `/dev`
+while resolving the device name. MXC's terminal policy alone does not allow that
+enumeration, and a read-only `/dev` grant overrides terminal write permissions.
+The explicit read/write device grant accommodates both operations. Native CI
+still verifies controlling-terminal attachment, input/output, and resize.
 
 ## Native runtime compatibility
 
