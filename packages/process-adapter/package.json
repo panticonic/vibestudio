@@ -24,6 +24,7 @@
     "test": "cd ../.. && vitest run packages/process-adapter/src"
   },
   "devDependencies": {
+    "@microsoft/mxc-sdk": "0.8.0",
     "@types/node": "^24.10.1",
     "typescript": "7.0.2"
   },

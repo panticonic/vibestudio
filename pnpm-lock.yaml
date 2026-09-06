@@ -63,6 +63,9 @@ importers:
       '@mdx-js/mdx':
         specifier: ^3.1.1
         version: 3.1.1
+      '@microsoft/mxc-sdk':
+        specifier: 0.8.0
+        version: 0.8.0
       '@number0/iroh':
         specifier: 1.1.0
         version: 1.1.0
@@ -920,6 +923,9 @@ importers:
 
   packages/process-adapter:
     devDependencies:
+      '@microsoft/mxc-sdk':
+        specifier: 0.8.0
+        version: 0.8.0
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.9
@@ -1009,6 +1015,9 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@microsoft/mxc-sdk':
+        specifier: 0.8.0
+        version: 0.8.0
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15
@@ -2910,6 +2919,10 @@ packages:
 
   '@mermaid-js/parser@1.2.1':
     resolution: {integrity: sha512-n12NohV3mrUyUL2o93IgG/ifeW9FTyeJn3zDxkhwa8MJ9Fxg3HQMlA3RiGmD/3UnJvheztkjjQAjA2T4LmUcpw==}
+
+  '@microsoft/mxc-sdk@0.8.0':
+    resolution: {integrity: sha512-pnf5QsASwp+qtRi5uth2GDjwuyG0rHWRpxCf3RbAjQ4wDTNfBX/9l0A+RVZspU2agpF3/11uWB1JisIS7WrNYg==}
+    engines: {node: '>=18.0.0'}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -7708,6 +7721,9 @@ packages:
   node-pty@1.1.0:
     resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
 
+  node-pty@1.2.0-beta.15:
+    resolution: {integrity: sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA==}
+
   node-releases@2.0.54:
     resolution: {integrity: sha512-YHs7BmmcsdAI5Ozuf8JZo6PT0mv2GIWC9vMfvUC3dp65M8hn7Ux8CPL+2oBI7juNuj9d0ndhTcznq2ODBps9cQ==}
     engines: {node: '>=18'}
@@ -10559,7 +10575,7 @@ snapshots:
       env-paths: 3.0.0
       graceful-fs: 4.2.11
       progress: 2.0.3
-      semver: 7.8.4
+      semver: 7.8.5
       sumchecker: 3.0.1
     optionalDependencies:
       undici: 7.29.1
@@ -11674,6 +11690,11 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
+  '@microsoft/mxc-sdk@0.8.0':
+    dependencies:
+      node-pty: 1.2.0-beta.15
+      semver: 7.8.5
+
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
@@ -12725,7 +12746,7 @@ snapshots:
       execa: 5.1.1
       node-stream-zip: 1.15.0
       ora: 5.4.1
-      semver: 7.8.4
+      semver: 7.8.5
       wcwidth: 1.0.1
       yaml: 2.9.0
     transitivePeerDependencies:
@@ -12779,7 +12800,7 @@ snapshots:
       mime: 2.6.0
       ora: 5.4.1
       prompts: 2.4.2
-      semver: 7.8.4
+      semver: 7.8.5
 
   '@react-native-community/cli-types@18.0.1':
     dependencies:
@@ -12909,7 +12930,7 @@ snapshots:
       metro: 0.82.5
       metro-config: 0.82.5
       metro-core: 0.82.5
-      semver: 7.8.4
+      semver: 7.8.5
     optionalDependencies:
       '@react-native-community/cli': 18.0.1(typescript@7.0.2)
     transitivePeerDependencies:
@@ -12958,7 +12979,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -15587,7 +15610,7 @@ snapshots:
       es6-error: 4.1.1
       matcher: 3.0.0
       roarr: 2.15.4
-      semver: 7.8.4
+      semver: 7.8.5
       serialize-error: 7.0.1
     optional: true
 
@@ -16323,7 +16346,7 @@ snapshots:
       jest-util: 29.7.0
       natural-compare: 1.4.0
       pretty-format: 29.7.0
-      semver: 7.8.4
+      semver: 7.8.5
     transitivePeerDependencies:
       - supports-color
 
@@ -16485,7 +16508,7 @@ snapshots:
       lodash.isstring: 4.0.1
       lodash.once: 4.1.1
       ms: 2.1.3
-      semver: 7.8.4
+      semver: 7.8.5
 
   jwa@2.0.1:
     dependencies:
@@ -17409,13 +17432,13 @@ snapshots:
 
   node-abi@4.33.0:
     dependencies:
-      semver: 7.8.4
+      semver: 7.8.5
 
   node-addon-api@7.1.1: {}
 
   node-api-version@0.2.1:
     dependencies:
-      semver: 7.8.4
+      semver: 7.8.5
 
   node-domexception@1.0.0: {}
 
@@ -17440,7 +17463,7 @@ snapshots:
       graceful-fs: 4.2.11
       nopt: 9.0.0
       proc-log: 6.1.0
-      semver: 7.8.4
+      semver: 7.8.5
       tar: 7.5.22
       tinyglobby: 0.2.15
       undici: 6.28.1
@@ -17449,6 +17472,10 @@ snapshots:
   node-int64@0.4.0: {}
 
   node-pty@1.1.0:
+    dependencies:
+      node-addon-api: 7.1.1
+
+  node-pty@1.2.0-beta.15:
     dependencies:
       node-addon-api: 7.1.1
 
@@ -18681,7 +18708,7 @@ snapshots:
 
   simple-update-notifier@2.0.0:
     dependencies:
-      semver: 7.8.4
+      semver: 7.8.5
 
   sirv@3.0.2:
     dependencies:

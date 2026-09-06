@@ -3,30 +3,45 @@
     "platform": "linux",
     "arch": "x64",
     "rustTarget": "x86_64-unknown-linux-gnu",
-    "artifact": "dist/native/linux-x64/vibestudio-isolation"
+    "artifact": "dist/mxc/linux-x64/lxc-exec",
+    "mxcBinary": "lxc-exec",
+    "mxcFiles": [
+      "lxc-exec"
+    ],
+    "cleanupArtifact": "dist/native/linux-x64/vibestudio-isolation"
   },
   {
     "platform": "linux",
     "arch": "arm64",
     "rustTarget": "aarch64-unknown-linux-gnu",
-    "artifact": "dist/native/linux-arm64/vibestudio-isolation"
-  },
-  {
-    "platform": "darwin",
-    "arch": "x64",
-    "rustTarget": "x86_64-apple-darwin",
-    "artifact": "dist/native/darwin-x64/vibestudio-isolation"
+    "artifact": "dist/mxc/linux-arm64/lxc-exec",
+    "mxcBinary": "lxc-exec",
+    "mxcFiles": [
+      "lxc-exec"
+    ],
+    "cleanupArtifact": "dist/native/linux-arm64/vibestudio-isolation"
   },
   {
     "platform": "darwin",
     "arch": "arm64",
     "rustTarget": "aarch64-apple-darwin",
-    "artifact": "dist/native/darwin-arm64/vibestudio-isolation"
+    "artifact": "dist/mxc/darwin-arm64/mxc-exec-mac",
+    "mxcBinary": "mxc-exec-mac",
+    "mxcFiles": [
+      "mxc-exec-mac"
+    ],
+    "cleanupArtifact": "dist/native/darwin-arm64/vibestudio-isolation"
   },
   {
     "platform": "win32",
     "arch": "x64",
     "rustTarget": "x86_64-pc-windows-msvc",
-    "artifact": "dist/native/win32-x64/vibestudio-isolation.exe"
+    "artifact": "dist/mxc/win32-x64/wxc-exec.exe",
+    "mxcBinary": "wxc-exec.exe",
+    "mxcFiles": [
+      "wxc-exec.exe",
+      "wxc-host-prep.exe"
+    ],
+    "cleanupArtifact": "dist/native/win32-x64/vibestudio-isolation.exe"
   }
 ]

@@ -1,4 +1,7 @@
-import { nativeIsolationExecutable } from "./nativeIsolationExecutable.js";
+import {
+  collectInstalledRuntimeReadRoots,
+  getMxcExecutable,
+} from "@vibestudio/shared/runtimePaths";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
 import { waitForNativeJob, type NativeWorkspaceJob } from "./nativeWorkspaceJob.js";
 import { mkdir, realpath, copyFile, stat, lstat, readFile, writeFile, rm } from "node:fs/promises";
@@ -106,7 +109,7 @@ export async function startNativeWorkspaceRuntime(input: {
     }
     executable = path.join(nodeRoot, path.basename(installedExecutable));
   } else {
-    read.push(executable, ...sharedObjects);
+    read.push(...collectInstalledRuntimeReadRoots([executable, ...sharedObjects]));
     const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
     if (process.versions["electron"] && resources) read.push(await realpath(resources));
     for (const name of ["icudtl.dat", "v8_context_snapshot.bin", "snapshot_blob.bin"]) {
@@ -117,17 +120,11 @@ export async function startNativeWorkspaceRuntime(input: {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
-    for (const directory of platform === "linux"
-      ? ["/usr/bin", "/usr/sbin", "/usr/lib", "/usr/lib64", "/usr/share/zoneinfo"]
-      : ["/bin", "/usr/bin", "/usr/sbin", "/usr/lib", "/System/Library"]) {
-      try {
-        if ((await stat(directory)).isDirectory()) read.push(await realpath(directory));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
   }
-  const canonicalRead = [
+  // MXC owns platform layout and mount ordering. Preserve loader-visible names
+  // as well as physical files: ELF interpreters and runtime rpaths can name an
+  // installation alias (including runtimes installed outside the system tree).
+  const runtimeRead = [
     ...new Set([
       ...read.map((resource) => path.normalize(resource)),
       ...(await Promise.all(read.map((resource) => realpath(resource)))),
@@ -168,21 +165,15 @@ export async function startNativeWorkspaceRuntime(input: {
         ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
         ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"] ?? "C:\\Windows" } : {}),
       },
-      read: canonicalRead,
+      read: runtimeRead,
       // These are owner-selected anchors, never the destinations of guest links.
-      // Backends keep the anchors immutable while granting their descendants.
+      // MXC enforces access to the declared private resource trees.
       write: [home, scratchRoot, extensionStorage],
       sockets: [],
     },
     {
       platform,
-      launcher: await realpath(
-        platform === "linux"
-          ? "/usr/bin/bwrap"
-          : platform === "darwin"
-            ? "/usr/bin/sandbox-exec"
-            : nativeIsolationExecutable(input.appRoot)
-      ),
+      launcher: await realpath(getMxcExecutable(input.appRoot)),
       workspaceEntry,
     }
   );
@@ -233,10 +224,6 @@ export async function startNativeWorkspaceRuntime(input: {
       async retireStorage() {
         const stopped = await sandbox.stop();
         if (!stopped.launcherExited) throw new Error("Native workspace still owns its storage");
-        await WorkspaceSandbox.retireStorage(privateRoot, {
-          platform,
-          launcher: nativeIsolationExecutable(input.appRoot),
-        });
       },
     };
   } catch (error) {

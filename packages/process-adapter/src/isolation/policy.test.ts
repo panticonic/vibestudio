@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { compileExecution, type ExecutionPolicy } from "./index.js";
 import { validateExecutionPolicy } from "./policy.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 function policy(): ExecutionPolicy {
   return {
@@ -46,78 +49,91 @@ describe("resolved execution resource policy", () => {
       ).toThrow();
     }
   );
-  it("emits a Linux launch without inherited environment, root or networking", () => {
-    const result = compileExecution(policy(), { platform: "linux", launcher: "/usr/bin/bwrap" });
-    expect(result.environment).toEqual({});
-    expect(result.args).toContain("--unshare-all");
-    expect(result.args).toContain("--clearenv");
-    expect(result.args).not.toContain("--share-net");
-    expect(result.args).not.toContain("--dev-bind");
-    expect(result.args).not.toContain("/");
-  });
-  it("escapes SBPL resource text without introducing policy forms", () => {
-    const p = policy();
-    const resource = '/owned/job/input/quote" (allow network*) \\';
-    const result = compileExecution(
-      { ...p, read: [...p.read, resource] },
-      { platform: "darwin", launcher: "/usr/bin/sandbox-exec" }
-    );
-    expect(result.args[1]).toContain('quote\\" (allow network*) \\\\"');
-    expect(result.args[1]).toContain("(deny default)");
-    expect(result.args[1]).not.toContain("(allow network*)\n");
-    expect(result.environment["HOME"]).toBe(p.home);
-    expect(result.cwd).toBe(p.cwd);
-  });
-  it("limits macOS local IPC to workspace storage and explicit sockets", () => {
-    const result = compileExecution(
-      { ...policy(), sockets: ["/owned/broker.sock"] },
-      { platform: "darwin", launcher: "/usr/bin/sandbox-exec" }
-    );
-    expect(result.args[1]).toContain("(allow system-socket (socket-domain AF_UNIX))");
-    expect(result.args[1]).toContain('(remote unix-socket (literal "/owned/broker.sock"))');
-    expect(result.args[1]).toContain('(local unix-socket (subpath "/owned/job/state"))');
-    expect(result.args[1]).not.toContain("(local ip");
-    expect(result.args[1]).not.toContain("(remote ip");
-  });
-  it("requires the Seatbelt PTY extension for slave device access", () => {
-    const result = compileExecution(policy(), {
-      platform: "darwin",
-      launcher: "/usr/bin/sandbox-exec",
-    });
-    const slaveRules = result.args[1]!.split("\n").filter((line) => line.includes("/dev/ttys"));
-    expect(slaveRules).toHaveLength(1);
-    expect(slaveRules[0]).toContain(
-      '(require-all (regex #"^/dev/ttys[0-9]+$") (extension "com.apple.sandbox.pty"))'
-    );
-    expect(result.args[1]).toContain("(allow pseudo-tty)");
-  });
-  it("requires private staging on Windows and keeps policy outside guest roots", () => {
-    const p: ExecutionPolicy = {
-      ...policy(),
-      privateRoot: "C:\\owned\\job",
-      executable: "C:\\owned\\job\\runtime\\node.exe",
-      args: [],
-      cwd: "C:\\owned\\job\\input",
-      home: "C:\\owned\\job\\state\\home",
-      read: ["C:\\owned\\job\\runtime", "C:\\owned\\job\\input"],
-      write: ["C:\\owned\\job\\state"],
-    };
-    const result = compileExecution(p, {
-      platform: "win32",
-      launcher: "C:\\Program Files\\Vibestudio\\isolation.exe",
-    });
-    expect(result.mechanism).toBe("windows-lpac-job");
-    expect(result.controlFiles[0]?.path).toMatch(
-      /^C:\\owned\\job\\\.isolation-[a-f0-9]{64}\.json$/
-    );
+  it.each(["linux", "darwin", "win32"] as const)(
+    "compiles MXC policy without network or host environment inheritance on %s",
+    (platform) => {
+      vi.stubEnv("SystemRoot", "C:\\Windows");
+      vi.stubEnv("USERPROFILE", "C:\\Users\\host-owner");
+      vi.stubEnv("LOCALAPPDATA", "C:\\Users\\host-owner\\AppData\\Local");
+      vi.stubEnv("MXC_DACL_STATE_DIR", "untrusted-ambient-override");
+      let p = policy();
+      if (platform === "win32") {
+        const win = (v: string) => "C:" + v.replaceAll("/", "\\");
+        p = {
+          ...p,
+          privateRoot: win(p.privateRoot),
+          executable: win(p.executable),
+          cwd: win(p.cwd),
+          home: win(p.home),
+          read: p.read.map(win),
+          write: p.write.map(win),
+        };
+      }
+      const result = compileExecution(p, {
+        platform,
+        launcher: platform === "win32" ? "C:\\installed\\mxc.exe" : "/installed/mxc",
+      });
+      const config = JSON.parse(Buffer.from(result.args[1]!, "base64").toString());
+      expect(result.mechanism).toBe("mxc-process");
+      expect(result.args[0]).toBe("--config-base64");
+      expect(config.network).toEqual({
+        egress: { default: "deny" },
+        ingress: { default: "deny", hostLoopback: "deny" },
+      });
+      expect(config.filesystem.readonlyPaths).toEqual(p.read);
+      expect(config.filesystem.readwritePaths).toEqual(p.write);
+      expect(config.process.env).toContain(`HOME=${p.home}`);
+      expect(result.environment["HOME"]).toBeUndefined();
+      expect(config.lifecycle).toEqual({ destroyOnExit: true, preservePolicy: false });
+      expect(result.environment["MXC_DACL_STATE_DIR"]).toBeUndefined();
+      if (platform === "win32") {
+        expect(config.processContainer).toEqual({ leastPrivilege: false, capabilities: [] });
+        expect(result.environment).toEqual({
+          SystemRoot: "C:\\Windows",
+          USERPROFILE: "C:\\Users\\host-owner",
+          LOCALAPPDATA: "C:\\Users\\host-owner\\AppData\\Local",
+        });
+        expect(config.process.env).toContain(`USERPROFILE=${p.home}`);
+        expect(config.process.env).toContain(`LOCALAPPDATA=${p.home}\\data`);
+        expect(config.process.env.some((entry: string) => entry.includes("host-owner"))).toBe(
+          false
+        );
+      }
+    }
+  );
+  it.skipIf(process.platform === "win32")(
+    "round-trips literal arguments through MXC's Unix shell command contract",
+    () => {
+      const args = [
+        "",
+        "space and ' quote",
+        'double " quote',
+        "$(exit 99)",
+        "`exit 99`",
+        "line\nbreak",
+        "trailing\\",
+      ];
+      const p = {
+        ...policy(),
+        executable: process.execPath,
+        read: [...policy().read, process.execPath],
+        args: ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...args],
+      };
+      const launch = compileExecution(p, { platform: "linux", launcher: "/installed/mxc" });
+      const config = JSON.parse(Buffer.from(launch.args[1]!, "base64").toString());
+      expect(
+        JSON.parse(
+          execFileSync("/bin/sh", ["-c", config.process.commandLine], { encoding: "utf8" })
+        )
+      ).toEqual(args);
+    }
+  );
+  it("rejects socket admission instead of weakening network isolation", () => {
     expect(() =>
       compileExecution(
-        { ...p, read: [...p.read, "C:\\Users\\somebody"] },
-        { platform: "win32", launcher: result.command }
+        { ...policy(), sockets: ["/broker.sock"] },
+        { platform: "linux", launcher: "/installed/mxc" }
       )
-    ).toThrow();
-    expect(() =>
-      validateExecutionPolicy({ ...p, write: ["C:\\owned\\job\\state:stream"] }, "win32")
-    ).toThrow();
+    ).toThrow("socket admission");
   });
 });

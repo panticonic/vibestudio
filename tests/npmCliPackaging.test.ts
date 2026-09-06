@@ -20,6 +20,9 @@ describe("npm CLI packaging", () => {
       "dist/server.mjs",
       "dist/fs-disk-worker.cjs",
       nativeIsolationTarget().artifact,
+      `dist/mxc/${process.platform}-${process.arch}/manifest.json`,
+      nativeIsolationTarget().cleanupArtifact,
+      `dist/native/${process.platform}-${process.arch}/manifest.json`,
       "dist/browserTransport.js",
       "dist/authority-analysis-worker.mjs",
       "dist/library-lowering-worker.mjs",
@@ -31,10 +34,9 @@ describe("npm CLI packaging", () => {
       "dist/sql-wasm.wasm",
       "dist/host-build-fingerprint.json",
     ]);
-    expect(NATIVE_ISOLATION_TARGETS.map(({ artifact }) => artifact)).toEqual([
+    expect(NATIVE_ISOLATION_TARGETS.map(({ cleanupArtifact }) => cleanupArtifact)).toEqual([
       "dist/native/linux-x64/vibestudio-isolation",
       "dist/native/linux-arm64/vibestudio-isolation",
-      "dist/native/darwin-x64/vibestudio-isolation",
       "dist/native/darwin-arm64/vibestudio-isolation",
       "dist/native/win32-x64/vibestudio-isolation.exe",
     ]);

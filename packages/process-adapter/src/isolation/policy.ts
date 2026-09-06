@@ -12,7 +12,7 @@ export interface ExecutionPolicy {
     executionDigest: string;
   };
   executable: string;
-  /** Exclusive domain directory. Windows inputs/toolchain are staged here. */
+  /** Exclusive workspace-owned domain directory. */
   privateRoot: string;
   args: readonly string[];
   cwd: string;
@@ -90,18 +90,6 @@ export function validateExecutionPolicy(policy: ExecutionPolicy, platform: NodeJ
       );
     }
   }
-  if (platform === "win32") {
-    for (const resource of policy.read) {
-      if (
-        !containsPath(policy.privateRoot, resource, platform) ||
-        resource === policy.privateRoot
-      ) {
-        throw new IsolationError(
-          "Windows immutable inputs and runtime must be staged in the private domain"
-        );
-      }
-    }
-  }
   if (!policy.write.some((root) => containsPath(root, policy.home, platform))) {
     throw new IsolationError("Execution home must belong to private writable state");
   }
@@ -150,6 +138,11 @@ export function executionEnvironment(
   const paths = platform === "win32" ? path.win32 : path.posix;
   return {
     ...policy.environment,
+    // MXC's Unix executor resolves its shell through the guest PATH. Its
+    // platform runtime baseline supplies these system tools.
+    ...(platform === "win32"
+      ? {}
+      : { PATH: [policy.environment["PATH"], "/usr/bin", "/bin"].filter(Boolean).join(":") }),
     HOME: policy.home,
     USERPROFILE: policy.home,
     XDG_CONFIG_HOME: paths.join(policy.home, "config"),

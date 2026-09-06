@@ -78,3 +78,69 @@ export function getPlatformPackageBinaryPath(
     path.join("node_modules", ...packageName.split("/"), "bin", binaryName)
   );
 }
+
+/** Installed MXC release payload; never resolve enforcement from guest PATH. */
+export function getMxcExecutable(
+  appRoot: string,
+  platform: string = process.platform,
+  arch: string = process.arch
+): string {
+  if (
+    !(
+      (platform === "linux" && (arch === "x64" || arch === "arm64")) ||
+      (platform === "darwin" && arch === "arm64") ||
+      (platform === "win32" && arch === "x64")
+    )
+  )
+    throw new Error(`Unsupported MXC product target: ${platform}-${arch}`);
+  const binary =
+    platform === "linux" ? "lxc-exec" : platform === "darwin" ? "mxc-exec-mac" : "wxc-exec.exe";
+  return getPhysicalAppPath(appRoot, `dist/mxc/${platform}-${arch}/${binary}`);
+}
+
+/** Resolve the directory closure of trusted installed executables/libraries.
+ *
+ * MXC mounts runtime directories, preserving their loader-visible symlink names.
+ * Admitting individual library aliases can collide with a symlink already in a
+ * system mount. Admitting only realpaths loses aliases embedded in ELF loaders
+ * and rpaths. Keep each link target's containing directory as well as its
+ * physical directory. This deliberately grants directory-level runtime reads;
+ * callers must never pass arbitrary workspace files or permission requests.
+ */
+export function collectInstalledRuntimeReadRoots(files: readonly string[]): string[] {
+  const roots = new Set<string>();
+  const addRoot = (root: string) => {
+    if (root === path.parse(root).root) {
+      throw new Error("An installed runtime cannot acquire the host filesystem root");
+    }
+    roots.add(root);
+  };
+  for (const file of files) {
+    if (!path.isAbsolute(file) || file.includes("\0")) {
+      throw new Error("Installed runtime files must be absolute paths");
+    }
+    let current = path.normalize(file);
+    const visited = new Set<string>();
+    for (;;) {
+      if (visited.has(current)) throw new Error(`Installed runtime symlink cycle: ${file}`);
+      visited.add(current);
+      const info = fs.lstatSync(current);
+      addRoot(path.dirname(current));
+      if (info.isSymbolicLink()) {
+        current = path.resolve(path.dirname(current), fs.readlinkSync(current));
+        continue;
+      }
+      if (!info.isFile()) throw new Error(`Installed runtime resource is not a file: ${file}`);
+      addRoot(path.dirname(fs.realpathSync(current)));
+      break;
+    }
+  }
+  // Resolve containing directory aliases as well as leaf links. The lexical
+  // directories above must remain: binaries can name either spelling.
+  for (const root of [...roots]) addRoot(fs.realpathSync(root));
+  return [...roots]
+    .filter(
+      (root) => ![...roots].some((parent) => parent !== root && root.startsWith(parent + path.sep))
+    )
+    .sort();
+}

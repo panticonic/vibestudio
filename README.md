@@ -263,15 +263,19 @@ ports, ready files, CLI credentials, and sessions. The checkout-scoped lock
 prevents two launchers from competing for one instance, while different
 instances run concurrently. Stopping one never targets another hub.
 
-Native helper builds require Rust 1.95.0. Source builds emit the helper for the current process architecture. Release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging npm packages or installers, download the native artifacts from a successful CI run for the same native source:
+MXC executor payloads come from the pinned `@microsoft/mxc-sdk` 0.8.0 package. The separate Rust helper only performs installed workspace-storage cleanup. Source builds stage both for the current process architecture; release packaging consumes the tested CI artifacts separately, so a local host build cannot replace another platform's release binary. Before staging npm packages or installers, download the native artifacts from a successful CI run:
 
 ```bash
 gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/artifacts
 ```
 
-Generic npm packages require the complete Linux/macOS x64 and ARM64 plus Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. The native macOS backend targets macOS 14 or later, matching the helper deployment target and installer minimum version. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency. The Windows helper uses a static C runtime, with CI checking its imports for unexpected Visual C++ redistributable dependencies.
+Generic npm packages require the complete Linux x64/ARM64, Apple Silicon macOS, and Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched MXC inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
 
-The five helper targets are not a product support matrix. Current required native dependencies cover Linux x64/ARM64, native Apple Silicon macOS, and Windows x64. Intel macOS has a helper implementation but lacks the required Iroh native binding; full app and standalone server support require that dependency and startup validation. Native macOS/Windows sandbox enforcement and packaged-app conformance must still pass on their respective systems before release.
+The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release.
+
+On Linux, `slirp4netns` is required only for linked Claude launches that explicitly use a network-capable provider. Ordinary workspace network access remains disabled and does not require it.
+
+Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its OS-preparation diagnostics refer to an installed tool. Preparation requiring elevation remains an explicit administrator operation; startup never applies it silently.
 
 ## Scripts
 

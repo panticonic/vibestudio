@@ -1,17 +1,29 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
-import { claudeContainedSpawnEnvironment, confineClaudeReadOnly } from "./claudeReadOnlyLaunch.js";
+import {
+  claudeContainedSpawnEnvironment,
+  claudeMxcLauncherEnvironment,
+  confineClaudeReadOnly,
+} from "./claudeReadOnlyLaunch.js";
 
-function canCreateBubblewrapNamespace(): boolean {
-  if (process.platform !== "linux" || !existsSync("/usr/bin/bwrap")) return false;
-  const probe = spawnSync("/usr/bin/bwrap", ["--ro-bind", "/", "/", "--", "/bin/true"], {
-    stdio: "ignore",
-  });
-  return probe.status === 0;
+function canRunMxc(): boolean {
+  if (process.platform !== "linux" || !existsSync(launcher)) return false;
+  if (spawnSync("slirp4netns", ["--version"], { stdio: "ignore" }).status !== 0) return false;
+  return true;
 }
+
+const launcher = path.resolve(
+  "dist/mxc",
+  `${process.platform}-${process.arch}`,
+  process.platform === "win32"
+    ? "wxc-exec.exe"
+    : process.platform === "darwin"
+      ? "mxc-exec-mac"
+      : "lxc-exec"
+);
 
 describe("confineClaudeReadOnly", () => {
   const roots: string[] = [];
@@ -19,66 +31,83 @@ describe("confineClaudeReadOnly", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("mounts the host and context read-only with one explicit writable scratch root", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "claude-readonly-launch-"));
+  it("declares network-capable linked-provider policy with explicit filesystem resources", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "claude-mxc-policy-"));
     roots.push(root);
-    const profileDir = path.join(root, "launch-1");
-    const contextDirectory = path.join(root, "context-1");
-    const binDirectory = path.join(root, "bin");
-    const bubblewrap = path.join(binDirectory, "bwrap");
-    mkdirSync(binDirectory);
-    writeFileSync(bubblewrap, "#!/bin/sh\nexit 0\n");
-    chmodSync(bubblewrap, 0o700);
+    const profileDir = path.join(root, "profile");
+    const contextDirectory = path.join(root, "context");
     const launch = confineClaudeReadOnly({
-      argv: ["claude", "--channels", "server:vibestudio"],
+      argv: ["/runtime/claude", "argument with ' and $shell"],
       profileDir,
       contextDirectory,
       platform: "linux",
-      pathValue: binDirectory,
+      launcher: "/installed/mxc",
+      readPaths: ["/runtime"],
+      launchEnv: {},
     });
-
-    expect(launch.command).toBe(bubblewrap);
-    expect(launch.args).toEqual(
-      expect.arrayContaining([
-        "--ro-bind",
-        "/",
-        "/",
-        "--ro-bind",
-        contextDirectory,
-        contextDirectory,
-        "--bind",
-        profileDir,
-        profileDir,
-      ])
-    );
-    expect(launch.args.slice(-3)).toEqual(["claude", "--channels", "server:vibestudio"]);
-    expect(launch.scratchDirectory).toBe(path.join(profileDir, "scratch"));
-    expect(launch.claudeConfigDirectory).toBe(path.join(profileDir, "claude-config"));
-    expect(launch.env).toEqual({
-      TMPDIR: "/tmp",
-      VIBESTUDIO_LINKED_SCRATCH: path.join(profileDir, "scratch"),
-      CLAUDE_CONFIG_DIR: path.join(profileDir, "claude-config"),
+    const config = JSON.parse(Buffer.from(launch.args[1]!, "base64").toString());
+    expect(launch.command).toBe("/installed/mxc");
+    expect(config.filesystem).toEqual({
+      readonlyPaths: ["/runtime", contextDirectory],
+      readwritePaths: [profileDir],
     });
+    expect(config.network).toEqual({
+      egress: { default: "allow" },
+      ingress: { default: "deny", hostLoopback: "deny" },
+    });
+    expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
+    expect(config.process.commandLine).toContain("$shell");
+    expect(config.process.env).toContain(`TMPDIR=${path.join(profileDir, "tmp")}`);
+    expect(launch.env).not.toHaveProperty("HOME");
+    expect(launch.env).not.toHaveProperty("TMPDIR");
   });
 
-  it("fails closed without the audited OS backend", () => {
+  it("rejects host-root grants and overlapping writable profiles before provisioning", () => {
+    const input = {
+      argv: ["/runtime/claude"],
+      profileDir: "/state/profile",
+      contextDirectory: "/context",
+      launcher: "/installed/mxc",
+      readPaths: ["/runtime"],
+      launchEnv: {},
+      platform: "linux" as const,
+    };
+    expect(() => confineClaudeReadOnly({ ...input, readPaths: ["/"] })).toThrow(
+      /below the host root/
+    );
+    expect(() => confineClaudeReadOnly({ ...input, readPaths: ["/runtime", "/state"] })).toThrow(
+      /disjoint/
+    );
+    expect(() => confineClaudeReadOnly({ ...input, platform: "freebsd" })).toThrow(/unsupported/);
+  });
+
+  it("keeps Windows MXC lifecycle coordinates in the host environment only", () => {
+    expect(
+      claudeMxcLauncherEnvironment("win32", {
+        PATH: "C:\\runtime",
+        SystemRoot: "C:\\Windows",
+        USERPROFILE: "C:\\Users\\owner",
+        LOCALAPPDATA: "C:\\Users\\owner\\AppData\\Local",
+        HOME: "guest-home",
+        OPENAI_API_KEY: "secret",
+      })
+    ).toEqual({
+      PATH: "C:\\runtime",
+      SystemRoot: "C:\\Windows",
+      USERPROFILE: "C:\\Users\\owner",
+      LOCALAPPDATA: "C:\\Users\\owner\\AppData\\Local",
+    });
     expect(() =>
       confineClaudeReadOnly({
-        argv: ["claude"],
-        profileDir: "/state/launch-1",
-        contextDirectory: "/workspace/context-1",
-        platform: "darwin",
+        argv: ["C:\\runtime\\claude.cmd"],
+        launcher: "C:\\mxc.exe",
+        profileDir: "C:\\profile",
+        contextDirectory: "C:\\context",
+        readPaths: ["C:\\runtime"],
+        launchEnv: {},
+        platform: "win32",
       })
-    ).toThrow(/no backend is supported/);
-    expect(() =>
-      confineClaudeReadOnly({
-        argv: ["claude"],
-        profileDir: "/state/launch-1",
-        contextDirectory: "/workspace/context-1",
-        platform: "linux",
-        pathValue: "",
-      })
-    ).toThrow(/requires bubblewrap/);
+    ).toThrow(/native Windows executable/);
   });
 
   it("allows runtime coordinates while excluding ambient credentials and agent sockets", () => {
@@ -150,7 +179,7 @@ describe("confineClaudeReadOnly", () => {
     }
   });
 
-  it.runIf(canCreateBubblewrapNamespace())(
+  it.runIf(canRunMxc())(
     "enforces EROFS for native context writes while explicit scratch stays writable",
     () => {
       const root = mkdtempSync(path.join(os.tmpdir(), "claude-readonly-exec-"));
@@ -163,14 +192,13 @@ describe("confineClaudeReadOnly", () => {
         argv: ["/bin/sh", "-c", 'touch "$VIBESTUDIO_LINKED_SCRATCH/allowed"; touch ./blocked'],
         profileDir,
         contextDirectory,
+        launcher,
+        readPaths: ["/bin/sh"],
+        launchEnv: {},
       });
 
       const result = spawnSync(launch.command, launch.args, {
-        env: claudeContainedSpawnEnvironment({
-          profileDir,
-          launchEnv: {},
-          confinementEnv: launch.env,
-        }),
+        env: launch.env,
         encoding: "utf8",
       });
       expect(result.status).not.toBe(0);

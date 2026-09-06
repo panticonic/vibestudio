@@ -27,14 +27,6 @@ pub fn remove_workspace_trash(root: &Path) -> io::Result<()> {
         }
         Ok(_) => {}
     }
-    #[cfg(target_os = "windows")]
-    {
-        let state = root.join("workspace").join("state");
-        if state.exists() {
-            super::windows::retire_storage(&state.to_string_lossy())
-                .map_err(|error| io::Error::other(error.to_string()))?;
-        }
-    }
     // Keep the protected catalog receipt until the guest-writable subtree is
     // gone, so timeout or concurrent writes leave a recoverable deletion.
     match fs::remove_dir_all(root.join("workspace")) {

@@ -293,7 +293,9 @@ function makeHost(
     onPushBuild: vi.fn(),
   };
   const host = new ExtensionHost({
-    launchNativeExtension: vi.fn(),
+    launchNativeExtension: vi.fn(() => {
+      throw new Error("This service fixture has no native process launcher");
+    }),
     statePath,
     workspacePath: path.join(statePath, "source"),
     workspaceId: "workspace-test",
@@ -801,32 +803,60 @@ describe("ExtensionHost reconcileDeclared", () => {
     });
   });
 
-  it("defers approved on-invoke extension builds and execution until first use", async () => {
+  it.each(["canonical", "short", "source"] as const)(
+    "materializes an approved on-invoke extension by its %s identity on first use",
+    async (identity) => {
+      const extensionTransport = { call: vi.fn(async () => "transport-result") };
+      const { host, buildSystem, extensionNode } = makeHost({
+        installed: false,
+        activationEvents: ["onInvoke"],
+        extensionTransport,
+      });
+      const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+      await host.reconcileDeclared(declare(extensionNode.name));
+      await host.whenSettled();
+
+      expect(buildSystem.getBuild).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(host.registry.get(extensionNode.name)).toMatchObject({
+        activeBundleKey: null,
+        status: "available",
+      });
+
+      const invocationName =
+        identity === "canonical"
+          ? extensionNode.name
+          : identity === "source"
+            ? extensionNode.relativePath
+            : extensionNode.relativePath.split("/").at(-1)!;
+      await expect(host.invoke(panelCtx("panel-1"), invocationName, "blame", [])).resolves.toBe(
+        "transport-result"
+      );
+      expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+        priority: "interactive",
+      });
+      expect(start).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("rejects an ambiguous short name even when only one declaration is built", async () => {
     const extensionTransport = { call: vi.fn(async () => "transport-result") };
-    const { host, buildSystem, extensionNode } = makeHost({
-      installed: false,
-      activationEvents: ["onInvoke"],
-      extensionTransport,
-    });
-    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
-
-    await host.reconcileDeclared(declare(extensionNode.name));
-    await host.whenSettled();
-
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
-    expect(host.registry.get(extensionNode.name)).toMatchObject({
+    const { host, extensionNode, buildSystem, approvalQueue } = makeHost({ extensionTransport });
+    const active = host.registry.get(extensionNode.name)!;
+    host.registry.upsert({
+      ...active,
+      name: "@other/git-tools",
+      source: { ...active.source, repo: "other/git-tools" },
       activeBundleKey: null,
       status: "available",
     });
-
-    await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).resolves.toBe(
-      "transport-result"
-    );
-    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
-      priority: "interactive",
+    await expect(host.invoke(panelCtx("panel-1"), "git-tools", "blame", [])).rejects.toMatchObject({
+      code: "ENOEXT",
     });
-    expect(start).toHaveBeenCalledTimes(1);
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(extensionTransport.call).not.toHaveBeenCalled();
   });
 
   it("keeps declared refs unchanged for managed workspace extension repos", async () => {

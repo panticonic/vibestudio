@@ -133,16 +133,17 @@
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
     "@vibestudio/env-paths": "workspace:*",
-    "@vibestudio/vcs-path-policy": "workspace:*",
     "@vibestudio/identity": "workspace:*",
     "@vibestudio/iroh-transport": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/sqlite": "workspace:*",
     "@vibestudio/types": "workspace:*",
+    "@vibestudio/vcs-path-policy": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@microsoft/mxc-sdk": "0.8.0",
     "@types/json-schema": "^7.0.15",
     "es-module-lexer": "^1.7.0"
   }

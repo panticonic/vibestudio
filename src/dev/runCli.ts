@@ -20,6 +20,7 @@ function extractInstance(argv: string[]): { instanceId?: string; argv: string[] 
 
 async function main(): Promise<void> {
   const repoRoot = path.resolve(process.cwd());
+  process.env["VIBESTUDIO_APP_ROOT"] = repoRoot;
   const parsed = extractInstance(process.argv.slice(2));
   if (parsed.instanceId) {
     const instance = resolveDevInstance(repoRoot, parsed.instanceId);

@@ -1,4 +1,6 @@
 import { accessSync, constants, mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import type { ContainerConfig } from "@microsoft/mxc-sdk";
 import * as path from "node:path";
 
 export interface ClaudeReadOnlyLaunch {
@@ -32,7 +34,13 @@ const SAFE_LAUNCH_KEYS = [
   "VIBESTUDIO_SUBAGENT_CONTRACT",
   "CLAUDE_CONFIG_DIR",
 ] as const;
-const SAFE_CONFINEMENT_KEYS = ["TMPDIR", "VIBESTUDIO_LINKED_SCRATCH", "CLAUDE_CONFIG_DIR"] as const;
+const SAFE_CONFINEMENT_KEYS = [
+  "TMP",
+  "TEMP",
+  "TMPDIR",
+  "VIBESTUDIO_LINKED_SCRATCH",
+  "CLAUDE_CONFIG_DIR",
+] as const;
 
 function credentialFreeProxy(value: string): string | null {
   try {
@@ -69,11 +77,17 @@ export function claudeContainedSpawnEnvironment(input: {
   }
   const env: Record<string, string> = {
     HOME: home,
+    USERPROFILE: home,
+    APPDATA: xdgConfig,
+    LOCALAPPDATA: xdgData,
     XDG_CONFIG_HOME: xdgConfig,
     XDG_CACHE_HOME: xdgCache,
     XDG_DATA_HOME: xdgData,
     XDG_STATE_HOME: xdgState,
   };
+  if (process.platform === "win32" && ambient["SystemRoot"]) {
+    env["SystemRoot"] = ambient["SystemRoot"];
+  }
   for (const key of SAFE_LAUNCH_KEYS) {
     const value = input.launchEnv[key];
     if (value) env[key] = value;
@@ -109,104 +123,151 @@ export interface ClaudeReadOnlyLaunchInput {
   argv: string[];
   profileDir: string;
   contextDirectory: string;
-  /** Test seams. Production intentionally supports only Linux/bubblewrap. */
+  /** Pinned installed MXC binary, supplied by the trusted launcher. */
+  launcher: string;
+  /** Explicit CLI/runtime resources; never the host filesystem root. */
+  readPaths: string[];
+  launchEnv: Record<string, string>;
   platform?: NodeJS.Platform;
-  pathValue?: string;
 }
 
-function executableOnPath(name: string, pathValue: string | undefined): string | null {
-  for (const directory of (pathValue ?? "").split(path.delimiter)) {
-    if (!directory) continue;
-    const candidate = path.join(directory, name);
+/** Resolve a command from the trusted owner's PATH before constructing policy. */
+export function resolveClaudeRuntimeCommand(name: string, pathValue = process.env["PATH"]): string {
+  const candidates = path.isAbsolute(name)
+    ? [name]
+    : (pathValue ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .flatMap((directory) =>
+          process.platform === "win32"
+            ? [name, `${name}.exe`, `${name}.cmd`].map((file) => path.resolve(directory, file))
+            : [path.resolve(directory, name)]
+        );
+  for (const candidate of candidates) {
     try {
       accessSync(candidate, constants.X_OK);
       return candidate;
     } catch {
-      // Continue to the next exact PATH entry.
+      // Resolution runs in the owner; no guest-controlled executable search.
     }
   }
-  return null;
+  throw new Error(`Linked Claude runtime command is not installed: ${name}`);
+}
+
+/** MXC journals host ACL ownership outside the guest's writable profile. */
+export function claudeMxcLauncherEnvironment(
+  platform: NodeJS.Platform,
+  ambient: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const keys =
+    platform === "win32" ? ["PATH", "SystemRoot", "USERPROFILE", "LOCALAPPDATA"] : ["PATH"];
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const value = ambient[key];
+      return value === undefined ? [] : [[key, value]];
+    })
+  );
+}
+
+function quoteArgument(value: string, platform: NodeJS.Platform): string {
+  if (value.includes("\0")) throw new Error("Claude launch argument contains NUL");
+  if (platform !== "win32") return "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  return '\"' + value.replace(/(\\*)"/gu, '$1$1\\"').replace(/(\\+)$/u, "$1$1") + '\"';
 }
 
 /**
- * Build the only supported linked-Claude process launch.
- *
- * The host tree is mounted read-only, including the materialized context. A
- * disposable profile directory and /tmp are the only writable mounts. The
- * profile contains isolated writable Claude state prepared by the launch
- * materializer, so token refresh and session hooks never need to write directly
- * into the host's ~/.claude while managed source remains immutable. This is an
- * OS boundary, not a prompt convention: native Edit/Write/Bash calls receive
- * EROFS for managed projection paths. Server-side semantic reads still work,
- * and scratch is explicit through VIBESTUDIO_LINKED_SCRATCH.
- *
- * We deliberately fail on platforms without the one audited backend instead of
- * silently launching an uncontained session or approximating containment with
- * chmod (which the same process could undo).
+ * Linked Claude is a network-capable provider with an explicitly provisioned
+ * agent identity. MXC protects managed context from writes and limits filesystem
+ * reads to its installed runtime and admitted context. Its provider/Iroh network
+ * is intentionally available; this is not the network-denied workspace-command
+ * contract and does not claim HTTP mediation. No host-root filesystem grant is
+ * made (particularly important for Windows ACL-based confinement).
  */
 export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeReadOnlyLaunch {
-  const argv = input.argv.filter((value): value is string => typeof value === "string");
-  if (argv.length === 0) throw new Error("Claude launch has no executable");
   const platform = input.platform ?? process.platform;
-  if (platform !== "linux") {
+  if (platform !== "linux" && platform !== "darwin" && platform !== "win32") {
+    throw new Error(`Linked Claude MXC execution is unsupported on ${platform}`);
+  }
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  if (platform === "win32" && /\.(?:cmd|bat)$/iu.test(input.argv[0] ?? "")) {
     throw new Error(
-      `Linked Claude requires an OS-enforced read-only launch; no backend is supported on ${platform}`
+      "Linked Claude requires its native Windows executable; command-script shims cannot be launched by MXC"
     );
   }
-  const bwrap = executableOnPath("bwrap", input.pathValue ?? process.env["PATH"]);
-  if (!bwrap) {
-    throw new Error(
-      "Linked Claude requires bubblewrap (bwrap) so managed context projections are read-only"
-    );
+  if (!input.argv.length) throw new Error("Claude launch has no executable");
+  const profileDir = paths.resolve(input.profileDir);
+  const contextDirectory = paths.resolve(input.contextDirectory);
+  const readPaths = [...new Set([...input.readPaths, contextDirectory])];
+  for (const resource of [input.launcher, input.argv[0]!, profileDir, ...readPaths]) {
+    if (
+      !paths.isAbsolute(resource) ||
+      resource.includes("\0") ||
+      resource === paths.parse(resource).root
+    ) {
+      throw new Error("Linked Claude resources must be absolute paths below the host root");
+    }
   }
-
-  const profileDir = path.resolve(input.profileDir);
-  const contextDirectory = path.resolve(input.contextDirectory);
-  const scratchDirectory = path.join(profileDir, "scratch");
-  const claudeConfigDirectory = path.join(profileDir, "claude-config");
-  mkdirSync(scratchDirectory, { recursive: true, mode: 0o700 });
-  mkdirSync(claudeConfigDirectory, { recursive: true, mode: 0o700 });
-
-  return {
-    command: bwrap,
-    args: [
-      "--die-with-parent",
-      "--new-session",
-      "--ro-bind",
-      "/",
-      "/",
-      "--proc",
-      "/proc",
-      "--dev-bind",
-      "/dev",
-      "/dev",
-      "--tmpfs",
-      "/tmp",
-      "--bind",
-      profileDir,
-      profileDir,
-      "--ro-bind",
-      contextDirectory,
-      contextDirectory,
-      "--chdir",
-      contextDirectory,
-      "--setenv",
-      "TMPDIR",
-      "/tmp",
-      "--setenv",
-      "VIBESTUDIO_LINKED_SCRATCH",
-      scratchDirectory,
-      "--setenv",
-      "CLAUDE_CONFIG_DIR",
-      claudeConfigDirectory,
-      "--",
-      ...argv,
-    ],
-    env: {
-      TMPDIR: "/tmp",
-      VIBESTUDIO_LINKED_SCRATCH: scratchDirectory,
-      CLAUDE_CONFIG_DIR: claudeConfigDirectory,
+  const contains = (parent: string, child: string) => {
+    const relative = paths.relative(parent, child);
+    return (
+      !relative ||
+      (!paths.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${paths.sep}`))
+    );
+  };
+  if (
+    readPaths.some((resource) => contains(resource, profileDir) || contains(profileDir, resource))
+  ) {
+    throw new Error("Linked Claude writable profile and readonly resources must be disjoint");
+  }
+  if (!readPaths.some((resource) => contains(resource, input.argv[0]!))) {
+    throw new Error("Claude executable must belong to the admitted runtime");
+  }
+  const scratchDirectory = paths.join(profileDir, "scratch");
+  const claudeConfigDirectory = paths.join(profileDir, "claude-config");
+  const temporaryDirectory = paths.join(profileDir, "tmp");
+  for (const directory of [scratchDirectory, claudeConfigDirectory, temporaryDirectory]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  const env = {
+    TMPDIR: temporaryDirectory,
+    TMP: temporaryDirectory,
+    TEMP: temporaryDirectory,
+    VIBESTUDIO_LINKED_SCRATCH: scratchDirectory,
+    CLAUDE_CONFIG_DIR: claudeConfigDirectory,
+  };
+  const environment = claudeContainedSpawnEnvironment({
+    profileDir,
+    launchEnv: input.launchEnv,
+    confinementEnv: env,
+  });
+  const config: ContainerConfig = {
+    version: "0.8.0-alpha",
+    containment:
+      platform === "linux" ? "bubblewrap" : platform === "darwin" ? "seatbelt" : "processcontainer",
+    containerId: `vibestudio-claude-${randomUUID()}`,
+    process: {
+      commandLine: input.argv.map((arg) => quoteArgument(arg, platform)).join(" "),
+      cwd: contextDirectory,
+      env: Object.entries(environment).map(([key, value]) => `${key}=${value}`),
     },
+    filesystem: { readonlyPaths: readPaths, readwritePaths: [profileDir] },
+    network: { egress: { default: "allow" }, ingress: { default: "deny", hostLoopback: "deny" } },
+    lifecycle: { destroyOnExit: true, preservePolicy: false },
+    ui: { disable: true, clipboard: "none", injection: false },
+    ...(platform === "darwin" ? { seatbelt: { nestedPty: true, keychainAccess: false } } : {}),
+    ...(platform === "win32"
+      ? {
+          processContainer: {
+            leastPrivilege: false,
+            capabilities: ["internetClient"],
+          },
+        }
+      : {}),
+  };
+  return {
+    command: input.launcher,
+    args: ["--config-base64", Buffer.from(JSON.stringify(config)).toString("base64")],
+    env: claudeMxcLauncherEnvironment(platform),
     scratchDirectory,
     claudeConfigDirectory,
   };

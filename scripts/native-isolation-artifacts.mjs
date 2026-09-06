@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, lstatSync } from "node:fs";
+import { readFileSync, readdirSync, lstatSync, existsSync } from "node:fs";
 import path from "node:path";
 
 export const NATIVE_ISOLATION_RUST_VERSION = "1.95.0";
+export const MXC_SDK_VERSION = "0.8.0";
 
 export const NATIVE_ISOLATION_TARGETS = Object.freeze(
   JSON.parse(readFileSync(new URL("../native/isolation/targets.json", import.meta.url), "utf8"))
@@ -45,6 +46,10 @@ export function nativeIsolationManifestPath(target) {
   return `${path.posix.dirname(target.artifact)}/manifest.json`;
 }
 
+export function nativeCleanupManifestPath(target) {
+  return `${path.posix.dirname(target.cleanupArtifact)}/manifest.json`;
+}
+
 export function nativeIsolationBinaryDigest(file) {
   if (!lstatSync(file).isFile())
     throw new Error(`Native isolation artifact must be a regular file: ${file}`);
@@ -57,8 +62,8 @@ export function assertNativeIsolationArtifacts(
   artifactRoot = path.join(appRoot, "native/isolation/artifacts"),
   targets = NATIVE_ISOLATION_TARGETS
 ) {
-  const sourceDigest = nativeIsolationSourceDigest(appRoot);
   const artifacts = [];
+  const cleanupSourceDigest = nativeIsolationSourceDigest(appRoot);
   for (const target of targets) {
     const manifestPath = nativeIsolationManifestPath(target);
     const inputRoot = path.join(artifactRoot, `native-isolation-${target.platform}-${target.arch}`);
@@ -72,23 +77,33 @@ export function assertNativeIsolationArtifacts(
         `Missing native isolation release artifact: ${target.platform}-${target.arch}. Assemble the complete CI native artifact matrix before staging npm packages.`
       );
     }
-    if (
-      manifest.version !== 1 ||
-      manifest.rustVersion !== NATIVE_ISOLATION_RUST_VERSION ||
-      manifest.rustTarget !== target.rustTarget ||
-      manifest.sourceDigest !== sourceDigest
-    ) {
+    if (manifest.version !== 1 || manifest.sdk !== "@microsoft/mxc-sdk" || manifest.sdkVersion !== MXC_SDK_VERSION || manifest.binary !== target.mxcBinary || !manifest.files) {
       throw new Error(
-        `Native isolation artifact is from a different target or source closure: ${target.artifact}`
+        `MXC isolation artifact is from a different target or SDK version: ${target.artifact}`
       );
+    }
+    for (const binary of target.mxcFiles) {
+      const file = path.join(inputRoot, binary);
+      if (!existsSync(file) || manifest.files[binary] !== nativeIsolationBinaryDigest(file))
+        throw new Error(`Missing or checksum mismatch in MXC payload file: ${target.platform}-${target.arch}/${binary}`);
+      artifacts.push({ source: file, artifact: `${path.posix.dirname(target.artifact)}/${binary}` });
     }
     if (manifest.binaryDigest !== nativeIsolationBinaryDigest(inputBinary)) {
       throw new Error(`Native isolation artifact checksum mismatch: ${target.artifact}`);
     }
     assertNativeIsolationBinaryTarget(inputBinary, target);
+    artifacts.push({ source: inputManifest, artifact: manifestPath });
+    const cleanupInput = path.join(inputRoot, path.basename(target.cleanupArtifact));
+    const cleanupManifest = path.join(inputRoot, "cleanup-manifest.json");
+    if (!existsSync(cleanupInput) || !existsSync(cleanupManifest))
+      throw new Error(`Missing native cleanup receipt: ${target.platform}-${target.arch}`);
+    const cleanup = JSON.parse(readFileSync(cleanupManifest, "utf8"));
+    if (cleanup.version !== 1 || cleanup.rustVersion !== NATIVE_ISOLATION_RUST_VERSION || cleanup.rustTarget !== target.rustTarget || cleanup.sourceDigest !== cleanupSourceDigest || cleanup.binaryDigest !== nativeIsolationBinaryDigest(cleanupInput))
+      throw new Error(`Native cleanup receipt does not match target: ${target.platform}-${target.arch}`);
+    assertNativeIsolationBinaryTarget(cleanupInput, target);
     artifacts.push(
-      { source: inputBinary, artifact: target.artifact },
-      { source: inputManifest, artifact: manifestPath }
+      { source: cleanupInput, artifact: target.cleanupArtifact },
+      { source: cleanupManifest, artifact: nativeCleanupManifestPath(target) }
     );
   }
   return artifacts;

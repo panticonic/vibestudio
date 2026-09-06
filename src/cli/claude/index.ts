@@ -13,9 +13,13 @@ import {
   type PreparedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
 import {
-  claudeContainedSpawnEnvironment,
+  resolveClaudeRuntimeCommand,
   confineClaudeReadOnly,
 } from "@vibestudio/shared/claudeReadOnlyLaunch";
+import {
+  collectInstalledRuntimeReadRoots,
+  getMxcExecutable,
+} from "@vibestudio/shared/runtimePaths";
 import { cliConfigRoot } from "../configPaths.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
@@ -83,6 +87,11 @@ async function runLauncher(argv: string[]): Promise<number> {
   const creds = loadCliCredentials();
   if (!creds) {
     throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
+  }
+  if (creds.transport !== "iroh") {
+    throw new CliError(
+      "Linked Claude requires an Iroh-paired workspace; host loopback is unavailable inside MXC"
+    );
   }
   const client = new RpcClient(creds);
   const profilesRoot = path.join(cliConfigRoot(), "claude-launches");
@@ -210,19 +219,39 @@ export function spawnClaude(
   launch: MaterializedClaudeLaunch,
   contextDirectory: string
 ): Promise<number> {
+  const appRoot = process.env["VIBESTUDIO_APP_ROOT"];
+  if (!appRoot) throw new Error("Linked Claude requires the installed Vibestudio launcher");
+  const executableAlias = resolveClaudeRuntimeCommand(launch.argv[0]!);
+  const executable = fs.realpathSync(executableAlias);
+  const cliExecutable = resolveClaudeRuntimeCommand("vibestudio");
+  const report = process.report.getReport() as unknown as { sharedObjects?: unknown };
+  const sharedObjects = Array.isArray(report.sharedObjects)
+    ? report.sharedObjects
+        .filter((value): value is string => typeof value === "string" && path.isAbsolute(value))
+        .flatMap((value) => [path.normalize(value), fs.realpathSync(value)])
+    : [];
   const confined = confineClaudeReadOnly({
-    argv: launch.argv,
+    argv: [executable, ...launch.argv.slice(1)],
+    launcher: getMxcExecutable(appRoot),
+    readPaths: [
+      ...new Set([
+        fs.realpathSync(appRoot),
+        ...collectInstalledRuntimeReadRoots([
+          executableAlias,
+          cliExecutable,
+          process.execPath,
+          ...sharedObjects,
+        ]),
+      ]),
+    ],
+    launchEnv: launch.env,
     profileDir: launch.profileDir,
     contextDirectory,
   });
   return new Promise((resolve, reject) => {
     const child = spawn(confined.command, confined.args, {
       cwd: contextDirectory,
-      env: claudeContainedSpawnEnvironment({
-        profileDir: launch.profileDir,
-        launchEnv: launch.env,
-        confinementEnv: confined.env,
-      }),
+      env: confined.env,
       stdio: "inherit",
     });
     child.on("error", reject);
