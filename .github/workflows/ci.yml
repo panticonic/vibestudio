@@ -235,7 +235,17 @@ jobs:
 
       - name: Check native execution and platform permissions
         id: native-check
-        run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
+        run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts --reporter=default --reporter=json --outputFile=.cache/native-acceptance.json
+
+      # Publish diagnostics before the independent, slower desktop/package work.
+      - name: Upload native acceptance report
+        if: ${{ !cancelled() && (steps.native-check.outcome == 'success' || steps.native-check.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-acceptance-${{ matrix.target }}-${{ matrix.runner }}
+          path: .cache/native-acceptance.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Diagnose macOS sandbox denials
         if: ${{ failure() && runner.os == 'macOS' && steps.native-check.outcome == 'failure' }}
