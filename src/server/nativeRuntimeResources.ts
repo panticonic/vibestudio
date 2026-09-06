@@ -1,6 +1,17 @@
-import { constants, copyFileSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { getCACertificates } from "node:tls";
 import { collectInstalledRuntimeReadRoots } from "@vibestudio/shared/runtimePaths";
+
+export const NATIVE_RUNTIME_CERTIFICATES = "ca-certificates.pem";
 
 /** Materialize installed runtime resources under a caller-owned immutable root.
  * The caller must keep this root outside any tree the child may delete, and owns
@@ -75,6 +86,16 @@ export function prepareNativeRuntime(input: {
       }
     }
   }
+  // TLS trust is an installed runtime dependency too. Capture the owner's
+  // effective roots through Node's public API (available before our 22.19
+  // minimum), rather than guessing an OpenSSL/distro certificate-store path.
+  // NODE_EXTRA_CA_CERTS loads this immutable snapshot when each child starts.
+  const certificates = [...new Set(getCACertificates("default"))].join("\n") + "\n";
+  if (Buffer.byteLength(certificates) > 8 * 1024 * 1024)
+    throw new Error("Installed TLS trust roots exceed the 8 MiB runtime resource limit");
+  const certificatesPath = path.join(runtimeRoot, NATIVE_RUNTIME_CERTIFICATES);
+  writeFileSync(certificatesPath, certificates, { mode: 0o600, flag: "wx" });
+  environment["NODE_EXTRA_CA_CERTS"] = certificatesPath;
   // Preserve loader-visible aliases as well as physical resources. MXC owns
   // platform layout; a realpath-only list breaks non-system Node installations.
   const readPaths = [

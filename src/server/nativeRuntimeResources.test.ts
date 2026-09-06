@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getCACertificates } from "node:tls";
 import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
 
 const roots: string[] = [];
@@ -20,6 +21,11 @@ describe("installed native runtime resources", () => {
     const root = fixture();
     const runtime = prepareNativeRuntime({ runtimeRoot: root });
     expect(runtime.readPaths).toContain(root);
+    const trustPath = runtime.environment["NODE_EXTRA_CA_CERTS"]!;
+    expect(path.dirname(trustPath)).toBe(root);
+    expect(readFileSync(trustPath, "utf8")).toBe(
+      [...new Set(getCACertificates("default"))].join("\n") + "\n"
+    );
     expect(
       execFileSync(runtime.executable, ["-e", "process.stdout.write('runtime-ready')"], {
         env: { ...process.env, ...runtime.environment },
