@@ -42,6 +42,10 @@ export function buildNativeIsolation(appRoot = process.cwd()) {
       stdio: "inherit",
       env: {
         ...process.env,
+        // This helper must run on a clean Windows installation without the
+        // Visual C++ redistributable. Encoded flags override ambient RUSTFLAGS.
+        CARGO_ENCODED_RUSTFLAGS:
+          target.platform === "win32" ? "-C\u001ftarget-feature=+crt-static" : "",
         ...(target.platform === "darwin" ? { MACOSX_DEPLOYMENT_TARGET: "14.0" } : {}),
       },
     }

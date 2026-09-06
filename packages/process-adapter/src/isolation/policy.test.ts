@@ -79,6 +79,18 @@ describe("resolved execution resource policy", () => {
     expect(result.args[1]).not.toContain("(local ip");
     expect(result.args[1]).not.toContain("(remote ip");
   });
+  it("requires the Seatbelt PTY extension for slave device access", () => {
+    const result = compileExecution(policy(), {
+      platform: "darwin",
+      launcher: "/usr/bin/sandbox-exec",
+    });
+    const slaveRules = result.args[1]!.split("\n").filter((line) => line.includes("/dev/ttys"));
+    expect(slaveRules).toHaveLength(1);
+    expect(slaveRules[0]).toContain(
+      '(require-all (regex #"^/dev/ttys[0-9]+$") (extension "com.apple.sandbox.pty"))'
+    );
+    expect(result.args[1]).toContain("(allow pseudo-tty)");
+  });
   it("requires private staging on Windows and keeps policy outside guest roots", () => {
     const p: ExecutionPolicy = {
       ...policy(),

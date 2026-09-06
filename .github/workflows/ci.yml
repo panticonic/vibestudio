@@ -185,6 +185,20 @@ jobs:
       - name: Build native storage cleanup and admission
         run: node scripts/build-native-isolation.mjs
 
+      - name: Verify the Windows helper needs no Visual C++ redistributable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup component add llvm-tools-preview
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sysroot = rustc --print sysroot
+          $inspect = Join-Path $sysroot 'lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-readobj.exe'
+          $imports = & $inspect --coff-imports dist/native/win32-x64/vibestudio-isolation.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($imports -match '(?i)Name: (vcruntime|msvcp|msvcr)[^ ]*\.dll') {
+            throw 'Native helper unexpectedly depends on the Visual C++ redistributable'
+          }
+
       - name: Test native storage primitives
         working-directory: native/isolation
         run: cargo test --locked
