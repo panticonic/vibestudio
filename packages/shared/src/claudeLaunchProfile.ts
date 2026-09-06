@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
  */
 export const CLAUDE_LAUNCH_PROTOCOL = "vibestudio.claude-launch.v1" as const;
 
-export const MIN_CLAUDE_CODE_VERSION = "2.1.81";
+export const MIN_CLAUDE_CODE_VERSION = "2.1.139";
 
 const environmentSchema = z
   .object({
@@ -38,7 +38,7 @@ const environmentSchema = z
 export const claudeLaunchProfileSchema = z
   .object({
     protocol: z.literal(CLAUDE_LAUNCH_PROTOCOL),
-    launchId: z.string().min(1),
+    launchId: z.string().min(1).max(128),
     executable: z.literal("claude"),
     environment: environmentSchema,
   })
@@ -107,6 +107,8 @@ export interface MaterializedClaudeLaunch {
   profileDir: string;
   argv: string[];
   env: {
+    VIBESTUDIO_APP_ROOT: string;
+    ELECTRON_RUN_AS_NODE?: string;
     VIBESTUDIO_CONTEXT_ID: string;
     VIBESTUDIO_CHANNEL_ID: string;
     VIBESTUDIO_ENTITY_ID: string;
@@ -121,6 +123,12 @@ export interface MaterializedClaudeLaunch {
   credentialState: ClaudeCredentialState | null;
 }
 
+export interface ClaudeCliInvocation {
+  command: string;
+  args: string[];
+  environment: { VIBESTUDIO_APP_ROOT: string; ELECTRON_RUN_AS_NODE?: string };
+}
+
 export interface ClaudeCliRoute {
   url: string;
   serverId: string;
@@ -133,8 +141,8 @@ export interface ClaudeCliRoute {
 
 export interface ClaudeCredentialState {
   hostPath: string;
-  isolatedPath: string;
   sourceDigest: string;
+  profileIdentity: { dev: string; ino: string };
 }
 
 export type ClaudeCredentialReconciliation =
@@ -176,6 +184,7 @@ export async function materializeClaudeLaunch(input: {
   profile: ClaudeLaunchProfile;
   profilesRoot: string;
   cliRoute: ClaudeCliRoute;
+  cli: ClaudeCliInvocation;
   /** Test seam; defaults to CLAUDE_CONFIG_DIR or ~/.claude on the launch host. */
   hostClaudeConfigDirectory?: string;
 }): Promise<MaterializedClaudeLaunch> {
@@ -196,9 +205,12 @@ export async function materializeClaudeLaunch(input: {
 
   const name = Buffer.from(profile.launchId, "utf8").toString("base64url");
   const materializationId = randomUUID();
-  const profileDir = path.join(path.resolve(input.profilesRoot), `${name}.${materializationId}`);
-  const stageDir = path.join(path.resolve(input.profilesRoot), `.${name}.${materializationId}.tmp`);
   await mkdir(input.profilesRoot, { recursive: true, mode: 0o700 });
+  // Resolve the trusted owner-selected parent before creating any guest state.
+  // Later extraction validates this exact anchor rather than following aliases.
+  const profilesRoot = await realpath(input.profilesRoot);
+  const profileDir = path.join(profilesRoot, `${name}.${materializationId}`);
+  const stageDir = path.join(profilesRoot, `.${name}.${materializationId}.tmp`);
   await mkdir(stageDir, { mode: 0o700 });
 
   try {
@@ -234,8 +246,11 @@ export async function materializeClaudeLaunch(input: {
       await writeFile(isolatedCredentialPath, credentialBytes, { mode: 0o600 });
       credentialState = {
         hostPath: hostCredentialPath,
-        isolatedPath: path.join(finalClaudeConfigDirectory, ".credentials.json"),
         sourceDigest: digestBytes(credentialBytes),
+        profileIdentity: await lstat(stageDir, { bigint: true }).then((metadata) => ({
+          dev: metadata.dev.toString(),
+          ino: metadata.ino.toString(),
+        })),
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -243,11 +258,24 @@ export async function materializeClaudeLaunch(input: {
 
     const hooks: Record<string, unknown> = {};
     for (const event of HOOK_EVENTS) {
-      hooks[event] = [{ hooks: [{ type: "command", command: `vibestudio claude emit ${event}` }] }];
+      hooks[event] = [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: input.cli.command,
+              args: [...input.cli.args, "claude", "emit", event],
+            },
+          ],
+        },
+      ];
     }
     const mcp = {
       mcpServers: {
-        vibestudio: { command: "vibestudio", args: ["claude", "channel-host"] },
+        vibestudio: {
+          command: input.cli.command,
+          args: [...input.cli.args, "claude", "channel-host"],
+        },
       },
     };
     const settings = { hooks };
@@ -261,6 +289,7 @@ export async function materializeClaudeLaunch(input: {
       finalSettingsPath,
     ];
     const env: MaterializedClaudeLaunch["env"] = {
+      ...input.cli.environment,
       VIBESTUDIO_CONTEXT_ID: profile.environment.VIBESTUDIO_CONTEXT_ID,
       VIBESTUDIO_CHANNEL_ID: profile.environment.VIBESTUDIO_CHANNEL_ID,
       VIBESTUDIO_ENTITY_ID: profile.environment.VIBESTUDIO_ENTITY_ID,
@@ -338,11 +367,36 @@ function digestBytes(bytes: Uint8Array): string {
  * overwrites them.
  */
 export async function reconcileClaudeLaunchCredential(
-  launch: Pick<MaterializedClaudeLaunch, "credentialState">
+  launch: Pick<MaterializedClaudeLaunch, "credentialState" | "profileDir">,
+  appRoot = process.env["VIBESTUDIO_APP_ROOT"]
 ): Promise<ClaudeCredentialReconciliation> {
   const state = launch.credentialState;
   if (!state) return { status: "absent" };
-  const isolatedBytes = await readFile(state.isolatedPath);
+  if (!appRoot)
+    throw new Error("Installed application root is required for Claude credential reconciliation");
+  const { extractClaudeCredential } = await import("./claudeCredentialExtraction.js");
+  const isolatedBytes = await extractClaudeCredential({
+    profileDir: launch.profileDir,
+    profileIdentity: state.profileIdentity,
+    appRoot,
+  });
+  const credential = z
+    .object({
+      claudeAiOauth: z
+        .object({
+          accessToken: z.string().min(1),
+          refreshToken: z.string().min(1),
+          expiresAt: z.number().finite().nonnegative(),
+          scopes: z.array(z.string()),
+        })
+        .passthrough(),
+    })
+    .passthrough();
+  try {
+    credential.parse(JSON.parse(isolatedBytes.toString("utf8")));
+  } catch {
+    throw new Error("Confined Claude credential is not a valid OAuth credential");
+  }
   const isolatedDigest = digestBytes(isolatedBytes);
   if (isolatedDigest === state.sourceDigest) return { status: "unchanged" };
 
@@ -369,9 +423,43 @@ export async function reconcileClaudeLaunchCredential(
  * semantic launch remain independent, so an older owner cannot delete a newer
  * owner's profile. */
 export async function removeMaterializedClaudeLaunch(
-  launch: Pick<MaterializedClaudeLaunch, "profileDir">
+  launch: Pick<MaterializedClaudeLaunch, "profileDir">,
+  appRoot = process.env["VIBESTUDIO_APP_ROOT"]
 ): Promise<void> {
-  await rm(launch.profileDir, { recursive: true, force: true });
+  if (!appRoot)
+    throw new Error("Installed application root is required for Claude profile retirement");
+  const { nativeWorkspaceCleanup } = await import("./nativeWorkspaceCleanup.js");
+  const cleanup = nativeWorkspaceCleanup(appRoot);
+  const receipt = path.join(
+    path.dirname(launch.profileDir),
+    `.delete-${path.basename(launch.profileDir)}`
+  );
+  const exists = async (entry: string) => {
+    try {
+      return await lstat(entry);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const profile = await exists(launch.profileDir);
+  if (profile) {
+    if (!profile.isDirectory() || profile.isSymbolicLink())
+      throw new Error("Claude profile anchor is not an owned directory");
+    try {
+      await mkdir(receipt, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = await exists(receipt);
+      if (!existing?.isDirectory() || existing.isSymbolicLink())
+        throw new Error("Claude retirement receipt is not an owned directory");
+    }
+    await rename(launch.profileDir, path.join(receipt, "workspace"));
+  } else if (!(await exists(receipt))) return;
+  // The canonical workspace deletion primitive contains recursive traversal even
+  // if a surviving provider descendant races retirement. Failure retains this
+  // exact protected receipt for a subsequent owner retry.
+  cleanup(receipt);
 }
 
 function parseSemver(raw: string): [number, number, number] | null {

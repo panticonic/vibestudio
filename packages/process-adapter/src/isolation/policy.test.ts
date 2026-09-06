@@ -50,12 +50,12 @@ describe("resolved execution resource policy", () => {
     }
   );
   it.each(["linux", "darwin", "win32"] as const)(
-    "compiles MXC policy with open networking and no host environment inheritance on %s",
+    "compiles MXC policy with open networking and no guest inheritance of the owner environment on %s",
     (platform) => {
       vi.stubEnv("SystemRoot", "C:\\Windows");
       vi.stubEnv("USERPROFILE", "C:\\Users\\host-owner");
       vi.stubEnv("LOCALAPPDATA", "C:\\Users\\host-owner\\AppData\\Local");
-      vi.stubEnv("MXC_DACL_STATE_DIR", "untrusted-ambient-override");
+      vi.stubEnv("MXC_DACL_STATE_DIR", "owner-selected-journal");
       let p = policy();
       if (platform === "win32") {
         const win = (v: string) => "C:" + v.replaceAll("/", "\\");
@@ -80,18 +80,25 @@ describe("resolved execution resource policy", () => {
         defaultPolicy: "allow",
         allowLocalNetwork: true,
       });
-      expect(config.filesystem.readonlyPaths).toEqual(p.read);
+      expect(config.filesystem.readonlyPaths).toEqual([
+        ...p.read,
+        ...(platform === "darwin" ? ["/dev"] : []),
+      ]);
       expect(config.filesystem.readwritePaths).toEqual(p.write);
       expect(config.process.env).toContain(`HOME=${p.home}`);
-      expect(result.environment["HOME"]).toBeUndefined();
+      expect(result.environment["HOME"]).toBe(process.env["HOME"]);
+      expect(config.process.env).not.toContain(`HOME=${process.env["HOME"]}`);
       expect(config.lifecycle).toEqual({ destroyOnExit: true, preservePolicy: false });
-      expect(result.environment["MXC_DACL_STATE_DIR"]).toBeUndefined();
+      expect(result.environment["MXC_DACL_STATE_DIR"]).toBe("owner-selected-journal");
+      expect(
+        config.process.env.some((entry: string) => entry.startsWith("MXC_DACL_STATE_DIR="))
+      ).toBe(false);
       if (platform === "win32") {
         expect(config.processContainer).toEqual({
           leastPrivilege: false,
           capabilities: ["internetClient", "internetClientServer", "privateNetworkClientServer"],
         });
-        expect(result.environment).toEqual({
+        expect(result.environment).toMatchObject({
           PATH: process.env["PATH"],
           SystemRoot: "C:\\Windows",
           USERPROFILE: "C:\\Users\\host-owner",

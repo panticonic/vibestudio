@@ -3573,6 +3573,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "fs.nativeRoots": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "Discloses only the scoped native workspace's separately admitted source and scratch locations",
+    },
+    capability: null,
+    presentation: null,
+  },
   "fs.open": {
     tier: {
       tier: "open",
@@ -4261,6 +4273,52 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "act",
       },
     },
+  },
+  "linkedClaude.inspect": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "linked-claude.session",
+      rationale:
+        "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "linkedClaude.start": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "linked-claude.start",
+      rationale:
+        "Runs a linked provider only for an active agent session owned by the authenticated caller",
+    },
+    capability: "subagents.create",
+    presentation: {
+      title: "Launch a linked Claude agent",
+      action: "launch a linked Claude agent",
+      description:
+        "Run the installed Claude provider with its linked account and network access, using an isolated profile and the agent's workspace context.",
+      group: "automation",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
+  "linkedClaude.stop": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "linked-claude.session",
+      rationale:
+        "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+    },
+    capability: null,
+    presentation: null,
   },
   "menu.showContext": {
     tier: {

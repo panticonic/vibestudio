@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { IsolationError } from "./policy.js";
+import { windowsEnvironmentValue } from "./windowsEnvironment.js";
 
 const execute = promisify(execFile);
 type Platform = "linux" | "darwin" | "win32";
@@ -51,7 +52,7 @@ export async function assertMxcPrerequisites(input: {
     }
   } else {
     for (const key of ["SystemRoot", "USERPROFILE", "LOCALAPPDATA"]) {
-      const value = input.environment[key];
+      const value = windowsEnvironmentValue(input.environment, key);
       if (!value || !path.win32.isAbsolute(value)) {
         throw new IsolationError(
           `MXC requires the host owner's absolute ${key} environment coordinate for Windows execution and ACL cleanup. ` +

@@ -1,6 +1,6 @@
 import { accessSync, constants, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
+import { compileMxcLaunch, windowsEnvironmentValue } from "@vibestudio/process-adapter/mxc";
 import * as path from "node:path";
 
 export interface ClaudeReadOnlyLaunch {
@@ -24,6 +24,8 @@ const SAFE_PROXY_KEYS = [
   "no_proxy",
 ] as const;
 const SAFE_LAUNCH_KEYS = [
+  "VIBESTUDIO_APP_ROOT",
+  "ELECTRON_RUN_AS_NODE",
   "VIBESTUDIO_CONTEXT_ID",
   "VIBESTUDIO_CHANNEL_ID",
   "VIBESTUDIO_ENTITY_ID",
@@ -85,8 +87,9 @@ export function claudeContainedSpawnEnvironment(input: {
     XDG_DATA_HOME: xdgData,
     XDG_STATE_HOME: xdgState,
   };
-  if (process.platform === "win32" && ambient["SystemRoot"]) {
-    env["SystemRoot"] = ambient["SystemRoot"];
+  if (process.platform === "win32") {
+    const systemRoot = windowsEnvironmentValue(ambient, "SystemRoot");
+    if (systemRoot) env["SystemRoot"] = systemRoot;
   }
   for (const key of SAFE_LAUNCH_KEYS) {
     const value = input.launchEnv[key];

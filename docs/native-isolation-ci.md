@@ -14,6 +14,13 @@ AppContainer restrictions. CI does not apply firewall changes or loopback
 exemptions to make those tests pass. The existing application egress proxy remains
 separate and retains its own regression coverage.
 
+Linked Claude regression coverage uses synthetic credentials and real MXC for
+credential extraction and profile retirement. Host tests also check session
+ownership, connection loss, startup failure, and cleanup retries. Paid-provider
+authentication is outside this CI suite. Linked execution requires Claude Code
+2.1.139 or newer: hooks invoke the installed Vibestudio CLI with direct argument
+arrays, without depending on a global CLI installation or platform shell quoting.
+
 Windows also runs the native suite as a temporary standard user. This matters
 because GitHub's Windows hosted runner normally runs with administrative rights.
 The account runner verifies the child identity and token, uses that user's profile
@@ -22,7 +29,9 @@ Its host checkout permission is for the temporary developer account; it does not
 change the MXC AppContainer policy.
 
 The macOS and Windows jobs also run the existing desktop pairing smoke against
-a fresh Base checkout, covering connection approval, panels, relaunch and recovery.
+a fresh, locally named Base checkout, covering connection approval, panels,
+relaunch and recovery. Giving an exact commit a local branch preserves the
+development bootstrap's explicit checkout ownership contract.
 This exercises the application beyond the provider-independent packaged chooser.
 
 ## Packaged application gate
@@ -87,3 +96,24 @@ coverage of physical devices, third-party endpoint security, every OS version,
 interactive OS permission prompts, or every extension/provider workflow. Native
 Windows networking failures indicate a product compatibility issue that must be
 resolved or explicitly reconsidered before calling that platform supported.
+
+## macOS device access
+
+The September 6, 2026 hosted macOS run confirmed that a nested `node-pty` child
+has terminal input/output but cannot open its controlling terminal (`ENXIO`),
+while enumerating `/dev` fails with `EPERM`. Terminal resize therefore fails
+acceptance. This is not a scheduling delay: the terminal was never attached.
+
+[`node-pty`'s spawn helper](https://github.com/microsoft/node-pty/blob/v1.1.0/src/unix/spawn-helper.cc)
+uses `ttyname()` before attaching the terminal. Apple's
+[`devname_r`](https://github.com/apple-oss-distributions/Libc/blob/main/gen/devname.c)
+implementation enumerates `/dev` to resolve that name. MXC 0.8.0's stock
+[`nestedPty` policy](https://github.com/microsoft/mxc/blob/7dac1a952f0c9ad13f0a4cb089c4e0e8b3e0013a/src/backends/seatbelt/common/src/profile_builder.rs)
+permits terminal devices but omits directory enumeration. Its public filesystem
+configuration cannot grant enumeration alone: a read grant to `/dev` also grants
+device contents. The application deliberately permits read-only `/dev` access
+on macOS to preserve normal terminals using stock MXC. Device reads remain subject
+to the account's normal OS permissions; this grants neither root privileges nor
+additional filesystem writes. This is an accepted device-access tradeoff in the
+workspace-code containment boundary. The controlling-terminal and resize tests
+remain required, alongside the private-file and immutable-resource denial tests.

@@ -131,7 +131,11 @@ describe("remote Claude launch materialization", () => {
     const hostConfig = path.join(tmpRoot, "host-claude");
     const hostCredential = path.join(hostConfig, ".credentials.json");
     fs.mkdirSync(hostConfig, { recursive: true });
-    fs.writeFileSync(hostCredential, '{"accessToken":"old"}', { mode: 0o600 });
+    fs.writeFileSync(
+      hostCredential,
+      '{"claudeAiOauth":{"accessToken":"old","refreshToken":"refresh","expiresAt":2000000000,"scopes":[]}}',
+      { mode: 0o600 }
+    );
     const previousConfig = process.env["CLAUDE_CONFIG_DIR"];
     process.env["CLAUDE_CONFIG_DIR"] = hostConfig;
     try {
@@ -145,7 +149,7 @@ describe("remote Claude launch materialization", () => {
         spawnLaunch: vi.fn(async (launch: MaterializedClaudeLaunch) => {
           fs.writeFileSync(
             path.join(launch.env.CLAUDE_CONFIG_DIR, ".credentials.json"),
-            '{"accessToken":"refreshed"}',
+            '{"claudeAiOauth":{"accessToken":"refreshed","refreshToken":"next","expiresAt":2000000001,"scopes":[]}}',
             { mode: 0o600 }
           );
           return 0;

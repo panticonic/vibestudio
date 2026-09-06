@@ -15,7 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeWorkspaceCleanup } from "./nativeWorkspaceCleanup.js";
+import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 
 const appRoot = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
 const directories: string[] = [];

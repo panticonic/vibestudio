@@ -11,6 +11,9 @@ export interface LoadEndpointSecretOptions {
 }
 
 function fsyncDirectory(directory: string): void {
+  // Node cannot flush a directory handle on Windows (EPERM). The secret file
+  // itself is still flushed before its atomic rename on every platform.
+  if (process.platform === "win32") return;
   const handle = fs.openSync(directory, fs.constants.O_RDONLY);
   try {
     fs.fsyncSync(handle);
@@ -35,7 +38,8 @@ function parseSecret(bytes: Buffer, filename: string): SecretKey {
 /**
  * Load one durable endpoint identity, creating it only for genuinely new state.
  * The containing directory and secret modes are corrected before use; creation
- * is atomic and both the file and directory entry are fsynced before return.
+ * is atomic and the file is fsynced before return. Unix also fsyncs the directory
+ * entry; Windows retains its filesystem's rename durability semantics.
  */
 export function loadOrCreateNodeEndpointSecret(
   filename: string,

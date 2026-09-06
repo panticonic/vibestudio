@@ -16,6 +16,19 @@ const input = {
   launcher: "/installed/mxc",
   environment: { PATH: "/owner/bin:/usr/bin" },
 };
+it("accepts Windows owner coordinates independent of environment key casing", async () => {
+  await expect(
+    assertMxcPrerequisites({
+      platform: "win32",
+      launcher: "C:\\installed\\mxc.exe",
+      environment: {
+        SYSTEMROOT: "C:\\Windows",
+        userprofile: "C:\\owner",
+        LocalAppData: "C:\\owner\\AppData\\Local",
+      },
+    })
+  ).resolves.toBeUndefined();
+});
 it("reports a missing packaged executor before launching any helper", async () => {
   vi.mocked(access).mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }));
   await expect(assertMxcPrerequisites(input)).rejects.toThrow(/Repair the app installation/);

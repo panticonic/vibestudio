@@ -53,8 +53,9 @@ describe("confineClaudeReadOnly", () => {
     expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
     expect(config.process.commandLine).toContain("$shell");
     expect(config.process.env).toContain(`TMPDIR=${path.join(profileDir, "tmp")}`);
-    expect(launch.env).not.toHaveProperty("HOME");
-    expect(launch.env).not.toHaveProperty("TMPDIR");
+    expect(launch.env["HOME"]).toBe(process.env["HOME"]);
+    expect(launch.env["TMPDIR"]).toBe(process.env["TMPDIR"]);
+    expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
   });
 
   it("rejects host-root grants and overlapping writable profiles before provisioning", () => {

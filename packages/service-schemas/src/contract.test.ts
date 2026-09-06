@@ -46,6 +46,7 @@ import { hostLifecycleMethods } from "./hostLifecycle.js";
 import { hostPerformanceMethods } from "./hostPerformance.js";
 import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
+import { linkedClaudeMethods } from "./linkedClaude.js";
 import { hostTerminalMethods } from "./hostTerminal.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
@@ -158,6 +159,7 @@ const serviceTables: ServiceTable[] = [
   { service: "hostPerformance", file: "hostPerformance.ts", methods: hostPerformanceMethods },
   { service: "hubControl", file: "hubControl.ts", methods: hubControlMethods },
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
+  { service: "linkedClaude", file: "linkedClaude.ts", methods: linkedClaudeMethods },
   { service: "hostTerminal", file: "hostTerminal.ts", methods: hostTerminalMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },

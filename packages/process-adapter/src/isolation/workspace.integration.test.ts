@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import type { ProcessAdapter } from "../index.js";
 import { WorkspaceSandbox } from "./workspace.js";
 import type { ExecutionPolicy } from "./policy.js";
-import { prepareNativeRuntime } from "../../../../src/server/nativeRuntimeResources.js";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
 const sandboxes: WorkspaceSandbox[] = [];
 const directories: string[] = [];

@@ -1,0 +1,101 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { assertMxcPrerequisites } from "@vibestudio/process-adapter/mxc";
+import { installedClaudeCli, prepareInstalledClaudeLaunch } from "./claudeInstalledLaunch.js";
+import { collectInstalledRuntimeReadRoots, getMxcExecutable } from "./runtimePaths.js";
+import type { MaterializedClaudeLaunch } from "./claudeLaunchProfile.js";
+
+vi.mock("@vibestudio/process-adapter/mxc", async (original) => ({
+  ...(await original<typeof import("@vibestudio/process-adapter/mxc")>()),
+  assertMxcPrerequisites: vi.fn().mockResolvedValue(undefined),
+}));
+
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+function fixture() {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "installed Claude & app ")));
+  roots.push(root);
+  const appRoot = path.join(root, "app.asar");
+  const physicalRoot = appRoot + ".unpacked";
+  const entry = path.join(physicalRoot, "dist", "cli", "client.mjs");
+  mkdirSync(path.dirname(entry), { recursive: true });
+  writeFileSync(entry, "export {};");
+  return { root, appRoot, physicalRoot, entry };
+}
+
+it("selects the physical packaged CLI and host executable without shell quoting or guest PATH", () => {
+  const f = fixture();
+  vi.stubEnv("PATH", path.join(f.root, "untrusted command lookup"));
+  const invocation = installedClaudeCli(f.appRoot);
+  expect(invocation.command).toBe(process.execPath);
+  expect(invocation.args).toEqual([f.entry]);
+  expect(invocation.environment).toEqual({ VIBESTUDIO_APP_ROOT: f.appRoot });
+});
+
+it("marks Electron as a Node CLI runtime and rejects missing installed entry bytes", () => {
+  const f = fixture();
+  const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
+  Object.defineProperty(process.versions, "electron", { configurable: true, value: "fixture" });
+  try {
+    expect(installedClaudeCli(f.appRoot).environment).toEqual({
+      VIBESTUDIO_APP_ROOT: f.appRoot,
+      ELECTRON_RUN_AS_NODE: "1",
+    });
+  } finally {
+    if (electronDescriptor) Object.defineProperty(process.versions, "electron", electronDescriptor);
+    else Reflect.deleteProperty(process.versions, "electron");
+  }
+  expect(() => installedClaudeCli(path.join(f.root, "missing app"))).toThrow();
+  rmSync(f.entry);
+  mkdirSync(f.entry);
+  expect(() => installedClaudeCli(f.appRoot)).toThrow(/entry must be a file/);
+  vi.stubEnv("VIBESTUDIO_APP_ROOT", undefined);
+  expect(() => installedClaudeCli()).toThrow(/installed Vibestudio application/);
+});
+
+it("admits the installed CLI and runtime library closure while separating context and writable profile", async () => {
+  const f = fixture();
+  const profileDir = path.join(f.root, "profile");
+  const context = path.join(f.root, "context");
+  mkdirSync(profileDir);
+  mkdirSync(context);
+  const launch: MaterializedClaudeLaunch = {
+    profileDir,
+    argv: [process.execPath, "literal & argument"],
+    cliCredentialPath: path.join(profileDir, "credential.json"),
+    credentialState: null,
+    env: {
+      VIBESTUDIO_APP_ROOT: f.appRoot,
+      VIBESTUDIO_CONTEXT_ID: "context",
+      VIBESTUDIO_CHANNEL_ID: "channel",
+      VIBESTUDIO_ENTITY_ID: "entity",
+      VIBESTUDIO_VESSEL_REF: "do:fixture",
+      VIBESTUDIO_LAUNCH_PROFILE: profileDir,
+      CLAUDE_CONFIG_DIR: path.join(profileDir, "claude-config"),
+    },
+  };
+  const confined = await prepareInstalledClaudeLaunch(launch, context, f.appRoot);
+  expect(confined.command).toBe(getMxcExecutable(f.appRoot));
+  const config = JSON.parse(Buffer.from(confined.args[1]!, "base64").toString());
+  expect(config.filesystem.readonlyPaths).toContain(f.physicalRoot);
+  expect(config.filesystem.readonlyPaths).toContain(context);
+  for (const directory of collectInstalledRuntimeReadRoots([process.execPath]))
+    expect(config.filesystem.readonlyPaths).toContain(directory);
+  expect(config.filesystem.readonlyPaths).not.toContain(path.parse(f.root).root);
+  expect(config.filesystem.readwritePaths).toEqual([profileDir]);
+  expect(config.process.cwd).toBe(context);
+  expect(config.process.env).toContain(`VIBESTUDIO_APP_ROOT=${f.appRoot}`);
+  expect(config.process.env).toContain(`HOME=${path.join(profileDir, "home")}`);
+  expect(assertMxcPrerequisites).toHaveBeenCalledWith({
+    platform: process.platform,
+    launcher: confined.command,
+    environment: confined.env,
+  });
+});

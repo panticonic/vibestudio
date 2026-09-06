@@ -1,5 +1,7 @@
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import { windowsEnvironmentValue } from "./windowsEnvironment.js";
+export { windowsEnvironmentValue } from "./windowsEnvironment.js";
 
 export type MxcPlatform = "linux" | "darwin" | "win32";
 
@@ -60,10 +62,15 @@ export function compileMxcLaunch(
       throw new Error("Invalid MXC guest environment");
     return `${key}=${value}`;
   });
-  // MXC's legacy Windows SBOX contract treats an empty list as inheritance.
-  // Require an explicit environment so every supported Windows tier stays closed.
-  if (input.platform === "win32" && environment.length === 0)
-    throw new Error("MXC Windows guests require an explicit nonempty environment");
+  // AppContainer creation needs a local profile coordinate. Requiring it also
+  // prevents legacy SBOX's empty-environment inheritance behavior.
+  if (input.platform === "win32") {
+    const localData = windowsEnvironmentValue(input.guestEnvironment, "LOCALAPPDATA");
+    if (!localData || !path.win32.isAbsolute(localData))
+      throw new Error(
+        "MXC Windows guests require an absolute private LOCALAPPDATA environment coordinate"
+      );
+  }
   const config: ContainerConfig = {
     version: "0.8.0-alpha",
     containment:
@@ -79,7 +86,15 @@ export function compileMxcLaunch(
       env: environment,
       timeout: 0,
     },
-    filesystem: { readonlyPaths: [...input.readPaths], readwritePaths: [...input.writePaths] },
+    filesystem: {
+      // macOS ttyname() enumerates /dev to attach a controlling terminal.
+      // Stock MXC expresses this as a recursive read grant. Device reads remain
+      // subject to the owner's OS permissions; no additional writes are granted.
+      readonlyPaths: [
+        ...new Set([...input.readPaths, ...(input.platform === "darwin" ? ["/dev"] : [])]),
+      ],
+      readwritePaths: [...input.writePaths],
+    },
     // The supported stock open-network shape shares Linux's host network.
     // Directional ingress fields select filtered namespaces and cannot express
     // unrestricted ingress on that backend. We impose no application network

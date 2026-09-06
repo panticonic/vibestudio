@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertMxcPrerequisites, compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
 import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
-import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
 const roots: string[] = [];
 const children: Array<{ child: ChildProcessWithoutNullStreams; closed: Promise<unknown> }> = [];
@@ -146,6 +146,7 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
         cwd: home,
         guestEnvironment: {
           ...runtime.environment,
+          ...(platform === "win32" ? { LOCALAPPDATA: home, USERPROFILE: home, APPDATA: home } : {}),
           HOME: home,
           PATH: process.env["PATH"] ?? "/usr/bin:/bin",
         },
