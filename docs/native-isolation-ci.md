@@ -27,7 +27,10 @@ This exercises the application beyond the provider-independent packaged chooser.
 
 ## Packaged application gate
 
-CI packages the macOS and Windows application after native acceptance. A separate
+CI packages the macOS and Windows application after the production build. Native,
+desktop, and installed acceptance report independently, so a native failure does
+not hide packaging defects. The required native job still fails and release
+publication remains gated on acceptance. A separate
 job downloads the application archive, preserving executable bits and framework
 symlinks, and runs `scripts/packaged-isolation-smoke.mjs --app PATH`. That job
 installs harness dependencies but never builds the application. This distinguishes

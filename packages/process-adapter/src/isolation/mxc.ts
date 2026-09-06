@@ -16,19 +16,14 @@ export interface MxcLaunchInput {
   network: "allow" | "deny";
 }
 
-/** Keep helper discovery on the trusted owner's PATH. Windows ACL journal
- * coordinates stay host-owned, never copied from guestEnvironment. */
+/** The installed executor is trusted host infrastructure. MXC clears the
+ * environment at the guest boundary; host runtime/profile requirements belong
+ * to the owner here, never to guest-selected coordinates. */
 export function mxcLauncherEnvironment(
-  platform: MxcPlatform,
   ambient: NodeJS.ProcessEnv = process.env
 ): Record<string, string> {
-  const keys =
-    platform === "win32" ? ["PATH", "SystemRoot", "USERPROFILE", "LOCALAPPDATA"] : ["PATH"];
   return Object.fromEntries(
-    keys.flatMap((key) => {
-      const value = ambient[key];
-      return value === undefined ? [] : [[key, value]];
-    })
+    Object.entries(ambient).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
 }
 
@@ -65,6 +60,10 @@ export function compileMxcLaunch(
       throw new Error("Invalid MXC guest environment");
     return `${key}=${value}`;
   });
+  // MXC's legacy Windows SBOX contract treats an empty list as inheritance.
+  // Require an explicit environment so every supported Windows tier stays closed.
+  if (input.platform === "win32" && environment.length === 0)
+    throw new Error("MXC Windows guests require an explicit nonempty environment");
   const config: ContainerConfig = {
     version: "0.8.0-alpha",
     containment:
@@ -110,7 +109,7 @@ export function compileMxcLaunch(
     command: input.launcher,
     args: ["--config-base64", Buffer.from(JSON.stringify(config)).toString("base64")],
     cwd: input.cwd,
-    environment: mxcLauncherEnvironment(input.platform, hostEnvironment),
+    environment: mxcLauncherEnvironment(hostEnvironment),
   };
 }
 

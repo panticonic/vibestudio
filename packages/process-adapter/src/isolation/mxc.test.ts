@@ -30,16 +30,14 @@ describe("stock MXC adapter", () => {
       TOKEN: "secret",
     };
     const launch = compileMxcLaunch(input("win32"), host);
-    expect(launch.environment).toEqual({
-      PATH: host.PATH,
-      SystemRoot: host.SystemRoot,
-      USERPROFILE: host.USERPROFILE,
-      LOCALAPPDATA: host.LOCALAPPDATA,
-    });
+    expect(launch.environment).toEqual(host);
     expect(JSON.parse(Buffer.from(launch.args[1]!, "base64").toString()).process.env).toContain(
       "LOCALAPPDATA=/guest/local"
     );
-    expect(mxcLauncherEnvironment("linux", host)).toEqual({ PATH: host.PATH });
+    expect(JSON.parse(Buffer.from(launch.args[1]!, "base64").toString()).process.env).not.toContain(
+      "TOKEN=secret"
+    );
+    expect(mxcLauncherEnvironment(host)).toEqual(host);
   });
 
   it.runIf(process.platform !== "win32")("round trips shell metacharacters as literal argv", () => {
@@ -103,6 +101,9 @@ describe("stock MXC adapter", () => {
   );
 
   it("rejects data that cannot be represented safely and Windows script shims", () => {
+    expect(() => compileMxcLaunch({ ...input("win32"), guestEnvironment: {} })).toThrow(
+      /explicit nonempty environment/
+    );
     expect(() => compileMxcLaunch({ ...input(), argv: ["bad\0argument"] })).toThrow(/NUL/);
     expect(() => compileMxcLaunch({ ...input(), guestEnvironment: { "BAD=KEY": "x" } })).toThrow(
       /environment/
