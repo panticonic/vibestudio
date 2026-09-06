@@ -23,11 +23,13 @@ async function existingRegularFile(target: string): Promise<void> {
 }
 
 /**
- * Durably replaces one file below an extension's private storage root.
+ * Atomically replaces one file below an extension's private storage root.
  *
  * The temporary file is created in the destination directory, so rename is an
- * atomic name switch on the same filesystem. Both the bytes and directory
- * entry are synced before success is reported. No caller-visible convention or
+ * atomic name switch on the same filesystem. File bytes are flushed before
+ * rename on every platform. Unix also flushes the containing directory; Node
+ * cannot fsync directories on Windows, so power-loss durability of the renamed
+ * directory entry is not guaranteed there. No caller-visible convention or
  * temporary name is exposed through ExtensionContext.
  */
 export async function replaceExtensionStorageFile(
@@ -38,7 +40,9 @@ export async function replaceExtensionStorageFile(
 ): Promise<void> {
   const normalizedRoot = path.resolve(storageRoot);
   const lexicalTarget = path.resolve(normalizedRoot, relativePath);
-  const rootWithSep = normalizedRoot.endsWith(path.sep) ? normalizedRoot : `${normalizedRoot}${path.sep}`;
+  const rootWithSep = normalizedRoot.endsWith(path.sep)
+    ? normalizedRoot
+    : `${normalizedRoot}${path.sep}`;
   if (!lexicalTarget.startsWith(rootWithSep)) {
     throw storageError("EACCES", `Storage path escapes extension storage: ${relativePath}`);
   }
@@ -79,11 +83,13 @@ export async function replaceExtensionStorageFile(
     await fs.rename(temporary, target);
     ownsTemporary = false;
 
-    const directory = await fs.open(realParent, "r");
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
+    if (process.platform !== "win32") {
+      const directory = await fs.open(realParent, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
     }
   } finally {
     await handle?.close().catch(() => undefined);

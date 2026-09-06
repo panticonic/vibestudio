@@ -354,7 +354,8 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
     });
     const storagePath = path.join(root, "storage", "atomic", "value.txt");
     expect(fs.readFileSync(storagePath, "utf8")).toBe("durable");
-    expect(fs.statSync(storagePath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(storagePath).mode & 0o777).toBe(0o600);
+    else expect(fs.statSync(storagePath).mode & 0o200).toBe(0o200);
 
     const providerRequestId = randomUUID();
     const providerResponse = await waitForMessage<RpcResponse>((resolve, reject) => {

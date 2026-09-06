@@ -8,6 +8,7 @@ export default defineConfig({
       "tests/packageManagerInvocation.test.ts",
       "packages/process-adapter/src/isolation/**/*.test.ts",
       "packages/extension-host/src/childRuntime.integration.test.ts",
+      "packages/extension-host/src/atomicStorage.test.ts",
       "packages/shared/src/claudeNativeLaunch.test.ts",
       "packages/shared/src/claudeCredentialExtraction.integration.test.ts",
       "packages/shared/src/npmInstaller.integration.test.ts",
