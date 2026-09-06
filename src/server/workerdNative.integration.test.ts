@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { internalDoUniqueKey, UNIVERSAL_DO_UNIQUE_KEY } from "./workerdStorageIdentity.js";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
 
 const require = createRequire(import.meta.url);
@@ -61,8 +62,7 @@ it.each(["http", "nodejs", "inspector", "sqlite", "workerLoader"] as const)(
         fetch() { this.sql.exec('INSERT INTO count VALUES (1)'); return new Response(String(this.sql.exec('SELECT count(*) AS n FROM count').one().n)); }
       }
       export default { fetch(req, env) { return env.COUNTER.get(env.COUNTER.idFromName('test')).fetch(req); } };`;
-        fields =
-          'bindings = [(name = "COUNTER", durableObjectNamespace = "Counter")], durableObjectNamespaces = [(className = "Counter", uniqueKey = "native-test-counter", enableSql = true)], durableObjectStorage = (localDisk = "storage"),';
+        fields = `bindings = [(name = "COUNTER", durableObjectNamespace = "Counter")], durableObjectNamespaces = [(className = "Counter", uniqueKey = "${internalDoUniqueKey("@vibestudio/internal", "Counter")}", enableSql = true)], durableObjectStorage = (localDisk = "storage"),`;
       } else if (feature === "workerLoader") {
         source = `export default { async fetch(req, env) {
         const worker = env.LOADER.get('test', async () => ({ compatibilityDate: '2025-12-01', mainModule: 'worker.js', modules: { 'worker.js': 'export default { fetch() { return new Response("dynamic-ok") } }' } }));
@@ -153,3 +153,11 @@ it.each(["http", "nodejs", "inspector", "sqlite", "workerLoader"] as const)(
   },
   15000
 );
+
+it("keeps namespace directory names portable and source identities distinct", () => {
+  const first = internalDoUniqueKey("@host/a/b", "Counter");
+  const second = internalDoUniqueKey("@host/a_b", "Counter");
+  expect(first).not.toBe(second);
+  expect(first).toBe(internalDoUniqueKey("@host/a/b", "Counter"));
+  for (const key of [first, second, UNIVERSAL_DO_UNIQUE_KEY]) expect(key).toMatch(/^[a-z0-9-]+$/);
+});

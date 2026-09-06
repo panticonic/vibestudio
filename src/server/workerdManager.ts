@@ -61,10 +61,9 @@ import {
 } from "./runtimeReadinessError.js";
 import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hostPerformance";
 
+import { UNIVERSAL_DO_UNIQUE_KEY, internalDoUniqueKey } from "./workerdStorageIdentity.js";
+
 const log = createDevLogger("WorkerdManager");
-/** uniqueKey of the single static namespace that hosts all userland DO facets.
- *  workerd stores its facet SQLite under `<disk>/<this>/<hostHash>.*`. */
-const UNIVERSAL_DO_UNIQUE_KEY = "vibestudio:universal-do";
 const DEFAULT_WORKERD_STARTUP_READY_TIMEOUT_MS = 15_000;
 // Process signals normally settle immediately. These are catastrophic
 // containment fallbacks, not lifecycle budgets: give workerd ample time to
@@ -2212,7 +2211,7 @@ export class WorkerdManager {
         durableObjectNamespaces: [
           {
             className,
-            uniqueKey: `${doService.source.replace(/\//g, "_")}:${className}`,
+            uniqueKey: internalDoUniqueKey(doService.source, className),
             enableSql: true,
           },
         ],
@@ -3764,7 +3763,7 @@ export class WorkerdManager {
       // Internal classes get one workerd namespace each:
       // workerd-do/<uniqueKey>/<objectIdHash>.sqlite (+ namespace metadata.sqlite,
       // which is workerd-owned and never matched by the hash prefix).
-      const uniqueKey = `${ref.source.replace(/\//g, "_")}:${ref.className}`;
+      const uniqueKey = internalDoUniqueKey(ref.source, ref.className);
       return {
         dir: path.join(stateLayout(this.deps.statePath).databases.workerdDoDir, uniqueKey),
         hash: computeWorkerdObjectIdHash(uniqueKey, ref.objectKey),
