@@ -22,7 +22,7 @@ export interface ExecutionPolicy {
   read: readonly string[];
   /** Private state/scratch owned exclusively by this execution domain. */
   write: readonly string[];
-  /** Connected IPC must be explicitly supplied; there is no native IP grant. */
+  /** Additional filesystem socket resources require explicit path admission. */
   sockets: readonly string[];
 }
 

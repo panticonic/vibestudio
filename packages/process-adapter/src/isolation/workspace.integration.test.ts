@@ -330,12 +330,12 @@ describe("shared workspace sandbox on the native platform", () => {
         const denied = file => { try { fs.readFileSync(file); return false; } catch { return true; } };
         const socket = require('node:net').connect(${address.port}, '127.0.0.1');
         const connected = new Promise(resolve => {
-          socket.once('connect', () => { socket.destroy(); resolve(false); });
-          socket.once('error', () => resolve(true));
-          socket.setTimeout(1000, () => { socket.destroy(); resolve(true); });
+          socket.once('connect', () => { socket.destroy(); resolve(true); });
+          socket.once('error', () => resolve(false));
+          socket.setTimeout(1000, () => { socket.destroy(); resolve(false); });
         });
-        connected.then(networkDenied => process.send({
-          networkDenied,
+        connected.then(networkConnected => process.send({
+          networkConnected,
           anchorRenameDenied: (() => { try { fs.renameSync(process.env.HOME, process.env.HOME + '-replaced'); return false; } catch { return true; } })(),
           inputWriteDenied: (() => { try { fs.writeFileSync(__filename, 'tampered'); return false; } catch { return true; } })(),
           hardlinkWriteDenied: (() => {
@@ -461,13 +461,15 @@ describe("shared workspace sandbox on the native platform", () => {
         hostDenied: true,
         siblingDenied: true,
         ambientSecret: null,
-        networkDenied: true,
         anchorRenameDenied: true,
         inputWriteDenied: true,
         hardlinkWriteDenied: true,
         symlinkHostReadDenied: true,
         descendant: 0,
       });
+      // Stock Unix backends share open networking. Windows AppContainer may
+      // still refuse host loopback; this is an OS limitation, not app policy.
+      if (platform !== "win32") expect(firstMessage).toMatchObject({ networkConnected: true });
       expect(secondMessage).toEqual(firstMessage);
       const changed = message(first);
       first.postMessage({ write: "shared-by-commands" });
@@ -509,6 +511,6 @@ describe("shared workspace sandbox on the native platform", () => {
       siblingDenied: true,
       anchorRenameDenied: true,
     });
-    expect(hostConnections).toBe(0);
+    if (platform !== "win32") expect(hostConnections).toBeGreaterThan(0);
   }, 20_000);
 });

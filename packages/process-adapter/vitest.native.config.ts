@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       "packages/process-adapter/src/isolation/**/*.test.ts",
       "src/server/nativeWorkspaceCleanup.integration.test.ts",
+      "src/server/nativeNetwork.integration.test.ts",
     ],
     fileParallelism: false,
   },

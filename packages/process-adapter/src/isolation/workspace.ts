@@ -218,7 +218,6 @@ export class WorkspaceSandbox {
     await assertMxcPrerequisites({
       platform: installation.platform,
       launcher: installation.launcher,
-      network: "deny",
       environment: launch.environment,
     });
     // Resources must already exist and be anchored/sealed by the installed

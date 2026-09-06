@@ -50,7 +50,7 @@ describe("resolved execution resource policy", () => {
     }
   );
   it.each(["linux", "darwin", "win32"] as const)(
-    "compiles MXC policy without network or host environment inheritance on %s",
+    "compiles MXC policy with open networking and no host environment inheritance on %s",
     (platform) => {
       vi.stubEnv("SystemRoot", "C:\\Windows");
       vi.stubEnv("USERPROFILE", "C:\\Users\\host-owner");
@@ -77,8 +77,8 @@ describe("resolved execution resource policy", () => {
       expect(result.mechanism).toBe("mxc-process");
       expect(result.args[0]).toBe("--config-base64");
       expect(config.network).toEqual({
-        egress: { default: "deny" },
-        ingress: { default: "deny", hostLoopback: "deny" },
+        defaultPolicy: "allow",
+        allowLocalNetwork: true,
       });
       expect(config.filesystem.readonlyPaths).toEqual(p.read);
       expect(config.filesystem.readwritePaths).toEqual(p.write);
@@ -87,7 +87,10 @@ describe("resolved execution resource policy", () => {
       expect(config.lifecycle).toEqual({ destroyOnExit: true, preservePolicy: false });
       expect(result.environment["MXC_DACL_STATE_DIR"]).toBeUndefined();
       if (platform === "win32") {
-        expect(config.processContainer).toEqual({ leastPrivilege: false, capabilities: [] });
+        expect(config.processContainer).toEqual({
+          leastPrivilege: false,
+          capabilities: ["internetClient", "internetClientServer", "privateNetworkClientServer"],
+        });
         expect(result.environment).toEqual({
           PATH: process.env["PATH"],
           SystemRoot: "C:\\Windows",
