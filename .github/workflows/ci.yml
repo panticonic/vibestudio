@@ -84,7 +84,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Check acceptance and native preparation harnesses
-        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/with-macos-test-keychain.test.mjs scripts/branded-electron.test.mjs
+        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs scripts/macos-test-keychain.test.mjs scripts/branded-electron.test.mjs
 
       - name: Type-check
         run: pnpm type-check
@@ -315,11 +315,7 @@ jobs:
         shell: bash
         run: |
           git -C vibestudio-workspace-base switch -c ci-acceptance-base
-          if [[ "$RUNNER_OS" == macOS ]]; then
-            bash scripts/with-macos-test-keychain.sh node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
-          else
-            node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
-          fi
+          node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
 
   packaged-acceptance:
     name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})
