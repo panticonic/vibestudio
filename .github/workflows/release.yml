@@ -48,7 +48,7 @@ jobs:
             npm install -g @panticonic/vibestudio-server   # headless server + CLI
             ```
 
-            Requires Node.js 22.13+. Native installers (DMG/AppImage/deb) are attached when available.
+            Requires Node.js 22.19+. Native installers (DMG/AppImage/deb) are attached when available.
 
   linux-installers:
     name: Build Linux installers (AppImage/deb)
@@ -80,7 +80,7 @@ jobs:
       - name: Verify tag matches the committed package version
         run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
 
-      - name: Download the tested native helper matrix
+      - name: Download the tested MXC payload matrix
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: native-isolation-*
@@ -171,7 +171,7 @@ jobs:
       - name: Build application
         run: pnpm build
 
-      - name: Download the tested native helper matrix
+      - name: Download the tested MXC payload matrix
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: native-isolation-*
@@ -210,7 +210,7 @@ jobs:
 
   publish-macos:
     name: Verify and publish macOS DMG
-    needs: [github-release, mac-dmg]
+    needs: [github-release, mac-dmg, accept-macos-installer]
     if: ${{ vars.RELEASE_MAC == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -237,7 +237,7 @@ jobs:
     name: Build Windows x64 installer
     needs: github-release
     if: ${{ vars.RELEASE_WINDOWS == 'true' }}
-    runs-on: windows-2022
+    runs-on: windows-2025
     permissions:
       contents: read
     steps:
@@ -255,7 +255,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Download the tested native helper
+      - name: Download the tested MXC payload
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: native-isolation-win32-x64
@@ -282,7 +282,7 @@ jobs:
 
   publish-windows:
     name: Verify and publish Windows installer
-    needs: [github-release, windows-installer]
+    needs: [github-release, windows-installer, accept-windows-installer]
     if: ${{ vars.RELEASE_WINDOWS == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -302,3 +302,114 @@ jobs:
           files: |
             release/*.exe
             release/SHA256SUMS-windows
+
+  accept-macos-installer:
+    name: Install and launch signed macOS release candidate
+    needs: mac-dmg
+    if: ${{ vars.RELEASE_MAC == 'true' }}
+    runs-on: macos-14
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout acceptance harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install test dependencies (no application build)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Download immutable release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-macos-${{ github.sha }}
+          path: candidate
+      - name: Verify, install, and launch the DMG
+        shell: bash
+        run: |
+          (cd candidate && shasum -a 256 --check SHA256SUMS-macos)
+          images=(candidate/*.dmg)
+          test "${#images[@]}" -eq 1
+          mount="$RUNNER_TEMP/vibestudio-dmg"
+          mkdir -p "$mount" installed
+          hdiutil attach "${images[0]}" -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          ditto "$mount/Vibestudio.app" installed/Vibestudio.app
+          codesign --verify --deep --strict --verbose=2 installed/Vibestudio.app
+          xcrun stapler validate installed/Vibestudio.app
+          spctl --assess --type execute --verbose=2 installed/Vibestudio.app
+          node scripts/packaged-isolation-smoke.mjs --app installed/Vibestudio.app --out-dir test-results/packaged-isolation
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-acceptance-macos
+          path: test-results/packaged-isolation
+          if-no-files-found: warn
+          retention-days: 7
+
+  accept-windows-installer:
+    name: Install and launch Windows release candidate
+    needs: windows-installer
+    if: ${{ vars.RELEASE_WINDOWS == 'true' }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout acceptance harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install test dependencies (no application build)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Download immutable release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-windows-${{ github.sha }}
+          path: candidate
+      - name: Verify installer checksums
+        shell: bash
+        working-directory: candidate
+        run: sha256sum --check SHA256SUMS-windows
+      - name: Install and launch the NSIS release candidate
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem candidate/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Windows installer' }
+          $destination = Join-Path $env:RUNNER_TEMP 'Vibestudio installed acceptance'
+          $installer = Start-Process -FilePath $installers[0].FullName -ArgumentList @('/S', "/D=$destination") -PassThru
+          if (-not $installer.WaitForExit(180000)) { $installer.Kill(); throw 'Installer timed out' }
+          if ($installer.ExitCode -ne 0) { throw "Installer exited $($installer.ExitCode)" }
+          try {
+            node scripts/packaged-isolation-smoke.mjs --app "$destination/Vibestudio.exe" --out-dir test-results/packaged-isolation
+            if ($LASTEXITCODE -ne 0) { throw 'Installed application acceptance failed' }
+          } finally {
+            $uninstaller = Join-Path $destination 'Uninstall Vibestudio.exe'
+            if (Test-Path $uninstaller) {
+              $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru
+              if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Uninstaller timed out' }
+              if ($process.ExitCode -ne 0) { throw "Uninstaller exited $($process.ExitCode)" }
+            }
+          }
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-acceptance-windows
+          path: test-results/packaged-isolation
+          if-no-files-found: warn
+          retention-days: 7

@@ -271,7 +271,7 @@ gh run download RUN_ID --pattern 'native-isolation-*' --dir native/isolation/art
 
 Generic npm packages require the complete Linux x64/ARM64, Apple Silicon macOS, and Windows x64 matrix. An Electron installer requires its requested target. Packaging rejects missing, stale, wrong-architecture or checksum-mismatched MXC inputs and restores executable permissions after artifact transfer. Build manifests describe the pre-signing input bytes; platform signing remains a separate installer step. Windows on ARM uses an x64 Node/Electron process under Windows 11 emulation; a native Windows ARM64 process is unsupported by the current workerd dependency.
 
-The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release.
+The supported MXC release targets are Linux x64/ARM64, Apple Silicon macOS, and Windows x64. Native macOS/Windows enforcement and packaged-app conformance must pass on their respective systems before release. See [native isolation CI](docs/native-isolation-ci.md) for the acceptance matrix, standard-user checks, installer gates, and Windows 11 runner setup.
 
 Native workspace commands and linked Claude use normal networking through stock MXC. Linux requires bubblewrap, with no slirp4netns dependency. Workspace trash deletion remains offline. The existing application egress proxy and its approvals are unchanged. Windows AppContainer may restrict host-loopback access; native Windows validation remains a release gate.
 
