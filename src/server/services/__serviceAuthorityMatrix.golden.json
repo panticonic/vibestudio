@@ -5352,6 +5352,23 @@
         "capability": null,
         "presentation": null
       },
+      "nativeRoots": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "fs.control",
+          "rationale": "Discloses only the scoped native workspace's separately admitted source and scratch locations"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "open": {
         "authority": {
           "inherits": true
@@ -5982,6 +5999,126 @@
           "residency": "native-effect",
           "family": "host-terminal.session",
           "rationale": "Controls only a receiver-owned terminal bound to the approved caller and connection"
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
+  "linkedClaude": {
+    "service": {
+      "principals": [
+        "user",
+        "code"
+      ]
+    },
+    "methods": {
+      "inspect": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "linked-claude.session",
+          "rationale": "Controls only a host-owned generation bound to the verified extension connection and live session owner"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "start": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "subagents.create"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": ""
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "linked-claude.start",
+          "rationale": "Runs a linked provider only for an active agent session owned by the authenticated caller"
+        },
+        "capability": "subagents.create",
+        "presentation": {
+          "title": "Launch a linked Claude agent",
+          "action": "launch a linked Claude agent",
+          "description": "Run the installed Claude provider with its linked account and network access, using an isolated profile and the agent's workspace context.",
+          "group": "automation",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
+        }
+      },
+      "stop": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "linked-claude.session",
+          "rationale": "Controls only a host-owned generation bound to the verified extension connection and live session owner"
         },
         "capability": null,
         "presentation": null

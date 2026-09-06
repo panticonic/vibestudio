@@ -1,4 +1,4 @@
-import { nativeWorkspaceCleanup } from "./nativeWorkspaceCleanup.js";
+import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";

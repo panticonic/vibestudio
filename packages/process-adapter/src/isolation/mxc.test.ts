@@ -10,7 +10,10 @@ function input(platform: MxcLaunchInput["platform"] = "linux"): MxcLaunchInput {
     containerId: "test",
     argv: [platform === "win32" ? "C:\\runtime\\node.exe" : process.execPath],
     cwd: platform === "win32" ? "C:\\guest" : "/guest",
-    guestEnvironment: { HOME: "/guest/home", LOCALAPPDATA: "/guest/local" },
+    guestEnvironment:
+      platform === "win32"
+        ? { HOME: "C:\\guest\\home", LOCALAPPDATA: "C:\\guest\\local" }
+        : { HOME: "/guest/home", LOCALAPPDATA: "/guest/local" },
     readPaths: [],
     writePaths: [],
   };
@@ -32,7 +35,7 @@ describe("stock MXC adapter", () => {
     const launch = compileMxcLaunch(input("win32"), host);
     expect(launch.environment).toEqual(host);
     expect(JSON.parse(Buffer.from(launch.args[1]!, "base64").toString()).process.env).toContain(
-      "LOCALAPPDATA=/guest/local"
+      "LOCALAPPDATA=C:\\guest\\local"
     );
     expect(JSON.parse(Buffer.from(launch.args[1]!, "base64").toString()).process.env).not.toContain(
       "TOKEN=secret"
@@ -102,8 +105,17 @@ describe("stock MXC adapter", () => {
 
   it("rejects data that cannot be represented safely and Windows script shims", () => {
     expect(() => compileMxcLaunch({ ...input("win32"), guestEnvironment: {} })).toThrow(
-      /explicit nonempty environment/
+      /absolute private LOCALAPPDATA/
     );
+    expect(() =>
+      compileMxcLaunch({ ...input("win32"), guestEnvironment: { LOCALAPPDATA: "relative" } })
+    ).toThrow(/absolute private LOCALAPPDATA/);
+    expect(() =>
+      compileMxcLaunch({
+        ...input("win32"),
+        guestEnvironment: { localappdata: "C:\\guest\\local" },
+      })
+    ).not.toThrow();
     expect(() => compileMxcLaunch({ ...input(), argv: ["bad\0argument"] })).toThrow(/NUL/);
     expect(() => compileMxcLaunch({ ...input(), guestEnvironment: { "BAD=KEY": "x" } })).toThrow(
       /environment/

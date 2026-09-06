@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { assertMxcPrerequisites } from "@vibestudio/process-adapter/mxc";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -14,13 +13,9 @@ import {
   type PreparedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
 import {
-  resolveClaudeRuntimeCommand,
-  confineClaudeReadOnly,
-} from "@vibestudio/shared/claudeReadOnlyLaunch";
-import {
-  collectInstalledRuntimeReadRoots,
-  getMxcExecutable,
-} from "@vibestudio/shared/runtimePaths";
+  prepareInstalledClaudeLaunch,
+  installedClaudeCli,
+} from "@vibestudio/shared/claudeInstalledLaunch";
 import { cliConfigRoot } from "../configPaths.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
@@ -186,6 +181,7 @@ export async function executePreparedClaudeLaunch(input: {
       profile: prepared.profile,
       profilesRoot: input.profilesRoot,
       cliRoute: input.cliRoute,
+      cli: installedClaudeCli(),
     });
     outcome = {
       ok: true,
@@ -220,40 +216,7 @@ export async function spawnClaude(
   launch: MaterializedClaudeLaunch,
   contextDirectory: string
 ): Promise<number> {
-  const appRoot = process.env["VIBESTUDIO_APP_ROOT"];
-  if (!appRoot) throw new Error("Linked Claude requires the installed Vibestudio launcher");
-  const executableAlias = resolveClaudeRuntimeCommand(launch.argv[0]!);
-  const executable = fs.realpathSync(executableAlias);
-  const cliExecutable = resolveClaudeRuntimeCommand("vibestudio");
-  const report = process.report.getReport() as unknown as { sharedObjects?: unknown };
-  const sharedObjects = Array.isArray(report.sharedObjects)
-    ? report.sharedObjects
-        .filter((value): value is string => typeof value === "string" && path.isAbsolute(value))
-        .map((value) => path.normalize(value))
-    : [];
-  const confined = confineClaudeReadOnly({
-    argv: [executable, ...launch.argv.slice(1)],
-    launcher: getMxcExecutable(appRoot),
-    readPaths: [
-      ...new Set([
-        fs.realpathSync(appRoot),
-        ...collectInstalledRuntimeReadRoots([
-          executableAlias,
-          cliExecutable,
-          process.execPath,
-          ...sharedObjects,
-        ]),
-      ]),
-    ],
-    launchEnv: launch.env,
-    profileDir: launch.profileDir,
-    contextDirectory,
-  });
-  await assertMxcPrerequisites({
-    platform: process.platform as "linux" | "darwin" | "win32",
-    launcher: confined.command,
-    environment: confined.env,
-  });
+  const confined = await prepareInstalledClaudeLaunch(launch, contextDirectory);
   return new Promise((resolve, reject) => {
     const child = spawn(confined.command, confined.args, {
       cwd: contextDirectory,

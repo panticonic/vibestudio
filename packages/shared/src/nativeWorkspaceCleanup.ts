@@ -4,8 +4,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
 import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
-import type { WorkspaceTrashRemoval } from "@vibestudio/workspace/loader";
-import { NATIVE_RUNTIME_CERTIFICATES, prepareNativeRuntime } from "./nativeRuntimeResources.js";
+import {
+  NATIVE_RUNTIME_CERTIFICATES,
+  prepareNativeRuntime,
+} from "@vibestudio/shared/nativeRuntimeResources";
 
 // The write-granted directory is a mount root on Linux. Delete its children in
 // confinement; only the owner can remove that now-empty anchor afterward.
@@ -48,7 +50,7 @@ function removeStagedRuntimes(trashRoot: string): void {
 /** Catalog-owned effect. A surviving guest may race deletion, so recursive
  * traversal runs with MXC's restricted filesystem authority, never the host's.
  * Failure retains the receipt and runtime staging for the existing retry path. */
-export function nativeWorkspaceCleanup(appRoot: string): WorkspaceTrashRemoval {
+export function nativeWorkspaceCleanup(appRoot: string): (target: string) => void {
   const platform = process.platform;
   if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
     throw new Error(`Unsupported workspace cleanup platform: ${platform}`);
@@ -87,7 +89,12 @@ export function nativeWorkspaceCleanup(appRoot: string): WorkspaceTrashRemoval {
         containerId: `vibestudio-cleanup-${randomUUID()}`,
         argv: [runtime.executable, "-e", CLEANUP_SCRIPT],
         cwd: workspace,
-        guestEnvironment: runtime.environment,
+        guestEnvironment: {
+          ...runtime.environment,
+          ...(platform === "win32"
+            ? { LOCALAPPDATA: workspace, USERPROFILE: workspace, APPDATA: workspace }
+            : {}),
+        },
         readPaths: runtime.readPaths,
         writePaths: [workspace],
         network: "deny",

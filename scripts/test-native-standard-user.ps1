@@ -99,11 +99,14 @@ Write-Output "Native acceptance identity: $($identity.Name), SID $($identity.Use
 exit $LASTEXITCODE
 '@
     $childScript = $childScript.Replace('__PAYLOAD__', $payloadPath.Replace("'", "''"))
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+    # CreateProcessWithLogonW limits its command line to 1024 characters. Keep
+    # the fixed bootstrap in this owner-written, child-readonly staging directory.
+    $bootstrapPath = Join-Path $taskRoot 'bootstrap.ps1'
+    $childScript | Set-Content -LiteralPath $bootstrapPath -Encoding utf8
     $stdout = Join-Path $taskRoot 'stdout.log'
     $stderr = Join-Path $taskRoot 'stderr.log'
     $testProcess = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') `
-        -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) `
+        -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', ('"' + $bootstrapPath + '"')) `
         -Credential $credential -LoadUserProfile -WorkingDirectory $Workspace `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     if (-not $testProcess.WaitForExit($TimeoutSeconds * 1000)) { throw "Standard-user native tests exceeded $TimeoutSeconds seconds." }

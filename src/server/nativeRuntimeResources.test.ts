@@ -1,13 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCACertificates } from "node:tls";
-import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
@@ -17,6 +26,30 @@ function fixture() {
 }
 
 describe("installed native runtime resources", () => {
+  it("admits a macOS Electron bundle including metadata, without admitting its parent", () => {
+    const root = fixture();
+    const contents = path.join(root, "Installed.app", "Contents");
+    const resourcesPath = path.join(contents, "Resources");
+    mkdirSync(resourcesPath, { recursive: true });
+    mkdirSync(path.join(contents, "MacOS"));
+    const executable = path.join(contents, "MacOS", "Installed");
+    writeFileSync(executable, "installed executable fixture");
+    const runtimeRoot = path.join(root, "runtime");
+    mkdirSync(runtimeRoot);
+    vi.stubGlobal(
+      "process",
+      Object.create(process, {
+        execPath: { value: executable },
+        versions: { value: { ...process.versions, electron: "test" } },
+        resourcesPath: { value: resourcesPath },
+        report: { value: { getReport: () => ({ sharedObjects: [] }) } },
+      })
+    );
+    const runtime = prepareNativeRuntime({ runtimeRoot, platform: "darwin" });
+    expect(runtime.readPaths).toContain(contents);
+    expect(runtime.readPaths).not.toContain(root);
+    expect(runtime.readPaths).not.toContain(path.dirname(contents));
+  });
   it("prepares an executable runtime independently of any workspace", () => {
     const root = fixture();
     const runtime = prepareNativeRuntime({ runtimeRoot: root });

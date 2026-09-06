@@ -1,5 +1,5 @@
 import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
-import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
 import { waitForNativeJob, type NativeWorkspaceJob } from "./nativeWorkspaceJob.js";
 import { mkdir, realpath, copyFile, lstat, readFile, writeFile, rm } from "node:fs/promises";

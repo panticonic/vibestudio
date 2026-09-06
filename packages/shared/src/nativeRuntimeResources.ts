@@ -10,6 +10,7 @@ import {
 import path from "node:path";
 import { getCACertificates } from "node:tls";
 import { collectInstalledRuntimeReadRoots } from "@vibestudio/shared/runtimePaths";
+import { windowsEnvironmentValue } from "@vibestudio/process-adapter/mxc";
 
 export const NATIVE_RUNTIME_CERTIFICATES = "ca-certificates.pem";
 
@@ -46,7 +47,7 @@ export function prepareNativeRuntime(input: {
     : {};
   const assets = ["icudtl.dat", "v8_context_snapshot.bin", "snapshot_blob.bin"];
   if (platform === "win32") {
-    const systemRoot = process.env["SystemRoot"];
+    const systemRoot = windowsEnvironmentValue(process.env, "SystemRoot");
     if (!systemRoot || !path.win32.isAbsolute(systemRoot))
       throw new Error("Windows native runtime requires the host SystemRoot");
     environment["SystemRoot"] = systemRoot;
@@ -78,7 +79,22 @@ export function prepareNativeRuntime(input: {
       ...collectInstalledRuntimeReadRoots([installedExecutable, ...sharedObjects], platform)
     );
     const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-    if (process.versions["electron"] && resources) read.push(realpathSync(resources));
+    if (process.versions["electron"] && resources) {
+      const resourceRoot = realpathSync(resources);
+      if (platform === "darwin") {
+        // A macOS runtime is an application bundle: CoreFoundation and dyld
+        // also consume Contents/Info.plist and framework metadata beside the
+        // executable. Admit that installed bundle, not guessed system paths.
+        const contents = path.dirname(resourceRoot);
+        if (
+          path.basename(resourceRoot) !== "Resources" ||
+          path.basename(contents) !== "Contents" ||
+          path.dirname(installedExecutable) !== path.join(contents, "MacOS")
+        )
+          throw new Error("Electron runtime resources do not belong to its installed macOS bundle");
+        read.push(contents);
+      } else read.push(resourceRoot);
+    }
     for (const name of assets) {
       const asset = path.join(path.dirname(installedExecutable), name);
       try {

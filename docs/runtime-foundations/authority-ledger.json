@@ -17090,6 +17090,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:fs.nativeRoots",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "nativeRoots",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.control",
+      "reviewRationale": "Discloses only the scoped native workspace's separately admitted source and scratch locations",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:fs.nativeRoots"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:fs.nativeRoots),allOf(capability(user,service:fs.nativeRoots),workspace-member),allOf(capability(code,service:fs.nativeRoots),workspace-member))",
+      "r3b": {
+        "review": "scoped-native-context-root-disclosure",
+        "change": "Reports only the already admitted native source and scratch paths for the calling extension context; does not grant another context or host filesystem access."
+      },
+      "capability": "service:fs.nativeRoots",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:fs.open",
       "rpcPlane": "host-service",
       "owner": "fs",
@@ -19057,6 +19103,142 @@
         "change": null
       },
       "capability": "service:hubControl.updateProfile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:linkedClaude.inspect",
+      "rpcPlane": "host-service",
+      "owner": "linkedClaude",
+      "method": "inspect",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "linked-claude.session",
+      "reviewRationale": "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:linkedClaude.inspect"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:linkedClaude.inspect),workspace-member),allOf(capability(code,service:linkedClaude.inspect),workspace-member))",
+      "r3b": {
+        "review": "trusted-linked-provider-generation-ownership",
+        "change": "Returns only bounded runtime state for the exact generation owned by the verified live extension connection."
+      },
+      "capability": "service:linkedClaude.inspect",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:linkedClaude.start",
+      "rpcPlane": "host-service",
+      "owner": "linkedClaude",
+      "method": "start",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "linked-claude.start",
+      "reviewRationale": "Runs a linked provider only for an active agent session owned by the authenticated caller",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": ""
+      },
+      "authorityPrincipals": [
+        "code",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"subagents.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "trusted-linked-provider-generation-ownership",
+        "change": "Runs the installed linked Claude provider only for an authenticated caller-owned live session with an exact agent credential and binding. Host runtime, credential profile and context paths are derived by the receiver; no filesystem grant or executable is accepted."
+      },
+      "capability": "service:linkedClaude.start",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:linkedClaude.stop",
+      "rpcPlane": "host-service",
+      "owner": "linkedClaude",
+      "method": "stop",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "linked-claude.session",
+      "reviewRationale": "Controls only a host-owned generation bound to the verified extension connection and live session owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:linkedClaude.stop"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:linkedClaude.stop),workspace-member),allOf(capability(code,service:linkedClaude.stop),workspace-member))",
+      "r3b": {
+        "review": "trusted-linked-provider-generation-ownership",
+        "change": "Retires only that connection-owned generation before credential reconciliation and contained profile cleanup; grants no new execution authority."
+      },
+      "capability": "service:linkedClaude.stop",
       "parityAssertion": "generated-census:host-authority"
     },
     {

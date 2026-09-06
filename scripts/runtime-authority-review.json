@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:8cdfe5db5df7b9797882964606fc4912784ac1d0992a402f5f3a73a9869c1239",
+  "censusDigest": "sha256:7780851143b8c2802e8f4bf6bff7e6d4a576b9548841547e0a93f3c4d9946b38",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -597,6 +597,22 @@
     "host:hostTerminal.close": {
       "review": "connection-owned-host-terminal-control",
       "change": "Controls only an opaque PTY issued by a critically approved open on this exact authenticated connection. The receiver verifies user/code/connection ownership on every call, retires control before cleanup and refuses disconnected or stopped callers. Input, output and geometry are bounded; read output is external context and ownership is checked again after asynchronous ingestion. Cleanup reports direct process exit separately from unverified descendants."
+    },
+    "host:linkedClaude.start": {
+      "review": "trusted-linked-provider-generation-ownership",
+      "change": "Runs the installed linked Claude provider only for an authenticated caller-owned live session with an exact agent credential and binding. Host runtime, credential profile and context paths are derived by the receiver; no filesystem grant or executable is accepted."
+    },
+    "host:linkedClaude.inspect": {
+      "review": "trusted-linked-provider-generation-ownership",
+      "change": "Returns only bounded runtime state for the exact generation owned by the verified live extension connection."
+    },
+    "host:linkedClaude.stop": {
+      "review": "trusted-linked-provider-generation-ownership",
+      "change": "Retires only that connection-owned generation before credential reconciliation and contained profile cleanup; grants no new execution authority."
+    },
+    "host:fs.nativeRoots": {
+      "review": "scoped-native-context-root-disclosure",
+      "change": "Reports only the already admitted native source and scratch paths for the calling extension context; does not grant another context or host filesystem access."
     }
   }
 }

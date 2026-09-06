@@ -34,6 +34,7 @@
     "./channelEnvelopePaging": "./src/channelEnvelopePaging.ts",
     "./channelInvites": "./src/channelInvites.ts",
     "./claudeLaunchProfile": "./src/claudeLaunchProfile.ts",
+    "./claudeInstalledLaunch": "./src/claudeInstalledLaunch.ts",
     "./claudeReadOnlyLaunch": "./src/claudeReadOnlyLaunch.ts",
     "./chromeTrust": "./src/chromeTrust.ts",
     "./cliCredentials": "./src/cliCredentials.ts",
@@ -123,7 +124,9 @@
     "./runtime/*": "./src/runtime/*.ts",
     "./vcs/*": "./src/vcs/*.ts",
     "./webhooks/*": "./src/webhooks/*.ts",
-    "./ws/*": "./src/ws/*.ts"
+    "./ws/*": "./src/ws/*.ts",
+    "./nativeRuntimeResources": "./src/nativeRuntimeResources.ts",
+    "./nativeWorkspaceCleanup": "./src/nativeWorkspaceCleanup.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"

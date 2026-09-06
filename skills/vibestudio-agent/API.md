@@ -371,6 +371,18 @@ Authority principals: `code`, `user`
 | `hostTerminal.resize` | Resize an owned host terminal. |
 | `hostTerminal.close` | Retire terminal control before attempting process cleanup. Host descendants may survive. |
 
+## `linkedClaude`
+
+Trusted linked Claude execution with receiver-owned host resources
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `linkedClaude.start` | Start an authorized linked Claude agent with host-owned runtime and credential materialization; accepts no filesystem paths or executable grants |
+| `linkedClaude.inspect` | Read the bounded state of an owned linked Claude generation |
+| `linkedClaude.stop` | Retire an owned linked Claude generation and reconcile its isolated credential after confirmed exit |
+
 ## `mirror`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.
