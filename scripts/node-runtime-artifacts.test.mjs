@@ -66,10 +66,12 @@ test("rejects changed or additional distribution files before packaging", async 
     );
     assert.equal((await assertNodeRuntimeArtifacts(appRoot, target)).executable, executable);
     await writeFile(executable, "changed");
-    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /differs/);
+    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /changed: bin\/node/);
     await writeFile(executable, bytes);
     await writeFile(path.join(root, "extra.js"), "extra");
-    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /differs/);
+    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /unexpected: extra\.js/);
+    await rm(executable);
+    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /missing: bin\/node/);
   } finally {
     await rm(appRoot, { recursive: true, force: true });
   }

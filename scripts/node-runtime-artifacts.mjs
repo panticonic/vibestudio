@@ -72,12 +72,28 @@ export async function assertNodeRuntimeArtifacts(appRoot, target = nodeRuntimeTa
     receipt.version !== 1 ||
     receipt.nodeVersion !== NODE_RUNTIME_VERSION ||
     receipt.archive !== target.archive ||
-    receipt.archiveSha256 !== target.sha256 ||
-    JSON.stringify(receipt.files) !== JSON.stringify(await inventory(root))
+    receipt.archiveSha256 !== target.sha256
   )
     throw new Error(
       `Installed Node runtime differs from its verified distribution: ${target.platform}-${target.arch}`
     );
+  const actual = await inventory(root);
+  const expected = receipt.files ?? {};
+  const differences = [...new Set([...Object.keys(expected), ...Object.keys(actual)])]
+    .sort()
+    .filter((file) => JSON.stringify(expected[file]) !== JSON.stringify(actual[file]));
+  if (differences.length) {
+    const details = differences
+      .slice(0, 20)
+      .map(
+        (file) =>
+          `${!Object.hasOwn(actual, file) ? "missing" : !Object.hasOwn(expected, file) ? "unexpected" : "changed"}: ${file}`
+      );
+    throw new Error(
+      `Installed Node runtime differs from its verified distribution: ${target.platform}-${target.arch}; ` +
+        `${differences.length} file(s): ${details.join("; ")}`
+    );
+  }
   const executable = path.join(root, nodeRuntimeExecutable(target));
   if (!(await lstat(executable)).isFile())
     throw new Error(`Installed Node executable is missing: ${executable}`);
