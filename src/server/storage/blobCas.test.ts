@@ -7,6 +7,7 @@ import {
   blobCasPath,
   ensureBlobCasLayout,
   linkBlobFile,
+  linkReconstructableBlobFile,
   putBlobBytes,
   putBlobBytesSync,
   verifyBlob,
@@ -45,6 +46,36 @@ describe("blobCas", () => {
     expect(sync.mock.invocationCallOrder.some((order) => order > linkOrder!)).toBe(
       process.platform !== "win32"
     );
+  });
+
+  it("publishes readonly reconstructable content without a writable flush handle", async () => {
+    const bytes = Buffer.from("immutable reconstructable content");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const source = path.join(rootDir, "readonly-source");
+    await fsp.writeFile(source, bytes);
+    await fsp.chmod(source, 0o444);
+    const open = vi.spyOn(fsp, "open");
+    const target = await linkReconstructableBlobFile(rootDir, digest, source, bytes.length);
+    expect(await fsp.readFile(target)).toEqual(bytes);
+    expect((await fsp.stat(source)).mode & 0o222).toBe(0);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("rejects a same-size corrupt reconstructable destination that wins publication", async () => {
+    const bytes = Buffer.from("valid");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const source = path.join(rootDir, "source");
+    await fsp.writeFile(source, bytes);
+    const destination = blobCasPath(rootDir, digest);
+    const link = fsp.link.bind(fsp);
+    vi.spyOn(fsp, "link").mockImplementationOnce(async (from, to) => {
+      await fsp.writeFile(to, "wrong");
+      await link(from, to);
+    });
+    await expect(
+      linkReconstructableBlobFile(rootDir, digest, source, bytes.length)
+    ).rejects.toThrow("CAS object digest mismatch");
+    expect(await fsp.readFile(destination, "utf8")).toBe("wrong");
   });
 
   it("applies the same durable publication protocol to already-hashed files", async () => {
