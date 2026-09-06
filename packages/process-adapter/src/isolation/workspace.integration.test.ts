@@ -145,6 +145,7 @@ describe("shared workspace runtime on the native platform", () => {
     await writeFile(
       entry,
       `
+      const { stripVTControlCharacters } = require('node:util');
       let terminal;
       let output = '';
       let outputBytes = 0;
@@ -165,7 +166,10 @@ describe("shared workspace runtime on the native platform", () => {
             if (start < 0) break;
             const end = output.indexOf('\\n', start);
             if (end < 0) break;
-            const record = output.slice(start + 'PTY_RESULT:'.length, end).trim();
+            // A PTY carries terminal rendering, not a plain JSON pipe. ConPTY
+            // appends VT erase/cursor sequences. Decode the complete line so
+            // sequences split across onData chunks are handled together.
+            const record = stripVTControlCharacters(output.slice(start + 'PTY_RESULT:'.length, end)).trim();
             output = output.slice(end + 1);
             process.send(JSON.parse(record));
           }
