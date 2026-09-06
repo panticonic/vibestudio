@@ -97,7 +97,7 @@ it.each([
         constructor(ctx) { this.sql = ctx.storage.sql; this.sql.exec('CREATE TABLE IF NOT EXISTS count (value INTEGER)'); }
         fetch() { this.sql.exec('INSERT INTO count VALUES (1)'); return new Response(String(this.sql.exec('SELECT count(*) AS n FROM count').one().n)); }
       }
-      export default { fetch(req, env) { return env.COUNTER.get(env.COUNTER.idFromName('test')).fetch(req); } };`;
+      export default { fetch(req, env) { if (new URL(req.url).pathname === '/ready') return new Response('ready'); return env.COUNTER.get(env.COUNTER.idFromName('test')).fetch(req); } };`;
         fields = `bindings = [(name = "COUNTER", durableObjectNamespace = "Counter")], durableObjectNamespaces = [(className = "Counter", uniqueKey = "${internalDoUniqueKey("@vibestudio/internal", "Counter")}", enableSql = true)], durableObjectStorage = (localDisk = "storage"),`;
       } else if (facet) {
         const facetSource = `export class Counter {
@@ -112,7 +112,7 @@ it.each([
             return facet.fetch(req);
           }
         }
-        export default { fetch(req, env) { return env.COUNTER.get(env.COUNTER.idFromName('test')).fetch(req); } };`;
+        export default { fetch(req, env) { if (new URL(req.url).pathname === '/ready') return new Response('ready'); return env.COUNTER.get(env.COUNTER.idFromName('test')).fetch(req); } };`;
         fields = `compatibilityFlags = ["experimental"], bindings = [(name = "LOADER", workerLoader = (id = "facets")), (name = "COUNTER", durableObjectNamespace = "UniversalDO")], durableObjectNamespaces = [(className = "UniversalDO", uniqueKey = "${UNIVERSAL_DO_UNIQUE_KEY}", enableSql = true)], durableObjectStorage = (localDisk = "storage"),`;
       } else if (feature === "workerLoader") {
         source = `export default { async fetch(req, env) {
@@ -161,7 +161,9 @@ it.each([
             `${feature}: workerd exited ${child.exitCode ?? child.signalCode}: ${failure?.message ?? ""}\n${stderr}\n${stdout}`
           );
         try {
-          response = await fetch(endpoint, { signal: AbortSignal.timeout(1000) });
+          response = await fetch(sqlite ? `${endpoint}/ready` : endpoint, {
+            signal: AbortSignal.timeout(1000),
+          });
           break;
         } catch {
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -169,6 +171,11 @@ it.each([
       }
       if (!response) throw new Error(`${feature}: workerd never served HTTP\n${stderr}\n${stdout}`);
       if (sqlite) {
+        expect(response.status, stderr).toBe(200);
+        expect(await response.text()).toBe("ready");
+        // Retried readiness requests must never increment the durable counter.
+        // Submit each database operation once, after the listener is available.
+        response = await fetch(endpoint, { signal: AbortSignal.timeout(10000) });
         const files = (await readdir(storageRoot, { recursive: true })).map((file) =>
           path.join(storageRoot, file)
         );
