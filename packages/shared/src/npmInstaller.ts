@@ -7,9 +7,9 @@ import {
   assertNativePrerequisites,
   compileNativeLaunch,
 } from "@vibestudio/process-adapter/native-launch";
-import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
-import { nativeWorkspaceCleanup } from "./nativeWorkspaceCleanup.js";
-import { getNativeExecutionInstallation } from "./runtimePaths.js";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
+import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
+import { getNativeExecutionInstallation } from "@vibestudio/shared/runtimePaths";
 
 const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 let npmInstallTail: Promise<void> = Promise.resolve();
