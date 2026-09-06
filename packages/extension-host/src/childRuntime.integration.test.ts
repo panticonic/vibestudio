@@ -168,7 +168,7 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
         },
         {
           platform: "linux",
-          launcher: "/usr/bin/bwrap",
+          launcher: path.resolve("dist/mxc/linux-x64/lxc-exec"),
           workspaceEntry: path.join(runtime, "workspaceChild.js"),
         }
       );

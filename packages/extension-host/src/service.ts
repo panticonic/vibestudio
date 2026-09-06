@@ -1421,36 +1421,31 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return `${extensionName}\x00${requestId}`;
   }
 
-  /**
-   * Pure lookup for the invoke path — never installs or builds.
-   * Returns the running-eligible registry entry, or null. Trust is granted at
-   * declaration time (startup / meta-change reconcile), not at invocation.
-   */
-  private lookupForInvoke(name: string): RegistryEntry | null {
+  /** Resolve declared identity independently of build/activation state. A short
+   * name must remain unique even when one colliding declaration is unbuilt. */
+  private resolveInvocationEntry(name: string): RegistryEntry | null {
     const direct = this.registry.get(name);
-    if (direct?.activeBundleKey) return direct;
-    // Invocation accepts the canonical name, short name, or source repo.
-    // identifiers. Resolve those from the active registry itself; graph lookup
-    // only understands canonical names/paths and previously made the advertised
-    // short-name contract false (e.g. `local-models`). Require uniqueness so a
-    // basename collision can never route an invocation to the wrong extension.
+    if (direct) return direct;
     const aliasMatches = this.registry.list().filter((entry) => {
       const source = entry.source.repo.replace(/^workspace\//u, "").replace(/\/+$/u, "");
       const shortName =
         source.split("/").filter(Boolean).at(-1) ??
         entry.name.split("/").filter(Boolean).at(-1) ??
         entry.name;
-      return (name === source || name === shortName) && Boolean(entry.activeBundleKey);
+      return name === source || name === shortName;
     });
+    if (aliasMatches.length > 1) return null;
     if (aliasMatches.length === 1) return aliasMatches[0] ?? null;
-    let resolvedName = name;
     try {
-      resolvedName = this.findExtensionNode(name).name;
+      return this.registry.get(this.findExtensionNode(name).name) ?? null;
     } catch {
-      // Not a known extension unit — fall back to a direct registry lookup so
-      // a stale name still yields a clean ENOEXT rather than throwing here.
+      return null;
     }
-    const entry = this.registry.get(resolvedName);
+  }
+
+  /** Pure eligibility lookup: declaration reconciliation owns trust. */
+  private lookupForInvoke(name: string): RegistryEntry | null {
+    const entry = this.resolveInvocationEntry(name);
     return entry?.activeBundleKey ? entry : null;
   }
 
@@ -1461,16 +1456,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    */
   private async prepareTargetBuild(nameOrProvider: string): Promise<void> {
     const requestedName = this.deps.resolveProviderExtensionName(nameOrProvider) ?? nameOrProvider;
-    if (this.lookupForInvoke(requestedName)) return;
-
-    let node: ReturnType<ExtensionHost["findExtensionNode"]>;
-    try {
-      node = this.findExtensionNode(requestedName);
-    } catch {
-      return;
-    }
-    const entry = this.registry.get(node.name);
+    const entry = this.resolveInvocationEntry(requestedName);
     if (!entry || entry.activeBundleKey || entry.status !== "available") return;
+    const node = this.findExtensionNode(entry.name);
     const declaration = this.lastDeclared.find((candidate) => {
       try {
         return this.findExtensionNode(candidate.source).name === node.name;
@@ -1499,14 +1487,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * callable while an update is prepared.
    */
   private async waitForTargetActivation(name: string, signal?: AbortSignal): Promise<void> {
-    let canonicalName = name;
-    try {
-      canonicalName = this.findExtensionNode(name).name;
-    } catch {
-      // Unknown and undeclared names retain the normal fail-fast ENOEXT path.
-    }
-    const entry = this.registry.get(canonicalName);
+    const entry = this.resolveInvocationEntry(name);
     if (!entry || entry.activeBundleKey || entry.status !== "building") return;
+    const canonicalName = entry.name;
     const activation = this.activationTails.get(canonicalName);
     if (activation) {
       if (!signal) {

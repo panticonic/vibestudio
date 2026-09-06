@@ -5,6 +5,10 @@ import path from "node:path";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
 
 it("runs the production disk receiver inside the workspace resource boundary", async () => {
+  // This same fixture is run with Electron's Node mode to cover its distinct
+  // shared-library report and resource directory, not just the system Node ABI.
+  if (process.env["ELECTRON_RUN_AS_NODE"] === "1")
+    expect(process.versions["electron"]).toBeTruthy();
   const root = await mkdtemp(path.join(tmpdir(), "native-workspace-receiver-"));
   const statePath = path.join(root, "state");
   const sourceRoot = path.join(statePath, "source");

@@ -41,7 +41,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Linux sandbox runtime
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap slirp4netns
 
       - name: Install the reviewed Rust toolchain
         run: |
@@ -65,6 +65,12 @@ jobs:
 
       - name: Production host builds without userland source
         run: pnpm test:host-build-without-workspace
+
+      - name: Production Electron Node-mode native workspace receiver
+        run: ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron node_modules/vitest/vitest.mjs run src/server/nativeWorkspaceRuntime.integration.test.ts
+
+      - name: Linux native Claude launch contract
+        run: pnpm vitest run packages/shared/src/claudeReadOnlyLaunch.test.ts
 
       - name: Native Iroh remote transport
         run: pnpm test:remote-transport
@@ -141,11 +147,9 @@ jobs:
             target: linux-x64
           - runner: ubuntu-22.04-arm
             target: linux-arm64
-          - runner: macos-15-intel
-            target: darwin-x64
           - runner: macos-14
             target: darwin-arm64
-          - runner: windows-2022
+          - runner: windows-2025
             target: win32-x64
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -175,14 +179,14 @@ jobs:
 
       - name: Install bubblewrap
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap slirp4netns
 
       - name: Install the reviewed Rust toolchain
         run: |
           rustup set profile minimal
           rustup default 1.95.0
 
-      - name: Build native storage cleanup and admission
+      - name: Build MXC executor and native storage cleanup helper
         run: node scripts/build-native-isolation.mjs
 
       - name: Verify the Windows helper needs no Visual C++ redistributable
@@ -209,10 +213,19 @@ jobs:
       - name: Check native confinement and workspace sharing
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
 
+      - name: Assemble immutable native release input
+        shell: bash
+        run: |
+          input="native/isolation/artifacts/native-isolation-${{ matrix.target }}"
+          mkdir -p "$input"
+          cp "dist/mxc/${{ matrix.target }}"/* "$input"/
+          cp dist/native/${{ matrix.target }}/vibestudio-isolation* "$input"/
+          cp "dist/native/${{ matrix.target }}/manifest.json" "$input/cleanup-manifest.json"
+
       - name: Upload tested native release input
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-isolation-${{ matrix.target }}
-          path: dist/native/${{ matrix.target }}/
+          path: native/isolation/artifacts/native-isolation-${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 30

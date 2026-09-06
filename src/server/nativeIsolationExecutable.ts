@@ -8,5 +8,5 @@ export function nativeIsolationExecutable(
 ): string {
   const target = targets.find((entry) => entry.platform === platform && entry.arch === arch);
   if (!target) throw new Error(`Unsupported native isolation target: ${platform}-${arch}`);
-  return getPhysicalAppPath(appRoot, target.artifact);
+  return getPhysicalAppPath(appRoot, target.cleanupArtifact);
 }

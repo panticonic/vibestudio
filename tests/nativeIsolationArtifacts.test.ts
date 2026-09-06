@@ -57,13 +57,15 @@ describe("native isolation artifact matrix", () => {
     );
   });
 
-  it("accepts the complete five-target matrix and returns binary plus manifest descriptors", () => {
+  it("accepts the complete supported-target matrix and returns binary plus manifest descriptors", () => {
     const { root, artifactRoot } = fixture();
     writeArtifacts(root, artifactRoot);
     const descriptors = assertNativeIsolationArtifacts(root, artifactRoot);
-    expect(descriptors).toHaveLength(NATIVE_ISOLATION_TARGETS.length * 2);
+    expect(descriptors).toHaveLength(
+      NATIVE_ISOLATION_TARGETS.reduce((total, target) => total + target.mxcFiles.length + 3, 0)
+    );
     expect(descriptors.filter(({ artifact }) => artifact.endsWith("manifest.json"))).toHaveLength(
-      5
+      NATIVE_ISOLATION_TARGETS.length * 2
     );
   });
 
@@ -128,6 +130,23 @@ describe("native isolation artifact matrix", () => {
         target.artifact.replace(/[^/]+$/, "manifest.json")
       );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
+      const cleanupSource = path.join(
+        artifactRoot,
+        "native-isolation-linux-arm64",
+        path.basename(target.cleanupArtifact)
+      );
+      const cleanupInstalled = path.join(resources, "app.asar.unpacked", target.cleanupArtifact);
+      mkdirSync(path.dirname(cleanupInstalled), { recursive: true });
+      writeFileSync(cleanupInstalled, readFileSync(cleanupSource));
+      chmodSync(cleanupInstalled, 0o755);
+      writeFileSync(
+        path.join(
+          resources,
+          "app.asar.unpacked",
+          target.cleanupArtifact.replace(/[^/]+$/, "manifest.json")
+        ),
+        readFileSync(path.join(artifactRoot, "native-isolation-linux-arm64/cleanup-manifest.json"))
+      );
       expect(() => assertPackagedNativeIsolation(resources, context as never)).not.toThrow();
       writeFileSync(installed, Buffer.from("changed"));
       expect(() => assertPackagedNativeIsolation(resources, context as never)).toThrow(/differs/);
@@ -150,8 +169,8 @@ describe("native isolation artifact matrix", () => {
       const artifactPath = path.join(inputRoot, path.basename(target.artifact));
       const manifestPath = path.join(inputRoot, "manifest.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-      if (kind === "source") manifest.sourceDigest = "wrong";
-      if (kind === "target") manifest.rustTarget = "wrong-target";
+      if (kind === "source") manifest.sdkVersion = "0.7.0";
+      if (kind === "target") manifest.binary = "wrong-binary";
       if (kind === "checksum") writeFileSync(artifactPath, Buffer.from("tampered"));
       if (kind === "machine") {
         const wrong = binary(NATIVE_ISOLATION_TARGETS[1]!);

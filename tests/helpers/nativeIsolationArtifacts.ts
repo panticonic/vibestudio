@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   NATIVE_ISOLATION_TARGETS,
-  NATIVE_ISOLATION_RUST_VERSION,
+  MXC_SDK_VERSION,
   nativeIsolationSourceDigest,
 } from "../../scripts/native-isolation-artifacts.mjs";
 
@@ -50,15 +50,31 @@ export function writeNativeIsolationArtifacts(
   const sourceDigest = nativeIsolationSourceDigest(root);
   for (const target of targets) {
     const inputRoot = path.join(artifactRoot, `native-isolation-${target.platform}-${target.arch}`);
-    const artifact = path.join(inputRoot, path.basename(target.artifact));
     mkdirSync(inputRoot, { recursive: true });
     const bytes = nativeIsolationBinary(target);
-    writeFileSync(artifact, bytes);
+    for (const file of target.mxcFiles) writeFileSync(path.join(inputRoot, file), bytes);
+    writeFileSync(path.join(inputRoot, path.basename(target.cleanupArtifact)), bytes);
     writeFileSync(
       path.join(inputRoot, "manifest.json"),
       JSON.stringify({
         version: 1,
-        rustVersion: NATIVE_ISOLATION_RUST_VERSION,
+        sdk: "@microsoft/mxc-sdk",
+        sdkVersion: MXC_SDK_VERSION,
+        binary: target.mxcBinary,
+        files: Object.fromEntries(
+          target.mxcFiles.map((file: string) => [
+            file,
+            createHash("sha256").update(bytes).digest("hex"),
+          ])
+        ),
+        binaryDigest: createHash("sha256").update(bytes).digest("hex"),
+      })
+    );
+    writeFileSync(
+      path.join(inputRoot, "cleanup-manifest.json"),
+      JSON.stringify({
+        version: 1,
+        rustVersion: "1.95.0",
         rustTarget: target.rustTarget,
         sourceDigest,
         binaryDigest: createHash("sha256").update(bytes).digest("hex"),

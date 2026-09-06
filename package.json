@@ -183,6 +183,7 @@
     "vitest": "^3.2.7"
   },
   "dependencies": {
+    "@microsoft/mxc-sdk": "0.8.0",
     "@panticonic/builtin": "workspace:*",
     "@number0/iroh": "1.1.0",
     "@vibestudio/automation": "workspace:*",

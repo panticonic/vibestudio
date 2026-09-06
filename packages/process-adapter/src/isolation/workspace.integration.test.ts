@@ -12,17 +12,9 @@ import type { ExecutionPolicy } from "./policy.js";
 const sandboxes: WorkspaceSandbox[] = [];
 const directories: string[] = [];
 const listeners: Server[] = [];
-const hostTerminalCleanup: Array<() => Promise<void>> = [];
-const storageOwners: Array<{
-  root: string;
-  installation: import("./index.js").IsolationInstallation;
-}> = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   const stops = await Promise.allSettled(sandboxes.splice(0).map((sandbox) => sandbox.stop()));
-  const terminalStops = await Promise.allSettled(
-    hostTerminalCleanup.splice(0).map((cleanup) => cleanup())
-  );
   await Promise.all(
     listeners
       .splice(0)
@@ -31,18 +23,14 @@ afterEach(async () => {
   const unfinished = stops.find(
     (result) => result.status === "rejected" || !result.value.launcherExited
   );
-  const unfinishedTerminal = terminalStops.find((result) => result.status === "rejected");
-  if (unfinished || unfinishedTerminal) {
+  if (unfinished) {
     // Keep residual paths private and unique instead of deleting resources
     // while a launcher may still own them. Every other cleanup was attempted.
     directories.length = 0;
-    storageOwners.length = 0;
     throw new Error("A native fixture process did not retire", {
-      cause: unfinished ?? unfinishedTerminal,
+      cause: unfinished,
     });
   }
-  for (const owner of storageOwners.splice(0))
-    await WorkspaceSandbox.retireStorage(owner.root, owner.installation);
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
 });
@@ -95,35 +83,9 @@ describe("shared workspace sandbox on the native platform", () => {
     // Copy the installed package's actual native loader closure into this
     // workspace, rather than exposing the host node_modules tree or a PTY.
     const require = createRequire(import.meta.url);
-    let hostTty: string | null = null;
-    let hostTerminalPid: number | null = null;
-    if (platform === "darwin") {
-      const terminal = (require("node-pty") as typeof import("node-pty")).spawn(
-        process.execPath,
-        [
-          "-e",
-          `process.stdout.write('HOST_TTY:' + require('node:child_process').execFileSync('/usr/bin/tty', { stdio: ['inherit', 'pipe', 'pipe'] })); setTimeout(() => process.exit(0), 30000);`,
-        ],
-        { cwd: root, env: { PATH: "/usr/bin:/bin" } }
-      );
-      hostTerminalPid = terminal.pid;
-      let exited = false;
-      terminal.onExit(() => {
-        exited = true;
-      });
-      let output = "";
-      terminal.onData((data) => {
-        output = (output + data).slice(-4096);
-      });
-      hostTerminalCleanup.push(async () => {
-        if (!exited) terminal.kill();
-        await vi.waitFor(() => expect(exited).toBe(true), { timeout: 3000 });
-      });
-      await vi.waitFor(() => expect(output).toMatch(/HOST_TTY:(\/dev\/ttys[0-9]+)\r?\n/), {
-        timeout: 3000,
-      });
-      hostTty = /HOST_TTY:(\/dev\/ttys[0-9]+)\r?\n/.exec(output)![1]!;
-    }
+    // Stock MXC's macOS policy permits host PTY slave access. Host-terminal
+    // denial is intentionally outside the accepted MXC containment contract;
+    // this fixture verifies workspace PTY functionality and file confinement.
     const installedPty = path.dirname(require.resolve("node-pty/package.json"));
     const ptyRoot = path.join(runtime, "node_modules", "node-pty");
     await mkdir(ptyRoot, { recursive: true });
@@ -161,18 +123,6 @@ describe("shared workspace sandbox on the native platform", () => {
         let inputWriteDenied = false;
         try { fs.readFileSync(${JSON.stringify(hostCanary)}); } catch { hostDenied = true; }
         try { fs.writeFileSync(__filename, 'tampered'); } catch { inputWriteDenied = true; }
-        const hostTty = ${JSON.stringify(hostTty)};
-        if (hostTty) {
-          const denied = mode => {
-            try { const fd = fs.openSync(hostTty, mode); fs.closeSync(fd); return false; }
-            catch (error) { return error.code === 'EACCES' || error.code === 'EPERM'; }
-          };
-          emit({ hostTtyReadDenied: denied('r'), hostTtyWriteDenied: denied('r+') });
-          let hostSignalDenied = false;
-          try { process.kill(${JSON.stringify(hostTerminalPid)}, 0); }
-          catch (error) { hostSignalDenied = error.code === 'EPERM'; }
-          emit({ hostSignalDenied });
-        }
         emit({ input: line, ...dimensions() });
         emit({ hostDenied, inputWriteDenied });
       });
@@ -220,20 +170,18 @@ describe("shared workspace sandbox on the native platform", () => {
     `
     );
     const launcher = await realpath(
-      platform === "linux"
-        ? "/usr/bin/bwrap"
-        : platform === "darwin"
-          ? "/usr/bin/sandbox-exec"
-          : fileURLToPath(
-              new URL("../../../../dist/native/win32-x64/vibestudio-isolation.exe", import.meta.url)
-            )
+      fileURLToPath(
+        new URL(
+          `../../../../dist/mxc/${platform}-${process.arch}/${platform === "win32" ? "wxc-exec.exe" : platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
+          import.meta.url
+        )
+      )
     );
     const installation = {
       platform,
       launcher,
       workspaceEntry: path.join(runtime, "workspaceChild.js"),
     };
-    storageOwners.push({ root: privateRoot, installation });
     const sandbox = await WorkspaceSandbox.start(
       {
         version: 1,
@@ -294,9 +242,6 @@ describe("shared workspace sandbox on the native platform", () => {
           if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);
           expect(records).toContainEqual({ input: "workspace-input", columns: 120, rows: 40 });
           expect(records).toContainEqual({ hostDenied: true, inputWriteDenied: true });
-          if (hostTty)
-            expect(records).toContainEqual({ hostTtyReadDenied: true, hostTtyWriteDenied: true });
-          if (hostTty) expect(records).toContainEqual({ hostSignalDenied: true });
         },
         { timeout: 5000 }
       );
@@ -340,13 +285,12 @@ describe("shared workspace sandbox on the native platform", () => {
       throw new Error(`No confinement backend for ${platform}`);
     }
     const launcher = await realpath(
-      platform === "linux"
-        ? "/usr/bin/bwrap"
-        : platform === "darwin"
-          ? "/usr/bin/sandbox-exec"
-          : fileURLToPath(
-              new URL("../../../../dist/native/win32-x64/vibestudio-isolation.exe", import.meta.url)
-            )
+      fileURLToPath(
+        new URL(
+          `../../../../dist/mxc/${platform}-${process.arch}/${platform === "win32" ? "wxc-exec.exe" : platform === "darwin" ? "mxc-exec-mac" : "lxc-exec"}`,
+          import.meta.url
+        )
+      )
     );
     const starts = await Promise.allSettled(
       ["A", "B"].map(async (id) => {
@@ -462,7 +406,6 @@ describe("shared workspace sandbox on the native platform", () => {
           launcher,
           workspaceEntry: path.join(runtime, "workspaceChild.js"),
         };
-        storageOwners.push({ root: privateRoot, installation: launch });
         const sandbox = await WorkspaceSandbox.start(policy, launch);
         sandboxes.push(sandbox);
         return { sandbox, entry, id, policy, launch };

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { darwinProfile } from "./darwin.js";
-import { linuxArguments } from "./linux.js";
+import type { ContainerConfig } from "@microsoft/mxc-sdk";
 import {
   executionEnvironment,
   IsolationError,
@@ -13,7 +12,7 @@ export { IsolationError, validateExecutionPolicy, type ExecutionPolicy } from ".
 
 export interface IsolationInstallation {
   platform: "linux" | "darwin" | "win32";
-  /** Absolute path from the installed product, never from guest PATH. */
+  /** Absolute path to the pinned, installed MXC executable, never guest PATH. */
   launcher: string;
 }
 
@@ -22,15 +21,18 @@ export interface CompiledExecution {
   args: string[];
   cwd: string;
   environment: Record<string, string>;
-  /** The installed owner seals these outside all guest-readable/writable roots. */
-  controlFiles: readonly { path: string; contents: string; mode: 0o600 }[];
-  /** Mechanism facts, not a claim that a process has been admitted or started. */
-  mechanism: "linux-namespaces" | "macos-seatbelt" | "windows-lpac-job";
+  mechanism: "mxc-process";
 }
 
-/** Compile already-resolved resources. The caller remains responsible for
- * protected admission, anchored filesystem resources and an owned lifetime.
- * In particular, the macOS profile by itself does not own daemonized children. */
+/** MXC accepts a command line rather than argv. Unix uses shell words; Windows
+ * uses the CreateProcess/CRT quoting contract. Never interpolate command data. */
+function quoteArgument(value: string, platform: IsolationInstallation["platform"]): string {
+  if (platform !== "win32") return "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  return '\"' + value.replace(/(\\*)"/gu, '$1$1\\"').replace(/(\\+)$/u, "$1$1") + '\"';
+}
+
+/** Translate application-owned resource admission into MXC's public policy.
+ * MXC owns OS layout discovery, policy enforcement and native lifecycle. */
 export function compileExecution(
   policy: ExecutionPolicy,
   installation: IsolationInstallation
@@ -38,41 +40,59 @@ export function compileExecution(
   validateExecutionPolicy(policy, installation.platform);
   const paths = installation.platform === "win32" ? path.win32 : path.posix;
   if (!paths.isAbsolute(installation.launcher) || installation.launcher.includes("\0")) {
-    throw new IsolationError("The confinement launcher must be an installed absolute path");
+    throw new IsolationError("The MXC launcher must be an installed absolute path");
+  }
+  if (policy.sockets.length) {
+    throw new IsolationError(
+      "MXC socket admission is not implemented; use the workspace control channel"
+    );
   }
   const environment = executionEnvironment(policy, installation.platform);
-  if (installation.platform === "linux") {
-    return {
-      command: installation.launcher,
-      args: linuxArguments(policy),
+  const config: ContainerConfig = {
+    version: "0.8.0-alpha",
+    containment:
+      installation.platform === "linux"
+        ? "bubblewrap"
+        : installation.platform === "darwin"
+          ? "seatbelt"
+          : "processcontainer",
+    containerId:
+      "vibestudio-" +
+      createHash("sha256").update(JSON.stringify(policy.owner)).digest("hex").slice(0, 32),
+    process: {
+      commandLine: [policy.executable, ...policy.args]
+        .map((arg) => quoteArgument(arg, installation.platform))
+        .join(" "),
       cwd: policy.cwd,
-      environment: {},
-      controlFiles: [],
-      mechanism: "linux-namespaces",
-    };
-  }
-  if (installation.platform === "darwin") {
-    return {
-      command: installation.launcher,
-      args: ["-p", darwinProfile(policy), policy.executable, ...policy.args],
-      cwd: policy.cwd,
-      environment,
-      controlFiles: [],
-      mechanism: "macos-seatbelt",
-    };
-  }
-  if (policy.sockets.length)
-    throw new IsolationError("Unix socket resources cannot be passed to Windows admission");
-  const generation = createHash("sha256").update(policy.owner.incarnation).digest("hex");
-  const policyPath = paths.join(policy.privateRoot, `.isolation-${generation}.json`);
+      env: Object.entries(environment).map(([key, value]) => `${key}=${value}`),
+      timeout: 0,
+    },
+    filesystem: { readonlyPaths: [...policy.read], readwritePaths: [...policy.write] },
+    network: { egress: { default: "deny" }, ingress: { default: "deny", hostLoopback: "deny" } },
+    lifecycle: { destroyOnExit: true, preservePolicy: false },
+    ui: { disable: true, clipboard: "none", injection: false },
+    ...(installation.platform === "win32"
+      ? { processContainer: { leastPrivilege: false, capabilities: [] } }
+      : {}),
+    ...(installation.platform === "darwin"
+      ? { seatbelt: { nestedPty: true, keychainAccess: false } }
+      : {}),
+  };
   return {
     command: installation.launcher,
-    args: [policyPath],
+    args: ["--config-base64", Buffer.from(JSON.stringify(config)).toString("base64")],
     cwd: policy.cwd,
-    environment: {},
-    controlFiles: [
-      { path: policyPath, contents: JSON.stringify({ ...policy, environment }), mode: 0o600 },
-    ],
-    mechanism: "windows-lpac-job",
+    // MXC's Windows ACL lifecycle journal is host-owned. These coordinates
+    // belong only to its launcher; process.env above stays workspace-scoped.
+    environment:
+      installation.platform === "win32"
+        ? Object.fromEntries(
+            ["SystemRoot", "USERPROFILE", "LOCALAPPDATA"].flatMap((key) => {
+              const value = process.env[key];
+              return value === undefined ? [] : [[key, value]];
+            })
+          )
+        : { PATH: "/usr/bin:/bin" },
+    mechanism: "mxc-process",
   };
 }
