@@ -7,6 +7,8 @@ import {
   type UserlandDependencyProjection,
 } from "./lib/userland-dependency-projection.js";
 import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
+import { buildNativeIsolation } from "./build-native-isolation.mjs";
+import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
@@ -19,6 +21,10 @@ const workspaceRoot = path.resolve(
     : requireDevelopmentBaseCheckout(appRoot)
 );
 const compiler = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
+// This checkout command installs workspace-declared dependencies before a host
+// build exists. Prepare the same installed toolchain used by runtime installs.
+buildNativeIsolation(appRoot);
+await stageNodeRuntime(appRoot);
 const projection = await prepareUserlandDependencyProjection({
   appRoot,
   workspaceRoot,

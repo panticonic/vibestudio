@@ -41,5 +41,21 @@ security default-keychain -d user -s "$keychain_path"
 # Do not accidentally find a stale Electron item in another runner keychain.
 # System trust roots remain in the separate system keychain domain.
 security list-keychains -d user -s "$keychain_path"
+# Contract: electron/electron v43.2.0 shell/browser/electron_browser_main_parts.cc
+# and chromium 150.0.7871.129 components/os_crypt/common/keychain_password_mac.mm.
+# Electron names its generic-password item from app.getName(); our
+# branded desktop sets "Vibestudio". Seed only synthetic CI encryption material.
+# Chromium generates this same Base64-encoded 128-bit password on first use.
+# Provisioning an exact application ACL prevents a first-use Keychain dialog
+# from blocking the unattended main thread. Never use security's allow-all -A.
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+electron_binary=$(node --input-type=module -e '
+  const {resolveElectronExecutableForVibestudio} = await import(process.argv[1]);
+  process.stdout.write(resolveElectronExecutableForVibestudio());
+' "$script_dir/branded-electron.mjs")
+safe_storage_password=$(openssl rand -base64 16)
+security add-generic-password -a Vibestudio -s 'Vibestudio Safe Storage' \
+  -w "$safe_storage_password" -T "$electron_binary" "$keychain_path"
+unset safe_storage_password
 echo '[desktop-smoke] Using an isolated unlocked macOS test keychain'
 "$@"
