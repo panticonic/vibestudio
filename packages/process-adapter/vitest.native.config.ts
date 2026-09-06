@@ -1,14 +1,16 @@
 import { defineConfig } from "vitest/config";
 
-// Runs without the host application or Base checkout. These are real native
-// denial checks: a missing/unsupported launcher is a failure, never a skip.
+// Requires the production host build, but no Base checkout or provider credentials.
+// Missing/unsupported launchers and broken networking fail acceptance; never skip.
 export default defineConfig({
   test: {
     include: [
       "packages/process-adapter/src/isolation/**/*.test.ts",
       "src/server/nativeWorkspaceCleanup.integration.test.ts",
       "src/server/nativeNetwork.integration.test.ts",
+      "src/server/nativeWorkspaceRuntime.integration.test.ts",
     ],
     fileParallelism: false,
+    testTimeout: 30_000,
   },
 });

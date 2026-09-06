@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+    inputs:
+      windows-runner:
+        type: string
+        default: windows-2025
+  workflow_dispatch:
+    inputs:
+      windows-runner:
+        description: Windows runner label (use a configured Windows 11 desktop runner for desktop acceptance)
+        type: string
+        default: windows-2025
+        required: true
 
 permissions: {}
 
@@ -45,6 +56,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Check packaged acceptance harness
+        run: node --test scripts/packaged-isolation-smoke.test.mjs
 
       - name: Type-check
         run: pnpm type-check
@@ -137,7 +151,7 @@ jobs:
           test "$(wc -l < SHA256SUMS-macos)" -eq 1
 
   native-isolation:
-    name: Native workspace isolation (${{ matrix.target }})
+    name: Native workspace isolation (${{ matrix.target }}, ${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
@@ -148,9 +162,15 @@ jobs:
             target: linux-arm64
           - runner: macos-14
             target: darwin-arm64
-          - runner: windows-2025
+            package: true
+          - runner: macos-26
+            target: darwin-arm64
+            additional: true
+          - runner: ${{ inputs.windows-runner || 'windows-2025' }}
             target: win32-x64
+            package: true
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -171,7 +191,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install test dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        run: pnpm install --frozen-lockfile
 
       - name: Build the native terminal dependency
         run: pnpm rebuild node-pty
@@ -183,16 +203,122 @@ jobs:
       - name: Stage MXC executor payload
         run: node scripts/build-native-isolation.mjs
 
-      - name: Build shared command host
-        run: pnpm --filter @vibestudio/process-adapter build
+      - name: Build production application and headless host
+        run: pnpm build
 
       - name: Check native confinement and workspace sharing
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
 
+      - name: Check Windows confinement as a standard user
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-native-standard-user.ps1
+
       - name: Upload tested native release input
+        if: ${{ !matrix.additional }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-isolation-${{ matrix.target }}
           path: dist/mxc/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Checkout Base for desktop integration
+        if: runner.os != 'Linux'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: panticonic/vibestudio-workspace-base
+          path: vibestudio-workspace-base
+          persist-credentials: false
+
+      - name: Desktop pairing, approvals, panels, relaunch, and recovery
+        if: runner.os != 'Linux'
+        run: node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+
+      - name: Assemble packaging input from tested payload
+        if: matrix.package
+        shell: bash
+        run: |
+          mkdir -p native/isolation/artifacts/native-isolation-${{ matrix.target }}
+          cp dist/mxc/${{ matrix.target }}/* native/isolation/artifacts/native-isolation-${{ matrix.target }}/
+
+      - name: Package the application
+        if: matrix.package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm exec electron-builder --dir --publish never
+
+      # A tar archive preserves executable modes and macOS framework symlinks.
+      - name: Archive installed application layout
+        if: matrix.package
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = macOS ]; then
+            tar -cf packaged-app.tar -C release/mac-arm64 Vibestudio.app
+          else
+            tar -cf packaged-app.tar -C release/win-unpacked .
+          fi
+
+      - name: Upload application for independent acceptance
+        if: matrix.package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: packaged-app-${{ matrix.target }}
+          path: packaged-app.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  packaged-acceptance:
+    name: Installed application (${{ matrix.target }}, ${{ matrix.runner }})
+    needs: native-isolation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: darwin-arm64
+            app: Vibestudio.app
+          - runner: macos-26
+            target: darwin-arm64
+            app: Vibestudio.app
+          - runner: ${{ inputs.windows-runner || 'windows-2025' }}
+            target: win32-x64
+            app: Vibestudio.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout test harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install test dependencies (no application build)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Download application built in another job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packaged-app-${{ matrix.target }}
+          path: candidate
+      - name: Extract application
+        shell: bash
+        run: |
+          mkdir installed
+          tar -xf candidate/packaged-app.tar -C installed
+      - name: Launch installed desktop and workspace containment smoke
+        run: node scripts/packaged-isolation-smoke.mjs --app "installed/${{ matrix.app }}" --out-dir test-results/packaged-isolation
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: packaged-acceptance-${{ matrix.runner }}
+          path: test-results/packaged-isolation
+          if-no-files-found: warn
+          retention-days: 7

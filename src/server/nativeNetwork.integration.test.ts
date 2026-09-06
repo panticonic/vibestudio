@@ -99,7 +99,7 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
     const http = require('node:http');
     const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
     const mode = process.argv[2];
-    const timer = setTimeout(() => process.exit(124), 10000);
+    const timer = setTimeout(() => process.exit(124), 25000);
     process.stdin.on('data', () => { clearTimeout(timer); process.exit(0); });
     process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
     const request = http.get({ host: '127.0.0.1', port: ${address.port}, path: '/' }, response => {
@@ -110,6 +110,25 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
     request.on('error', error => send({ type: 'outbound', connected: false, error: error.code }));
     request.setTimeout(1500, () => request.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
     if (mode === 'allow') {
+      let dnsLookup = false;
+      let trustWriteDenied = false;
+      try { require('node:fs').writeFileSync(process.env.NODE_EXTRA_CA_CERTS, 'tampered'); }
+      catch { trustWriteDenied = true; }
+      const internet = require('node:https').get('https://github.com/robots.txt', response => {
+        const tlsAuthenticated = response.socket.authorized === true;
+        let body = '';
+        response.on('data', data => {
+          body += data;
+          if (body.length > 65536) response.destroy(new Error('HTTPS fixture response exceeded 64 KiB'));
+        });
+        response.on('error', error => send({ type: 'internet', error: error.message }));
+        response.on('end', () => send({ type: 'internet', status: response.statusCode, tlsAuthenticated, dnsLookup, trustWriteDenied, robots: /user-agent/i.test(body) }));
+      });
+      internet.on('socket', socket => socket.on('lookup', (error, _address, _family, hostname) => {
+        if (!error && hostname === 'github.com') dnsLookup = true;
+      }));
+      internet.on('error', error => send({ type: 'internet', error: error.code + ': ' + error.message }));
+      internet.setTimeout(15000, () => internet.destroy(new Error('Public DNS/HTTPS probe timed out after 15 seconds')));
       const listener = http.createServer((_req, res) => res.end('sandbox-endpoint'));
       listener.on('error', error => send({ type: 'listener', listening: false, error: error.code }));
       listener.listen(0, '127.0.0.1', () => send({ type: 'listener', listening: true, port: listener.address().port }));
@@ -176,33 +195,27 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
       const inbound = listener["listening"]
         ? await request(listener["port"] as number)
         : { connected: false, error: String(listener["error"]) };
-      if (platform === "win32") {
-        // Stock AppContainer may refuse host-loopback even with open network
-        // capabilities. Record both directions; do not silently skip execution
-        // or claim Unix parity. Unexpected non-network failures still fail.
-        console.info("Windows MXC stock host-loopback conformance", {
-          outbound,
-          listener,
-          inbound,
-        });
-        const networkErrors = [
-          "EACCES",
-          "EPERM",
-          "ECONNREFUSED",
-          "ETIMEDOUT",
-          "EHOSTUNREACH",
-          "ENETUNREACH",
-        ];
-        if (!outbound["connected"]) expect(networkErrors).toContain(outbound["error"]);
-        else expect(outbound["body"]).toBe("host-endpoint");
-        if (!inbound.connected) expect(networkErrors).toContain(inbound.error);
-        else expect(inbound).toMatchObject({ body: "sandbox-endpoint" });
-      } else {
-        expect(outbound).toEqual({ type: "outbound", connected: true, body: "host-endpoint" });
-        expect(listener["listening"]).toBe(true);
-        expect(inbound).toEqual({ connected: true, body: "sandbox-endpoint" });
-        expect(hostRequests).toBe(before + 1);
-      }
+      expect(outbound).toEqual({ type: "outbound", connected: true, body: "host-endpoint" });
+      expect(listener["listening"]).toBe(true);
+      expect(inbound).toEqual({ connected: true, body: "sandbox-endpoint" });
+      expect(hostRequests).toBe(before + 1);
+      await vi.waitFor(
+        () => {
+          if (child.exitCode !== null)
+            throw new Error(`DNS/HTTPS probe exited ${child.exitCode}: ${stderr}`);
+          expect(records.some((value) => value["type"] === "internet")).toBe(true);
+        },
+        { timeout: 20000 }
+      );
+      const internet = records.find((value) => value["type"] === "internet")!;
+      expect(internet, `Native public DNS/HTTPS failure: ${JSON.stringify(internet)}`).toEqual({
+        type: "internet",
+        status: 200,
+        tlsAuthenticated: true,
+        dnsLookup: true,
+        trustWriteDenied: true,
+        robots: true,
+      });
     }
     await stopChild(record);
     expect(child.exitCode).toBe(0);

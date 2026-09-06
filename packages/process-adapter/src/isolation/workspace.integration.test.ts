@@ -467,9 +467,7 @@ describe("shared workspace sandbox on the native platform", () => {
         symlinkHostReadDenied: true,
         descendant: 0,
       });
-      // Stock Unix backends share open networking. Windows AppContainer may
-      // still refuse host loopback; this is an OS limitation, not app policy.
-      if (platform !== "win32") expect(firstMessage).toMatchObject({ networkConnected: true });
+      expect(firstMessage).toMatchObject({ networkConnected: true });
       expect(secondMessage).toEqual(firstMessage);
       const changed = message(first);
       first.postMessage({ write: "shared-by-commands" });
@@ -511,6 +509,6 @@ describe("shared workspace sandbox on the native platform", () => {
       siblingDenied: true,
       anchorRenameDenied: true,
     });
-    if (platform !== "win32") expect(hostConnections).toBeGreaterThan(0);
+    expect(hostConnections).toBeGreaterThan(0);
   }, 20_000);
 });
