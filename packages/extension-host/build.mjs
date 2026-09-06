@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 
@@ -66,6 +67,6 @@ if (PUBLISH) {
   execFileSync(
     process.execPath,
     [tscBin, "--project", "tsconfig.build.json", "--emitDeclarationOnly"],
-    { stdio: "inherit", cwd: path.dirname(new URL(import.meta.url).pathname) }
+    { stdio: "inherit", cwd: path.dirname(fileURLToPath(import.meta.url)) }
   );
 }

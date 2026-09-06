@@ -1,6 +1,7 @@
 import { copyFileSync, chmodSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { Arch } from "electron-builder";
+import { prepareNativeDependencyFiles } from "./native-host-dependencies.mjs";
 import {
   nativeIsolationTarget,
   nativeIsolationBinaryDigest,
@@ -18,6 +19,11 @@ function electronNativeArtifacts(context) {
 }
 
 export default function stageElectronNativeIsolation(context) {
+  prepareNativeDependencyFiles({
+    cwd: context.packager.projectDir,
+    platform: context.electronPlatformName,
+    arch: Arch[context.arch],
+  });
   for (const { source, artifact } of electronNativeArtifacts(context)) {
     const appRoot = context.packager.projectDir;
     const destination = path.join(appRoot, artifact);

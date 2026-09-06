@@ -1,5 +1,6 @@
 import * as esbuild from "esbuild";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
+import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
 import * as fs from "fs";
 import * as path from "path";
 import { execFileSync } from "node:child_process";
@@ -23,6 +24,7 @@ import {
 } from "./scripts/host-build-fingerprint.mjs";
 
 if (process.argv.includes("--production")) process.env.NODE_ENV = "production";
+prepareNativeDependencyFiles();
 const isDev = process.env.NODE_ENV === "development";
 
 const logOverride = {
