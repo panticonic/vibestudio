@@ -63,8 +63,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install Linux sandbox runtime
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Install Linux sandbox and desktop credential runtimes
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap gnome-keyring dbus-x11
 
       - name: Allow bundled MXC user namespace under AppArmor
         run: |
