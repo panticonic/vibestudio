@@ -155,6 +155,20 @@ it.each([
         }
       }
       if (!response) throw new Error(`${feature}: workerd never served HTTP\n${stderr}\n${stdout}`);
+      if (sqlite) {
+        const files = (await readdir(storageRoot, { recursive: true })).map((file) =>
+          path.join(storageRoot, file)
+        );
+        console.log(
+          "[workerd native storage]",
+          JSON.stringify({
+            feature,
+            root: storageRoot,
+            rootLength: storageRoot.length,
+            files: files.map((file) => ({ path: file, length: file.length })),
+          })
+        );
+      }
       expect(response.status, stderr).toBe(200);
       expect(await response.text(), stderr).toBe(
         feature === "nodejs"
