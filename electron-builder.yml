@@ -112,6 +112,10 @@ dmg:
 # Windows configuration
 win:
   # Preserve the stock distribution, independent of node_modules filtering.
+  # The official Node payload must remain byte-for-byte unchanged; sign the
+  # application and other native helpers, but exclude this vendor executable.
+  signExts:
+    - "!node.exe"
   extraResources:
     - from: "dist/node/win32-${arch}"
       to: "app.asar.unpacked/dist/node/win32-${arch}"
