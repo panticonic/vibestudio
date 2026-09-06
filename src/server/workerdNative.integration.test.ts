@@ -1,6 +1,7 @@
 import { it, expect } from "vitest";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -36,7 +37,7 @@ async function unusedPort(): Promise<number> {
   return address.port;
 }
 
-it.each(["http", "inspector", "sqlite", "workerLoader"] as const)(
+it.each(["http", "nodejs", "inspector", "sqlite", "workerLoader"] as const)(
   "serves real requests with installed workerd: %s",
   async (feature) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "vibestudio-workerd-native-"));
@@ -50,7 +51,11 @@ it.each(["http", "inspector", "sqlite", "workerLoader"] as const)(
       if (feature === "sqlite") await mkdir(path.join(root, "storage"));
       let source = 'export default { fetch() { return new Response("http-ok"); } };';
       let fields = "";
-      if (feature === "sqlite") {
+      if (feature === "nodejs") {
+        source = `import { createHash } from 'node:crypto';
+          export default { fetch() { return new Response(createHash('sha256').update('native').digest('hex')); } };`;
+        fields = 'compatibilityFlags = ["nodejs_compat"],';
+      } else if (feature === "sqlite") {
         source = `export class Counter {
         constructor(ctx) { this.sql = ctx.storage.sql; this.sql.exec('CREATE TABLE IF NOT EXISTS count (value INTEGER)'); }
         fetch() { this.sql.exec('INSERT INTO count VALUES (1)'); return new Response(String(this.sql.exec('SELECT count(*) AS n FROM count').one().n)); }
@@ -114,7 +119,13 @@ it.each(["http", "inspector", "sqlite", "workerLoader"] as const)(
       if (!response) throw new Error(`${feature}: workerd never served HTTP\n${stderr}\n${stdout}`);
       expect(response.status, stderr).toBe(200);
       expect(await response.text(), stderr).toBe(
-        feature === "sqlite" ? "1" : feature === "workerLoader" ? "dynamic-ok" : "http-ok"
+        feature === "nodejs"
+          ? createHash("sha256").update("native").digest("hex")
+          : feature === "sqlite"
+            ? "1"
+            : feature === "workerLoader"
+              ? "dynamic-ok"
+              : "http-ok"
       );
       if (feature === "sqlite")
         expect(await (await fetch(endpoint, { signal: AbortSignal.timeout(3000) })).text()).toBe(
