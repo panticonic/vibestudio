@@ -595,7 +595,7 @@ function createTsExtensionPlugin(sourceRoot: string): esbuild.Plugin {
 }
 
 function isBareSpecifier(spec: string): boolean {
-  return !spec.startsWith(".") && !spec.startsWith("/") && !spec.startsWith("node:");
+  return !spec.startsWith(".") && !path.isAbsolute(spec) && !spec.startsWith("node:");
 }
 
 function packageNameFromSpecifier(specifier: string): string {
@@ -691,6 +691,9 @@ export function createDependencyEnvironmentResolvePlugin(
     name: "dependency-environment",
     setup(build) {
       build.onResolve({ filter: /^[^./]|^@/ }, async (args) => {
+        // Drive-qualified and UNC file paths also match the bare-import filter.
+        // Leave filesystem resolution to esbuild on every host platform.
+        if (path.isAbsolute(args.path)) return null;
         const priorData =
           args.pluginData && typeof args.pluginData === "object"
             ? (args.pluginData as Record<string, unknown>)

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as esbuild from "esbuild";
+import { describe, expect, it } from "vitest";
 import { createDependencyEnvironmentResolvePlugin } from "./builder.js";
 
 function writePackage(nodeModules: string, name: string, marker: string): void {
@@ -18,6 +19,26 @@ function writePackage(nodeModules: string, name: string, marker: string): void {
 }
 
 describe("dependency-environment resolver", () => {
+  it("resolves absolute entry points and file imports without treating them as packages", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-file-import-"));
+    try {
+      const entry = path.join(root, "entry.js");
+      const dependency = path.join(root, "value.js");
+      fs.writeFileSync(dependency, 'export default "local-file";\n');
+      fs.writeFileSync(entry, `export { default } from ${JSON.stringify(dependency)};\n`);
+      const result = await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: "esm",
+        write: false,
+        plugins: [createDependencyEnvironmentResolvePlugin([])],
+      });
+      expect(result.outputFiles[0]?.text).toContain('"local-file"');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses the prepared environment instead of node_modules above materialized source", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hermetic-build-"));
     try {
@@ -97,7 +118,7 @@ describe("dependency-environment resolver", () => {
         path.join(packageSource, "index.js"),
         'export { marker } from "./value.js";\n'
       );
-      fs.symlinkSync(packageSource, path.join(ownedModules, "linked-dependency"), "dir");
+      fs.symlinkSync(packageSource, path.join(ownedModules, "linked-dependency"), "junction");
       const entry = path.join(sourceDir, "entry.js");
       fs.writeFileSync(
         entry,

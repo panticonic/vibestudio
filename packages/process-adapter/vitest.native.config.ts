@@ -18,6 +18,7 @@ export default defineConfig({
       "src/server/nativeWorkspaceRuntime.integration.test.ts",
       "src/server/storage/blobCas.test.ts",
       "src/server/buildV2/dependencyContentStore.test.ts",
+      "src/server/buildV2/builder.dependencyEnvironment.test.ts",
     ],
     fileParallelism: false,
     testTimeout: 30_000,
