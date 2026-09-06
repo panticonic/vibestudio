@@ -3,7 +3,7 @@ import { chmodSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createPnpmInvocation } from "./cli/lib/package-manager.mjs";
+import { spawnPnpmSync } from "./cli/lib/package-manager.mjs";
 
 const dependencyContracts = [
   {
@@ -112,7 +112,7 @@ export function assertHostNativeDependencies(options = {}) {
 export function ensureHostNativeDependencies({
   cwd = process.cwd(),
   env = process.env,
-  run = spawnSync,
+  run,
   log = console.log,
 } = {}) {
   prepareNativeDependencyFiles({ cwd });
@@ -124,13 +124,16 @@ export function ensureHostNativeDependencies({
 
   const packages = failures.map(({ packageName }) => packageName);
   log(`[native-dependencies] Rebuilding unavailable host dependencies: ${packages.join(", ")}`);
-  const pnpm = createPnpmInvocation(["rebuild", ...packages]);
-  const rebuild = run(pnpm.command, pnpm.args, {
-    cwd,
-    env,
-    encoding: "utf8",
-    stdio: "inherit",
-  });
+  const rebuild = spawnPnpmSync(
+    ["rebuild", ...packages],
+    {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: "inherit",
+    },
+    run
+  );
   if (rebuild.status !== 0 || rebuild.error) {
     throw new Error(
       `Failed to rebuild host native dependencies ${packages.join(", ")}: ${failureText(rebuild)}`

@@ -1,3 +1,8 @@
+import {
+  stageNodeRuntime,
+  nodeRuntimeTarget,
+  assertNodeRuntimeArtifacts,
+} from "./node-runtime-artifacts.mjs";
 import { copyFileSync, chmodSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { Arch } from "electron-builder";
@@ -18,7 +23,11 @@ function electronNativeArtifacts(context) {
   return assertNativeIsolationArtifacts(appRoot, artifactRoot, [target]);
 }
 
-export default function stageElectronNativeIsolation(context) {
+export default async function stageElectronNativeIsolation(context) {
+  await stageNodeRuntime(
+    context.packager.projectDir,
+    nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
+  );
   prepareNativeDependencyFiles({
     cwd: context.packager.projectDir,
     platform: context.electronPlatformName,
@@ -34,7 +43,11 @@ export default function stageElectronNativeIsolation(context) {
 }
 
 /** afterPack runs before signing changes the executable bytes. */
-export function assertPackagedNativeIsolation(resources, context) {
+export async function assertPackagedNativeIsolation(resources, context) {
+  await assertNodeRuntimeArtifacts(
+    path.join(resources, "app.asar.unpacked"),
+    nodeRuntimeTarget(context.electronPlatformName, Arch[context.arch])
+  );
   for (const { source, artifact } of electronNativeArtifacts(context)) {
     const installed = path.join(resources, "app.asar.unpacked", artifact);
     if (nativeIsolationBinaryDigest(installed) !== nativeIsolationBinaryDigest(source)) {

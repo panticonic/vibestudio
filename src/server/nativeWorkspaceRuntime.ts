@@ -75,7 +75,7 @@ export async function startNativeWorkspaceRuntime(input: {
   const { rgPath } = installedRequire("@vscode/ripgrep") as { rgPath: string };
   const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
   await copyFile(rgPath, ripgrep);
-  const runtime = prepareNativeRuntime({ runtimeRoot, platform });
+  const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot, platform });
   const { executable } = runtime;
   const identity = createHash("sha256");
   for (const resource of [

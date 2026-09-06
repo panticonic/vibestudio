@@ -180,7 +180,8 @@
     "tsx": "^4.21.0",
     "oxlint": "^1.77.0",
     "oxlint-tsgolint": "7.0.2001",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "extract-zip": "2.0.1"
   },
   "dependencies": {
     "@microsoft/mxc-sdk": "0.8.0",
@@ -267,7 +268,6 @@
     "sucrase": "^3.35.1",
     "typebox": "^1.1.38",
     "node-pty": "^1.1.0",
-    "npm": "^11.13.0",
     "pathe": "^2.0.3",
     "qrcode-terminal": "^0.12.0",
     "react": "19.0.0",
@@ -285,6 +285,7 @@
     "ws": "^8.21.1",
     "yaml": "^2.9.0",
     "zod": "^3.25.76",
-    "zod-to-json-schema": "^3.25.0"
+    "zod-to-json-schema": "^3.25.0",
+    "cross-spawn": "7.0.6"
   }
 }

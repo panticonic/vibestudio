@@ -45,7 +45,7 @@ export async function afterPack(context) {
     "Electron app.asar.unpacked"
   );
   assertPackagedIrohBinding(resources, context.electronPlatformName, context.arch);
-  assertPackagedNativeIsolation(resources, context);
+  await assertPackagedNativeIsolation(resources, context);
 
   const resourceEntries = fs
     .readdirSync(resources, { withFileTypes: true })

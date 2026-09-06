@@ -66,11 +66,25 @@ jobs:
       - name: Install Linux sandbox runtime
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
+      - name: Allow bundled MXC user namespace under AppArmor
+        run: |
+          profile="$RUNNER_TEMP/vibestudio-mxc-lxc-exec.apparmor"
+          cat > "$profile" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile vibestudio_mxc_lxc_exec "$GITHUB_WORKSPACE/dist/mxc/linux-x64/lxc-exec" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-mxc-lxc-exec
+          sudo apparmor_parser -r /etc/apparmor.d/vibestudio-mxc-lxc-exec
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Check acceptance and native preparation harnesses
-        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs
+        run: node --test scripts/packaged-isolation-smoke.test.mjs scripts/native-host-dependencies.test.mjs scripts/node-runtime-artifacts.test.mjs
 
       - name: Type-check
         run: pnpm type-check
@@ -261,9 +275,14 @@ jobs:
 
       - name: Desktop pairing, approvals, panels, relaunch, and recovery
         if: ${{ !cancelled() && steps.desktop-base.outcome == 'success' }}
+        shell: bash
         run: |
           git -C vibestudio-workspace-base switch -c ci-acceptance-base
-          node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            bash scripts/with-macos-test-keychain.sh node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+          else
+            node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
+          fi
 
       # Native, desktop and installed acceptance report independently. A failed
       # native assertion still fails this required job and cannot publish a release.

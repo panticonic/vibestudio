@@ -9,6 +9,7 @@ directories:
 
 files:
   - "dist/**/*"
+  - "!dist/node/**/*"
   - "scripts/cli/**/*"
   - "packages/**/*"
   - "node_modules/**/*"
@@ -73,6 +74,10 @@ extraResources:
 
 # macOS configuration
 mac:
+  # Preserve the stock distribution, independent of node_modules filtering.
+  extraResources:
+    - from: "dist/node/darwin-${arch}"
+      to: "app.asar.unpacked/dist/node/darwin-${arch}"
   minimumSystemVersion: "14.0.0"
   category: public.app-category.developer-tools
   target:
@@ -106,6 +111,10 @@ dmg:
 
 # Windows configuration
 win:
+  # Preserve the stock distribution, independent of node_modules filtering.
+  extraResources:
+    - from: "dist/node/win32-${arch}"
+      to: "app.asar.unpacked/dist/node/win32-${arch}"
   target:
     - target: nsis
       arch:
@@ -124,6 +133,10 @@ nsis:
 
 # Linux configuration
 linux:
+  # Preserve the stock distribution, independent of node_modules filtering.
+  extraResources:
+    - from: "dist/node/linux-${arch}"
+      to: "app.asar.unpacked/dist/node/linux-${arch}"
   synopsis: Stacked panel workspace for agentic workflows
   description: Vibestudio is a branded desktop and mobile workspace for horizontally stacked panels, local runtime surfaces, and secure paired workspace access.
   target:

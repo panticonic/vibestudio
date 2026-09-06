@@ -1,13 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readdirSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { compileMxcLaunch } from "@vibestudio/process-adapter/mxc";
 import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
-import {
-  NATIVE_RUNTIME_CERTIFICATES,
-  prepareNativeRuntime,
-} from "@vibestudio/shared/nativeRuntimeResources";
+import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
 // The write-granted directory is a mount root on Linux. Delete its children in
 // confinement; only the owner can remove that now-empty anchor afterward.
@@ -24,26 +29,12 @@ function absent(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-/** These are exclusively host-created, guest-readonly runtime directories next
- * to the discarded workspace, never workspace contents. Use only unlink/rmdir
- * so even unexpected entries cannot cause a recursive host-side traversal. */
+/** These are host-created, guest-readonly runtime distributions. The discarded
+ * workspace itself is removed only by the confined job below. */
 function removeStagedRuntimes(trashRoot: string): void {
   for (const name of readdirSync(trashRoot)) {
-    if (!name.startsWith(".runtime-")) continue;
-    const runtime = path.join(trashRoot, name);
-    const node = path.join(runtime, "node");
-    try {
-      for (const file of readdirSync(node)) unlinkSync(path.join(node, file));
-      rmdirSync(node);
-    } catch (error) {
-      if (!absent(error)) throw error;
-    }
-    try {
-      unlinkSync(path.join(runtime, NATIVE_RUNTIME_CERTIFICATES));
-    } catch (error) {
-      if (!absent(error)) throw error;
-    }
-    rmdirSync(runtime);
+    if (name.startsWith(".runtime-"))
+      rmSync(path.join(trashRoot, name), { recursive: true, force: true });
   }
 }
 
@@ -84,7 +75,7 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
       const startedAt = Date.now();
       console.log("[NativeCleanup] Preparing installed deletion runtime");
       const runtimeRoot = mkdtempSync(path.join(trashRoot, ".runtime-"));
-      const runtime = prepareNativeRuntime({ runtimeRoot, platform });
+      const runtime = prepareNativeRuntime({ appRoot: appRoot, runtimeRoot, platform });
       console.log(`[NativeCleanup] Runtime prepared (${Date.now() - startedAt}ms)`);
       const launch = compileMxcLaunch({
         platform,

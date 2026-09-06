@@ -1,15 +1,11 @@
-import {
-  constants,
-  copyFileSync,
-  lstatSync,
-  mkdirSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { constants, copyFileSync, cpSync, lstatSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { getCACertificates } from "node:tls";
-import { collectInstalledRuntimeReadRoots } from "@vibestudio/shared/runtimePaths";
+import {
+  collectInstalledRuntimeReadRoots,
+  getInstalledNodeRuntime,
+} from "@vibestudio/shared/runtimePaths";
 import { windowsEnvironmentValue } from "@vibestudio/process-adapter/mxc";
 
 export const NATIVE_RUNTIME_CERTIFICATES = "ca-certificates.pem";
@@ -18,9 +14,15 @@ export const NATIVE_RUNTIME_CERTIFICATES = "ca-certificates.pem";
  * The caller must keep this root outside any tree the child may delete, and owns
  * its lifetime. No workspace-authored path is traversed or copied here. */
 export function prepareNativeRuntime(input: {
+  appRoot: string;
   runtimeRoot: string;
   platform?: "linux" | "darwin" | "win32";
-}): { executable: string; readPaths: string[]; environment: Record<string, string> } {
+}): {
+  executable: string;
+  npmCli: string;
+  readPaths: string[];
+  environment: Record<string, string>;
+} {
   const platform = input.platform ?? process.platform;
   if (platform !== "linux" && platform !== "darwin" && platform !== "win32") {
     throw new Error(`Unsupported native runtime platform: ${platform}`);
@@ -33,76 +35,40 @@ export function prepareNativeRuntime(input: {
   ) {
     throw new Error("Native runtime root must be a canonical directory owned by its caller");
   }
-  const installedExecutable = realpathSync(process.execPath);
+  const installed = getInstalledNodeRuntime(input.appRoot, platform);
+  const installedRoot = realpathSync(installed.root);
+  const installedExecutable = realpathSync(installed.executable);
+  const sharedObjects = installedNodeLibraries(installedExecutable, installed.version, platform);
   let executable = installedExecutable;
-  const report = process.report.getReport() as unknown as { sharedObjects?: unknown };
-  const sharedObjects = Array.isArray(report.sharedObjects)
-    ? report.sharedObjects.filter(
-        (value): value is string => typeof value === "string" && path.isAbsolute(value)
-      )
-    : [];
+  let npmCli = realpathSync(installed.npmCli);
   const read = [runtimeRoot];
-  const environment: Record<string, string> = process.versions["electron"]
-    ? { ELECTRON_RUN_AS_NODE: "1" }
-    : {};
-  const assets = ["icudtl.dat", "v8_context_snapshot.bin", "snapshot_blob.bin"];
+  const environment: Record<string, string> = {};
   if (platform === "win32") {
     const systemRoot = windowsEnvironmentValue(process.env, "SystemRoot");
     if (!systemRoot || !path.win32.isAbsolute(systemRoot))
       throw new Error("Windows native runtime requires the host SystemRoot");
     environment["SystemRoot"] = systemRoot;
     const nodeRoot = path.join(runtimeRoot, "node");
-    mkdirSync(nodeRoot);
+    // MXC applies Windows ACLs to admitted resources. Copy the complete real
+    // Node/npm distribution so these grants cannot change the installed app.
+    cpSync(installedRoot, nodeRoot, { recursive: true, errorOnExist: true, force: false });
     const systemPrefix = path.normalize(systemRoot).toLowerCase() + path.sep;
-    const installedFiles = new Set([
-      installedExecutable,
-      ...sharedObjects
-        .filter((file) => !path.normalize(file).toLowerCase().startsWith(systemPrefix))
-        .map((file) => realpathSync(file)),
-    ]);
-    for (const name of assets) {
-      const asset = path.join(path.dirname(installedExecutable), name);
-      try {
-        if (statSync(asset).isFile()) installedFiles.add(realpathSync(asset));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
+    for (const file of sharedObjects) {
+      const resource = realpathSync(file);
+      if (
+        resource.toLowerCase().startsWith(systemPrefix) ||
+        resource.toLowerCase().startsWith(installedRoot.toLowerCase() + path.sep)
+      )
+        continue;
+      copyFileSync(resource, path.join(nodeRoot, path.basename(resource)), constants.COPYFILE_EXCL);
     }
-    // Copy, never hardlink: sandbox ACL changes must not touch installed files.
-    // Exclusive creation also rejects colliding DLL basenames instead of silently
-    // replacing one runtime dependency with another.
-    for (const file of installedFiles)
-      copyFileSync(file, path.join(nodeRoot, path.basename(file)), constants.COPYFILE_EXCL);
-    executable = path.join(nodeRoot, path.basename(installedExecutable));
+    executable = path.join(nodeRoot, path.relative(installedRoot, installedExecutable));
+    npmCli = path.join(nodeRoot, path.relative(installedRoot, npmCli));
   } else {
     read.push(
+      installedRoot,
       ...collectInstalledRuntimeReadRoots([installedExecutable, ...sharedObjects], platform)
     );
-    const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-    if (process.versions["electron"] && resources) {
-      const resourceRoot = realpathSync(resources);
-      if (platform === "darwin") {
-        // A macOS runtime is an application bundle: CoreFoundation and dyld
-        // also consume Contents/Info.plist and framework metadata beside the
-        // executable. Admit that installed bundle, not guessed system paths.
-        const contents = path.dirname(resourceRoot);
-        if (
-          path.basename(resourceRoot) !== "Resources" ||
-          path.basename(contents) !== "Contents" ||
-          path.dirname(installedExecutable) !== path.join(contents, "MacOS")
-        )
-          throw new Error("Electron runtime resources do not belong to its installed macOS bundle");
-        read.push(contents);
-      } else read.push(resourceRoot);
-    }
-    for (const name of assets) {
-      const asset = path.join(path.dirname(installedExecutable), name);
-      try {
-        if (statSync(asset).isFile()) read.push(realpathSync(asset));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
   }
   // TLS trust is an installed runtime dependency too. Capture the owner's
   // effective roots through Node's public API (available before our 22.19
@@ -124,5 +90,59 @@ export function prepareNativeRuntime(input: {
   ].filter(
     (file, _, all) => !all.some((parent) => parent !== file && file.startsWith(parent + path.sep))
   );
-  return { executable, readPaths, environment };
+  return { executable, npmCli, readPaths, environment };
+}
+
+const libraryReports = new Map<string, string[]>();
+
+/** Read-only installed Node resources for an already-owned native launch. */
+export function installedNodeReadPaths(appRoot: string): string[] {
+  const installed = getInstalledNodeRuntime(appRoot);
+  const executable = realpathSync(installed.executable);
+  return [
+    ...new Set([
+      realpathSync(installed.root),
+      ...collectInstalledRuntimeReadRoots([
+        executable,
+        ...installedNodeLibraries(executable, installed.version, process.platform),
+      ]),
+    ]),
+  ];
+}
+
+/** Probe installed Node itself, never the Electron host's loaded libraries. */
+function installedNodeLibraries(executable: string, version: string, platform: string): string[] {
+  const key = `${executable}\0${version}`;
+  const cached = libraryReports.get(key);
+  if (cached) return cached;
+  const systemRoot = windowsEnvironmentValue(process.env, "SystemRoot");
+  const report = JSON.parse(
+    execFileSync(
+      executable,
+      [
+        "-e",
+        "process.stdout.write(JSON.stringify({version:process.versions.node,platform:process.platform,arch:process.arch,sharedObjects:process.report.getReport().sharedObjects}))",
+      ],
+      {
+        env: platform === "win32" && systemRoot ? { SystemRoot: systemRoot } : {},
+        encoding: "utf8",
+        timeout: 10000,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      }
+    )
+  ) as { version?: unknown; platform?: unknown; arch?: unknown; sharedObjects?: unknown };
+  if (
+    report.version !== version ||
+    report.platform !== platform ||
+    report.arch !== process.arch ||
+    !Array.isArray(report.sharedObjects) ||
+    !report.sharedObjects.every((file): file is string => typeof file === "string")
+  )
+    throw new Error("Installed Node runtime probe does not match its verified distribution");
+  // Reports also name kernel-provided virtual images such as the Linux vDSO;
+  // only filesystem-backed images need resource grants.
+  const libraries = (report.sharedObjects as string[]).filter((file) => path.isAbsolute(file));
+  libraryReports.set(key, libraries);
+  return libraries;
 }

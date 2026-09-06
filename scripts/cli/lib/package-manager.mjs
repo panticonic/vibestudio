@@ -1,3 +1,4 @@
+import crossSpawn from "cross-spawn";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -62,4 +63,25 @@ export function createPnpmInvocation(args = []) {
     command: commandName,
     args,
   };
+}
+
+/** Execute command-script shims through the maintained Windows launcher. */
+export function spawnPnpmSync(args, options = {}, run = crossSpawn.sync) {
+  const invocation = createPnpmInvocation(args);
+  return run(invocation.command, invocation.args, options);
+}
+export function execPnpmSync(args, options = {}) {
+  const result = spawnPnpmSync(args, options);
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const error = new Error(`pnpm failed (${result.signal ?? result.status})`);
+    Object.assign(error, {
+      status: result.status,
+      signal: result.signal,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
+    throw error;
+  }
+  return result.stdout;
 }

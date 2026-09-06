@@ -1,9 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { createPnpmInvocation } from "./cli/lib/package-manager.mjs";
+import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 
 export const INFRASTRUCTURE_CACHE_VERSION = 1;
 export const INFRASTRUCTURE_CACHE_PATH = ".cache/vibestudio-infrastructure-build.json";
@@ -262,7 +261,7 @@ export function writeInfrastructurePackageCache(plan) {
 
 export function buildInfrastructurePackages({
   cwd = process.cwd(),
-  run = execFileSync,
+  run = execPnpmSync,
   log = console.log,
   toolchainDigest,
 } = {}) {
@@ -282,8 +281,7 @@ export function buildInfrastructurePackages({
   );
   const selectedPackages = executionSelection(plan.dirty, plan.packages);
   const args = selectedPackages.flatMap((name) => ["--filter", name]);
-  const invocation = createPnpmInvocation([...args, "build"]);
-  run(invocation.command, invocation.args, { cwd, stdio: "inherit" });
+  run([...args, "build"], { cwd, stdio: "inherit" });
   writeInfrastructurePackageCache(plan);
   return {
     built: plan.dirty.map((state) => state.name),

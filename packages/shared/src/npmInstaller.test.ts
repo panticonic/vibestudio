@@ -3,10 +3,30 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const getSharedDerivedDataPath = vi.hoisted(() => vi.fn<() => string>());
-vi.mock("@vibestudio/env-paths", () => ({ getSharedDerivedDataPath }));
+// Unit tests exercise real npm-shaped processes; native enforcement has its
+// own integration fixture using the installed executor.
+vi.mock("@vibestudio/process-adapter/mxc", () => ({
+  assertMxcPrerequisites: vi.fn(),
+  compileMxcLaunch: vi.fn((input) => ({
+    command: input.argv[0],
+    args: input.argv.slice(1),
+    cwd: input.cwd,
+    environment: input.guestEnvironment,
+  })),
+}));
+vi.mock("./nativeRuntimeResources.js", () => ({
+  prepareNativeRuntime: ({ appRoot }: { appRoot: string }) => ({
+    npmCli: path.join(appRoot, "node_modules", "npm", "bin", "npm-cli.js"),
+    executable: process.execPath,
+    readPaths: [path.dirname(process.execPath)],
+    environment: process.platform === "win32" ? { SystemRoot: process.env["SystemRoot"]! } : {},
+  }),
+}));
+vi.mock("./nativeWorkspaceCleanup.js", () => ({
+  nativeWorkspaceCleanup: () => (root: string) => fs.rmSync(root, { recursive: true, force: true }),
+}));
 
-import { resolveBundledNpmCliPath, runNpmInstall } from "./npmInstaller.js";
+import { runNpmInstall } from "./npmInstaller.js";
 
 const tempDirs: string[] = [];
 
@@ -18,16 +38,10 @@ afterEach(() => {
 });
 
 describe("runNpmInstall", () => {
-  it("refuses to resolve npm from the ambient launch directory", () => {
-    expect(() => resolveBundledNpmCliPath(undefined)).toThrow(
-      "requires the exact Vibestudio application root"
-    );
-  });
-
   it("uses a Vibestudio-owned cache instead of the user's npm cache", async () => {
     const fixture = createFakeNpmFixture();
     const sharedDerivedDataPath = path.join(fixture.root, "shared-derived-data");
-    getSharedDerivedDataPath.mockReturnValue(sharedDerivedDataPath);
+
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
       npm_config_cache: path.join(fixture.root, "poisoned-user-cache"),
@@ -40,7 +54,8 @@ describe("runNpmInstall", () => {
     }
 
     const [args] = readAttempts(fixture.installDir);
-    expect(cacheArg(args!)).toBe(path.join(sharedDerivedDataPath, "npm-cache"));
+    expect(cacheArg(args!)).toMatch(/[\\/]workspace[\\/]cache$/);
+    expect(cacheArg(args!)).not.toContain(sharedDerivedDataPath);
     expect(args).toContain("--ignore-scripts");
     expect(args).toContain("--legacy-peer-deps");
   });
@@ -59,7 +74,6 @@ describe("runNpmInstall", () => {
         appRoot: fixture.appRoot,
         timeout: 5_000,
         ignoreScripts: false,
-        cacheDir: primaryCache,
       });
     } finally {
       restoreEnv();
@@ -67,7 +81,7 @@ describe("runNpmInstall", () => {
 
     const attempts = readAttempts(fixture.installDir);
     expect(attempts).toHaveLength(2);
-    expect(cacheArg(attempts[0]!)).toBe(primaryCache);
+    expect(cacheArg(attempts[0]!)).toMatch(/[\\/]workspace[\\/]cache$/);
     const recoveryCache = cacheArg(attempts[1]!);
     expect(recoveryCache).toMatch(/vibestudio-npm-cache-recovery-/);
     expect(fs.existsSync(recoveryCache)).toBe(false);
@@ -86,7 +100,6 @@ describe("runNpmInstall", () => {
         runNpmInstall(fixture.installDir, {
           appRoot: fixture.appRoot,
           timeout: 5_000,
-          cacheDir: path.join(fixture.root, "primary-cache"),
         })
       ).rejects.toThrow("Command failed");
     } finally {
@@ -109,7 +122,6 @@ describe("runNpmInstall", () => {
         runNpmInstall(fixture.installDir, {
           appRoot: fixture.appRoot,
           timeout: 5_000,
-          cacheDir: path.join(fixture.root, "primary-cache"),
         })
       ).rejects.toMatchObject({
         name: "NpmResolutionError",
@@ -135,7 +147,6 @@ describe("runNpmInstall", () => {
         runNpmInstall(fixture.installDir, {
           appRoot: fixture.appRoot,
           timeout: 5_000,
-          cacheDir: path.join(fixture.root, "primary-cache"),
         })
       ).rejects.toMatchObject({
         name: "NpmResolutionError",
@@ -150,7 +161,7 @@ describe("runNpmInstall", () => {
 
   it("retries transient network failures", async () => {
     const fixture = createFakeNpmFixture();
-    getSharedDerivedDataPath.mockReturnValue(path.join(fixture.root, "shared-derived-data"));
+
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
       VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE: "1",
@@ -166,16 +177,15 @@ describe("runNpmInstall", () => {
     expect(readAttempts(fixture.installDir)).toHaveLength(2);
   });
 
-  it("serializes concurrent installs so the first can populate the shared cache", async () => {
+  it("bounds concurrent installs with independent private caches", async () => {
     const first = createFakeNpmFixture();
     const second = createFakeNpmFixture();
-    const cacheDir = path.join(first.root, "shared-cache");
     const restoreEnv = replaceEnv({ VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS: "200" });
 
     try {
-      const firstInstall = runNpmInstall(first.installDir, { appRoot: first.appRoot, cacheDir });
+      const firstInstall = runNpmInstall(first.installDir, { appRoot: first.appRoot });
       await vi.waitFor(() => expect(readAttempts(first.installDir)).toHaveLength(1));
-      const secondInstall = runNpmInstall(second.installDir, { appRoot: second.appRoot, cacheDir });
+      const secondInstall = runNpmInstall(second.installDir, { appRoot: second.appRoot });
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(fs.existsSync(path.join(second.installDir, "attempts.json"))).toBe(false);
       await Promise.all([firstInstall, secondInstall]);
@@ -188,7 +198,7 @@ describe("runNpmInstall", () => {
 
   it("hard-stops and retries an npm process that ignores SIGTERM", async () => {
     const fixture = createFakeNpmFixture();
-    getSharedDerivedDataPath.mockReturnValue(path.join(fixture.root, "shared-derived-data"));
+
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
       VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE: "1",
@@ -229,10 +239,11 @@ const attemptsPath = path.join(process.cwd(), "attempts.json");
 const attempts = fs.existsSync(attemptsPath)
   ? JSON.parse(fs.readFileSync(attemptsPath, "utf8"))
   : [];
+const control = JSON.parse(fs.readFileSync(path.join(process.cwd(), "control.json"), "utf8"));
 const args = process.argv.slice(2);
 attempts.push(args);
 fs.writeFileSync(attemptsPath, JSON.stringify(attempts));
-if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) {
+if (control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) {
   fs.mkdirSync(path.join(process.cwd(), "node_modules", "half-extracted"), { recursive: true });
   fs.writeFileSync(path.join(process.cwd(), "package-lock.json"), "partial lock");
   process.on("SIGTERM", () => {});
@@ -240,20 +251,20 @@ if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1
   return;
 }
 if (
-  process.env.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE &&
+  control.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE &&
   (fs.existsSync(path.join(process.cwd(), "node_modules")) ||
     fs.existsSync(path.join(process.cwd(), "package-lock.json")))
 ) {
   process.stderr.write("retry inherited a partial npm install\\n");
   process.exit(1);
 }
-if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE && attempts.length === 1) {
+if (control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE && attempts.length === 1) {
   process.stderr.write("npm error network ETIMEDOUT while fetching package\\n");
   process.exit(1);
 }
 const cacheIndex = args.indexOf("--cache");
 const cacheDir = cacheIndex >= 0 ? args[cacheIndex + 1] : "";
-if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE === cacheDir) {
+if (control.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE && attempts.length === 1) {
   process.stderr.write(
     "npm error ENOENT: Invalid response body, stat '" +
       path.join(cacheDir, "_cacache", "content-v2", "sha512", "missing") +
@@ -261,15 +272,16 @@ if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE === cacheDir) {
   );
   process.exit(1);
 }
-if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR) {
-  process.stderr.write(process.env.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR + "\\n");
+if (control.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR) {
+  process.stderr.write(control.VIBESTUDIO_NPM_INSTALLER_TEST_ERROR + "\\n");
   process.exit(1);
 }
-if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS) {
-  setTimeout(() => {}, Number(process.env.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS));
+if (control.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS) {
+  setTimeout(() => {}, Number(control.VIBESTUDIO_NPM_INSTALLER_TEST_DELAY_MS));
 }
 `
   );
+  fs.writeFileSync(path.join(installDir, "control.json"), "{}");
   return { root, appRoot, installDir };
 }
 
@@ -284,13 +296,13 @@ function cacheArg(args: string[]): string {
 }
 
 function replaceEnv(values: Record<string, string>): () => void {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(values)) {
-    previous.set(key, process.env[key]);
-    process.env[key] = value;
+  for (const root of tempDirs) {
+    fs.writeFileSync(path.join(root, "install", "control.json"), JSON.stringify(values));
   }
+  const prior = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, values);
   return () => {
-    for (const [key, value] of previous) {
+    for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }

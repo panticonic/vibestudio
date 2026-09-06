@@ -44,7 +44,7 @@ export async function extractClaudeCredential(input: {
     await mkdtemp(path.join(path.dirname(input.profileDir), ".credential-runtime-"))
   );
   try {
-    const runtime = prepareNativeRuntime({ runtimeRoot });
+    const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot });
     const platform = process.platform;
     if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
       throw new Error(`Unsupported Claude credential extraction platform: ${platform}`);

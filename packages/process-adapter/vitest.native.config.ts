@@ -5,8 +5,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: [
+      "tests/packageManagerInvocation.test.ts",
       "packages/process-adapter/src/isolation/**/*.test.ts",
       "packages/shared/src/claudeCredentialExtraction.integration.test.ts",
+      "packages/shared/src/npmInstaller.integration.test.ts",
       "src/server/nativeWorkspaceCleanup.integration.test.ts",
       "src/server/claudeProfileRetirement.integration.test.ts",
       "src/server/nativeNetwork.integration.test.ts",

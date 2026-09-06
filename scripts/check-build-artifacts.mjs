@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
+import { assertNodeRuntimeArtifacts, NODE_RUNTIME_TARGETS } from "./node-runtime-artifacts.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -111,17 +112,6 @@ const contracts = [
         pattern: 'path.join(process.cwd(), "package.json")',
         reason:
           "Runtime build dependencies must resolve from the explicit app roots, not the launch directory.",
-      },
-    ],
-  },
-  {
-    path: "packages/shared/src/npmInstaller.ts",
-    runtime: "runtime npm installer",
-    forbidden: [
-      {
-        pattern: "process.cwd()",
-        reason:
-          "The bundled npm CLI must resolve from the exact application root, not the launch directory.",
       },
     ],
   },
@@ -341,9 +331,19 @@ for (const smoke of executableSmokes) {
 const nativeContractCount = assertHostNativeDependencies({ cwd: repoRoot });
 
 if (process.env.NODE_ENV === "production") {
+  // Stock toolchains retain their upstream contents, including npm source maps.
+  // Verify those distributions separately; the no-map rule owns app outputs.
+  const nodeRoot = path.join(repoRoot, "dist", "node");
+  for (const name of fs.readdirSync(nodeRoot)) {
+    const target = NODE_RUNTIME_TARGETS.find((entry) => `${entry.platform}-${entry.arch}` === name);
+    if (!target) throw new Error(`Unexpected Node distribution: ${name}`);
+    await assertNodeRuntimeArtifacts(repoRoot, target);
+  }
   const maps = fs
     .readdirSync(path.join(repoRoot, "dist"), { recursive: true })
-    .filter((entry) => String(entry).endsWith(".map"));
+    .filter(
+      (entry) => !String(entry).startsWith(`node${path.sep}`) && String(entry).endsWith(".map")
+    );
   if (maps.length > 0) {
     throw new Error(`Production dist contains source maps: ${maps.join(", ")}`);
   }

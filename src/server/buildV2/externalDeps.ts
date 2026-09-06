@@ -17,6 +17,7 @@ import { applyPatch, parsePatch } from "diff";
 import semver from "semver";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
+import { getInstalledNodeRuntime } from "@vibestudio/shared/runtimePaths";
 import {
   derivedCacheCoordinator,
   derivedCacheUnderPressure,
@@ -1285,7 +1286,7 @@ export async function ensureExtensionRuntimeDeps(
     hashDeps(deps, overrides, validatedPatches),
     process.platform,
     process.arch,
-    `abi${process.versions.modules ?? "unknown"}`,
+    `node${getInstalledNodeRuntime(appRoot).version}`,
   ].join("-");
   return acquireDependencyCache(deps, {
     baseDir: getExtensionRuntimeDepsBaseDir(),

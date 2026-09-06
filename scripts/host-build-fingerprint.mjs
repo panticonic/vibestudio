@@ -10,6 +10,9 @@ const INPUT_ROOTS = ["apps", "build-resources", "packages", "skills/vibestudio-a
 
 const INPUT_FILES = [
   ".gitignore",
+  ".nvmrc",
+  "native/node/distribution.json",
+  "scripts/node-runtime-artifacts.mjs",
   "build.mjs",
   "electron-builder.yml",
   "package.json",

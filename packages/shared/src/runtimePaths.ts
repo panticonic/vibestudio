@@ -98,6 +98,40 @@ export function getMxcExecutable(
   return getPhysicalAppPath(appRoot, `dist/mxc/${platform}-${arch}/${binary}`);
 }
 
+/** The app ships a real Node distribution for workspace code and native tools. */
+export function getInstalledNodeRuntime(
+  appRoot: string,
+  platform: string = process.platform,
+  arch: string = process.arch
+): { root: string; executable: string; npmCli: string; version: string } {
+  if (!/^(linux-(x64|arm64)|darwin-arm64|win32-x64)$/u.test(`${platform}-${arch}`))
+    throw new Error(`Unsupported Node runtime target: ${platform}-${arch}`);
+  const root = getPhysicalAppPath(appRoot, `dist/node/${platform}-${arch}`);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "runtime.json"), "utf8")) as {
+    version?: unknown;
+    platform?: unknown;
+    arch?: unknown;
+  };
+  if (
+    typeof manifest.version !== "string" ||
+    !/^\d+\.\d+\.\d+$/u.test(manifest.version) ||
+    manifest.platform !== platform ||
+    manifest.arch !== arch
+  )
+    throw new Error("Installed Node runtime metadata does not match this host");
+  return {
+    root,
+    executable: path.join(root, platform === "win32" ? "node.exe" : "bin/node"),
+    npmCli: path.join(
+      root,
+      platform === "win32"
+        ? "node_modules/npm/bin/npm-cli.js"
+        : "lib/node_modules/npm/bin/npm-cli.js"
+    ),
+    version: manifest.version,
+  };
+}
+
 /** Resolve the directory closure of trusted installed executables/libraries.
  *
  * MXC mounts runtime directories, preserving their loader-visible symlink names.

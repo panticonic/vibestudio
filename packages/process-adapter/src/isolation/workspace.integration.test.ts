@@ -72,7 +72,10 @@ describe("shared workspace sandbox on the native platform", () => {
     await mkdir(path.join(home, "tmp"), { recursive: true });
     const hostCanary = path.join(root, "host-secret");
     await writeFile(hostCanary, "host-only");
-    const prepared = prepareNativeRuntime({ runtimeRoot: runtime });
+    const prepared = prepareNativeRuntime({
+      appRoot: fileURLToPath(new URL("../../../../", import.meta.url)),
+      runtimeRoot: runtime,
+    });
     const { executable } = prepared;
     const installedRuntime = await realpath(
       fileURLToPath(new URL("../../dist/isolation", import.meta.url))
@@ -314,7 +317,10 @@ describe("shared workspace sandbox on the native platform", () => {
         const home = path.join(privateRoot, "state");
         const runtime = path.join(privateRoot, "runtime");
         await mkdir(runtime, { recursive: true });
-        const prepared = prepareNativeRuntime({ runtimeRoot: runtime });
+        const prepared = prepareNativeRuntime({
+          appRoot: fileURLToPath(new URL("../../../../", import.meta.url)),
+          runtimeRoot: runtime,
+        });
         const { executable } = prepared;
         await writeFile(path.join(runtime, "package.json"), '{"type":"module"}');
         for (const name of ["workspaceChild.js", "control.js"]) {
