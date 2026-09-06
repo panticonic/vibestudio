@@ -26,7 +26,7 @@ a format upgrade.
 The host stores DO SQLite files under:
 
 ```text
-<statePath>/.databases/workerd-universal-do/vibestudio:universal-do/<object_hash>.*
+<statePath>/.databases/workerd-universal-do/vibestudio-universal-do/<object_hash>.*
 ```
 
 Backups live outside workerd's directory under
