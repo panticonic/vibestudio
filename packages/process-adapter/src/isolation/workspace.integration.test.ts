@@ -118,6 +118,14 @@ describe("shared workspace sandbox on the native platform", () => {
       const dimensions = () => ({ columns: process.stdout.columns, rows: process.stdout.rows });
       process.stdout.on('resize', () => emit({ resized: true, ...dimensions() }));
       const deadline = setTimeout(() => process.exit(124), 8000);
+      if (process.platform !== 'win32') {
+        try { fs.readdirSync('/dev'); emit({ deviceDirectoryReadable: true }); }
+        catch (error) { emit({ deviceDirectoryReadable: false, error: error.code }); }
+        try {
+          fs.closeSync(fs.openSync('/dev/tty', 'r+'));
+          emit({ controllingTerminal: true });
+        } catch (error) { emit({ controllingTerminal: false, error: error.code }); }
+      }
       emit({ ready: true, tty: process.stdin.isTTY && process.stdout.isTTY, ...dimensions() });
       require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
         if (line === 'quit') { clearTimeout(deadline); process.exit(0); }
@@ -228,6 +236,8 @@ describe("shared workspace sandbox on the native platform", () => {
         () => {
           if (exitCode !== undefined) throw new Error(`PTY owner exited ${exitCode}: ${stderr}`);
           expect(records).toContainEqual({ ready: true, tty: true, columns: 100, rows: 30 });
+          if (process.platform !== "win32")
+            expect(records).toContainEqual({ controllingTerminal: true });
         },
         { timeout: 5000 }
       );

@@ -213,13 +213,19 @@ jobs:
         run: node scripts/build-native-isolation.mjs
 
       - name: Build production application and headless host
+        id: production-build
         run: pnpm build
 
       - name: Check native confinement and workspace sharing
+        id: native-check
         run: pnpm vitest run --config packages/process-adapter/vitest.native.config.ts
 
+      - name: Diagnose macOS sandbox denials
+        if: ${{ failure() && runner.os == 'macOS' && steps.native-check.outcome == 'failure' }}
+        run: sudo log show --last 3m --style compact --predicate 'eventMessage CONTAINS "Sandbox" AND eventMessage CONTAINS "deny"' | tail -100
+
       - name: Check Windows confinement as a standard user
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.production-build.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/test-native-standard-user.ps1
 
@@ -233,7 +239,8 @@ jobs:
           retention-days: 30
 
       - name: Checkout Base for desktop integration
-        if: runner.os != 'Linux'
+        id: desktop-base
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.production-build.outcome == 'success' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: panticonic/vibestudio-workspace-base
@@ -242,25 +249,30 @@ jobs:
           persist-credentials: false
 
       - name: Desktop pairing, approvals, panels, relaunch, and recovery
-        if: runner.os != 'Linux'
+        if: ${{ !cancelled() && steps.desktop-base.outcome == 'success' }}
         run: node scripts/desktop-pairing-smoke.mjs --base-checkout vibestudio-workspace-base
 
-      - name: Assemble packaging input from tested payload
-        if: matrix.package
+      # Native, desktop and installed acceptance report independently. A failed
+      # native assertion still fails this required job and cannot publish a release.
+      - name: Assemble packaging input
+        id: packaging-input
+        if: ${{ !cancelled() && matrix.package && steps.production-build.outcome == 'success' }}
         shell: bash
         run: |
           mkdir -p native/isolation/artifacts/native-isolation-${{ matrix.target }}
           cp dist/mxc/${{ matrix.target }}/* native/isolation/artifacts/native-isolation-${{ matrix.target }}/
 
       - name: Package the application
-        if: matrix.package
+        id: package
+        if: ${{ !cancelled() && steps.packaging-input.outcome == 'success' }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: pnpm exec electron-builder --dir --publish never
 
       # A tar archive preserves executable modes and macOS framework symlinks.
       - name: Archive installed application layout
-        if: matrix.package
+        id: archive
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: bash
         run: |
           if [ "${{ runner.os }}" = macOS ]; then
@@ -270,7 +282,7 @@ jobs:
           fi
 
       - name: Upload application for independent acceptance
-        if: matrix.package
+        if: ${{ !cancelled() && steps.archive.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: packaged-app-${{ matrix.target }}

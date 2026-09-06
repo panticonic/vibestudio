@@ -98,6 +98,7 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
     `
     const http = require('node:http');
     const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+    send({ type: 'environment', ownerSecret: process.env.MXC_TRUSTED_OWNER_SECRET ?? null });
     const mode = process.argv[2];
     const timer = setTimeout(() => process.exit(124), 25000);
     process.stdin.on('data', () => { clearTimeout(timer); process.exit(0); });
@@ -136,21 +137,25 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
   `
   );
   for (const network of ["allow", "deny"] as const) {
-    const launch = compileMxcLaunch({
-      platform,
-      launcher,
-      containerId: `vibestudio-network-${network}-${Date.now()}`,
-      argv: [runtime.executable, entry, network],
-      cwd: home,
-      guestEnvironment: {
-        ...runtime.environment,
-        HOME: home,
-        PATH: process.env["PATH"] ?? "/usr/bin:/bin",
+    const launch = compileMxcLaunch(
+      {
+        platform,
+        launcher,
+        containerId: `vibestudio-network-${network}-${Date.now()}`,
+        argv: [runtime.executable, entry, network],
+        cwd: home,
+        guestEnvironment: {
+          ...runtime.environment,
+          HOME: home,
+          PATH: process.env["PATH"] ?? "/usr/bin:/bin",
+        },
+        readPaths: runtime.readPaths,
+        writePaths: [home],
+        network,
       },
-      readPaths: runtime.readPaths,
-      writePaths: [home],
-      network,
-    });
+      { ...process.env, MXC_TRUSTED_OWNER_SECRET: "synthetic-owner-only" }
+    );
+    expect(launch.environment["MXC_TRUSTED_OWNER_SECRET"]).toBe("synthetic-owner-only");
     await assertMxcPrerequisites({ platform, launcher, environment: launch.environment });
     const before = hostRequests;
     const child = spawn(launch.command, launch.args, {
@@ -187,6 +192,10 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
       { timeout: 5000 }
     );
     const outbound = records.find((value) => value["type"] === "outbound")!;
+    expect(records.find((value) => value["type"] === "environment")).toEqual({
+      type: "environment",
+      ownerSecret: null,
+    });
     if (network === "deny") {
       expect(outbound["connected"]).toBe(false);
       expect(hostRequests).toBe(before);
