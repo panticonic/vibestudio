@@ -89,6 +89,7 @@ describe("resolved execution resource policy", () => {
       if (platform === "win32") {
         expect(config.processContainer).toEqual({ leastPrivilege: false, capabilities: [] });
         expect(result.environment).toEqual({
+          PATH: process.env["PATH"],
           SystemRoot: "C:\\Windows",
           USERPROFILE: "C:\\Users\\host-owner",
           LOCALAPPDATA: "C:\\Users\\host-owner\\AppData\\Local",

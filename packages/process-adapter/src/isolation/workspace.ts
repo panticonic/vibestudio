@@ -13,6 +13,7 @@ import {
   type ExecutionPolicy,
 } from "./policy.js";
 import { readControl, writeControl } from "./control.js";
+import { assertMxcPrerequisites, formatMxcStartupError } from "./prerequisites.js";
 
 export interface WorkspaceSandboxInstallation extends IsolationInstallation {
   /** Installed workspaceChild.js and its adjacent control.js, visible read-only. */
@@ -129,27 +130,50 @@ export class WorkspaceSandbox {
     });
     this.ready = new Promise<void>((resolve, reject) => {
       let ready = false;
-      const timer = setTimeout(
-        () => fail(new IsolationError("Workspace sandbox startup timed out")),
-        10_000
-      );
-      const fail = (error: Error) => {
-        clearTimeout(timer);
+      let startupFailure: Error | undefined;
+      const startupError = (error: Error, code?: number | null, signal?: string | null) =>
+        formatMxcStartupError({
+          platform: installation.platform,
+          launcher: installation.launcher,
+          error,
+          stderr: this.stderrTail,
+          code,
+          signal,
+        });
+      const timer = setTimeout(() => {
         this.endSession();
-        reject(
-          this.stderrTail ? new IsolationError(`${error.message}: ${this.stderrTail}`) : error
-        );
         this.child.kill("SIGKILL");
+        reject(
+          startupError(startupFailure ?? new IsolationError("Workspace sandbox startup timed out"))
+        );
+      }, 10_000);
+      const fail = (error: Error) => {
+        this.endSession();
+        if (ready) {
+          clearTimeout(timer);
+          this.child.kill("SIGKILL");
+        } else {
+          // stdout EOF can precede the native diagnostic on stderr. Preserve
+          // the first failure and let close drain both streams before reporting;
+          // the startup deadline still bounds an executor that never closes.
+          startupFailure ??= error;
+        }
       };
       this.child.on("error", fail);
       this.child.stdin.on("error", fail);
       this.child.stderr.on("data", (chunk) => {
         this.stderrTail = (this.stderrTail + String(chunk)).slice(-16_384);
       });
-      this.child.once("close", () => {
+      this.child.once("close", (code, signal) => {
         clearTimeout(timer);
         if (!ready)
-          reject(new IsolationError(`Workspace sandbox exited before ready: ${this.stderrTail}`));
+          reject(
+            startupError(
+              startupFailure ?? new IsolationError("Workspace sandbox exited before ready"),
+              code,
+              signal
+            )
+          );
       });
       readControl(
         this.child.stdout,
@@ -191,6 +215,12 @@ export class WorkspaceSandbox {
       throw new IsolationError("Workspace bootstrap must be in the admitted read-only runtime");
     const resolved = { ...policy, args: [installation.workspaceEntry] };
     const launch = compileExecution(resolved, installation);
+    await assertMxcPrerequisites({
+      platform: installation.platform,
+      launcher: installation.launcher,
+      network: "deny",
+      environment: launch.environment,
+    });
     // Resources must already exist and be anchored/sealed by the installed
     // owner. Reject path aliases here; this check alone is not race protection.
     for (const resource of [

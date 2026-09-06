@@ -4,21 +4,7 @@ import path from "node:path";
 import {
   NATIVE_ISOLATION_TARGETS,
   MXC_SDK_VERSION,
-  nativeIsolationSourceDigest,
 } from "../../scripts/native-isolation-artifacts.mjs";
-
-export function prepareNativeIsolationSource(root: string) {
-  const source = path.join(root, "native/isolation");
-  mkdirSync(path.join(source, "src"), { recursive: true });
-  mkdirSync(path.join(root, "scripts"), { recursive: true });
-  writeFileSync(path.join(source, "Cargo.toml"), "[package]\nname='fixture'\n");
-  writeFileSync(path.join(source, "Cargo.lock"), "# fixture\n");
-  writeFileSync(path.join(source, "targets.json"), JSON.stringify(NATIVE_ISOLATION_TARGETS));
-  writeFileSync(path.join(source, "src/main.rs"), "fn main() {}\n");
-  writeFileSync(path.join(root, "scripts/build-native-isolation.mjs"), "fixture\n");
-  writeFileSync(path.join(root, "scripts/native-isolation-artifacts.mjs"), "fixture\n");
-  return source;
-}
 
 export function nativeIsolationBinary(target: (typeof NATIVE_ISOLATION_TARGETS)[number]) {
   if (target.platform === "linux") {
@@ -47,13 +33,11 @@ export function writeNativeIsolationArtifacts(
   artifactRoot: string,
   targets = NATIVE_ISOLATION_TARGETS
 ) {
-  const sourceDigest = nativeIsolationSourceDigest(root);
   for (const target of targets) {
     const inputRoot = path.join(artifactRoot, `native-isolation-${target.platform}-${target.arch}`);
     mkdirSync(inputRoot, { recursive: true });
     const bytes = nativeIsolationBinary(target);
     for (const file of target.mxcFiles) writeFileSync(path.join(inputRoot, file), bytes);
-    writeFileSync(path.join(inputRoot, path.basename(target.cleanupArtifact)), bytes);
     writeFileSync(
       path.join(inputRoot, "manifest.json"),
       JSON.stringify({
@@ -67,16 +51,6 @@ export function writeNativeIsolationArtifacts(
             createHash("sha256").update(bytes).digest("hex"),
           ])
         ),
-        binaryDigest: createHash("sha256").update(bytes).digest("hex"),
-      })
-    );
-    writeFileSync(
-      path.join(inputRoot, "cleanup-manifest.json"),
-      JSON.stringify({
-        version: 1,
-        rustVersion: "1.95.0",
-        rustTarget: target.rustTarget,
-        sourceDigest,
         binaryDigest: createHash("sha256").update(bytes).digest("hex"),
       })
     );

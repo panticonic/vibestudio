@@ -4,7 +4,10 @@ import { defineConfig } from "vitest/config";
 // denial checks: a missing/unsupported launcher is a failure, never a skip.
 export default defineConfig({
   test: {
-    include: ["packages/process-adapter/src/isolation/**/*.test.ts"],
+    include: [
+      "packages/process-adapter/src/isolation/**/*.test.ts",
+      "src/server/nativeWorkspaceCleanup.integration.test.ts",
+    ],
     fileParallelism: false,
   },
 });

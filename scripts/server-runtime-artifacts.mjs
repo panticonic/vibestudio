@@ -32,8 +32,6 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/fs-disk-worker.cjs",
   nativeIsolationTarget().artifact,
   `${nativeIsolationTarget().artifact.replace(/[^/]+$/, "")}manifest.json`,
-  nativeIsolationTarget().cleanupArtifact,
-  `${nativeIsolationTarget().cleanupArtifact.replace(/[^/]+$/, "")}manifest.json`,
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/internal-do.bundle.mjs",

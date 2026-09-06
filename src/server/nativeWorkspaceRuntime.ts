@@ -1,10 +1,8 @@
-import {
-  collectInstalledRuntimeReadRoots,
-  getMxcExecutable,
-} from "@vibestudio/shared/runtimePaths";
+import { getMxcExecutable } from "@vibestudio/shared/runtimePaths";
+import { prepareNativeRuntime } from "./nativeRuntimeResources.js";
 import { materializeImmutableTree } from "./buildV2/immutableTreeMaterializer.js";
 import { waitForNativeJob, type NativeWorkspaceJob } from "./nativeWorkspaceJob.js";
-import { mkdir, realpath, copyFile, stat, lstat, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, realpath, copyFile, lstat, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
@@ -77,62 +75,8 @@ export async function startNativeWorkspaceRuntime(input: {
   const { rgPath } = installedRequire("@vscode/ripgrep") as { rgPath: string };
   const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
   await copyFile(rgPath, ripgrep);
-  let executable = await realpath(process.execPath);
-  const read = [runtimeRoot, sourceRoot, buildsRoot];
-  const reported = process.report.getReport() as unknown as { sharedObjects?: unknown };
-  const sharedObjects = Array.isArray(reported.sharedObjects)
-    ? reported.sharedObjects.filter(
-        (value): value is string => typeof value === "string" && path.isAbsolute(value)
-      )
-    : [];
-  if (platform === "win32") {
-    // Windows LPAC admits only staged resources. Copy the installed runtime
-    // closure, never hardlink it to mutable or differently owned files.
-    const nodeRoot = path.join(runtimeRoot, "node");
-    await mkdir(nodeRoot, { recursive: true });
-    const installedExecutable = executable;
-    const windowsRoot = (process.env["SystemRoot"] ?? "C:\\Windows").toLowerCase();
-    for (const resource of [
-      installedExecutable,
-      ...sharedObjects.filter((file) => !file.toLowerCase().startsWith(windowsRoot + path.sep)),
-    ])
-      await copyFile(resource, path.join(nodeRoot, path.basename(resource)));
-    for (const name of ["icudtl.dat", "v8_context_snapshot.bin", "snapshot_blob.bin"]) {
-      try {
-        await copyFile(
-          path.join(path.dirname(installedExecutable), name),
-          path.join(nodeRoot, name)
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    executable = path.join(nodeRoot, path.basename(installedExecutable));
-  } else {
-    read.push(...collectInstalledRuntimeReadRoots([executable, ...sharedObjects]));
-    const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-    if (process.versions["electron"] && resources) read.push(await realpath(resources));
-    for (const name of ["icudtl.dat", "v8_context_snapshot.bin", "snapshot_blob.bin"]) {
-      const resource = path.join(path.dirname(executable), name);
-      try {
-        if ((await stat(resource)).isFile()) read.push(await realpath(resource));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-  }
-  // MXC owns platform layout and mount ordering. Preserve loader-visible names
-  // as well as physical files: ELF interpreters and runtime rpaths can name an
-  // installation alias (including runtimes installed outside the system tree).
-  const runtimeRead = [
-    ...new Set([
-      ...read.map((resource) => path.normalize(resource)),
-      ...(await Promise.all(read.map((resource) => realpath(resource)))),
-    ]),
-  ].filter(
-    (resource, _, all) =>
-      !all.some((parent) => parent !== resource && resource.startsWith(parent + path.sep))
-  );
+  const runtime = prepareNativeRuntime({ runtimeRoot, platform });
+  const { executable } = runtime;
   const identity = createHash("sha256");
   for (const resource of [
     workspaceEntry,
@@ -162,10 +106,9 @@ export async function startNativeWorkspaceRuntime(input: {
             ? [path.dirname(executable), runtimeRoot].join(path.delimiter)
             : `${runtimeRoot}:/usr/bin:/bin`,
         LANG: "C.UTF-8",
-        ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-        ...(platform === "win32" ? { SystemRoot: process.env["SystemRoot"] ?? "C:\\Windows" } : {}),
+        ...runtime.environment,
       },
-      read: runtimeRead,
+      read: [...runtime.readPaths, sourceRoot, buildsRoot],
       // These are owner-selected anchors, never the destinations of guest links.
       // MXC enforces access to the declared private resource trees.
       write: [home, scratchRoot, extensionStorage],
@@ -173,7 +116,7 @@ export async function startNativeWorkspaceRuntime(input: {
     },
     {
       platform,
-      launcher: await realpath(getMxcExecutable(input.appRoot)),
+      launcher: getMxcExecutable(input.appRoot),
       workspaceEntry,
     }
   );

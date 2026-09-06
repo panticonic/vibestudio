@@ -19,11 +19,9 @@ import {
 import stageElectronNativeIsolation, {
   assertPackagedNativeIsolation,
 } from "../scripts/stage-electron-native-isolation.mjs";
-import { nativeIsolationExecutable } from "../src/server/nativeIsolationExecutable.js";
 
 import {
   nativeIsolationBinary as binary,
-  prepareNativeIsolationSource,
   writeNativeIsolationArtifacts as writeArtifacts,
 } from "./helpers/nativeIsolationArtifacts.js";
 
@@ -35,8 +33,7 @@ afterEach(() => {
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "vibestudio-native-artifacts-"));
   roots.push(root);
-  const source = prepareNativeIsolationSource(root);
-  return { root, artifactRoot: path.join(source, "artifacts") };
+  return { root, artifactRoot: path.join(root, "native/isolation/artifacts") };
 }
 
 describe("native isolation artifact matrix", () => {
@@ -52,9 +49,7 @@ describe("native isolation artifact matrix", () => {
   it("requires the complete matrix", () => {
     const { root, artifactRoot } = fixture();
     writeArtifacts(root, artifactRoot, NATIVE_ISOLATION_TARGETS.slice(0, -1));
-    expect(() => assertNativeIsolationArtifacts(root, artifactRoot)).toThrow(
-      /complete CI native artifact matrix/
-    );
+    expect(() => assertNativeIsolationArtifacts(root, artifactRoot)).toThrow(/complete CI matrix/);
   });
 
   it("accepts the complete supported-target matrix and returns binary plus manifest descriptors", () => {
@@ -62,10 +57,10 @@ describe("native isolation artifact matrix", () => {
     writeArtifacts(root, artifactRoot);
     const descriptors = assertNativeIsolationArtifacts(root, artifactRoot);
     expect(descriptors).toHaveLength(
-      NATIVE_ISOLATION_TARGETS.reduce((total, target) => total + target.mxcFiles.length + 3, 0)
+      NATIVE_ISOLATION_TARGETS.reduce((total, target) => total + target.mxcFiles.length + 1, 0)
     );
     expect(descriptors.filter(({ artifact }) => artifact.endsWith("manifest.json"))).toHaveLength(
-      NATIVE_ISOLATION_TARGETS.length * 2
+      NATIVE_ISOLATION_TARGETS.length
     );
   });
 
@@ -95,15 +90,6 @@ describe("native isolation artifact matrix", () => {
     }
   });
 
-  it("resolves packaged executables into the physical asar-unpacked tree", () => {
-    expect(nativeIsolationExecutable("/opt/app.asar", "win32", "x64")).toBe(
-      path.join("/opt/app.asar.unpacked", "dist/native/win32-x64/vibestudio-isolation.exe")
-    );
-    expect(() => nativeIsolationExecutable("/opt/app.asar", "win32", "arm64")).toThrow(
-      /Unsupported native isolation target/
-    );
-  });
-
   it("verifies the unpacked helper before signing", () => {
     const { root, artifactRoot } = fixture();
     const target = nativeIsolationTarget("linux", "arm64");
@@ -130,23 +116,6 @@ describe("native isolation artifact matrix", () => {
         target.artifact.replace(/[^/]+$/, "manifest.json")
       );
       writeFileSync(installedManifest, readFileSync(sourceManifest));
-      const cleanupSource = path.join(
-        artifactRoot,
-        "native-isolation-linux-arm64",
-        path.basename(target.cleanupArtifact)
-      );
-      const cleanupInstalled = path.join(resources, "app.asar.unpacked", target.cleanupArtifact);
-      mkdirSync(path.dirname(cleanupInstalled), { recursive: true });
-      writeFileSync(cleanupInstalled, readFileSync(cleanupSource));
-      chmodSync(cleanupInstalled, 0o755);
-      writeFileSync(
-        path.join(
-          resources,
-          "app.asar.unpacked",
-          target.cleanupArtifact.replace(/[^/]+$/, "manifest.json")
-        ),
-        readFileSync(path.join(artifactRoot, "native-isolation-linux-arm64/cleanup-manifest.json"))
-      );
       expect(() => assertPackagedNativeIsolation(resources, context as never)).not.toThrow();
       writeFileSync(installed, Buffer.from("changed"));
       expect(() => assertPackagedNativeIsolation(resources, context as never)).toThrow(/differs/);

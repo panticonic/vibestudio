@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkspaceSandbox } from "./workspace.js";
 
-vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFile: vi.fn() }));
+vi.mock("./prerequisites.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prerequisites.js")>()),
+  assertMxcPrerequisites: vi.fn(async () => {}),
+}));
 vi.mock("node:fs/promises", () => ({
   realpath: async (value: string) => value,
   open: async () => ({ writeFile: async () => {}, sync: async () => {}, close: async () => {} }),
@@ -101,5 +105,67 @@ it.each([false, true])(
       expect(peer.stdout.destroyed).toBe(true);
       expect(peer.stderr.destroyed).toBe(true);
     }
+  }
+);
+
+it.each([false, true])(
+  "retains late native diagnostics after startup stdout closes (executor hangs: %s)",
+  async (hangs) => {
+    vi.useFakeTimers();
+    const peer = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: vi.fn(() => {
+        peer.emit("close", null, "SIGKILL");
+        return true;
+      }),
+      unref: vi.fn(),
+    });
+    vi.mocked(spawn).mockImplementation(() => {
+      setTimeout(() => peer.stdout.end(), 1);
+      setTimeout(() => {
+        peer.stderr.write("native policy rejected: precise diagnostic");
+        if (!hangs) peer.emit("close", 1, null);
+      }, 20);
+      return peer as unknown as ReturnType<typeof spawn>;
+    });
+    const root = path.resolve("fixture");
+    const runtime = path.join(root, "runtime");
+    const home = path.join(root, "state");
+    const pending = WorkspaceSandbox.start(
+      {
+        version: 1,
+        owner: {
+          workspaceId: "fixture",
+          contextId: null,
+          runtimeId: "fixture",
+          incarnation: "fixture",
+          executionDigest: "fixture",
+        },
+        privateRoot: root,
+        executable: path.join(runtime, "node"),
+        args: [],
+        cwd: home,
+        home,
+        environment: {},
+        read: [runtime],
+        write: [home],
+        sockets: [],
+      },
+      {
+        platform: process.platform as "linux" | "darwin" | "win32",
+        launcher: path.join(root, "launcher"),
+        workspaceEntry: path.join(runtime, "workspaceChild.js"),
+      }
+    );
+    const rejection = expect(pending).rejects.toThrow("native policy rejected: precise diagnostic");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(peer.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(hangs ? 14001 : 50);
+    await rejection;
+    expect(peer.stdin.destroyed).toBe(true);
+    expect(peer.stdout.destroyed).toBe(true);
+    expect(peer.stderr.destroyed).toBe(true);
   }
 );

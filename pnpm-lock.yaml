@@ -996,6 +996,9 @@ importers:
       '@vibestudio/iroh-transport':
         specifier: workspace:*
         version: link:../iroh-transport
+      '@vibestudio/process-adapter':
+        specifier: workspace:*
+        version: link:../process-adapter
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
@@ -1015,9 +1018,6 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
-      '@microsoft/mxc-sdk':
-        specifier: 0.8.0
-        version: 0.8.0
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15
