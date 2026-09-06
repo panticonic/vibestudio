@@ -81,8 +81,11 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
     if (workspaceExists) {
       // The catalog-owned parent is not writable by either workspace. Keeping
       // runtime staging here also makes failed cleanup self-contained/retryable.
+      const startedAt = Date.now();
+      console.log("[NativeCleanup] Preparing installed deletion runtime");
       const runtimeRoot = mkdtempSync(path.join(trashRoot, ".runtime-"));
       const runtime = prepareNativeRuntime({ runtimeRoot, platform });
+      console.log(`[NativeCleanup] Runtime prepared (${Date.now() - startedAt}ms)`);
       const launch = compileMxcLaunch({
         platform,
         launcher,
@@ -100,6 +103,7 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
         network: "deny",
       });
       try {
+        console.log("[NativeCleanup] Confined deletion started");
         execFileSync(launch.command, launch.args, {
           cwd: launch.cwd,
           env: launch.environment,
@@ -109,6 +113,7 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
           killSignal: "SIGKILL",
           maxBuffer: 64 * 1024,
         });
+        console.log(`[NativeCleanup] Confined deletion completed (${Date.now() - startedAt}ms)`);
       } catch (error) {
         const failure = error as NodeJS.ErrnoException & {
           stderr?: Buffer;
@@ -127,6 +132,7 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
       // with ENOTEMPTY, retaining the receipt instead of following their paths.
       rmdirSync(workspace);
     }
+    console.log("[NativeCleanup] Retiring owner runtime and receipt");
     removeStagedRuntimes(trashRoot);
     try {
       unlinkSync(path.join(trashRoot, "deletion.json"));
@@ -134,5 +140,6 @@ export function nativeWorkspaceCleanup(appRoot: string): (target: string) => voi
       if (!absent(error)) throw error;
     }
     rmdirSync(trashRoot);
+    console.log("[NativeCleanup] Retirement completed");
   };
 }

@@ -3155,24 +3155,31 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     }
     const childProcesses = workspaceChildren();
     await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
+    console.log("[Hub] Shutdown: workspace children stopped");
     if (state.centralData.getEphemeralWorkspace()?.ownerBootId === state.serverBootId) {
       try {
+        console.log("[Hub] Shutdown: ephemeral storage cleanup started");
         removeOwnedEphemeralWorkspace(
           state.centralData,
           state.serverBootId,
           nativeWorkspaceCleanup(state.appRoot)
         );
+        console.log("[Hub] Shutdown: ephemeral storage cleanup completed");
       } catch (error) {
         // Keep the lifecycle marker intact so the next startup retries cleanup.
         console.error("[Hub] Ephemeral workspace cleanup will retry on next startup:", error);
       }
     }
+    console.log("[Hub] Shutdown: gateway close started");
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    console.log("[Hub] Shutdown: gateway closed; governance close started");
     await state.governanceLog?.close();
+    console.log("[Hub] Shutdown: governance closed; persistence close started");
     clearInterval(processLeaseHeartbeat);
     state.centralData.releaseHubProcessLease(state.serverBootId);
     state.centralData.close();
     state.identityDb.close();
+    console.log("[Hub] Shutdown complete");
     process.exit(0);
   }
 
