@@ -1,9 +1,3 @@
-# Native artifacts built on different OSes share one exact source-closure hash.
-native/isolation/** text eol=lf
-scripts/build-native-isolation.mjs text eol=lf
-scripts/native-isolation-artifacts.mjs text eol=lf
-
-# Canonical manifests are compared byte-for-byte after every checkout,
-# including the external Base checkout used by Windows acceptance jobs.
-*.yml text eol=lf
-*.yaml text eol=lf
+# Source snapshots and generated manifests have identical bytes on every OS.
+# Git detects binary files automatically and leaves their contents unchanged.
+* text=auto eol=lf
