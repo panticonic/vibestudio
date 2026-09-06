@@ -156,7 +156,7 @@ describe("extension runtime dependency publication", () => {
         "extension-runtime-background-test",
         "package.json"
       );
-      expect(fs.statSync(manifest).mode & 0o222).toBe(0);
+      expect(fs.statSync(manifest).mode & 0o222).not.toBe(0);
     } finally {
       borrowed.release();
     }
@@ -783,14 +783,19 @@ describe("ensureExternalDeps", () => {
     const secondFile = fs.statSync(path.join(second, "leftpad", "index.js"));
 
     expect(firstFile.ino).toBe(secondFile.ino);
-    expect(firstFile.mode & 0o222).toBe(0);
-    expect(() => fs.writeFileSync(path.join(first, "leftpad", "index.js"), "mutated\n")).toThrow(
-      /EACCES/u
-    );
+    expect(firstFile.mode & 0o7777).toBe(secondFile.mode & 0o7777);
+    expect(firstFile.mode & 0o222).not.toBe(0);
     expect(firstFile.nlink).toBeGreaterThanOrEqual(3); // content owner + two closure views
-    expect(fs.existsSync(path.join(testExtDepsRoot, "dependency-files", "0444", "sha256"))).toBe(
-      true
-    );
+    expect(
+      fs.existsSync(
+        path.join(
+          testExtDepsRoot,
+          "dependency-files",
+          (firstFile.mode & 0o7777).toString(8).padStart(4, "0"),
+          "sha256"
+        )
+      )
+    ).toBe(true);
   });
 
   it("collects dependency content after its last published topology is gone", async () => {

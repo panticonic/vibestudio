@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
-import { blobCasPath, linkBlobFile } from "../storage/blobCas.js";
+import { blobCasPath, linkReconstructableBlobFile } from "../storage/blobCas.js";
 
 const HASH_CONCURRENCY = 8;
 const VERIFIED_CONTENT_LIMIT = 100_000;
@@ -61,7 +61,8 @@ function sameInode(left: fs.Stats, right: fs.Stats): boolean {
 async function ensureContentLink(
   storeRoot: string,
   digest: string,
-  sourcePath: string
+  sourcePath: string,
+  expectedSize: number
 ): Promise<string> {
   const target = blobCasPath(storeRoot, digest);
   const verified = verifiedContent.get(target);
@@ -81,7 +82,7 @@ async function ensureContentLink(
 
   const existing = contentInstalls.get(target);
   if (existing) return existing;
-  const pending = linkBlobFile(storeRoot, digest, sourcePath)
+  const pending = linkReconstructableBlobFile(storeRoot, digest, sourcePath, expectedSize)
     .then(async (storedPath) => {
       const stat = await fs.promises.lstat(storedPath);
       if (verifiedContent.size >= VERIFIED_CONTENT_LIMIT) {
@@ -103,15 +104,10 @@ async function ensureContentLink(
 async function replaceWithContentLink(
   filePath: string
 ): Promise<{ bytes: number; linked: boolean }> {
-  const initialStat = await fs.promises.lstat(filePath);
-  const immutableMode = initialStat.mode & 0o555;
-  if ((initialStat.mode & 0o7777) !== immutableMode) {
-    await fs.promises.chmod(filePath, immutableMode);
-  }
   const sourceStat = await fs.promises.lstat(filePath);
   const digest = await sha256File(filePath);
   const storeRoot = contentStoreRoot(sourceStat.mode);
-  let storedPath = await ensureContentLink(storeRoot, digest, filePath);
+  let storedPath = await ensureContentLink(storeRoot, digest, filePath, sourceStat.size);
   const storedStat = await fs.promises.lstat(storedPath);
   if (sameInode(sourceStat, storedStat)) return { bytes: sourceStat.size, linked: false };
 
@@ -128,7 +124,7 @@ async function replaceWithContentLink(
       // no consumer ever depends on the pool pathname itself.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       verifiedContent.delete(storedPath);
-      storedPath = await ensureContentLink(storeRoot, digest, filePath);
+      storedPath = await ensureContentLink(storeRoot, digest, filePath, sourceStat.size);
       await fs.promises.link(storedPath, replacement);
     }
     await fs.promises.rename(replacement, filePath);
@@ -143,11 +139,11 @@ async function replaceWithContentLink(
  * content store. The dependency directory must still be unpublished: callers
  * may read it only after this operation and the subsequent atomic promotion.
  *
- * Files are made read-only before publication. This is the immutability fence
- * that makes shared inodes safe: a consumer cannot accidentally mutate every
- * closure through one writable hardlink. File mode remains part of the store
- * namespace, so equal executable and data bytes never share an inode.
- * Symlinks are topology, not payload, and deliberately remain in the closure.
+ * Trusted installers finish mutations before publishing the cache. Workspace
+ * consumers receive read-only MXC resource grants; file attributes do not carry
+ * that authority. Preserve original modes in the store namespace so sharing
+ * cannot change executable or permission bits. Symlinks are topology, not
+ * payload, and deliberately remain in the closure.
  */
 export async function deduplicateDependencyContent(
   unpublishedCacheDir: string
@@ -177,28 +173,6 @@ export async function deduplicateDependencyContent(
     })
   );
   return result;
-}
-
-/**
- * Make a dependency tree immutable without reading and hashing every payload.
- * Immutability is a publication invariant; physical sharing is maintenance.
- */
-export async function makeDependencyTreeImmutable(root: string): Promise<void> {
-  const files = await regularFiles(root);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(32, files.length) }, async () => {
-      for (;;) {
-        const filePath = files[cursor++];
-        if (!filePath) return;
-        const stat = await fs.promises.lstat(filePath);
-        const immutableMode = stat.mode & 0o555;
-        if ((stat.mode & 0o7777) !== immutableMode) {
-          await fs.promises.chmod(filePath, immutableMode);
-        }
-      }
-    })
-  );
 }
 
 async function pruneShaTree(root: string): Promise<DependencyContentPrune> {

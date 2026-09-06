@@ -27,7 +27,6 @@ import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageG
 import { BuildRequestError } from "./diagnostics.js";
 import {
   deduplicateDependencyContent,
-  makeDependencyTreeImmutable,
   pruneUnreferencedDependencyContent,
 } from "./dependencyContentStore.js";
 import { scheduleDependencyContentMaintenance } from "./dependencyContentMaintenance.js";
@@ -1437,8 +1436,6 @@ async function ensureDepsInstalledOnce(
     const deduplicateStartedAt = Date.now();
     if (options.contentDeduplication === "blocking") {
       await deduplicateDependencyContent(tmpDir);
-    } else {
-      await makeDependencyTreeImmutable(tmpDir);
     }
     profile.contentFinalizationMs = Date.now() - deduplicateStartedAt;
 

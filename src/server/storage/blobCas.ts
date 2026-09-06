@@ -428,9 +428,10 @@ export async function linkBlobFile(
 }
 
 /**
- * Link a reconstructable bootstrap object without paying a durability barrier
- * for the workspace-local reference. The source CAS object is already durable;
- * callers still fail before publication if any link cannot be established.
+ * Publish a reconstructable object from caller-verified immutable content.
+ * Its authoritative input remains available for reconstruction, so publishing
+ * this cache reference needs no file or namespace durability barrier. Existing
+ * or raced destinations still have to match the supplied content address.
  */
 export async function linkReconstructableBlobFile(
   rootDir: string,
@@ -449,8 +450,9 @@ export async function linkReconstructableBlobFile(
     } catch (error) {
       if (!isErrorCode(error, "EEXIST")) throw error;
     }
-    const installed = await fsp.lstat(filePath);
-    assertRegularFileSize(installed, filePath, expectedSize);
+    if (!(await existingBlob(filePath, digest, expectedSize, sourceStat))) {
+      throw new Error(`CAS object disappeared during installation: ${filePath}`);
+    }
     return filePath;
   });
 }
