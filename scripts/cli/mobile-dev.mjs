@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import process from "process";
 import net from "net";
-import { spawn } from "child_process";
+import spawn from "cross-spawn";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";

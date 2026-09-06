@@ -11,9 +11,12 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { getInstalledNodeRuntime } from "@vibestudio/shared/runtimePaths";
 import { getCACertificates } from "node:tls";
 import { prepareNativeRuntime } from "@vibestudio/shared/nativeRuntimeResources";
 
+const appRoot = fileURLToPath(new URL("../../", import.meta.url));
 const roots: string[] = [];
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -26,7 +29,7 @@ function fixture() {
 }
 
 describe("installed native runtime resources", () => {
-  it("admits a macOS Electron bundle including metadata, without admitting its parent", () => {
+  it("uses real installed Node without admitting the Electron host bundle", () => {
     const root = fixture();
     const contents = path.join(root, "Installed.app", "Contents");
     const resourcesPath = path.join(contents, "Resources");
@@ -45,14 +48,16 @@ describe("installed native runtime resources", () => {
         report: { value: { getReport: () => ({ sharedObjects: [] }) } },
       })
     );
-    const runtime = prepareNativeRuntime({ runtimeRoot, platform: "darwin" });
-    expect(runtime.readPaths).toContain(contents);
+    const runtime = prepareNativeRuntime({ appRoot, runtimeRoot });
+    expect(runtime.readPaths).not.toContain(contents);
+    expect(runtime.executable).not.toBe(executable);
+    expect(runtime.environment).not.toHaveProperty("ELECTRON_RUN_AS_NODE");
     expect(runtime.readPaths).not.toContain(root);
     expect(runtime.readPaths).not.toContain(path.dirname(contents));
   });
   it("prepares an executable runtime independently of any workspace", () => {
     const root = fixture();
-    const runtime = prepareNativeRuntime({ runtimeRoot: root });
+    const runtime = prepareNativeRuntime({ appRoot, runtimeRoot: root });
     expect(runtime.readPaths).toContain(root);
     const trustPath = runtime.environment["NODE_EXTRA_CA_CERTS"]!;
     expect(path.dirname(trustPath)).toBe(root);
@@ -69,7 +74,7 @@ describe("installed native runtime resources", () => {
     expect(runtime.environment).not.toHaveProperty("LOCALAPPDATA");
     if (process.platform === "win32")
       expect(runtime.executable.startsWith(root + path.sep)).toBe(true);
-    else expect(runtime.executable).toBe(realpathSync(process.execPath));
+    else expect(runtime.executable).toBe(realpathSync(getInstalledNodeRuntime(appRoot).executable));
   });
 
   it.runIf(process.platform !== "win32")(
@@ -80,7 +85,9 @@ describe("installed native runtime resources", () => {
       const alias = path.join(root, "alias");
       mkdirSync(real);
       symlinkSync(real, alias, "dir");
-      expect(() => prepareNativeRuntime({ runtimeRoot: alias })).toThrow(/canonical directory/);
+      expect(() => prepareNativeRuntime({ appRoot, runtimeRoot: alias })).toThrow(
+        /canonical directory/
+      );
     }
   );
 });

@@ -1,10 +1,11 @@
 import * as esbuild from "esbuild";
+import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
 import * as fs from "fs";
 import * as path from "path";
 import { execFileSync } from "node:child_process";
-import { createPnpmInvocation } from "./scripts/cli/lib/package-manager.mjs";
+import { execPnpmSync } from "./scripts/cli/lib/package-manager.mjs";
 import { randomUUID } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
@@ -638,8 +639,7 @@ async function buildVibestudioPackages() {
 async function buildHeadlessHost() {
   console.log("Building @vibestudio/headless-host...");
   try {
-    const invocation = createPnpmInvocation(["--filter", "@vibestudio/headless-host", "build"]);
-    execFileSync(invocation.command, invocation.args, { stdio: "inherit" });
+    execPnpmSync(["--filter", "@vibestudio/headless-host", "build"], { stdio: "inherit" });
     fs.rmSync("dist/headless-host", { recursive: true, force: true });
     copyDirectoryRecursive("apps/headless-host/dist", "dist/headless-host");
     console.log("@vibestudio/headless-host built successfully!");
@@ -740,6 +740,7 @@ async function build() {
     // Dependencies: none
     await buildVibestudioPackages();
     buildNativeIsolation();
+    await stageNodeRuntime();
 
     // ========================================================================
     // STEP 1: Build standalone headless panel host
@@ -915,6 +916,7 @@ async function buildSourceServerPrerequisites() {
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
     buildNativeIsolation();
+    await stageNodeRuntime();
     await buildHeadlessHost();
     // Injected into every non-Electron/headless panel by PanelHttpServer. It
     // embeds the RPC WebSocket client, so leaving it stale can make panels use

@@ -8,6 +8,7 @@ import {
   SERVER_RUNTIME_ARTIFACTS,
   stageNpmUpdateLauncherFiles,
   stageNativeIsolationArtifacts,
+  stageNodeRuntimeArtifacts,
 } from "../scripts/build-npm-packages.mjs";
 import {
   NATIVE_ISOLATION_TARGETS,
@@ -100,6 +101,28 @@ describe("npm CLI packaging", () => {
       expect(fs.readFileSync(path.join(appRoot, "dist/mxc/linux-x64/manifest.json"), "utf8")).toBe(
         "{}"
       );
+    } finally {
+      fs.rmSync(appRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("stages the pinned stock Node runtime into the standalone server package", () => {
+    const appRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-node-stage-"));
+    const sourceRoot = path.join(appRoot, "source-runtime");
+    const packageRoot = path.join(appRoot, "package");
+    mkdirSync(path.join(sourceRoot, "dist", "node", "linux-x64", "bin"), { recursive: true });
+    writeFileSync(path.join(sourceRoot, "dist", "node", "linux-x64", "bin", "node"), "node");
+    writeFileSync(path.join(sourceRoot, "dist", "node", "linux-x64", "runtime.json"), "{}");
+    try {
+      stageNodeRuntimeArtifacts(packageRoot, {
+        root: path.join(sourceRoot, "dist", "node", "linux-x64"),
+      });
+      expect(
+        fs.existsSync(path.join(packageRoot, "dist", "node", "linux-x64", "bin", "node"))
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(packageRoot, "dist", "node", "linux-x64", "runtime.json"))
+      ).toBe(true);
     } finally {
       fs.rmSync(appRoot, { recursive: true, force: true });
     }

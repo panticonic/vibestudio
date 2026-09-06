@@ -136,7 +136,7 @@ describe("infrastructure package cache", () => {
     let buildInfoExistedWhenBuildStarted = true;
     buildInfrastructurePackages({
       cwd,
-      run: (_command, commandArgs) => {
+      run: (commandArgs) => {
         args = commandArgs;
         buildInfoExistedWhenBuildStarted = fs.existsSync(
           path.join(cwd, "packages/consumer/tsconfig.build.tsbuildinfo")

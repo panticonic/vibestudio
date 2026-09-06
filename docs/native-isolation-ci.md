@@ -14,6 +14,17 @@ AppContainer restrictions. CI does not apply firewall changes or loopback
 exemptions to make those tests pass. The existing application egress proxy remains
 separate and retains its own regression coverage.
 
+The Ubuntu 24.04 quality runner keeps its AppArmor hardening enabled. Ubuntu
+restricts unprivileged user namespaces unless the invoking application has an
+AppArmor profile granting `userns`; the stock MXC Linux backend needs that
+operation while starting its bundled `dist/mxc/linux-x64/lxc-exec`. CI loads a
+temporary profile attached only to that exact checkout executable, with
+`flags=(unconfined)` and the single `userns` rule, before the production tests.
+The profile is discarded with the ephemeral runner. CI does not change the
+global `kernel.apparmor_restrict_unprivileged_userns` setting or disable
+AppArmor. Other Linux hosts must provide an equivalent narrowly scoped profile
+when their AppArmor policy denies MXC's user namespace setup.
+
 Linked Claude regression coverage uses synthetic credentials and real MXC for
 credential extraction and profile retirement. Host tests also check session
 ownership, connection loss, startup failure, and cleanup retries. Paid-provider
@@ -120,6 +131,20 @@ must resolve this before macOS acceptance can pass.
 
 ## Native runtime compatibility
 
+Workspace utilities and npm installations use the pinned stock Node distribution
+shipped with the application, not Electron's Node compatibility mode or a Node
+installation discovered on the host. Build and package verification check the
+official archive digest and the complete extracted inventory. Electron and
+standalone server packages retain upstream npm files and relative executable
+symlinks. Extension dependency cache identity includes this Node version.
+
+Npm lifecycle scripts run inside MXC with only their installation tree and
+private home/cache directories writable. Native acceptance executes a real
+lifecycle script and checks host-file denial and cleanup. Ambient host npm
+profiles, registry tokens and Node options are not inherited; authenticated
+private registries require an explicit credential interface before they can be
+supported by this installation path.
+
 Windows console Node imports USER32. MXC's `ui.disable` enables the Win32k
 system-call mitigation and prevents that DLL from initializing (guest exit
 `0xC0000142` before JavaScript runs). Windows guests therefore keep UI system
@@ -147,3 +172,10 @@ reboot, so installing once is not evidence of working after a reboot. Runtime
 errors identify the corresponding preparation command. CI prepares these stock
 prerequisites before exercising both the runner account and an actual standard
 user, and repeats preparation on the fresh installed-application runner.
+
+The September 6 Windows Server 2025 run demonstrates that these prerequisites
+are insufficient: Node's path resolution next fails to read metadata at
+`C:\Users`. Stock MXC 0.8.0 exposes recursive filesystem grants and drive-root
+preparation, but no metadata-only ancestor grants. Broad user-directory access
+is not an acceptable substitute. This remains an upstream compatibility blocker,
+and the drive preparation itself took several minutes on the hosted runner.

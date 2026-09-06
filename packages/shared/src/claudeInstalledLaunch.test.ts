@@ -1,10 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { assertMxcPrerequisites } from "@vibestudio/process-adapter/mxc";
 import { installedClaudeCli, prepareInstalledClaudeLaunch } from "./claudeInstalledLaunch.js";
-import { collectInstalledRuntimeReadRoots, getMxcExecutable } from "./runtimePaths.js";
+import {
+  collectInstalledRuntimeReadRoots,
+  getMxcExecutable,
+  getInstalledNodeRuntime,
+} from "./runtimePaths.js";
 import type { MaterializedClaudeLaunch } from "./claudeLaunchProfile.js";
 
 vi.mock("@vibestudio/process-adapter/mxc", async (original) => ({
@@ -27,26 +32,29 @@ function fixture() {
   const entry = path.join(physicalRoot, "dist", "cli", "client.mjs");
   mkdirSync(path.dirname(entry), { recursive: true });
   writeFileSync(entry, "export {};");
+  const installed = getInstalledNodeRuntime(fileURLToPath(new URL("../../../", import.meta.url)));
+  const nodeRoot = path.join(physicalRoot, "dist", "node", `${process.platform}-${process.arch}`);
+  mkdirSync(path.dirname(nodeRoot), { recursive: true });
+  symlinkSync(installed.root, nodeRoot, process.platform === "win32" ? "junction" : "dir");
   return { root, appRoot, physicalRoot, entry };
 }
 
-it("selects the physical packaged CLI and host executable without shell quoting or guest PATH", () => {
+it("selects the physical packaged CLI and installed Node executable without shell quoting or guest PATH", () => {
   const f = fixture();
   vi.stubEnv("PATH", path.join(f.root, "untrusted command lookup"));
   const invocation = installedClaudeCli(f.appRoot);
-  expect(invocation.command).toBe(process.execPath);
+  expect(invocation.command).toBe(getInstalledNodeRuntime(f.appRoot).executable);
   expect(invocation.args).toEqual([f.entry]);
   expect(invocation.environment).toEqual({ VIBESTUDIO_APP_ROOT: f.appRoot });
 });
 
-it("marks Electron as a Node CLI runtime and rejects missing installed entry bytes", () => {
+it("uses standalone Node even in Electron and rejects missing installed entry bytes", () => {
   const f = fixture();
   const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
   Object.defineProperty(process.versions, "electron", { configurable: true, value: "fixture" });
   try {
     expect(installedClaudeCli(f.appRoot).environment).toEqual({
       VIBESTUDIO_APP_ROOT: f.appRoot,
-      ELECTRON_RUN_AS_NODE: "1",
     });
   } finally {
     if (electronDescriptor) Object.defineProperty(process.versions, "electron", electronDescriptor);

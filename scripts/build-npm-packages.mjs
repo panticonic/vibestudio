@@ -18,9 +18,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { createPnpmInvocation } from "./cli/lib/package-manager.mjs";
+import { execPnpmSync } from "./cli/lib/package-manager.mjs";
 import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 import { STANDALONE_SERVER_RUNTIME_ARTIFACTS } from "./server-runtime-artifacts.mjs";
+import { stageNodeRuntime } from "./node-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
 
@@ -46,9 +47,12 @@ async function main() {
   console.log(`Staging npm packages @ v${VERSION}`);
   assertBuilt();
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
+  // The standalone server cannot rely on Electron's beforePack hook to stage
+  // the pinned stock Node runtime used for workspace execution.
+  const nodeRuntime = await stageNodeRuntime(repoRoot);
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
-  stageServer(nativeArtifacts);
+  stageServer(nativeArtifacts, nodeRuntime);
   stageApp(nativeArtifacts);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   assertNoBundledUserlandSource(path.join(outRoot, "app"), "staged app npm package");
@@ -67,13 +71,7 @@ function assertBuilt() {
 
 function buildSelfContainedExtensionHost() {
   console.log("• Building self-contained @vibestudio/extension-host (publish)…");
-  const invocation = createPnpmInvocation([
-    "--filter",
-    "@vibestudio/extension-host",
-    "run",
-    "build",
-  ]);
-  execFileSync(invocation.command, invocation.args, {
+  execPnpmSync(["--filter", "@vibestudio/extension-host", "run", "build"], {
     cwd: repoRoot,
     stdio: "inherit",
     env: { ...process.env, VIBESTUDIO_EXTHOST_PUBLISH: "1" },
@@ -83,7 +81,7 @@ function buildSelfContainedExtensionHost() {
 // ---------------------------------------------------------------------------
 // @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
-function stageServer(nativeArtifacts) {
+function stageServer(nativeArtifacts, nodeRuntime) {
   const root = path.join(outRoot, "server");
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
@@ -93,6 +91,7 @@ function stageServer(nativeArtifacts) {
     copyFile(artifact, path.join(root, artifact));
   }
   stageNativeIsolationArtifacts(root, nativeArtifacts);
+  stageNodeRuntimeArtifacts(root, nodeRuntime);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),
@@ -388,4 +387,13 @@ export function stageNativeIsolationArtifacts(root, artifacts) {
     fs.copyFileSync(source, destination);
     if (!artifact.endsWith(".json") && !artifact.endsWith(".exe")) fs.chmodSync(destination, 0o755);
   }
+}
+
+export function stageNodeRuntimeArtifacts(root, runtime) {
+  const target = path.basename(runtime.root);
+  if (!/^(linux-(x64|arm64)|darwin-arm64|win32-x64)$/u.test(target))
+    throw new Error(`Unsupported staged Node runtime target: ${target}`);
+  const destination = path.join(root, "dist/node", target);
+  mkdirp(path.dirname(destination));
+  fs.cpSync(runtime.root, destination, { recursive: true, verbatimSymlinks: true });
 }

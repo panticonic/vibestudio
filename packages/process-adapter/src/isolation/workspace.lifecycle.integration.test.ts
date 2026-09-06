@@ -79,7 +79,10 @@ async function fixture() {
   directories.push(root);
   const runtime = path.join(root, "runtime");
   await mkdir(runtime);
-  const prepared = prepareNativeRuntime({ runtimeRoot: runtime });
+  const prepared = prepareNativeRuntime({
+    appRoot: fileURLToPath(new URL("../../../../", import.meta.url)),
+    runtimeRoot: runtime,
+  });
   const { executable } = prepared;
   const installed = fileURLToPath(new URL("../../dist/isolation/", import.meta.url));
   for (const file of ["workspaceChild.js", "control.js"])

@@ -78,8 +78,8 @@ it("permits developer HTTP clients/listeners and keeps internal cleanup offline"
   const home = path.join(root, "home");
   mkdirSync(runtimeRoot);
   mkdirSync(home);
-  const runtime = prepareNativeRuntime({ runtimeRoot, platform });
   const appRoot = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
+  const runtime = prepareNativeRuntime({ appRoot, runtimeRoot, platform });
   const launcher = getMxcExecutable(appRoot);
   let hostRequests = 0;
   const server = createServer((_req, res) => {

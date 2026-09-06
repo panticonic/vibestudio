@@ -1,0 +1,76 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  NODE_RUNTIME_VERSION,
+  NODE_RUNTIME_TARGETS,
+  nodeRuntimeTarget,
+  nodeRuntimeExecutable,
+  nodeRuntimeDirectory,
+  verifyNodeRuntimeArchive,
+  assertNodeRuntimeArtifacts,
+} from "./node-runtime-artifacts.mjs";
+
+test("pins CI and all supported installed runtime targets to the same official release", async () => {
+  assert.equal(
+    (await readFile(new URL("../.nvmrc", import.meta.url), "utf8")).trim(),
+    NODE_RUNTIME_VERSION
+  );
+  assert.match(NODE_RUNTIME_VERSION, /^\d+\.\d+\.\d+$/);
+  assert.deepEqual(NODE_RUNTIME_TARGETS.map((x) => `${x.platform}-${x.arch}`).sort(), [
+    "darwin-arm64",
+    "linux-arm64",
+    "linux-x64",
+    "win32-x64",
+  ]);
+  for (const target of NODE_RUNTIME_TARGETS) {
+    assert.match(target.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(target.archive.includes(`v${NODE_RUNTIME_VERSION}-`));
+    assert.equal(
+      nodeRuntimeExecutable(target),
+      target.platform === "win32" ? "node.exe" : "bin/node"
+    );
+  }
+  assert.throws(() => nodeRuntimeTarget("win32", "arm64"), /Unsupported/);
+});
+test("rejects substituted downloads before extraction", () => {
+  const content = Buffer.from("verified fixture archive");
+  const target = { archive: "fixture", sha256: createHash("sha256").update(content).digest("hex") };
+  verifyNodeRuntimeArchive(content, target);
+  assert.throws(
+    () => verifyNodeRuntimeArchive(Buffer.from("substitute"), target),
+    /checksum mismatch/
+  );
+});
+test("rejects changed or additional distribution files before packaging", async () => {
+  const appRoot = await mkdtemp(path.join(os.tmpdir(), "node-artifact-contract-"));
+  const target = nodeRuntimeTarget("linux", "x64");
+  const root = nodeRuntimeDirectory(appRoot, target);
+  const executable = path.join(root, "bin", "node");
+  const bytes = Buffer.from("synthetic installed binary");
+  try {
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(executable, bytes);
+    await writeFile(
+      path.join(root, "vibestudio-runtime.json"),
+      JSON.stringify({
+        version: 1,
+        nodeVersion: NODE_RUNTIME_VERSION,
+        archive: target.archive,
+        archiveSha256: target.sha256,
+        files: { "bin/node": { sha256: createHash("sha256").update(bytes).digest("hex") } },
+      })
+    );
+    assert.equal((await assertNodeRuntimeArtifacts(appRoot, target)).executable, executable);
+    await writeFile(executable, "changed");
+    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /differs/);
+    await writeFile(executable, bytes);
+    await writeFile(path.join(root, "extra.js"), "extra");
+    await assert.rejects(assertNodeRuntimeArtifacts(appRoot, target), /differs/);
+  } finally {
+    await rm(appRoot, { recursive: true, force: true });
+  }
+});
