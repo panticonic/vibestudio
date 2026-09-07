@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RemoteRpcError } from "../errors.js";
 import { createRecoveryCoordinator } from "./recoveryCoordinator.js";
 
 afterEach(() => {
@@ -74,6 +75,29 @@ describe("DefaultRecoveryCoordinator", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await run;
     expect(attempts).toBe(2); // succeeded on the 2nd attempt, no 3rd
+  });
+
+  it("keeps expected outage retries quiet but reports terminal exhaustion", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const coord = createRecoveryCoordinator();
+    coord.registerResubscribeHandler("subscription", () => {
+      const cause = new RemoteRpcError("offline", "transport", "CONNECTION_LOST");
+      throw Object.assign(new Error("subscription unavailable"), {
+        code: "connection",
+        errorCode: "CONNECTION_LOST",
+        cause,
+      });
+    });
+
+    const run = coord.run("resubscribe");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      '[RecoveryCoordinator] resubscribe handler "subscription" exhausted all 3 attempts'
+    );
   });
 
   it("late-registers a resubscribe handler AFTER a completed generation and runs it immediately", async () => {

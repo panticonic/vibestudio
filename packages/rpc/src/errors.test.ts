@@ -9,6 +9,16 @@ describe("isRpcConnectionLost", () => {
     expect(isRpcConnectionLost(new RemoteRpcError("offline", "transport", "CONNECTION_LOST"))).toBe(
       true
     );
+    const remote = new RemoteRpcError("offline", "transport", "CONNECTION_LOST");
+    expect(
+      isRpcConnectionLost(
+        Object.assign(new Error("subscription unavailable"), {
+          code: "connection",
+          errorCode: "CONNECTION_LOST",
+          cause: remote,
+        })
+      )
+    ).toBe(true);
   });
 
   it.each(["access", "service", "protocol", "application", "internal"] as const)(
@@ -26,6 +36,14 @@ describe("isRpcConnectionLost", () => {
     expect(isRpcConnectionLost(new RpcBoundaryError("offline", "transport", "ECONNRESET"))).toBe(
       false
     );
+    expect(
+      isRpcConnectionLost(
+        Object.assign(new Error("domain failure"), {
+          code: "server",
+          errorCode: "CONNECTION_LOST",
+        })
+      )
+    ).toBe(false);
     expect(isRpcConnectionLost(null)).toBe(false);
   });
 });

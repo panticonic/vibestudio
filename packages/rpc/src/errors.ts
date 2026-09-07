@@ -3,10 +3,21 @@ import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 
 /** Routine logical-session loss; callers still own recovery and mutation policy. */
 export function isRpcConnectionLost(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) return false;
-  return (
+  if (!error || typeof error !== "object") return false;
+  if (
+    "code" in error &&
     error.code === SESSION_CONNECTION_LOST_CODE &&
     (!("errorKind" in error) || error.errorKind === "transport")
+  ) {
+    return true;
+  }
+  // Domain wrappers such as PubSubError keep their own category in `code`,
+  // preserve the lower RPC code in `errorCode`, and retain the typed cause.
+  return (
+    "errorCode" in error &&
+    error.errorCode === SESSION_CONNECTION_LOST_CODE &&
+    "cause" in error &&
+    isRpcConnectionLost(error.cause)
   );
 }
 

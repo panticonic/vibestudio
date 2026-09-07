@@ -1,3 +1,5 @@
+import { isRpcConnectionLost } from "../errors.js";
+
 export type RecoveryKind = "resubscribe" | "cold-recover";
 
 export interface ResubscribeRegistrationOptions {
@@ -91,10 +93,12 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
         await handler.fn();
         return;
       } catch (error) {
-        console.warn(
-          `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}):`,
-          error
-        );
+        if (!isRpcConnectionLost(error)) {
+          console.warn(
+            `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}):`,
+            error
+          );
+        }
         if (attempt < maxAttempts) {
           await new Promise((resolve) =>
             setTimeout(resolve, Math.min(250 * 2 ** (attempt - 1), 1000))
