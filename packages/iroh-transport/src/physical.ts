@@ -38,6 +38,18 @@ export interface IrohConnectionPath {
   kind: "direct" | "relay";
   remoteAddress: string;
   rttMs?: number;
+  /** Native QUIC path counters; byte units apply to cwnd and currentMtu. */
+  stats?: {
+    udpTxDatagrams: number;
+    udpTxBytes: number;
+    udpRxDatagrams: number;
+    udpRxBytes: number;
+    cwnd: number;
+    congestionEvents: number;
+    lostPackets: number;
+    lostBytes: number;
+    currentMtu: number;
+  };
 }
 
 export interface IrohConnectionDiagnostics {

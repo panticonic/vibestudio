@@ -137,6 +137,13 @@ describe("Iroh Node transport fixture", () => {
       lostBytes: expect.any(Number),
       paths: expect.any(Array),
     });
+    expect(observedDiagnostics[0]?.paths[0]?.stats).toMatchObject({
+      currentMtu: expect.any(Number),
+      cwnd: expect.any(Number),
+      lostPackets: expect.any(Number),
+      udpTxBytes: expect.any(Number),
+      udpRxBytes: expect.any(Number),
+    });
     unsubscribe();
   });
 

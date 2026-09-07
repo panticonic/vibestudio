@@ -8,6 +8,7 @@ describe("Node Iroh physical diagnostics", () => {
   it("samples only while subscribed and emits changed path/stat snapshots", async () => {
     vi.useFakeTimers();
     let transmittedBytes = 10;
+    let lostPackets = 0;
     const native = {
       remoteId: () => ({ toString: () => "peer-endpoint" }),
       rtt: () => 12,
@@ -25,6 +26,17 @@ describe("Node Iroh physical diagnostics", () => {
           isRelay: true,
           remoteAddr: "relay.example:443",
           rttMs: 12,
+          stats: {
+            udpTxDatagrams: 1,
+            udpTxBytes: transmittedBytes,
+            udpRxDatagrams: 1,
+            udpRxBytes: 20,
+            cwnd: 12000,
+            congestionEvents: 0,
+            lostPackets,
+            lostBytes: 0,
+            currentMtu: 1200,
+          },
         },
       ],
       closed: () => new Promise<string>(() => undefined),
@@ -42,9 +54,20 @@ describe("Node Iroh physical diagnostics", () => {
     expect(snapshots).toHaveLength(2);
     expect(snapshots[1]).toMatchObject({ transmittedBytes: 30, rttMs: 12 });
 
+    // Congestion may change while the selected address and top-level byte
+    // counters stay fixed. That still needs to reach an active profiler.
+    lostPackets = 2;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(snapshots).toHaveLength(3);
+    expect(snapshots[2]?.paths[0]?.stats).toMatchObject({
+      lostPackets: 2,
+      currentMtu: 1200,
+      cwnd: 12000,
+    });
+
     unsubscribe();
     transmittedBytes = 40;
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(snapshots).toHaveLength(2);
+    expect(snapshots).toHaveLength(3);
   });
 });

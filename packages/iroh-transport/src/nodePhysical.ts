@@ -114,6 +114,17 @@ export class NodePhysicalConnection implements IrohPhysicalConnection {
         kind: path.isRelay ? ("relay" as const) : ("direct" as const),
         remoteAddress: path.remoteAddr,
         rttMs: Number(path.rttMs),
+        stats: {
+          udpTxDatagrams: path.stats.udpTxDatagrams,
+          udpTxBytes: path.stats.udpTxBytes,
+          udpRxDatagrams: path.stats.udpRxDatagrams,
+          udpRxBytes: path.stats.udpRxBytes,
+          cwnd: path.stats.cwnd,
+          congestionEvents: path.stats.congestionEvents,
+          lostPackets: path.stats.lostPackets,
+          lostBytes: path.stats.lostBytes,
+          currentMtu: path.stats.currentMtu,
+        },
       })),
     };
   }
