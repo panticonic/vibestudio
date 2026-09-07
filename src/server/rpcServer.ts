@@ -1182,11 +1182,10 @@ export class RpcServer {
     authorization: DirectAuthorityAttestation,
     invoke: () => Promise<T>
   ): Promise<T> {
-    const release = this.beginAuthorityParent(
-      receiverRuntimeId,
-      authorization,
-      createHostCaller("server", "server", SYSTEM_SUBJECT)
-    );
+    // Host scheduling authenticates entry into the DO, but is not a user
+    // delegation. Nested effects retain the DO's verified subject and code;
+    // this scope carries invocation constraints without inventing an initiator.
+    const release = this.beginAuthorityParent(receiverRuntimeId, authorization);
     try {
       return await invoke();
     } finally {

@@ -21,6 +21,7 @@ import { encodeWebSocketStreamFrame, type RpcSessionChannel } from "./rpcServer/
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   createVerifiedCaller,
+  verifiedInitiatingUserId,
   type CallerKind,
   type ServiceContext,
   type ServiceDispatcher,
@@ -3318,6 +3319,58 @@ describe("RpcServer relay behavior", () => {
     ).toThrow(/another runtime/);
 
     release();
+    expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
+  });
+
+  it("preserves the authenticated agent user for credential calls during a host wake-up", async () => {
+    const receiver = "do:workers/ai-chat:AiChat:onboarding";
+    const subject = { userId: "user-1", handle: "user1" };
+    const { server, entityCache } = createServer({
+      userSubjectSource: { resolve: () => subject },
+    });
+    entityCache._onActivate(makeRecord(receiver, "do", { repoPath: "workers/ai-chat" }));
+    const nonce = "host-minted-onboarding-wake-up";
+    const contexts: ServiceContext[] = [];
+    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+      contexts.push(ctx);
+    });
+    await server.withAuthorityParent(
+      receiver,
+      {
+        nonce,
+        method: "__alarm",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      async () => {
+        const request: InternalRpcRequest = {
+          type: "request",
+          requestId: "onboarding-credential",
+          fromId: receiver,
+          method: "credentials.resolveCredential",
+          args: [],
+          authorityParentNonce: nonce,
+        };
+        await testServer(server).handleEnvelopeRequest(
+          receiver,
+          "do",
+          undefined,
+          envelopeFromMessage({
+            selfId: receiver,
+            from: receiver,
+            target: "main",
+            callerKind: "do",
+            message: request,
+          }),
+          request,
+          new AbortController().signal
+        );
+      }
+    );
+    expect(contexts).toHaveLength(1);
+    expect(verifiedInitiatingUserId(contexts[0]!)).toBe(subject.userId);
+    expect(contexts[0]!.authorizingCaller).toBeUndefined();
+    expect(contexts[0]!.caller.runtime.id).toBe(receiver);
+    expect(contexts[0]!.caller.code?.repoPath).toBe("workers/ai-chat");
     expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
   });
 
