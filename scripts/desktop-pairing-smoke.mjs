@@ -1091,13 +1091,23 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
       if (!runtime || !pane) return null;
       const available = runtime.getBoundingClientRect();
       const bounds = pane.getBoundingClientRect();
+      const frame = document.querySelector('.workspace-desktop')?.getBoundingClientRect();
+      const titleBar = document.querySelector('.workspace-desktop-titlebar [data-shell-top-chrome="titlebar"]')?.getBoundingClientRect();
       return { panelId: pane.getAttribute('data-pane-panel-id'),
+        privateOwnerBands: [...document.querySelectorAll('.workspace-section[aria-label="Personal workspace"] [aria-label^="Panels owned by"], .workspace-section[aria-label="System workspace"] [aria-label^="Panels owned by"]')].length,
+        titleBarSpansWindow: Boolean(frame && titleBar &&
+          Math.abs(titleBar.left - frame.left) <= 2 &&
+          Math.abs(titleBar.right - frame.right) <= 2),
         availableWidth: available.width, paneWidth: bounds.width,
         rightGap: available.right - bounds.right };
     })()`,
       "reading the initial Personal pane geometry"
     );
     if (layout?.panelId) {
+      if (!layout.titleBarSpansWindow)
+        throw new Error("The desktop title bar does not span the workspace sidebar and content");
+      if (layout.privateOwnerBands !== 0)
+        throw new Error("Private workspaces should show one panel tree without owner bands");
       const page = await chromePage(app, deadline);
       const snapshot = await nativeRpc(page, workspaceId, "view.getLocalPresentation", [
         layout.panelId,

@@ -630,6 +630,44 @@ describe("ViewManager", () => {
       expect(overlayView.webContents.focus).not.toHaveBeenCalled();
     });
 
+    it("attributes content overlays only to their live hosted-shell owner", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const hostedShellView = vm.createView({
+        id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
+        "file:///hosted-shell/index.html"
+      );
+
+      vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-test");
+      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+
+      expect(
+        vm.findHostedShellViewIdByContentOverlayWebContentsId(overlayView.webContents.id)
+      ).toBe("@workspace-apps/shell");
+      expect(vm.findHostedShellViewIdByContentOverlayWebContentsId(999_999)).toBeNull();
+
+      (hostedShellView.webContents.isDestroyed as unknown as Mock).mockReturnValue(true);
+      expect(
+        vm.findHostedShellViewIdByContentOverlayWebContentsId(overlayView.webContents.id)
+      ).toBeNull();
+      (hostedShellView.webContents.isDestroyed as unknown as Mock).mockReturnValue(false);
+
+      vm.setHostedShellReady("@workspace-apps/shell", false, "renderer-test");
+      expect(
+        vm.findHostedShellViewIdByContentOverlayWebContentsId(overlayView.webContents.id)
+      ).toBeNull();
+    });
+
     it("reports the user-visible handoff when the hosted shell becomes ready", () => {
       const vm = new ViewManager({
         window: mockWindow,

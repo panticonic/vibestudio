@@ -2524,7 +2524,9 @@ app.on("ready", async () => {
         if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
           return { callerId: "shell", callerKind: "shell" };
         }
-        const callerId = viewManager.findViewIdByWebContentsId(webContentsId);
+        const callerId =
+          viewManager.findViewIdByWebContentsId(webContentsId) ??
+          viewManager.findHostedShellViewIdByContentOverlayWebContentsId(webContentsId);
         if (!callerId) return null;
         const viewInfo = viewManager.getViewInfo(callerId);
         const caller = resolveElectronViewCaller(callerId, viewInfo);
@@ -2680,7 +2682,9 @@ app.on("ready", async () => {
       if (shellContents && !shellContents.isDestroyed() && shellContents.id === event.sender.id) {
         return "shell";
       }
-      const viewId = viewManager.findViewIdByWebContentsId(event.sender.id);
+      const viewId =
+        viewManager.findViewIdByWebContentsId(event.sender.id) ??
+        viewManager.findHostedShellViewIdByContentOverlayWebContentsId(event.sender.id);
       if (!viewId) throw new Error("Unknown caller webContents");
       return viewId;
     };

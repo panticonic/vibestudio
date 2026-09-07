@@ -2689,6 +2689,30 @@ export class ViewManager {
   }
 
   /**
+   * Resolve an isolated shell content overlay to the live hosted-shell app that
+   * owns it. Overlay documents are separate WebContentsViews, so they are not
+   * present in the managed-view reverse map. Their authority is nevertheless
+   * exactly the active hosted shell's authority and expires with that hosting
+   * lifecycle.
+   */
+  findHostedShellViewIdByContentOverlayWebContentsId(webContentsId: number): string | null {
+    if (!this.shellContentOverlay.ownsWebContentsId(webContentsId)) return null;
+    if (!this.nativePanelSlots.hostedShellReady) return null;
+    const ownerId = this.nativePanelSlots.activeHostedShellViewId;
+    if (!ownerId) return null;
+    const owner = this.views.get(ownerId);
+    if (
+      !owner ||
+      owner.type !== "app" ||
+      !owner.hostChrome ||
+      owner.view.webContents.isDestroyed()
+    ) {
+      return null;
+    }
+    return ownerId;
+  }
+
+  /**
    * Get WebContents for a view by ID.
    * Returns null if view doesn't exist or is destroyed.
    */

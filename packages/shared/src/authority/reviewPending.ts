@@ -27,6 +27,11 @@ export interface PendingReviewNotice {
   message: string;
 }
 
+/** A queued authority decision that a surface can route to the shared presenter. */
+export interface PendingAuthorityNotice extends PendingReviewNotice {
+  kind: "review" | "acquisition";
+}
+
 interface CodedError {
   code?: unknown;
   errorCode?: unknown;
@@ -54,6 +59,36 @@ export function pendingReviewNotice(error: unknown): PendingReviewNotice | null 
     title: review.title,
     message: `Waiting for you to finish reviewing ${review.title}.`,
   };
+}
+
+/** Reads either an existing unit review or an exact runtime acquisition. */
+export function pendingAuthorityNotice(error: unknown): PendingAuthorityNotice | null {
+  const review = pendingReviewNotice(error);
+  if (review) return { ...review, kind: "review" };
+  if (typeof error !== "object" || error === null) return null;
+  for (const candidate of payloads(error as CodedError)) {
+    const acquisition = candidate["acquisition"];
+    if (typeof acquisition !== "object" || acquisition === null) continue;
+    const value = acquisition as Record<string, unknown>;
+    if (
+      value["pending"] !== true ||
+      typeof value["acquisitionId"] !== "string" ||
+      typeof value["renderedAction"] !== "string"
+    ) {
+      continue;
+    }
+    return {
+      kind: "acquisition",
+      approvalId: value["acquisitionId"],
+      title: value["renderedAction"],
+      message: `Your approval is needed to ${value["renderedAction"]}.`,
+    };
+  }
+  return null;
+}
+
+export function isAuthorityPending(error: unknown): boolean {
+  return isReviewPending(error) || pendingAuthorityNotice(error)?.kind === "acquisition";
 }
 
 /** True for a `review-pending` outcome even when its payload did not survive. */

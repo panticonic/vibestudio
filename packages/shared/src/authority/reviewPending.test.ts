@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { isReviewPending, pendingReviewNotice } from "./reviewPending.js";
+import {
+  isAuthorityPending,
+  isReviewPending,
+  pendingAuthorityNotice,
+  pendingReviewNotice,
+} from "./reviewPending.js";
 
 /** The shape the dispatcher throws in-process. */
 function accessError(): Record<string, unknown> {
@@ -70,5 +75,45 @@ describe("pendingReviewNotice", () => {
     const cyclic: Record<string, unknown> = { code: "EREVIEWPENDING" };
     cyclic["cause"] = cyclic;
     expect(isReviewPending(cyclic)).toBe(true);
+  });
+});
+
+describe("pendingAuthorityNotice", () => {
+  it("reads an exact pending acquisition through an extension wrapper", () => {
+    const wrapped = {
+      cause: {
+        code: "EACQUIRE",
+        errorData: {
+          acquisition: {
+            acquisitionId: "acq:templates-catalog",
+            renderedAction: "read responses from github.com",
+            pending: true,
+          },
+        },
+      },
+    };
+    expect(pendingAuthorityNotice(wrapped)).toEqual({
+      kind: "acquisition",
+      approvalId: "acq:templates-catalog",
+      title: "read responses from github.com",
+      message: "Your approval is needed to read responses from github.com.",
+    });
+    expect(isAuthorityPending(wrapped)).toBe(true);
+  });
+
+  it("does not present a completed or malformed acquisition", () => {
+    expect(
+      pendingAuthorityNotice({
+        code: "EACQUIRE",
+        errorData: {
+          acquisition: {
+            acquisitionId: "acq:done",
+            renderedAction: "read responses from github.com",
+            pending: false,
+          },
+        },
+      }),
+    ).toBeNull();
+    expect(pendingAuthorityNotice({ code: "EACQUIRE", errorData: {} })).toBeNull();
   });
 });
