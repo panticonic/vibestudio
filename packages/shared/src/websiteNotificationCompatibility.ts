@@ -1,6 +1,8 @@
+export type WebsiteNotificationPermission = "default" | "denied" | "granted";
+
 export interface WebsiteNotificationAdapter {
-  permission(): NotificationPermission;
-  requestPermission(): Promise<NotificationPermission>;
+  permission(): WebsiteNotificationPermission;
+  requestPermission(): Promise<WebsiteNotificationPermission>;
   show(title: string, options: unknown): Promise<string>;
   close(id: string): Promise<void>;
   onEvent(listener: (event: { id: string; type: "click" | "close" }) => void): () => void;
