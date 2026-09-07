@@ -29,9 +29,10 @@ import type {
 } from "../types.js";
 import type { DecodedFramedStream } from "../protocol/streamCodec.js";
 import { decodeIrohStreamResponseHead } from "../protocol/irohStreamResponse.js";
-import { RemoteRpcError } from "../errors.js";
+import { RemoteRpcError, RpcBoundaryError } from "../errors.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
+import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import {
   decodeIrohSessionControlFrame,
   encodeIrohSessionControlFrame,
@@ -767,12 +768,16 @@ class ClientPipe implements IrohClientPipe {
   async close(): Promise<void> {
     return (this.closePromise ??= (async () => {
       this.setStatus("disconnected");
-      for (const session of this.sessions.values()) session.fail(new Error("Iroh pipe closed"));
+      const error = new RpcBoundaryError(
+        "Iroh pipe closed",
+        "transport",
+        SESSION_CONNECTION_LOST_CODE
+      );
+      for (const session of this.sessions.values()) session.fail(error);
       this.sessions.clear();
       this.unsubscribePhysicalDiagnostics?.();
       this.diagnosticsChanged();
-      for (const pending of this.pendingOpens.values())
-        pending.reject(new Error("Iroh pipe closed"));
+      for (const pending of this.pendingOpens.values()) pending.reject(error);
       this.pendingOpens.clear();
       await this.controlWriter?.finish().catch(() => undefined);
       this.connection.close(0n, new TextEncoder().encode("client closed"));

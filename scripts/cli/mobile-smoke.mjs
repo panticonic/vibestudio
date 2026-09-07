@@ -1224,6 +1224,7 @@ function findNodeBounds(xml, text, options = {}) {
 async function tapVisibleNode(device, xml, text, options = {}) {
   const bounds = findNodeBounds(xml, text, options);
   if (!bounds) return false;
+  console.log(`[mobile-smoke] Tap label: ${text}`);
   await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
   return true;
 }
@@ -1249,6 +1250,7 @@ async function tapVisibleNodeByResourceId(device, xml, resourceId) {
     if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) {
       return false;
     }
+    console.log(`[mobile-smoke] Tap action: ${resourceId}`);
     await adb(
       device,
       "shell",
@@ -1512,7 +1514,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       await sleep(1_000);
       continue;
     }
-    if (await tapVisibleNode(device, xml, "Add to workspace")) {
+    if (await tapVisibleNodeByResourceId(device, xml, "approval-action-accept-install-review")) {
       await sleep(1_000);
       continue;
     }
@@ -1721,6 +1723,12 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   }
   assertNoBlockingPermissionDialog(panelXml);
   await assertNoVisiblePanelCrash(device, panelXml, "Panel rendering");
+  const panelLabels = collectWindowLabels(panelXml);
+  if (!panelLabels.includes("Personal") || !panelLabels.includes("panels/chat")) {
+    throw new Error(
+      `The visible panel is not Personal's automatic onboarding chat: ${summarizeLabels(panelLabels)}`
+    );
+  }
   await fsp.mkdir(screenshotDir, { recursive: true });
   const screenshotPath = path.join(
     screenshotDir,

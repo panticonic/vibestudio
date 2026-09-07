@@ -18,6 +18,7 @@ import {
 } from "@vibestudio/iroh-transport/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRpcClient } from "../client.js";
+import { isRpcConnectionLost } from "../errors.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import { encodeIrohStreamResponseHead } from "../protocol/irohStreamResponse.js";
 import {
@@ -89,13 +90,19 @@ describe("Iroh RPC client over real local QUIC", () => {
         return token;
       },
     });
-    const rejected = expect(session.ready?.()).rejects.toThrow("Iroh pipe closed");
+    const rejected = session.ready?.().catch((reason: unknown) => reason);
     try {
       await tokenRequested;
       await pipe.close();
       // Readiness settles even while token retrieval remains pending. Vitest
       // also rejects any unhandled rejection from the pending open result.
-      await rejected;
+      const error = await rejected;
+      expect(error).toMatchObject({
+        message: "Iroh pipe closed",
+        errorKind: "transport",
+        code: "CONNECTION_LOST",
+      });
+      expect(isRpcConnectionLost(error)).toBe(true);
     } finally {
       releaseToken("expired-credential");
       await serverTask;
