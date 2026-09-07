@@ -481,7 +481,15 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
       personal.socket,
       'document.cookie = "vibestudio_workspace_probe=personal; path=/; SameSite=Strict"'
     );
-    const originalUrl = await cdpEvaluate(personal.socket, "location.href");
+    const originalDocument = await cdpEvaluate(
+      personal.socket,
+      `(() => {
+      window.__workspaceDocumentProbe = crypto.randomUUID();
+      return { url: location.href, identity: window.__workspaceDocumentProbe,
+        timeOrigin: performance.timeOrigin };
+    })()`
+    );
+    const originalUrl = originalDocument.url;
     await tapButtonByText(device, "Open panel drawer", deadlineMs);
     await waitForVisibleLabel(device, "Your workspaces", deadlineMs);
     await fsp.mkdir(screenshotDir, { recursive: true });
@@ -617,8 +625,25 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
       );
     }
     await dismissNavigationDrawerIfOpen(device);
-    if ((await cdpEvaluate(personal.socket, "location.href")) !== originalUrl) {
-      throw new Error("Returning to Personal replaced its retained panel document");
+    const returnedDocument = await cdpEvaluate(
+      personal.socket,
+      `({
+      url: location.href, identity: window.__workspaceDocumentProbe,
+      timeOrigin: performance.timeOrigin
+    })`
+    );
+    if (
+      returnedDocument?.url !== originalUrl ||
+      returnedDocument?.identity !== originalDocument.identity ||
+      returnedDocument?.timeOrigin !== originalDocument.timeOrigin
+    ) {
+      const packet = path.join(screenshotDir, "personal-document-retention.json");
+      await fsp.writeFile(packet, JSON.stringify({ originalDocument, returnedDocument }, null, 2), {
+        mode: 0o600,
+      });
+      throw new Error(
+        `Returning to Personal replaced its retained panel document; evidence: ${packet}`
+      );
     }
     console.log(
       "[mobile-smoke] Workspace isolation: System and Personal keep separate browser cookies and retained panel focus"
