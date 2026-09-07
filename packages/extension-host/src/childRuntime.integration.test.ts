@@ -194,6 +194,8 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
         proc!.postMessage(frame);
       },
     };
+    let protectedStoreAttempts = 0;
+    const authorityWaits: unknown[][] = [];
     let extensionLogArgs: unknown[] | undefined;
     const readyPromise = waitForMessage<{ ws: typeof channel; message: RpcRequest }>(
       (resolve, reject) => {
@@ -216,6 +218,36 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
               const envelope = message.envelope as RpcEnvelope | undefined;
               const rpc = envelope?.message as RpcMessage | undefined;
               if (!envelope || rpc?.type !== "request") return;
+              if (rpc.method === "upsertImportJob") {
+                protectedStoreAttempts += 1;
+                const response: RpcResponse =
+                  protectedStoreAttempts === 1
+                    ? {
+                        type: "response",
+                        requestId: rpc.requestId,
+                        error: "upsertImportJob: authority acquisition required",
+                        errorKind: "access",
+                        errorCode: "EACQUIRE",
+                        errorData: {
+                          acquisition: {
+                            acquisitionId: "acq:browser-import",
+                            ownerRuntimeId: "@workspace-extensions/process-test",
+                          },
+                        },
+                      }
+                    : {
+                        type: "response",
+                        requestId: rpc.requestId,
+                        result: { jobId: "import-1", phase: "queued" },
+                      };
+                ws.send(
+                  JSON.stringify({
+                    type: "ws:routed",
+                    envelope: makeEnvelope(envelope.target, envelope.from, "do", response),
+                  } satisfies WsServerMessage)
+                );
+                return;
+              }
               const response: RpcResponse = {
                 type: "response",
                 requestId: rpc.requestId,
@@ -241,7 +273,10 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
             const response: RpcResponse = {
               type: "response",
               requestId: rpc.requestId,
-              result: null,
+              result:
+                rpc.method === "authority.awaitDecision"
+                  ? (authorityWaits.push(rpc.args), { state: "decided" })
+                  : null,
             };
             ws.send(
               JSON.stringify({
@@ -269,6 +304,58 @@ describe.each(modes)("extension child runtime (%s)", (mode) => {
       hasFetch: false,
     });
     expect(extensionLogArgs).toEqual([{ level: "info", message: "activated" }]);
+
+    const importRequestId = randomUUID();
+    const importResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      const onImportResponse = (raw: unknown) => {
+        try {
+          const message = JSON.parse(String(raw)) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === importRequestId) {
+            proc!.off("message", onImportResponse);
+            resolve(rpc);
+          }
+        } catch (err) {
+          proc!.off("message", onImportResponse);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      ready.ws.on("message", onImportResponse);
+      ready.ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: makeEnvelope("main", "@workspace-extensions/process-test", "server", {
+            type: "request",
+            requestId: importRequestId,
+            fromId: "main",
+            method: "extension.invoke",
+            args: [
+              "targetEcho",
+              [
+                "do:workers/browser-data:BrowserDataDO:browser:user-1",
+                "upsertImportJob",
+                { jobId: "import-1", phase: "queued" },
+              ],
+              {
+                requestId: importRequestId,
+                extensionName: "@workspace-extensions/process-test",
+                method: "providers.browserData.startImport",
+                caller: { callerId: "panel:nav-a", callerKind: "panel", userId: "user-1" },
+              },
+            ],
+          } satisfies RpcRequest),
+        } satisfies WsServerMessage)
+      );
+    });
+
+    expect(importResponse).toMatchObject({
+      type: "response",
+      requestId: importRequestId,
+      result: { jobId: "import-1", phase: "queued" },
+    });
+    expect(authorityWaits).toEqual([[{ acquisitionId: "acq:browser-import" }]]);
+    expect(protectedStoreAttempts).toBe(2);
 
     const requestId = randomUUID();
     const response = await waitForMessage<RpcResponse>((resolve, reject) => {
