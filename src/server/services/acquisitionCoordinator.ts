@@ -47,6 +47,14 @@ export interface AcquisitionOutcome {
   info?: AcquisitionInfo;
 }
 
+/** Internal failures travel through the existing owner wait as RPC errors. */
+type AcquisitionSettlement = AcquisitionOutcome | { state: "failed"; error: unknown };
+
+function acquisitionOutcome(settlement: AcquisitionSettlement): AcquisitionOutcome {
+  if (settlement.state === "failed") throw settlement.error;
+  return settlement;
+}
+
 interface PendingAcquisition {
   requestKey: string;
   info: AcquisitionInfo;
@@ -56,8 +64,8 @@ interface PendingAcquisition {
   resource: ResourceScope;
   /** When the request began waiting, so a reviewer can see what has been stuck. */
   requestedAt: number;
-  outcome: Promise<AcquisitionOutcome>;
-  settle: (outcome: AcquisitionOutcome) => void;
+  outcome: Promise<AcquisitionSettlement>;
+  settle: (outcome: AcquisitionSettlement) => void;
   continuation: "in-band" | "owner-redrive";
 }
 
@@ -85,7 +93,7 @@ interface CompletedAcquisition {
   ownerRuntimeId: string;
   sessionId: string;
   info: AcquisitionInfo;
-  outcome: AcquisitionOutcome;
+  outcome: AcquisitionSettlement;
   expiresAt: number;
 }
 
@@ -780,8 +788,8 @@ export class AcquisitionCoordinator {
         : ("queue" as const);
 
     const cardType = cardTypeForGroup(inputs);
-    let settle!: (outcome: AcquisitionOutcome) => void;
-    const outcome = new Promise<AcquisitionOutcome>((resolve) => {
+    let settle!: (outcome: AcquisitionSettlement) => void;
+    const outcome = new Promise<AcquisitionSettlement>((resolve) => {
       settle = resolve;
     });
     const info: AcquisitionInfo = {
@@ -810,7 +818,7 @@ export class AcquisitionCoordinator {
     this.byId.set(acquisitionId, entry);
     info.pending = true;
     void this.present(entry, inputs, attention, signal).catch((error) => {
-      this.finish(entry, { state: "closed" });
+      this.finish(entry, { state: "failed", error });
       console.error("[AuthorityAcquisition] approval presentation failed:", error);
     });
     return { ...info };
@@ -905,8 +913,8 @@ export class AcquisitionCoordinator {
     const existing = this.byRequestKey.get(requestKey);
     if (existing) return { ...existing.info, pending: true };
     const acquisitionId = acquisitionIdFor(requestKey);
-    let settle!: (outcome: AcquisitionOutcome) => void;
-    const outcome = new Promise<AcquisitionOutcome>((resolve) => {
+    let settle!: (outcome: AcquisitionSettlement) => void;
+    const outcome = new Promise<AcquisitionSettlement>((resolve) => {
       settle = resolve;
     });
     const info: AcquisitionInfo = {
@@ -1067,7 +1075,7 @@ export class AcquisitionCoordinator {
       .catch((error) => {
         console.error("[AuthorityAcquisition] source delta presentation failed:", error);
         entry.info.pending = false;
-        this.finish(entry, { state: "closed" });
+        this.finish(entry, { state: "failed", error });
       });
     return { ...info, pending: true };
   }
@@ -1132,7 +1140,8 @@ export class AcquisitionCoordinator {
     if (!entry) {
       this.pruneTerminalCaches(Date.now());
       const completed = this.completedById.get(input.acquisitionId);
-      if (completed?.ownerRuntimeId === input.ownerRuntimeId) return completed.outcome;
+      if (completed?.ownerRuntimeId === input.ownerRuntimeId)
+        return acquisitionOutcome(completed.outcome);
       throw Object.assign(new Error("Acquisition is not owned by this task"), { code: "EACCES" });
     }
     if (entry.info.ownerRuntimeId !== input.ownerRuntimeId) {
@@ -1143,15 +1152,17 @@ export class AcquisitionCoordinator {
     // the fire-and-forget classification from the original protected call.
     entry.continuation = "in-band";
     const signal = input.signal;
-    if (!signal) return await entry.outcome;
+    if (!signal) return acquisitionOutcome(await entry.outcome);
     if (signal.aborted) throw acquisitionWaitAbortError();
-    return await new Promise<AcquisitionOutcome>((resolve, reject) => {
-      const abort = () => reject(acquisitionWaitAbortError());
-      signal.addEventListener("abort", abort, { once: true });
-      void entry.outcome.then(resolve, reject).finally(() => {
-        signal.removeEventListener("abort", abort);
-      });
-    });
+    return acquisitionOutcome(
+      await new Promise<AcquisitionSettlement>((resolve, reject) => {
+        const abort = () => reject(acquisitionWaitAbortError());
+        signal.addEventListener("abort", abort, { once: true });
+        void entry.outcome.then(resolve, reject).finally(() => {
+          signal.removeEventListener("abort", abort);
+        });
+      })
+    );
   }
 
   closeSession(sessionId: string): void {
@@ -1446,7 +1457,7 @@ export class AcquisitionCoordinator {
     });
   }
 
-  private finish(entry: PendingAcquisition, outcome: AcquisitionOutcome): void {
+  private finish(entry: PendingAcquisition, outcome: AcquisitionSettlement): void {
     if (this.byId.get(entry.info.acquisitionId) !== entry) return;
     this.byId.delete(entry.info.acquisitionId);
     this.byRequestKey.delete(entry.requestKey);

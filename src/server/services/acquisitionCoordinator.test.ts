@@ -61,6 +61,74 @@ function reviewedPresentation() {
 }
 
 describe("AcquisitionCoordinator", () => {
+  it.each(["waiting", "waiting-abortable", "late"])(
+    "preserves presentation failures for an owner waiter (%s)",
+    async (mode) => {
+      const late = mode === "late";
+      const grantStore = new CapabilityGrantStore({
+        statePath: mkdtempSync(join(tmpdir(), "authority-failure-")),
+      });
+      const failure = Object.assign(new Error("Approval requester is not admitted to this scope"), {
+        code: "EACCES",
+      });
+      let failPresentation!: (error: Error) => void;
+      const notifyOwner = vi.fn();
+      const coordinator = new AcquisitionCoordinator({
+        approvalQueue: {
+          request: () =>
+            new Promise((_, reject) => {
+              failPresentation = reject;
+            }),
+        } as never,
+        grantStore,
+        notifyOwner,
+      });
+      const snap = snapshot();
+      const input = {
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "gated" as const,
+        caller: createVerifiedCaller("agent:1", "agent", null, {
+          agentId: "a",
+          entityId: "e",
+          contextId: "c",
+          channelId: "chat-1",
+        }),
+        renderedAction: "access example.com",
+        resource: { kind: "origin" as const, origin: "https://example.com" },
+        presentation: reviewedPresentation(),
+      };
+      try {
+        const info = coordinator.request(input);
+        await vi.waitFor(() => expect(failPresentation).toBeDefined());
+        const wait = () =>
+          coordinator.awaitDecision({
+            acquisitionId: info.acquisitionId,
+            ownerRuntimeId: "agent:1",
+            ...(mode === "waiting-abortable" ? { signal: new AbortController().signal } : {}),
+          });
+        const pending = late ? undefined : wait();
+        const assertion = pending ? expect(pending).rejects.toBe(failure) : undefined;
+        failPresentation(failure);
+        if (late) {
+          await vi.waitFor(() => expect(coordinator.pendingViews()).toHaveLength(0));
+          await expect(wait()).rejects.toBe(failure);
+        } else await assertion;
+        if (late) expect(notifyOwner).toHaveBeenCalledWith("agent:1", info.acquisitionId);
+        else expect(notifyOwner).not.toHaveBeenCalled();
+        await expect(
+          coordinator.awaitDecision({
+            acquisitionId: info.acquisitionId,
+            ownerRuntimeId: "another-owner",
+          })
+        ).rejects.toThrow("Acquisition is not owned by this task");
+        expect(grantStore.grantsForSubjects(["session:chat-1"], snap.capability)).toEqual([]);
+      } finally {
+        grantStore.close();
+      }
+    }
+  );
+
   it("presents planned task rules once and persists only selected rows", async () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-task-rules-"));
     const grantStore = new CapabilityGrantStore({ statePath });
