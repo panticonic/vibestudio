@@ -9,6 +9,7 @@ import type {
   ApprovalRequesterIdentity,
   DiffReviewEntry,
   PendingApproval,
+  PendingApprovalBase,
   PendingUnitInstallReviewApproval,
 } from "@vibestudio/shared/approvals";
 import type {
@@ -169,6 +170,7 @@ const pendingApprovalBaseShape = {
   repoPath: z.string(),
   effectiveVersion: z.string(),
   requestedAt: z.number(),
+  executionPlatform: z.enum(["windows", "macos", "linux"]).optional(),
   requestedByUserId: z.string().min(1).optional(),
   operationId: z.string().optional(),
   taskSubject: z.string().optional(),
@@ -209,6 +211,8 @@ const pendingApprovalBaseShape = {
   requester: approvalRequesterSchema.optional(),
   operation: approvalOperationSchema.optional(),
   diffReview: z.array(diffReviewSchema).optional(),
+} satisfies {
+  [K in keyof PendingApprovalBase]-?: z.ZodType<PendingApprovalBase[K]>;
 };
 
 export const authorityRowDiffSchema = z

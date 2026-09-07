@@ -26,6 +26,28 @@ describe("shellApproval service contract", () => {
     expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
   });
 
+  it("carries the server execution platform on pending capability approvals", () => {
+    const approval = {
+      approvalId: "approval-platform",
+      callerId: "do:worker:one",
+      callerKind: "do" as const,
+      repoPath: "workers/one",
+      effectiveVersion: "ev-one",
+      requestedAt: 0,
+      executionPlatform: "macos" as const,
+      kind: "capability" as const,
+      capability: "runtime.code-execution.manage",
+      title: "Run code",
+    };
+
+    expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
+    expect(
+      shellApprovalMethods.listPending.returns.safeParse([
+        { ...approval, executionPlatform: "aix" },
+      ]).success
+    ).toBe(false);
+  });
+
   it("carries every registered authority prompt card across listPending", () => {
     const approvals = AUTHORITY_PROMPT_CARD_TYPES.map((cardType, index) => ({
       approvalId: `approval-${index}`,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { createApprovalQueue, type UnitInstallReviewQueueRequest } from "./approvalQueue.js";
 
 function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0]> = {}) {
@@ -57,6 +58,9 @@ describe("approvalQueue", () => {
     } as UnitInstallReviewQueueRequest);
 
     expect(queue.listPending()[0]?.executionPlatform).toBe("macos");
+    expect(shellApprovalMethods.listPending.returns.parse(queue.listPending())).toEqual(
+      queue.listPending()
+    );
   });
 
   it("omits an unknown host platform instead of changing runtime admission", () => {
