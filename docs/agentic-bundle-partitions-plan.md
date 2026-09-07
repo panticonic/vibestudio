@@ -244,12 +244,83 @@ transport-wide barrier was removed. Focused lifecycle tests and host hooks pass;
 `03579d94f` now also requires the same completed onboarding panel and card after restart.
 Native replay remains in progress.
 
-The subsequent live report of indefinite onboarding typing is a separate unresolved
-real-credential integration issue. A reproduced live turn stalls at the credential
-RPC before any approval reaches Personal's queue; no missing-credential or OS keychain
-prompt was found. Deterministic inference fixtures do not exercise this real encrypted
-credential/agent RPC/approval path. Keep the automatic onboarding tests and add coverage
-of that boundary; do not substitute manual chat or alter the queue without evidence.
+The live report of indefinite onboarding typing exposed incorrect attribution at
+host-driven DO invocation. Native stage tracing proved that the panel caller, agent
+creation initiator, durable owner, and credential caller all carried the same real
+user. `RpcServer.withAuthorityParent` nevertheless installed a synthetic
+`server/system` authorizer. The credential service preferred that authorizer and
+queued a private approval for `system`; the real user's shell correctly could not
+see it. This is not an entity-ownership or overlay-rendering failure.
+
+The wrapper predates this workspace work (July 24, `8f23c2d31`); the fabricated
+authorizer was added August 7 in `3a4160192`. Host `2b1a3f066` removes it.
+Host-driven invocations now retain the authenticated DO subject for nested effects
+while preserving the exact receiver nonce, capability constraints, context integrity,
+and invocation lifetime. Actual delegated calls still retain their verified
+initiator. The regression exercises the wrapper and nested credential RPC dispatcher;
+all 122 RPC server tests pass. Earlier `11d3b0996` and `f72f0e202` made approval reads,
+decisions, and event audiences consistent with verified initiators, but did not fix
+the host wrapper's fabricated attribution.
+
+Host `ed8351977` rejects private approvals without an eligible workspace member
+before persistence. Base `bcb2581` terminates model execution on structured user
+refusal or receiver rejection, rather than retrying an unanswerable request.
+Administrative workspace-unit admission remains supported. Existing queue fixtures
+retain their behavior assertions with explicit private request owners. Focused host
+checks (78 tests), model executor checks (32 tests), host commit checks, and all three
+userland typechecks pass. The existing loop and chat projection suites also pass
+(150 tests), including terminal credential failure closing the interactive turn and
+rendering the failure reason as a visible diagnostic. Real credential prompt
+presentation now passes native acceptance: the real Personal credential card remained
+visible across a six-second refresh interval and accepted a one-time decision.
+The same automatic turn passed credential resolution, then hit a second local
+credential check in network egress. That caller lacked user attribution; the queue
+correctly rejected it, but the proxy reduced the structured rejection to HTTP 502
+and the model eventually reported no progress. This is not evidence of an external
+provider failure. Host `140791f9b` now resolves egress accounts through the same
+live user-subject source as RPC, instead of retaining the subject-less image registration. Focused
+identity tests pass (11 tests) and normal host checks pass. Host `cf22d9d1a` preserves
+structured authority rejection through the existing egress error path: access
+failures become terminal 403 responses and retain code/details for RPC proxy
+callers. All 63 egress tests and normal host checks pass. Combined native
+real-credential replay remains required. Deterministic model fixtures do not prove
+this real-credential path.
+
+The subsequent user report of failed onboarding reads reproduces in the existing
+`onboarding-opening-overview` system test: its validator passed despite five
+unexpected tool failures, including read and provenance. This is an inadequate
+acceptance assertion as well as a runtime defect. Repair must retain the original
+onboarding flow and require successful onboarding skill access; rendering an inline
+card after failed tools is insufficient.
+
+Live tracing identifies the rejected node as the command for the current tool,
+with the correct channel but no causal parent. Base AgentVessel's mutation replay
+probe uses unscoped `this.rpc`, losing the invocation identity before any tool can
+execute; post-cancellation recovery likewise discards its scoped RPC client.
+Base `5449384` carries the scoped client into both paths; host `b04302fb0` extends existing
+caller-owned trajectory recognition to the exact command derived from the verified
+current invocation. Either change alone is insufficient. RpcServer verifies that
+invocation before service dispatch; foreign command references retain graph checks.
+The strengthened original `onboarding-opening-overview` now passes with zero tool
+failures (run `st_adeb422b0cbb4c06bc0f176273dbccf2`), including the required successful
+onboarding skill read. Host VCS tests pass (29), validator tests pass (26), all
+userland types pass, and normal host commit checks pass. No prompt workaround
+or manual chat substitution is used.
+
+Base `f037db2` also removes PubSub's competing transport-recovery trigger. Typed
+connection loss waits for the host's recovery signal; resource-only subscription
+closure still self-recovers. All 57 existing PubSub tests plus the focused host-signal
+regression pass, as do all userland typechecks. Base `e4d861e` reasserts current dialog
+overlay state on reconnection. Complete desktop native replay remains required.
+The next native replay retained the original onboarding panel and compiled card,
+but revealed that the shared binary/base64 stream bridge discarded structured RPC
+failure codes. Host `13e868c77` preserves those codes and details before and after
+response headers (35 focused tests and host checks pass; all userland types pass).
+The subsequent replay removed the repeated per-attempt errors, but a resource
+closure racing server shutdown still exhausted recovery while the transport was
+offline. The coordinator now defers an interrupted generation to the next host
+signal; it does not mark the generation complete or retry without a usable pipe.
+Ordinary resource-failure retries remain covered. Full native replay is still due.
 
 The System placeholder icons exposed a deeper startup split. Both workspaces
 served their exact icon bytes successfully, but System published its late icon
