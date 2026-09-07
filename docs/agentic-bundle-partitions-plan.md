@@ -6,6 +6,52 @@ Status: implementation in progress, 2026-09-07. The user accepted rules 1–5 be
 The full runtime, cross-workspace integration, client UX, and verification work is
 not complete. The existing filename remains so hand-off links continue to work.
 
+Latest regression audit (September 7): evaluate failures against the user's working
+workflow, then inspect every caller of the owning mechanism. A successful build or
+an agent's completion message does not prove that a panel can use its backing service.
+The current catalog has no scenario that jointly creates a panel, its store and service
+declaration, publishes them, and drives a persistent UI effect without unexpected
+approval. Add that exact acceptance case; separate service and app-building tests do
+not close this gap. The reported task-board panel contains the exact declared store
+request. Candidate publication currently uses a live capability presentation resolver;
+whether this loses clearance for a service introduced by that same transaction is
+under investigation. Audit creation, import, publication, updates and revocation together.
+
+The reported missing `@workspace/test-runtime` was not an undeclared app dependency:
+the captured failing worker manifest already declared it. Distribution dependency
+closure omitted the package because the workspace scaffolder did not declare its
+own generated-code requirement. Base `af919cb` fixes that ownership; host `a81f643e6`
+checks the distribution closure and reports missing internal dependencies at graph
+validation instead of silently dropping the edge and emitting misleading resolver
+advice. Focused graph/distribution tests (25), scaffolder tests (29), host checks and
+all userland type configurations pass. Fresh agentic test execution remains necessary.
+
+Private tree simplification now changes actual ownership, not only section headings:
+host `1f4658630` normalizes persisted and seeded Personal/System panel slots to the
+immutable private owner, preserves order and leaves shared ownership unchanged.
+The initial implementation passed local tests but sent an undefined tuple element
+which JSON encoded as null for shared workspaces. A real profiling bootstrap caught
+this; `648475e7e` uses the proper one-argument shared invocation and verifies the wire
+contract (84 schema/workspace tests). This is evidence that direct handler tests alone
+are insufficient for serialized RPC contracts.
+
+The latest desktop native replay preserved the original onboarding panel and setup
+card across server restart, with full-width title bar and no private owner bands.
+Its strict renderer gate still failed on a cold-recovery warning, so the complete
+native suite is not passing. Base `d7a9c7a` repairs the owning cause: shared object
+identity in the onboarding catalog made its cached scope value non-serializable.
+The exact serializer and setup tests pass (20); replay remains required. Read-only
+CDP coverage (`8be57b927`, 24 tests) proves bounded screenshots remain available while
+raw mutable endpoint acquisition is rejected. The debug workflow documents that
+distinction; this does not establish an unrestricted read-only DOM automation API.
+
+A separate owned agentic sweep is running toward at least 50 distinct scenarios.
+Its early directory-operation failures exposed missing discoverability of scoped
+runtime filesystem operations, not grounds to pre-authorize native shell execution.
+Startup performance profiling uses another owned instance and coordinates measurement
+windows with the sweep. Neither activity is complete; record final run IDs, failures,
+repairs, measurements and cleanup before claiming their acceptance gates passed.
+
 Implementation evidence so far includes a real isolated standalone System bootstrap
 passing all system-test doctor checks, followed by `build-service` passing with no
 tool failures (`st_396c9699b31e44b284f798138ac481a3`). Its owned instance was stopped.
