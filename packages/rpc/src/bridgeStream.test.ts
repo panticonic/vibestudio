@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RpcEnvelope } from "./types.js";
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { bytesToBase64 } from "./base64.js";
+import { isRpcConnectionLost, RemoteRpcError } from "./errors.js";
 import {
   createBridgeBodyReassembler,
   createBridgeStreamRelay,
@@ -423,6 +424,59 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
     await expect(
       openBridgeUploadStream(surface, streamRequestEnvelope(), null, bodyStreamOf(bytes(1)))
     ).rejects.toThrow(/require a native duplex transport/);
+  });
+
+  it.each(["open", "body"])(
+    "preserves typed transport loss during %s across the bridge",
+    async (phase) => {
+      const failure = new RemoteRpcError(
+        "Workspace server is temporarily unavailable",
+        "transport",
+        "CONNECTION_LOST"
+      );
+      const { surface, relay } = connect(async () => {
+        if (phase === "open") throw failure;
+        return {
+          ...decodedResponse(bytes()),
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(failure);
+            },
+          }),
+        };
+      });
+      const outcome = openBridgeUploadStream(
+        surface,
+        streamRequestEnvelope(),
+        null,
+        bodyStreamOf(bytes(1))
+      ).then((response) => response.text());
+      await expect(outcome).rejects.toMatchObject({
+        name: "RemoteRpcError",
+        errorKind: "transport",
+        code: "CONNECTION_LOST",
+      });
+      expect(await outcome.catch(isRpcConnectionLost)).toBe(true);
+      expect(relay.size()).toBe(0);
+    }
+  );
+
+  it("preserves access errors without treating them as connection loss", async () => {
+    const { surface } = connect(async () => {
+      throw new RemoteRpcError("Denied", "access", "EACCES", { code: "receiver-rejected" });
+    });
+    const outcome = openBridgeUploadStream(
+      surface,
+      streamRequestEnvelope(),
+      null,
+      bodyStreamOf(bytes(1))
+    );
+    await expect(outcome).rejects.toMatchObject({
+      errorKind: "access",
+      code: "EACCES",
+      errorData: { code: "receiver-rejected" },
+    });
+    expect(await outcome.catch(isRpcConnectionLost)).toBe(false);
   });
 
   it("caller abort propagates across the bridge and stops both pumps", async () => {

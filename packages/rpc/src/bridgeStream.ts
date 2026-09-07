@@ -36,7 +36,8 @@
  * uploads additionally pump their request body through sequenced chunks.
  */
 
-import type { RpcEnvelope } from "./types.js";
+import type { RpcEnvelope, RpcErrorData, RpcErrorKind } from "./types.js";
+import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 
@@ -79,7 +80,14 @@ export type BridgeStreamMessage =
     }
   | { kind: "chunk"; opId: string; seq: number; chunk: BridgeChunkPayload }
   | { kind: "end"; opId: string }
-  | { kind: "error"; opId: string; message: string };
+  | {
+      kind: "error";
+      opId: string;
+      message: string;
+      errorKind?: RpcErrorKind;
+      code?: string;
+      errorData?: RpcErrorData;
+    };
 
 export function decodeBridgeChunk(chunk: unknown): Uint8Array {
   if (typeof chunk === "string") return base64ToBytes(chunk);
@@ -334,10 +342,14 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
     } catch (error) {
       // Always tell the panel (fail-loud). After a panel-initiated abort this
       // is a harmless no-op — the panel already unsubscribed its opId.
+      const code = (error as { code?: unknown } | null)?.code;
       deps.sendToPanel({
         kind: "error",
         opId: op.opId,
         message: error instanceof Error ? error.message : String(error),
+        errorKind: rpcErrorKindOf(error, "transport"),
+        ...(typeof code === "string" ? { code } : {}),
+        ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
       });
     } finally {
       cleanup(op);
@@ -622,7 +634,12 @@ export async function openBridgeStream(
         signal?.removeEventListener("abort", onAbort);
         return;
       case "error": {
-        const error = new Error(msg.message);
+        const error = new RemoteRpcError(
+          msg.message,
+          msg.errorKind ?? "transport",
+          msg.code,
+          msg.errorData
+        );
         settled = true;
         pumpAborted = true;
         rejectHead(error);
