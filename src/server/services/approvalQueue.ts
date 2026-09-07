@@ -100,7 +100,7 @@ export type BrowserPermissionApprovalDecision = "once" | "session" | "always" | 
 
 /**
  * The resolver's verified identity + surface (WP5 §4/§5), threaded from the
- * service handler (which holds `ctx.caller.subject`) into the queue's `settle`
+ * service handler (which holds the verified initiator) into the queue's `settle`
  * coordinator. Identity is host-verified, never accepted from the wire (INV-3).
  * Absent → the resolution is a programmatic/system settle (no provenance record
  * and no live `resolved` surface — only the enumerated bootstrap principals or

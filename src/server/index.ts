@@ -37,6 +37,7 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import { omitTrailingUndefined, parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
+import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
@@ -3195,11 +3196,7 @@ async function main() {
       },
       snapshots: {
         "shell-approval:pending-changed": (ctx) => {
-          const owner = {
-            userId: ctx.caller.subject?.userId,
-            callerId: ctx.caller.runtime.id,
-            callerKind: ctx.caller.runtime.kind,
-          };
+          const owner = eventWatchOwner(ctx);
           const pending = approvalQueue.listPending();
           return {
             pending: isHostApprovalObserver(owner)

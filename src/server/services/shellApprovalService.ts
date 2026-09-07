@@ -54,7 +54,7 @@ function resolvedViaFor(kind: string, clientPlatform?: string): ResolvedVia {
 
 /**
  * Capture the resolving human from the verified connection (WP5 §4) — identity
- * from `ctx.caller.subject`, never the wire (INV-3). The queue's `settle`
+ * from the verified initiator, never the wire (INV-3). The queue's `settle`
  * coordinator turns this into the `resolvedBy` on both the live
  * `shell-approval:resolved` event and the durable `ApprovalProvenanceRecord`.
  * Absent for the enumerated pre-identity bootstrap principals (WP0 §5.4), which

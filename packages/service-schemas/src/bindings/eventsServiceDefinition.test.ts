@@ -17,11 +17,16 @@ const snapshot: PanelTreeInvalidation = {
 function context(
   callerId: string,
   requestId: string,
-  options: { ws?: boolean; userId?: string } = {}
+  options: {
+    ws?: boolean;
+    userId?: string;
+    authorizingUserId?: string;
+    callerKind?: "app" | "do" | "panel";
+  } = {}
 ): ServiceContext {
   const caller = createVerifiedCaller(
     callerId,
-    options.ws ? "panel" : "do",
+    options.callerKind ?? (options.ws ? "panel" : "do"),
     null,
     null,
     options.userId ? { userId: options.userId, handle: options.userId } : null
@@ -29,6 +34,17 @@ function context(
   const ws = options.ws ? { readyState: 1, send: vi.fn(), on: vi.fn() } : undefined;
   return {
     caller,
+    ...(options.authorizingUserId
+      ? {
+          authorizingCaller: createVerifiedCaller(
+            `shell:${options.authorizingUserId}`,
+            "shell",
+            null,
+            null,
+            { userId: options.authorizingUserId, handle: options.authorizingUserId }
+          ),
+        }
+      : {}),
     requestId,
     connectionId: options.ws ? `connection:${callerId}` : undefined,
     ...(ws
@@ -138,6 +154,28 @@ describe("events.watch", () => {
       value: { kind: "snapshot", event: EVENT, payload: snapshot, sequence: 0 },
     });
     expect(provideSnapshot).toHaveBeenCalledWith(ctx);
+    await watch.records.return();
+  });
+
+  it("binds hosted chrome watches to the verified human without replacing observer identity", async () => {
+    const events = new EventService();
+    const openWatch = vi.spyOn(events, "openWatch");
+    const service = createEventsServiceDefinition(events);
+    const watch = await open(
+      service,
+      context("app:hosted-chrome", "request:hosted", {
+        authorizingUserId: "alice",
+        callerKind: "app",
+      })
+    );
+
+    expect(openWatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callerId: "app:hosted-chrome",
+        callerKind: "app",
+        userId: "alice",
+      })
+    );
     await watch.records.return();
   });
 

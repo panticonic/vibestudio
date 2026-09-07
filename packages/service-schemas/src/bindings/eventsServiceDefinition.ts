@@ -2,7 +2,10 @@ import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { isValidEventName } from "@vibestudio/shared/events";
 import { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiator,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { eventsMethods } from "../events.js";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
@@ -20,6 +23,16 @@ export interface EventsServiceDefinitionOptions {
     context: ServiceContext
   ) => (() => void) | undefined;
   methods?: ServiceMethodSchemas;
+}
+
+/** Delivery owner: authenticated transport identity plus its verified human audience. */
+export function eventWatchOwner(context: ServiceContext) {
+  const userId = verifiedInitiator(context).subject?.userId;
+  return {
+    callerId: context.caller.runtime.id,
+    callerKind: context.caller.runtime.kind,
+    ...(userId ? { userId } : {}),
+  };
 }
 
 /** Bind the events wire contract to an existing in-process event service. */
@@ -47,11 +60,9 @@ export function createEventsServiceDefinition(
         }
         const release = opts.onWatchOpened?.(events, ctx);
         return eventService.openWatch({
-          callerId: ctx.caller.runtime.id,
-          callerKind: ctx.caller.runtime.kind,
+          ...eventWatchOwner(ctx),
           connectionId: ctx.connectionId ?? EventService.DEFAULT_CONNECTION_ID,
           watchId,
-          ...(ctx.caller.subject?.userId ? { userId: ctx.caller.subject.userId } : {}),
           events,
           snapshots,
           ...(release ? { onClosed: release } : {}),
