@@ -113,7 +113,7 @@ behavior assertions; it failed against the regression and passes with the
 original chat options and local setup dependencies restored. Existing chat
 lifecycle tests and onboarding catalog, routing, status and setup-card tests
 also pass. Desktop and mobile native checks now require automatic Personal
-onboarding; their updated runs remain outstanding. Explicit New/manual-chat
+onboarding. Explicit New/manual-chat
 flows are separate behavior, not a substitute for this startup contract.
 
 The existing desktop startup-approval E2E was then run with the restored Personal
@@ -124,8 +124,63 @@ argument values. Base `4a8d3d6` makes deterministic and normal inference consume
 the same hydrated model history. All 30 executor tests pass, including canonical
 stored-argument encoding; all three userland typechecks pass. The failed native
 run had no panel-initialization or main-process errors, and its 34 captured
-processes and temporary instance state were cleaned up. Successful setup-card
-rendering and turn completion still require a fresh native replay.
+processes and temporary instance state were cleaned up. The next run passed the
+original automatic-prompt, skill-read and completed-turn assertions, but exposed
+another deterministic-inference mismatch: `activeToolNames` lists local tools;
+the panel advertises `inline_ui` through its channel. Base `1a88c51` makes both
+inference routes consume the same published tool schemas. The retained desktop
+startup-approval E2E then passed in 52 seconds on host `6004aac5d`, including the
+visible setup overview and Refresh control. Its native screenshot was inspected;
+the owned instance, display and temporary state were cleaned up. Full Android
+onboarding and the remaining native recovery journeys still require verification.
+
+Host `6004aac5d` also adapts existing desktop lifecycle, navigation, terminal,
+contextual-chat and phone-width tests to one captured workspace-owner helper
+contract. Ordinary fixtures now use actual Personal; System and project fixtures
+are explicit. Custom source changes edit the authored template manifest. All E2E
+and setup sources typecheck, seven fixture/owner tests pass, and the three existing
+approval-flow tests pass with an isolated temporary SQLite database.
+
+The retained browser-startup and restart-persistence journeys then exposed two
+real integration defects. Native test actions wrongly required an app in Personal,
+and panel creation attributed admitted interactive shell actions to parent panel
+code. Host `f03136c0c` uses the existing native shell route with a captured live
+workspace owner and live System chrome; `f9d7611ea` reuses the canonical interactive
+chrome predicate for authority attribution. Ordinary app actions remain scoped.
+A separate review found no regression in either change and traced a pre-existing
+unresolved-parent authority bypass: headless root creation into an existing context
+skipped the boundary. Host `070dabc7d` retains the authenticated caller when no
+anchor exists, allowing the normal authority evaluator to decide. No new host
+exemption was added. All 16 focused tests and host/workerd typechecks pass.
+
+Persistence also revealed that local Help was omitted from Base and Personal's
+positive source inventories. Base `946c56d` includes that existing panel locally;
+there is no cross-workspace sourcing. On host `f9d7611ea` / Base `946c56d`, the
+original browser startup without optional browser-data and panel persistence
+across restart both pass (31 and 46 seconds). The existing panel rebuild test also
+passed in the earlier run. Each owned native run completed process, display and
+temporary-state cleanup. Focused authority/state tests (59), distribution and
+onboarding tests (10), and host/workerd typechecks pass. Base `7746210` also updates
+the rendered onboarding card to explain that catalog choices create separate
+workspaces; all 11 existing setup-card tests pass.
+
+The full Android run on host `f9d7611ea` / Base `946c56d` rendered the automatic
+Personal prompt and completed its first turn. Camera approval attribution, native
+cookie isolation, retained workspace focus, and persisted app cold-start with zero
+panel-asset pipe misses passed. Server restart then failed on a retained inline UI
+source-loading error, `Iroh pipe closed`. All owned emulator/server processes exited;
+restricted diagnostic state is retained at `/tmp/vibestudio-mobile-smoke-nFgxvg`.
+This is not a completed Android acceptance run.
+
+Investigation found that pipe close emitted an untyped error and inline UI retained
+its failed source read across channel reconnection. Host `ed5af7f93` now emits the
+canonical connection-loss error. Base `cdaf3f1` invalidates source attempts on channel
+reconnection while preserving compiled components whose source is unchanged; 12
+existing source-hook tests and all userland typechecks pass. Native visual inspection
+also caught System About using a desktop-only service; Base `de377ae` serves the
+canonical app-info contract in the authenticated mobile bridge (26 tests pass).
+The smoke now requires the visible Personal chat, since a retained offscreen chat
+must not satisfy its screenshot assertion. Native replay remains required.
 
 The System placeholder icons exposed a deeper startup split. Both workspaces
 served their exact icon bytes successfully, but System published its late icon
@@ -277,14 +332,18 @@ Implementation is recorded in targeted local commits; nothing has been published
 | Host | `179bdcf73` | Canonical panel IDs for distribution seeds, verified through real runtime lease acquisition. |
 | Host | `4fee76409`, `257594f01` | Common desktop workspace runtime, scoped events and native ownership, with document-owned website notifications. |
 | Host | `01cd923ac`, `f3d00c40d` | Preserve typed connection loss across carriers; capture exact runtime owners for native navigation, readiness, attention and the shared desktop test API. |
-| Host | `8b1f26ed7` | Restore automatic Personal onboarding requirements in existing template, desktop startup and mobile smoke tests; derive exact per-workspace fixtures and retain separate New Panel coverage. Integrated native reruns remain outstanding. |
+| Host | `8b1f26ed7` | Restore automatic Personal onboarding requirements in existing template, desktop startup and mobile smoke tests; derive exact per-workspace fixtures and retain separate New Panel coverage. Desktop automatic startup is verified; Android and remaining recovery journeys are outstanding. |
+| Host | `ed5af7f93` | Canonical Iroh close error identity and strict visible-Personal onboarding screenshot assertion; native replay outstanding. |
+| Host | `6004aac5d`, `f03136c0c`, `f9d7611ea`, `070dabc7d` | Retain existing workspace-owned E2E journeys, align native test actions with admitted chrome, and preserve interactive identity in panel authority. |
 | Base | `1461b9a`, `391cc98` | Standalone source inventories, retained source integration and System-test ownership. |
 | Base | `0d801e2`, `731f20f`, `08ecf0e` | Desktop and mobile workspace UI, including persistent mobile Settings navigation. |
 | Base | `c572456`, `5dbcd61` | Workspace-owned desktop imagery/focus and mobile retained-view lease lifetime. |
 | Base | `c88bc3b` | Shared approval presentation and visible notifications across workspaces, compact desktop navigation, full panel viewport, and server-owned initial panel consumption. |
 | Base | `faf70e2` | Workspace-owned command execution and connected-session effects on desktop and mobile. |
 | Base | `cfe498d`, `23cd6cd`, `6c6c7b0` | Restored Personal onboarding and its local setup dependencies; real opening-tool execution in deterministic E2E; shared client recovery ownership and scoped native navigation. |
-| Base | `4a8d3d6` | Share hydrated model history with deterministic inference, repairing the read loop exposed by the existing automatic-onboarding E2E. |
+| Base | `4a8d3d6`, `1a88c51` | Share hydrated model history and advertised schemas with deterministic inference; existing automatic-onboarding E2E passes with the rendered setup overview. |
+| Base | `de377ae`, `cdaf3f1`, `e73496f` | Mobile app-info contract and inline-source recovery on channel reconnection; native replay outstanding. |
+| Base | `7746210`, `946c56d` | Explain separate workspace creation in onboarding and include local Help in Base and Personal. |
 | Host / Base | `0322ca4ed` / `6bfd508` | Website approval requester identity from verified origin and native globe presentation. |
 | Examples / Google | `662dc22` / `30e8d16` | Complete standalone source snapshots. |
 | News / Spectrolite | `74200f3` / `2b48cc2` | Complete standalone source snapshots; unrelated local edits preserved. |
@@ -1320,8 +1379,8 @@ Current completion gates are explicit:
 | --- | --- |
 | Receiver authority contract | User choice pending between trusted reviewed exports and separate per-invocation isolation; public forwarding remains closed. |
 | Website → agent/tool effects | End-to-end authority propagation and acceptance remain incomplete. |
-| Desktop | Earlier native pairing and local ownership checks pass, but accepted the wrong initial panel. Restored automatic onboarding, strict reconnect diagnostics and open-approval membership revocation require integrated verification. |
-| Mobile | Earlier focused Android journeys pass; the restored automatic-onboarding smoke and final recovery/navigation changes await native acceptance. The previous unattended run failed asset loading; iOS runtime acceptance needs an Apple environment. |
+| Desktop | Restored automatic onboarding including completed first turn and visible setup overview passes in the existing E2E. Existing browser startup, panel rebuild and restart persistence also pass. Strict reconnect diagnostics and open-approval membership revocation remain outstanding. |
+| Mobile | Automatic Personal prompt/first turn, camera approval, cookie isolation and app cold-start pass. Full run failed retained inline-source loading after server restart; source fixes and a stricter visible-panel assertion await native replay. iOS runtime acceptance needs an Apple environment. |
 | Native dependency | Repaired local Linux/Android artifacts are verified; production platform pins still select upstream 1.1.0 and need a coherent dependency release. |
 | Distribution | Clean source closures pass; exact Base/Personal/System publication receipts are required for packaged startup. Nothing has been published. |
 
