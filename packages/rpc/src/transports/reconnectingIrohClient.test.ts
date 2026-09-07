@@ -114,6 +114,60 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("publishes recovery only after every desired logical session is installed", async () => {
+    const first = new FakePipe();
+    const second = new FakePipe();
+    let releasePanel!: () => void;
+    const panelGate = new Promise<void>((resolve) => (releasePanel = resolve));
+    const open = second.openSession.bind(second);
+    vi.spyOn(second, "openSession").mockImplementation((options) => {
+      const inner = open(options);
+      const ready = inner.ready;
+      inner.ready = async () => {
+        if (options.connectionId === "panel") await panelGate;
+        await ready?.();
+        await options.onRecovery?.("resubscribe");
+      };
+      return inner;
+    });
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second),
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const recovered = vi.fn();
+    const main = owner.openSession({
+      connectionId: "main",
+      getToken: () => "credential",
+      onRecovery: recovered,
+    });
+    const panel = owner.openSession({
+      connectionId: "panel",
+      getToken: () => "credential",
+    });
+    try {
+      await Promise.all([main.ready?.(), panel.ready?.()]);
+      first.disconnect();
+      await eventually(() => expect(second.sessions).toHaveLength(2));
+      await Promise.resolve();
+      expect(owner.status()).toBe("connecting");
+      expect(recovered).not.toHaveBeenCalled();
+      await expect(main.send(eventEnvelope)).rejects.toMatchObject({
+        code: "CONNECTION_LOST",
+        errorKind: "transport",
+      });
+
+      releasePanel();
+      await eventually(() => expect(recovered).toHaveBeenCalledOnce());
+    } finally {
+      releasePanel();
+      await owner.close();
+    }
+  });
+
   it("allows awaited recovery replay to use the recovered logical session", async () => {
     const first = new FakePipe();
     const second = new FakePipe();

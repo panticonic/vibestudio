@@ -67,6 +67,10 @@ class ReconnectingSession implements IrohClientSession {
   private closed = false;
   private terminal = false;
   private authenticatedCallerId: string | null = null;
+  private pendingRecovery: {
+    generation: number;
+    kind: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0];
+  } | null = null;
   private readonly messageListeners = new Set<(envelope: RpcEnvelope) => void>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
 
@@ -138,6 +142,7 @@ class ReconnectingSession implements IrohClientSession {
     const inner = this.inner;
     this.inner = null;
     this.activation = null;
+    this.pendingRecovery = null;
     await inner?.close().catch(() => undefined);
     this.emitStatus("disconnected");
   }
@@ -146,17 +151,22 @@ class ReconnectingSession implements IrohClientSession {
     if (generation !== this.generation) return;
     this.inner = null;
     this.activation = null;
+    this.pendingRecovery = null;
     if (!this.closed && !this.terminal) this.emitStatus("connecting");
   }
 
-  activate(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
+  activate(
+    pipe: IrohClientPipe,
+    generation: number,
+    deferRecovery = false
+  ): Promise<IrohClientSession> {
     if (this.closed) return Promise.reject(new Error(`Iroh session ${this.logicalId} is closed`));
     if (this.terminal)
       return Promise.reject(new Error(`Iroh session ${this.logicalId} is terminal`));
     if (this.inner && this.generation === generation) return Promise.resolve(this.inner);
     if (this.activation && this.generation === generation) return this.activation;
     this.generation = generation;
-    this.activation = this.openInner(pipe, generation).catch((error) => {
+    this.activation = this.openInner(pipe, generation, deferRecovery).catch((error) => {
       if (this.generation === generation) {
         this.inner = null;
         this.activation = null;
@@ -164,6 +174,13 @@ class ReconnectingSession implements IrohClientSession {
       throw error;
     });
     return this.activation;
+  }
+
+  async publishRecovery(generation: number): Promise<void> {
+    const pending = this.pendingRecovery;
+    if (!pending || pending.generation !== generation) return;
+    this.pendingRecovery = null;
+    await this.options.onRecovery?.(pending.kind);
   }
 
   private async ensureInner(): Promise<IrohClientSession> {
@@ -193,7 +210,11 @@ class ReconnectingSession implements IrohClientSession {
     return this.ensureInner();
   }
 
-  private async openInner(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
+  private async openInner(
+    pipe: IrohClientPipe,
+    generation: number,
+    deferRecovery: boolean
+  ): Promise<IrohClientSession> {
     let terminalError: Error | null = null;
     let recovery: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0] | undefined;
     const inner = pipe.openSession({
@@ -223,7 +244,10 @@ class ReconnectingSession implements IrohClientSession {
     this.inner = inner;
     this.authenticatedCallerId = inner.callerId();
     this.emitStatus("connected");
-    if (recovery !== undefined) await this.options.onRecovery?.(recovery);
+    if (recovery !== undefined) {
+      if (deferRecovery) this.pendingRecovery = { generation, kind: recovery };
+      else await this.options.onRecovery?.(recovery);
+    }
     return inner;
   }
 
@@ -404,11 +428,18 @@ class ReconnectingPipe implements IrohClientPipe {
         };
         this.connected = connected;
         this.emitDiagnostics();
+        let sessions = [...this.sessions];
+        while (true) {
+          await Promise.allSettled(
+            sessions.map((session) => session.activate(pipe, generation, true))
+          );
+          const desired = [...this.sessions];
+          if (desired.every((session) => sessions.includes(session))) break;
+          sessions = desired;
+        }
         this.setStatus("connected");
         this.options.onReconnectResult?.({ attempt, success: true });
-        await Promise.allSettled(
-          [...this.sessions].map((session) => session.activate(pipe, generation))
-        );
+        await Promise.allSettled(sessions.map((session) => session.publishRecovery(generation)));
         return connected;
       } catch (error) {
         const failure = asError(error);
