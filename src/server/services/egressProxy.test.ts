@@ -61,6 +61,8 @@ import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { RpcBoundaryError } from "@vibestudio/rpc";
+import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -687,6 +689,125 @@ describe("EgressProxy", () => {
       wss.close();
       await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
     }
+  });
+
+  it("returns a terminal WebSocket 403 for a structured approval audience rejection", async () => {
+    const upstreamServer = createServer();
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const authorityFailure = authorityFailureForDecision(
+      {
+        allowed: false,
+        code: "receiver-rejected",
+        reason: "Approval has no eligible workspace audience",
+        requirement: { kind: "relationship", name: "workspace-member" },
+      },
+      {
+        capability: "approvals.credential",
+        resourceKey: "approval:test",
+        tier: "critical",
+      }
+    );
+    const approvalQueue = createApprovalQueueMock();
+    vi.mocked(approvalQueue.request).mockRejectedValueOnce(
+      new RpcBoundaryError(
+        "Approval has no eligible workspace audience",
+        "access",
+        "EACCES",
+        undefined,
+        { authorityFailure }
+      )
+    );
+    const credential = createLocalFetchCredential(upstreamPort, { grants: [] });
+    const auditLog = new MemoryAuditLog();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const proxy = createProxy(credential, auditLog, {
+      approvalQueue,
+      ...authorizeLoopbackFixture(`http://127.0.0.1:${upstreamPort}`),
+    });
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
+        headers: {
+          "X-Vibestudio-Egress-Caller": "worker:test",
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response).toMatchObject({
+        status: 403,
+        body: "Approval has no eligible workspace audience",
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "[EgressProxy] WebSocket upgrade failed",
+        expect.objectContaining({
+          phase: "reject",
+          reason: "EACCES",
+          statusCode: 403,
+        })
+      );
+      expect(auditLog.entries.at(-1)).toMatchObject({
+        callerId: "worker:test",
+        status: 403,
+        capabilityViolation: "EACCES",
+        retries: 0,
+      });
+    } finally {
+      warn.mockRestore();
+      await proxy.stop();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
+  it("preserves structured approval failures for credential proxy callers", async () => {
+    const authorityFailure = authorityFailureForDecision(
+      {
+        allowed: false,
+        code: "receiver-rejected",
+        reason: "Approval has no eligible workspace audience",
+        requirement: { kind: "relationship", name: "workspace-member" },
+      },
+      {
+        capability: "approvals.credential",
+        resourceKey: "approval:test",
+        tier: "critical",
+      }
+    );
+    const approvalQueue = createApprovalQueueMock();
+    vi.mocked(approvalQueue.request).mockRejectedValueOnce(
+      new RpcBoundaryError(
+        "Approval has no eligible workspace audience",
+        "access",
+        "EACCES",
+        undefined,
+        { authorityFailure }
+      )
+    );
+    const proxy = createProxy(createCredential({ grants: [] }), new MemoryAuditLog(), {
+      approvalQueue,
+    });
+
+    await expect(
+      proxy.forwardProxyFetch({
+        caller: workerCaller("worker:test"),
+        credentialId: "cred-1",
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: "EACCES",
+      errorData: { authorityFailure },
+    });
   });
 
   it("forwards only host-reconstructed headers from an internal WebSocket authorization", async () => {
@@ -2951,6 +3072,10 @@ describe("EgressProxy", () => {
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const approvalQueue = createApprovalQueue({
       eventService: { emitProjected: vi.fn() } as never,
+      workspaceAccess: {
+        isMember: (userId) => userId === "user-1",
+        isAdmin: () => false,
+      },
     });
     const proxy = new EgressProxy({
       credentialStore: store,
@@ -2961,16 +3086,20 @@ describe("EgressProxy", () => {
       "fetch",
       vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
     );
+    const memberCaller = (callerId: string) => ({
+      ...workerCaller(callerId),
+      subject: { userId: "user-1", handle: "user1" },
+    });
 
     const first = proxy.forwardProxyFetch({
-      caller: workerCaller("worker:first"),
+      caller: memberCaller("worker:first"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
     });
     await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(1));
     const second = proxy.forwardProxyFetch({
-      caller: workerCaller("do:worker:first"),
+      caller: memberCaller("do:worker:first"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",

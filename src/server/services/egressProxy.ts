@@ -54,6 +54,7 @@ import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { resolveCredentialByLabel } from "./credentialSelection.js";
 import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "../socketBridge.js";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
+import { RpcBoundaryError, rpcErrorDataOf } from "@vibestudio/rpc";
 
 import {
   NetworkDestinationDenied,
@@ -1244,6 +1245,17 @@ export class EgressProxy {
         statusCode = 403;
         capabilityViolation = "network-address-denied";
         throw new ForwardRejection(403, error.message, capabilityViolation);
+      }
+      if (error instanceof RpcBoundaryError) {
+        statusCode = error.errorKind === "access" ? 403 : 500;
+        capabilityViolation = error.code;
+        throw new ForwardRejection(
+          statusCode,
+          error.message,
+          capabilityViolation,
+          error.code,
+          rpcErrorDataOf(error)
+        );
       }
       if (error instanceof ForwardRejection) {
         statusCode = error.statusCode;
