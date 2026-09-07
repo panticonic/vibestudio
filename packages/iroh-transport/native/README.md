@@ -66,3 +66,12 @@ and cargo-ndk; Apple needs macOS/Xcode. Upstream's `Makefile.toml`,
 `make_swift.sh`, and release workflows own those builds and package validation.
 A local Linux binary or a single emulator ABI proves only that acceptance
 platform; it cannot stand in for the complete published release.
+
+Upstream was rechecked on 2026-09-07: npm, Maven and Swift still select
+[1.1.0](https://github.com/n0-computer/iroh-ffi/releases/tag/v1.1.0).
+The unreleased [change to `SendStream.stopped()`](https://github.com/n0-computer/iroh-ffi/commit/b733577fbb1bedc2595ab8fb5597f4b570896ac7)
+addresses one mutex wait. It does not cancel pending reads or writes: both
+[Node](https://github.com/n0-computer/iroh-ffi/blob/3103bf5295be6d50c5272ff7a426e9b539f3f587/iroh-js/src/endpoint.rs)
+and [UniFFI](https://github.com/n0-computer/iroh-ffi/blob/3103bf5295be6d50c5272ff7a426e9b539f3f587/src/endpoint.rs)
+still hold their stream mutex across those waits. That upstream change is not
+a substitute for this repair or an available coherent dependency release.

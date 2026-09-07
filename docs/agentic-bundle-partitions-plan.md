@@ -27,10 +27,12 @@ exact-source review have been visually checked at desktop and phone widths.
 Base, Personal and System have separate positive source inventories. Examples,
 Google, News and Spectrolite have been converted to self-contained source snapshots.
 Their closures also validate from clean Git archives, independently of local
-untracked files: Base/Personal/System contain 61/74/99 repositories and the four
-optional templates contain 76/66/64/63. After the final desktop/mobile ownership
-fixes, System was rechecked independently from its clean committed archive: 99
-repositories and 1,906 files. All include local template instructions and the Base
+untracked files. After restoring Personal onboarding and the desktop/mobile
+ownership fixes, all three were rechecked from the clean committed Base archive
+`6c6c7b0`: Base contains 61 repositories and 1,287 files, Personal 79 and 1,393,
+and System 99 and 1,917. Personal declares the initial chat; Base and System
+declare New Panel. The four optional templates' earlier checks contain
+76/66/64/63 repositories. All include local template instructions and the Base
 testing companion. Packaged startup now needs exact publication receipts for
 the three runtime distributions; the old single-Base release artifact does not
 supply those coordinates. No publication has been performed and no updater or
@@ -64,7 +66,8 @@ and mobile must read the same workspace-owned initial panel tree. Distribution
 WorkspaceDO reserves entities and creates slots in one durable transaction, with
 normal runtime recovery handling activation. Completed initialization does not
 recreate panels the user deleted. Existing durable panel history is preserved.
-This initialization change is under implementation and requires native acceptance.
+Desktop native startup and seeded-panel lease checks pass; final mobile acceptance
+remains outstanding.
 
 The latest `pnpm dev` report exposed desktop layout and shared ownership defects.
 The active panel must fill the available viewport, while the entire workspace
@@ -90,16 +93,66 @@ Restart fixes keep shared build metadata independent between workspaces, wait fo
 workspace startup before admitting persisted peers, and install a reconnected
 session before awaiting recovery callbacks that use it. Focused regressions pass.
 These fixes are being validated natively, not yet recorded as a full native pass.
-The next local Electron check reached exactly Personal and System with Personal
-focused and its initial pane filling the available 927-pixel content width.
-Native presentation then rejected the initializer's noncanonical entity ID before
-New Panel could mount. The initializer now reuses the ordinary panel ID producer;
-127 focused tests pass, including real lease acquisition for a seeded entity.
-Native replay after that correction is required. The history-suggestion error has therefore
-not yet been cleared by native evidence. The first attempt also exposed a smoke
-launcher mistake: launching the built main file instead of the application directory
-gave Electron version `0.0`. The smoke now uses the canonical package-directory
-launch; product version validation remains unchanged.
+An earlier local Electron smoke passed on host `257594f01` and Base
+`faf70e2`: exactly Personal and System, Personal initially focused, New Panel
+filling all 927 available content pixels, and its real history-provider request
+succeeding with zero rows. Both workspace icons decode without switching focus.
+Strict native diagnostics pass. Normal ephemeral shutdown stops both service
+containers and the hub; all 30 captured processes and temporary instance state
+are gone. The initializer reuses the ordinary panel ID producer, with 127 focused
+regressions including real seeded-panel lease acquisition. The smoke launches the
+actual app package, with its version metadata and canonical ephemeral instance
+lifecycle.
+
+That smoke incorrectly accepted New Panel as Personal's initial experience. It
+did not prove the required automatic onboarding. Personal's distribution had
+omitted both the onboarding chat declaration and its skill, while the existing
+template test still read the aggregate root manifest that retained them. The
+existing test now materializes Personal and preserves its original prompt and
+behavior assertions; it failed against the regression and passes with the
+original chat options and local setup dependencies restored. Existing chat
+lifecycle tests and onboarding catalog, routing, status and setup-card tests
+also pass. Desktop and mobile native checks now require automatic Personal
+onboarding; their updated runs remain outstanding. Explicit New/manual-chat
+flows are separate behavior, not a substitute for this startup contract.
+
+The existing desktop startup-approval E2E was then run with the restored Personal
+fixture. The automatic prompt was delivered and the real onboarding skill read
+completed, but its original completion assertion failed: deterministic inference
+repeatedly read the skill because it compared stored tool-argument references to
+argument values. Base `4a8d3d6` makes deterministic and normal inference consume
+the same hydrated model history. All 30 executor tests pass, including canonical
+stored-argument encoding; all three userland typechecks pass. The failed native
+run had no panel-initialization or main-process errors, and its 34 captured
+processes and temporary instance state were cleaned up. Successful setup-card
+rendering and turn completion still require a fresh native replay.
+
+The System placeholder icons exposed a deeper startup split. Both workspaces
+served their exact icon bytes successfully, but System published its late icon
+refresh through an unscoped IPC event that workspace clients discarded. Every
+workspace now uses the same desktop runtime construction, startup, event
+projection, native view ownership, recovery, diagnostics and shutdown. System
+adds app/account host services to that runtime's container. Personal adds its
+browser providers. Native app navigation also belongs to the common runtime;
+only app hosting/account management retains a System owner. The obsolete startup
+browser-readiness wrapper is removed.
+Direct user notifications retain the existing admitted UI-session route rather
+than being copied through a second host forwarding path.
+
+The related singleton audit includes workspace-owned command execution and
+failure notifications, OS approval attention keyed by workspace and request,
+and mobile effects attached to their owning connected session rather than to
+whichever screen has been visited. Addressed OAuth handoffs and ordinary external
+links feed the same captured mobile callback. Desktop command handlers now receive the
+same captured client as their panel/Quickfire UI. Focused ownership and lifecycle
+regressions pass, as do normal host commit checks and all three userland
+typechecks. Desktop local startup passes as recorded above. A remote outage run
+restored both workspaces' identities and panel trees using the same Electron
+process and paired device credential. Its strict diagnostics check still failed
+on connection-loss warnings, so it is not a native acceptance pass and did not
+reach the shared-member revocation phase. That owned run's 32 captured processes
+and temporary state were cleaned up. Recovery repairs and final mobile acceptance
+remain in progress.
 
 Desktop and mobile now expose selected-file copying through their template/source
 settings. Preview reads the exact protected-main event through `vcs.mainState()`;
@@ -222,10 +275,16 @@ Implementation is recorded in targeted local commits; nothing has been published
 | Host | `57657347d`, `ffd8e0c70` | One native IPC stream listener with independent response lifetimes; native pairing smoke with settled workspace focus and complete cleanup. |
 | Host | `3dfa1f2f2`, `4c6bd9484` | Shared approval selection, exact pending source reviews, account-only development startup, durable initial panels, viewer-bound panel grants and reconnect fixes. |
 | Host | `179bdcf73` | Canonical panel IDs for distribution seeds, verified through real runtime lease acquisition. |
+| Host | `4fee76409`, `257594f01` | Common desktop workspace runtime, scoped events and native ownership, with document-owned website notifications. |
+| Host | `01cd923ac`, `f3d00c40d` | Preserve typed connection loss across carriers; capture exact runtime owners for native navigation, readiness, attention and the shared desktop test API. |
+| Host | `8b1f26ed7` | Restore automatic Personal onboarding requirements in existing template, desktop startup and mobile smoke tests; derive exact per-workspace fixtures and retain separate New Panel coverage. Integrated native reruns remain outstanding. |
 | Base | `1461b9a`, `391cc98` | Standalone source inventories, retained source integration and System-test ownership. |
 | Base | `0d801e2`, `731f20f`, `08ecf0e` | Desktop and mobile workspace UI, including persistent mobile Settings navigation. |
 | Base | `c572456`, `5dbcd61` | Workspace-owned desktop imagery/focus and mobile retained-view lease lifetime. |
 | Base | `c88bc3b` | Shared approval presentation and visible notifications across workspaces, compact desktop navigation, full panel viewport, and server-owned initial panel consumption. |
+| Base | `faf70e2` | Workspace-owned command execution and connected-session effects on desktop and mobile. |
+| Base | `cfe498d`, `23cd6cd`, `6c6c7b0` | Restored Personal onboarding and its local setup dependencies; real opening-tool execution in deterministic E2E; shared client recovery ownership and scoped native navigation. |
+| Base | `4a8d3d6` | Share hydrated model history with deterministic inference, repairing the read loop exposed by the existing automatic-onboarding E2E. |
 | Host / Base | `0322ca4ed` / `6bfd508` | Website approval requester identity from verified origin and native globe presentation. |
 | Examples / Google | `662dc22` / `30e8d16` | Complete standalone source snapshots. |
 | News / Spectrolite | `74200f3` / `2b48cc2` | Complete standalone source snapshots; unrelated local edits preserved. |
@@ -1261,8 +1320,8 @@ Current completion gates are explicit:
 | --- | --- |
 | Receiver authority contract | User choice pending between trusted reviewed exports and separate per-invocation isolation; public forwarding remains closed. |
 | Website → agent/tool effects | End-to-end authority propagation and acceptance remain incomplete. |
-| Desktop | Fresh native pairing and local ownership journeys pass; reconnect and open-approval membership revocation are under verification. |
-| Mobile | Focused Android journeys pass; final retained-lease source still reproduces the asset-loading failure in unattended acceptance; iOS runtime acceptance needs an Apple environment. |
+| Desktop | Earlier native pairing and local ownership checks pass, but accepted the wrong initial panel. Restored automatic onboarding, strict reconnect diagnostics and open-approval membership revocation require integrated verification. |
+| Mobile | Earlier focused Android journeys pass; the restored automatic-onboarding smoke and final recovery/navigation changes await native acceptance. The previous unattended run failed asset loading; iOS runtime acceptance needs an Apple environment. |
 | Native dependency | Repaired local Linux/Android artifacts are verified; production platform pins still select upstream 1.1.0 and need a coherent dependency release. |
 | Distribution | Clean source closures pass; exact Base/Personal/System publication receipts are required for packaged startup. Nothing has been published. |
 
