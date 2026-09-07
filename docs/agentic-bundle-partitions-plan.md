@@ -42,14 +42,64 @@ permission ownership and requesting-user attribution must agree. Unowned source
 admission reviews belong to current workspace administrators. Preparing operations
 remain visible progress, but do not increase the actionable approval count. The
 same rule controls queue decisions, snapshots, events, push notifications and the
-per-user counts shown for unopened workspaces; clients do not open every workspace
-session merely to discover attention.
+per-user counts shown for all workspaces in navigation; clients do not connect every
+workspace session merely to discover attention. Both clients expose the same
+multi-workspace navigation and workspace-owned panel trees. A session that has not
+connected yet is a loading detail, not a separate category of workspace. Opening
+the global approval queue connects listed workspaces with pending requests through
+the existing session directory, without changing the current workspace or opening
+their panels. Loading failures remain visible and retryable in the queue.
 Ready workspace-creation reviews are included in that count. Native App units
 are admitted and hosted only in the user's designated System workspace; app
 source in an ordinary workspace remains source and does not create an orphan
-native-launch review. The identity cutover has one migration from schema 13 to
-14, retaining the previously shipped 11-to-13 migration; intermediate schemas
-created during development are not compatibility targets.
+native-launch review. The identity schema now supports account-only pairing without fabricating a project.
+The 14-to-15 migration preserves already-used developer profiles, existing pairing
+invitations and membership, alongside the earlier 11-to-13-to-14 migration chain.
+
+The development startup contract is an ephemeral **instance**, containing the
+authenticated user's Personal and System workspaces. An explicitly requested project
+remains optional; default startup does not invent a third `dev` workspace. Desktop
+and mobile must read the same workspace-owned initial panel tree. Distribution
+`initPanels` are initialization data, not commands each connecting client repeats:
+WorkspaceDO reserves entities and creates slots in one durable transaction, with
+normal runtime recovery handling activation. Completed initialization does not
+recreate panels the user deleted. Existing durable panel history is preserved.
+This initialization change is under implementation and requires native acceptance.
+
+The latest `pnpm dev` report exposed desktop layout and shared ownership defects.
+The active panel must fill the available viewport, while the entire workspace
+sidebar scrolls as one content-height list with shared-scroll virtualization.
+Layout persistence and focus use the panel's workspace client. Desktop and mobile
+present one shared approval queue across workspaces, with each item keyed by both
+workspace and approval identity. New requests open the shared review surface without
+changing the active workspace; an in-progress review keeps its selection. Cards,
+icons, payload reads and decisions retain their original workspace client, and
+revoked membership removes that workspace's items. Sidebar counts remain useful
+entry points into this queue. This replaces separate background-workspace review
+banners. Notifications appear in visible application chrome with their workspace
+name and captured actions; they do not become permission decisions. Mobile reuses
+its existing account-level toast host for notification visibility.
+Source browsing should lead to an existing setup review when one is pending.
+The shared queue passed focused desktop/mobile tests, all three userland typechecks,
+and an independent review of owner restoration, withdrawn requests and delayed
+selection. The viewer bound to a hosted panel is now its authenticated user under
+the exact current presentation lease; shared panel creation does not lend its
+creator's browser data to later viewers. Focused RPC, HTTP, real-QUIC, gateway and
+live-caller tests passed (182 tests), including lease takeover and revocation.
+Restart fixes keep shared build metadata independent between workspaces, wait for
+workspace startup before admitting persisted peers, and install a reconnected
+session before awaiting recovery callbacks that use it. Focused regressions pass.
+These fixes are being validated natively, not yet recorded as a full native pass.
+The next local Electron check reached exactly Personal and System with Personal
+focused and its initial pane filling the available 927-pixel content width.
+Native presentation then rejected the initializer's noncanonical entity ID before
+New Panel could mount. The initializer now reuses the ordinary panel ID producer;
+127 focused tests pass, including real lease acquisition for a seeded entity.
+Native replay after that correction is required. The history-suggestion error has therefore
+not yet been cleared by native evidence. The first attempt also exposed a smoke
+launcher mistake: launching the built main file instead of the application directory
+gave Electron version `0.0`. The smoke now uses the canonical package-directory
+launch; product version validation remains unchanged.
 
 Desktop and mobile now expose selected-file copying through their template/source
 settings. Preview reads the exact protected-main event through `vcs.mainState()`;
@@ -118,8 +168,16 @@ and repository commit checks, types, generated contracts and formatting passed.
 Subsequent review repaired desktop icon/focus ownership and mobile retained-view lease
 ordering. Lease acquisitions now carry the coordinator version already used by events
 and snapshots; clients do not invent another causal clock. Mobile's final lifecycle
-change passed 40 focused tests and all three userland typechecks; Android was not rerun
-for that final source change. Host acquisition/schema/orchestration checks passed,
+change passed 40 focused tests and all three userland typechecks. A subsequent
+unattended Android run used that committed lease source and verified repaired Node
+and Android binaries. Personal panel navigation, chat rendering and workspace-owned
+camera denial passed. System initialization and lease acquisition took 124 ms and
+167 ms, and its HTML arrived in 130 ms; subsequent asset prewarming and subscription
+requests timed out. System gateway activity appeared later in a burst, with handler replies in
+7–76 ms. Gateway timestamps alone do not establish when Iroh bytes reached the host.
+This reproduces the loading failure without the former
+lease delay; it does not establish a cause, and unattended mobile acceptance remains
+open. Host acquisition/schema/orchestration checks passed,
 including exact event-version ordering when a listener releases a just-acquired lease.
 The typed gateway extraction passed 46 schema/handler tests plus the two typed-client
 guards without adding a method-specific exemption. Four native panel-method authority
@@ -128,6 +186,13 @@ tests retained rejection of unrelated hosts and ordinary apps. Concurrent icon s
 also exposed one native IPC listener per stream; the preload now shares one listener,
 retaining operation-ID isolation and per-stream cancellation. Its 27 focused tests
 include 24 concurrent streams, foreign frames, terminal cleanup and surviving siblings.
+
+Native visual review also found a website permission requester displayed as an opaque
+panel runtime ID and “workspace.” Shared presentation now identifies browser permissions
+by their verified website origin before considering mediator titles or icons. Desktop
+and mobile use the existing globe icon and retain the exact owning panel for navigation.
+The change passed 32 shared copy, 44 desktop card and 47 mobile sheet tests, all three
+userland typechecks, and independent review. It changes presentation, not authority.
 
 The final native Electron smoke passed fresh remote pairing over Iroh with the
 explicit repaired local binding. It exercised the host launch approval and two
@@ -155,9 +220,13 @@ Implementation is recorded in targeted local commits; nothing has been published
 | Host | `40e4c054b`, `7113aefc8`, `8a4641d52` | Exact private-workspace smoke label, native QUIC path diagnostics and current mobile readiness detection. |
 | Host | `6555a57`, `b8bcfc93f`, `367149dca` | Shared streamed gateway contract, authoritative lease outcome versions and verified native view authority. |
 | Host | `57657347d`, `ffd8e0c70` | One native IPC stream listener with independent response lifetimes; native pairing smoke with settled workspace focus and complete cleanup. |
+| Host | `3dfa1f2f2`, `4c6bd9484` | Shared approval selection, exact pending source reviews, account-only development startup, durable initial panels, viewer-bound panel grants and reconnect fixes. |
+| Host | `179bdcf73` | Canonical panel IDs for distribution seeds, verified through real runtime lease acquisition. |
 | Base | `1461b9a`, `391cc98` | Standalone source inventories, retained source integration and System-test ownership. |
 | Base | `0d801e2`, `731f20f`, `08ecf0e` | Desktop and mobile workspace UI, including persistent mobile Settings navigation. |
 | Base | `c572456`, `5dbcd61` | Workspace-owned desktop imagery/focus and mobile retained-view lease lifetime. |
+| Base | `c88bc3b` | Shared approval presentation and visible notifications across workspaces, compact desktop navigation, full panel viewport, and server-owned initial panel consumption. |
+| Host / Base | `0322ca4ed` / `6bfd508` | Website approval requester identity from verified origin and native globe presentation. |
 | Examples / Google | `662dc22` / `30e8d16` | Complete standalone source snapshots. |
 | News / Spectrolite | `74200f3` / `2b48cc2` | Complete standalone source snapshots; unrelated local edits preserved. |
 
@@ -990,8 +1059,15 @@ action/duration choices, not new UX-only grant lifetimes. A multi-part action ca
 review grouping, while each policy and resource decision keeps its actual owner.
 
 A pending card never changes workspace as focus moves. Preserve the visible card and offer
-Open Project as an explicit navigation action. Routine background requests accumulate in the
-existing queue; no focus stealing or modal on each workspace switch. If policy hard-denies,
+Open Project as an explicit navigation action. New actionable requests open the shared review
+surface without navigating the active workspace; further arrivals do not replace a card being
+answered. Workspace switching itself never opens another modal. Minimize, previous and next
+operate on this one presentation queue. Queue identity and delayed UI intents include both
+workspace ID and approval ID, and delayed callbacks remain bound to the exact retained
+client lifetime, so removal/restoration cannot retarget an old answer. The owning clients
+retain subscriptions, authority, blob/icon reads and decisions; the shared queue owns only
+presentation selection. Routine notifications use visible shared chrome with the same
+workspace attribution, while keeping their existing notification actions and lifetimes. If policy hard-denies,
 show a plain explanation in the originating task, with Open settings only when the user may
 manage that policy. There is no Allow anyway button and no prompt generated by discovery.
 
@@ -1186,7 +1262,7 @@ Current completion gates are explicit:
 | Receiver authority contract | User choice pending between trusted reviewed exports and separate per-invocation isolation; public forwarding remains closed. |
 | Website → agent/tool effects | End-to-end authority propagation and acceptance remain incomplete. |
 | Desktop | Fresh native pairing and local ownership journeys pass; reconnect and open-approval membership revocation are under verification. |
-| Mobile | Focused Android journeys pass, but final retained-lease source still needs full unattended acceptance; iOS runtime acceptance needs an Apple environment. |
+| Mobile | Focused Android journeys pass; final retained-lease source still reproduces the asset-loading failure in unattended acceptance; iOS runtime acceptance needs an Apple environment. |
 | Native dependency | Repaired local Linux/Android artifacts are verified; production platform pins still select upstream 1.1.0 and need a coherent dependency release. |
 | Distribution | Clean source closures pass; exact Base/Personal/System publication receipts are required for packaged startup. Nothing has been published. |
 
@@ -1240,7 +1316,10 @@ and platform limitations separately rather than reporting them as denied:
     client selection and grants stay independent. No running Base workspace is required.
 12. Both users can join one ordinary workspace and collaborate under explicit roles.
     Each user's settings command opens their own System panel; neither private source nor
-    private state is loaded into a shared Project panel. A shared agent cannot borrow
+    private state is loaded into a shared Project panel. A hosted panel session uses its
+    authenticated viewer, validated against its exact host lease and current membership;
+    the panel creator does not supply another viewer's browser data or account permissions.
+    Background agent/worker lineage keeps its existing owner attribution. A shared agent cannot borrow
     the creator's, approver's, or another member's personal account grants automatically.
 13. System-only effects validate which user's System is acting and which resource is owned.
     Another user's System or a forged role cannot substitute. Server-operator actions
