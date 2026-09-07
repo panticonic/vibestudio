@@ -122,6 +122,8 @@ export class PanelPresentationController {
     string,
     { runtimeEntityId: string; connectionId: string; ownerToken?: object }
   >();
+  /** Exact lease incarnation under which the retained native view was loaded. */
+  private readonly viewConnectionBySlot = new Map<string, string>();
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
   private readonly attemptBySlot = new Map<string, PresentationAttempt>();
   private readonly progressBySlot = new Map<string, Promise<void>>();
@@ -509,6 +511,7 @@ export class PanelPresentationController {
     const lostOwnedLease =
       previousWasOurs &&
       trackedLeaseMatches &&
+      event.next?.clientSessionId !== this.clientSessionId &&
       event.next?.connectionId !== event.previous?.connectionId;
     if (lostOwnedLease) {
       const currentEntityId = await this.deps.shellCore
@@ -668,6 +671,7 @@ export class PanelPresentationController {
 
       if (!this.isCurrent(panelId, attempt)) return;
       if (view.hasView(panelId)) {
+        this.viewConnectionBySlot.delete(panelId);
         view.destroyView(panelId);
         this.recordViewMutation();
       }
@@ -697,7 +701,11 @@ export class PanelPresentationController {
   ): Promise<PresentationAttemptResult> {
     let panel = this.deps.registry.getPanel(panelId);
     if (!panel) panel = await this.hydrateAddressedPanel(panelId);
-    const targetKey = this.targetKeyFor(panel, ownedLease?.runtimeEntityId);
+    const targetKey = this.targetKeyFor(
+      panel,
+      ownedLease?.runtimeEntityId,
+      ownedLease?.connectionId ?? this.connectionBySlot.get(panelId)?.connectionId
+    );
     const currentAttempt = this.attemptBySlot.get(panelId);
     const currentSnapshot = this.getPresentation(panelId).presentation;
     if (!force && currentAttempt?.status === "active" && currentAttempt.targetKey === targetKey) {
@@ -747,9 +755,10 @@ export class PanelPresentationController {
 
   private targetKeyFor(
     panel: Panel,
-    runtimeEntityId = panel.runtimeEntityId ?? "preparing"
+    runtimeEntityId = panel.runtimeEntityId ?? "preparing",
+    connectionId = "unassigned"
   ): string {
-    return `${runtimeEntityId}|${panel.buildKey ?? ""}|${panel.snapshot.source}`;
+    return `${runtimeEntityId}|${connectionId}|${panel.buildKey ?? ""}|${panel.snapshot.source}`;
   }
 
   private async runPresentationAttempt(
@@ -1003,6 +1012,7 @@ export class PanelPresentationController {
           return;
         }
         if (view?.hasView(panelId)) {
+          this.viewConnectionBySlot.delete(panelId);
           view.destroyView(panelId);
           this.recordViewMutation();
         }
@@ -1083,6 +1093,7 @@ export class PanelPresentationController {
       if (view.hasView(panelId)) {
         this.deps.cdpHost.cleanupPanelAccess(panelId);
         this.deps.cdpHost.unregisterTarget?.(panelId);
+        this.viewConnectionBySlot.delete(panelId);
         view.destroyView(panelId);
         this.recordViewMutation();
       }
@@ -1099,6 +1110,7 @@ export class PanelPresentationController {
     const retainedViewMatches =
       view.hasView(panelId) &&
       connection?.runtimeEntityId === desiredRuntimeEntityId &&
+      this.viewConnectionBySlot.get(panelId) === connection.connectionId &&
       panel.artifacts.hostedRuntimeEntityId === desiredRuntimeEntityId;
     if (retainedViewMatches) {
       if (!snapshot.source.startsWith("browser:")) view.updatePanelCodeIdentity(panelId);
@@ -1120,14 +1132,15 @@ export class PanelPresentationController {
         snapshot.contextId,
         assertPresent(browserPartition)
       );
+      if (attempt && !this.isCurrent(panelId, attempt)) return;
       this.recordViewMutation();
       this.deps.registry.updateArtifacts(panelId, {
         buildState: "ready",
         htmlPath: url,
-        hostedRuntimeEntityId:
-          this.connectionBySlot.get(panelId)?.runtimeEntityId ?? panel.runtimeEntityId ?? undefined,
+        hostedRuntimeEntityId: connection?.runtimeEntityId ?? panel.runtimeEntityId ?? undefined,
         viewFailure: undefined,
       });
+      if (connection) this.viewConnectionBySlot.set(panelId, connection.connectionId);
       this.deps.registry.notifyPanelTreeUpdate(panelId);
       await this.reportPanelViewTransition(panelId);
       this.resources.track(panelId);
@@ -1139,8 +1152,9 @@ export class PanelPresentationController {
     this.bootEvidenceBySlot.delete(panelId);
     if (attempt) this.setAttemptStage(attempt, "navigating");
     await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
+    if (attempt && !this.isCurrent(panelId, attempt)) return;
     this.recordViewMutation();
-    this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
+    this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl, connection);
     await this.reportPanelViewTransition(panelId);
     this.resources.track(panelId);
     await this.resources.enforceCap(panelId);
@@ -1240,6 +1254,7 @@ export class PanelPresentationController {
     this.resources.clear(panelId);
     this.bootEvidenceBySlot.delete(panelId);
     this.connectionBySlot.delete(panelId);
+    this.viewConnectionBySlot.delete(panelId);
     this.deps.cdpHost.cleanupPanelAccess(panelId);
     this.deps.cdpHost.unregisterTarget?.(panelId);
     const view = this.deps.getPanelView();
@@ -1341,7 +1356,8 @@ export class PanelPresentationController {
   private updateWorkspacePanelArtifacts(
     panelId: string,
     snapshot: PanelSnapshot,
-    panelUrl: string
+    panelUrl: string,
+    connection: { runtimeEntityId: string; connectionId: string } | undefined
   ): void {
     const panel = this.deps.registry.getPanel(panelId);
     if (!panel) return;
@@ -1356,14 +1372,14 @@ export class PanelPresentationController {
     this.deps.registry.updateArtifacts(panelId, {
       ...panel.artifacts,
       htmlPath: panelUrl,
-      hostedRuntimeEntityId:
-        this.connectionBySlot.get(panelId)?.runtimeEntityId ?? panel.runtimeEntityId ?? undefined,
+      hostedRuntimeEntityId: connection?.runtimeEntityId ?? panel.runtimeEntityId ?? undefined,
       buildState: "ready",
       buildRevision: this.getBuildRevision(snapshot.source, snapshot.options.ref),
       buildProgress: undefined,
       error: undefined,
       viewFailure: undefined,
     });
+    if (connection) this.viewConnectionBySlot.set(panelId, connection.connectionId);
     this.deps.registry.notifyPanelTreeUpdate(panelId);
   }
 
@@ -1386,6 +1402,18 @@ export class PanelPresentationController {
 
   isPresentationInProgress(panelId: string): boolean {
     return this.getPresentation(panelId).presentation.state === "loading";
+  }
+
+  /**
+   * Execution readiness is metadata, not presentation demand. An activation
+   * may resume a renderer only when this host already owns a native view or an
+   * explicit load attempt is waiting for the executable identity.
+   */
+  hasLocalPresentationDemand(panelId: string): boolean {
+    return Boolean(
+      this.deps.getPanelView()?.hasView(panelId) ||
+      this.getPresentation(panelId).presentation.state === "loading"
+    );
   }
 
   private buildPanelUrl(panelId: string, snapshot: PanelSnapshot): string {
@@ -1413,6 +1441,7 @@ export class PanelPresentationController {
         ? contextIdToPartition(this.deps.registry.workspaceId, snapshot.contextId)
         : undefined;
     if (view.getViewPartition(panelId) === target) return;
+    this.viewConnectionBySlot.delete(panelId);
     view.destroyView(panelId);
     this.recordViewMutation();
   }

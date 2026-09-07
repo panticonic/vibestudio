@@ -558,7 +558,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
         boot: { kind: "unavailable" },
       }),
     ]);
-    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+    expect(panelView.createViewForPanel).toHaveBeenCalledOnce();
     expect(cdpHost.registerTarget).toHaveBeenCalledWith(panel.id, 42);
   });
 
@@ -699,10 +699,9 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/activation-before-create-response", [], {
       runtimeEntityId: "panel:nav-activation-before-create-response",
-      effectiveVersion: "effective-ready",
-      buildKey: "b".repeat(64),
-      executionDigest: "e".repeat(64),
-      authorityRequests: [],
+      effectiveVersion: null,
+      buildKey: null,
+      executionDigest: null,
       artifacts: { buildState: "building", buildProgress: "Loading panel runtime..." },
     });
     const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
@@ -714,9 +713,16 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     await orchestrator.applyPanelExecutionActivated({
       panelId: panel.id,
       runtimeEntityId: panel.runtimeEntityId!,
-      effectiveVersion: panel.effectiveVersion!,
-      buildKey: panel.buildKey!,
-      executionDigest: panel.executionDigest!,
+      effectiveVersion: "effective-ready",
+      buildKey: "b".repeat(64),
+      executionDigest: "e".repeat(64),
+      authorityRequests: [],
+    });
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+    expect(registry.getPanel(panel.id)).toMatchObject({
+      effectiveVersion: "effective-ready",
+      buildKey: "b".repeat(64),
+      executionDigest: "e".repeat(64),
       authorityRequests: [],
     });
     await orchestrator.ensureLoaded(panel.id);
@@ -724,7 +730,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(shellCore.refreshPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
       panel.id,
-      expect.stringContaining(`buildKey=${panel.buildKey}`),
+      expect.stringContaining(`buildKey=${"b".repeat(64)}`),
       panel.snapshot.contextId
     );
     expect(registry.getPanel(panel.id)?.artifacts.buildState).toBe("ready");
@@ -745,7 +751,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(registry.getFocusedPanelId()).toBe(panel.id);
   });
 
-  it("refreshes an already-presented native view identity without navigating", async () => {
+  it("navigates a retained view whose exact lease connection is unproven", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/already-presented", [], {
       runtimeEntityId: "panel:nav-already-presented",
@@ -776,8 +782,8 @@ describe("PanelOrchestrator.ensureLoaded", () => {
       ],
     });
 
-    expect(panelView.updatePanelCodeIdentity).toHaveBeenCalledWith(panel.id);
-    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+    expect(panelView.updatePanelCodeIdentity).not.toHaveBeenCalled();
+    expect(panelView.createViewForPanel).toHaveBeenCalledOnce();
   });
 });
 
@@ -2558,6 +2564,131 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     ]);
 
     expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebinds a retained view when the same runtime entity gets a new lease connection", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/rebound", [], {
+      runtimeEntityId: "panel:nav-rebound",
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "desktop-session",
+        label: "Desktop",
+        platform: "desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
+    panelView.hasView.mockReturnValue(true);
+    panelView.getWebContents.mockReturnValue({
+      id: 71,
+      isDestroyed: () => false,
+      getURL: () => "http://panel/rebound",
+      isLoading: () => false,
+    } as never);
+    const first = runtimeLease("panel:nav-rebound", {
+      slotId: panel.id,
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: "route-old",
+    });
+    const next = { ...first, connectionId: "route-new" };
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 1 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: first.runtimeEntityId,
+      previous: null,
+      next: first,
+      reason: "acquired",
+    });
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: next.runtimeEntityId,
+      previous: first,
+      next,
+      reason: "acquired",
+    });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2);
+    expect(serverClient.call).toHaveBeenLastCalledWith("panelRuntime", "reportView", [
+      next.runtimeEntityId,
+      "route-new",
+      expect.any(Object),
+    ]);
+  });
+
+  it("does not publish a delayed load under a superseding lease connection", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/delayed-rebind", [], {
+      runtimeEntityId: "panel:nav-delayed-rebind",
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "desktop-session",
+        label: "Desktop",
+        platform: "desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
+    panelView.hasView.mockReturnValue(true);
+    panelView.getWebContents.mockReturnValue({
+      id: 72,
+      isDestroyed: () => false,
+      getURL: () => "http://panel/delayed-rebind",
+      isLoading: () => false,
+    } as never);
+    let finishFirst!: () => void;
+    panelView.createViewForPanel
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (finishFirst = resolve)))
+      .mockResolvedValueOnce(undefined);
+    const first = runtimeLease("panel:nav-delayed-rebind", {
+      slotId: panel.id,
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: "route-delayed-old",
+    });
+    const next = { ...first, connectionId: "route-delayed-new" };
+    const firstLoad = orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 1 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: first.runtimeEntityId,
+      previous: null,
+      next: first,
+      reason: "acquired",
+    });
+    await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalledOnce());
+    const nextLoad = orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: next.runtimeEntityId,
+      previous: first,
+      next,
+      reason: "acquired",
+    });
+    finishFirst();
+    await Promise.all([firstLoad, nextLoad]);
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2);
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "reportView", [
+      first.runtimeEntityId,
+      "route-delayed-old",
+      expect.any(Object),
+    ]);
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "reportView", [
+      next.runtimeEntityId,
+      "route-delayed-new",
+      expect.any(Object),
+    ]);
   });
 
   it("publishes a terminal view failure when same-slot replacement cannot load", async () => {

@@ -1380,6 +1380,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       await this.shellCore.refreshPanel(asPanelSlotId(event.panelId));
       if (!this.registry.applyExecutionIdentity(event.panelId, event)) return;
     }
+    if (!this.runtime.hasLocalPresentationDemand(event.panelId)) return;
     try {
       await this.runtime.loadPanelIntoView(event.panelId);
     } catch (error) {
