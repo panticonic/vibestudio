@@ -261,6 +261,30 @@ describe("discoverPackageGraph extension units", () => {
     }
   });
 
+  it("records a missing internal package as a build-blocking dependency error", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-missing-dep-"));
+    try {
+      const panelDir = path.join(root, "panels", "chat");
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace-panels/chat",
+          dependencies: { "@workspace/test-runtime": "workspace:*" },
+          vibestudio: { entry: "index.tsx", panel: {} },
+        })
+      );
+
+      const node = discoverPackageGraph(root).get("@workspace-panels/chat");
+      expect(node.dependencyErrors).toEqual([
+        "Internal dependency @workspace/test-runtime is not in the workspace",
+      ]);
+      expect(node.internalDeps).not.toContain("@workspace/test-runtime");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("discovers extension packages under flat workspace/extensions paths", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ext-graph-"));
     try {

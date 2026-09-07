@@ -47,6 +47,14 @@ function sourceFixture(): { root: string; output: string } {
   write(root, "panels/chat/index.ts", "export {};\n");
   write(root, "packages/runtime/package.json", '{"name":"@workspace/runtime"}\n');
   write(root, "packages/runtime/index.ts", "export {};\n");
+  write(root, "packages/test-runtime/package.json", '{"name":"@workspace/test-runtime"}\n');
+  write(root, "packages/test-runtime/index.ts", "export {};\n");
+  write(
+    root,
+    "skills/workspace-dev/package.json",
+    '{"name":"@workspace-skills/workspace-dev","dependencies":{"@workspace/test-runtime":"workspace:*"}}\n'
+  );
+  write(root, "skills/workspace-dev/index.ts", "export {};\n");
   write(root, "packages/unrelated/package.json", '{"name":"@workspace/unrelated"}\n');
   write(root, "packages/unrelated/index.ts", "throw new Error('excluded');\n");
   write(
@@ -55,7 +63,7 @@ function sourceFixture(): { root: string; output: string } {
     `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` +
       "template:\n" +
       "  name: Personal\n" +
-      "  repositories: [panels/chat]\n" +
+      "  repositories: [panels/chat, skills/workspace-dev]\n" +
       "  files: [package.json]\n" +
       "initPanels:\n" +
       "  - source: panels/chat\n"
@@ -100,9 +108,15 @@ describe("buildWorkspaceDistribution", () => {
       ref: "refs/heads/distributions/personal",
     });
 
-    expect(built.repositories).toEqual(["packages/runtime", "panels/chat"]);
+    expect(built.repositories).toEqual([
+      "packages/runtime",
+      "packages/test-runtime",
+      "panels/chat",
+      "skills/workspace-dev",
+    ]);
     expect(fs.existsSync(path.join(fixture.output, ".git"))).toBe(true);
     expect(fs.existsSync(path.join(fixture.output, "packages/runtime/index.ts"))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.output, "packages/test-runtime/index.ts"))).toBe(true);
     expect(fs.existsSync(path.join(fixture.output, "packages/unrelated"))).toBe(false);
     expect(fs.existsSync(path.join(fixture.output, "meta/distributions"))).toBe(false);
     expect(git(fixture.output, "remote", "get-url", "origin")).toBe(

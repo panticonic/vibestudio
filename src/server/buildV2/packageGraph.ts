@@ -193,6 +193,11 @@ function recordInternalDepSpecError(
   console.warn(`[PackageGraph] ${node.name}: ${error}`);
 }
 
+function recordDependencyError(node: GraphNode, error: string): void {
+  node.dependencyErrors ??= [];
+  if (!node.dependencyErrors.includes(error)) node.dependencyErrors.push(error);
+}
+
 interface PackageJson {
   name?: string;
   version?: string;
@@ -595,13 +600,15 @@ function finalizePackageGraph(graph: PackageGraph): PackageGraph {
 
   // Validate: all internal deps must exist in the graph
   for (const node of graph.allNodes()) {
-    for (const dep of node.internalDeps) {
-      if (!graph.has(dep)) {
-        console.warn(`[PackageGraph] ${node.name} depends on ${dep} which is not in the workspace`);
-        // Remove missing deps to avoid topo sort errors
-        node.internalDeps = node.internalDeps.filter((d) => d !== dep);
-      }
+    const missing = node.internalDeps.filter((dep) => !graph.has(dep));
+    for (const dep of missing) {
+      const error = `Internal dependency ${dep} is not in the workspace`;
+      recordDependencyError(node, error);
+      console.warn(`[PackageGraph] ${node.name}: ${error}`);
     }
+    // Keep graph traversal total while retaining the missing edge as a
+    // build-blocking manifest error on its declaring unit.
+    if (missing.length > 0) node.internalDeps = node.internalDeps.filter((dep) => graph.has(dep));
   }
 
   graph.computeTopologicalOrder();
