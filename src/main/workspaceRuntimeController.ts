@@ -201,14 +201,14 @@ export function createDesktopWorkspaceRuntime(deps: {
   const recover = async (kind: "resubscribe" | "cold-recover") => {
     if (closed) return;
     const epoch = ++semanticRecoveryEpoch;
-    for (const { panelId } of controller.registry.listPanels()) {
-      const contents = window.getWorkspacePanelView(workspaceId)?.getWebContents(panelId);
-      if (contents && !contents.isDestroyed()) contents.send("vibestudio:rpc:recovery", kind);
-    }
     await watch.recover();
     if (closed || epoch !== semanticRecoveryEpoch) return;
     await controller.orchestrator.recoverShellSnapshot({ loadFocusedView: false });
     if (closed || epoch !== semanticRecoveryEpoch) return;
+    for (const { panelId } of controller.registry.listPanels()) {
+      const contents = window.getWorkspacePanelView(workspaceId)?.getWebContents(panelId);
+      if (contents && !contents.isDestroyed()) contents.send("vibestudio:rpc:recovery", kind);
+    }
     recoveryPending = false;
     publishConnectionStatus("connected");
     await deps.onRecovered?.(kind);

@@ -358,6 +358,12 @@ describe("workspace runtime ownership", () => {
       expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledWith({
         loadFocusedView: false,
       });
+      expect(owner.watch.recover.mock.invocationCallOrder[0]).toBeLessThan(
+        owner.orchestrator.recoverShellSnapshot.mock.invocationCallOrder[0]!
+      );
+      expect(owner.orchestrator.recoverShellSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+        owner.send.mock.invocationCallOrder[0]!
+      );
       await owner.runtime.close();
       await owner.runtime.close();
       expect(owner.managedStop).toHaveBeenCalledOnce();
@@ -450,7 +456,9 @@ describe("workspace runtime ownership", () => {
     const emit = vi.spyOn(owner.runtime.eventService, "emit");
     const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
     const replay = deferred<void>();
+    const snapshot = deferred<undefined>();
     owner.watch.recover.mockReturnValueOnce(replay.promise);
+    owner.orchestrator.recoverShellSnapshot.mockReturnValueOnce(snapshot.promise);
     status("disconnected");
     expect(emit).toHaveBeenLastCalledWith("server-connection-changed", {
       status: "disconnected",
@@ -464,6 +472,9 @@ describe("workspace runtime ownership", () => {
     expect(emit).not.toHaveBeenCalled();
     expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
     replay.resolve();
+    await vi.waitFor(() => expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce());
+    expect(owner.send).not.toHaveBeenCalled();
+    snapshot.resolve(undefined);
     await recovery;
     expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledOnce();

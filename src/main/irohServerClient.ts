@@ -334,7 +334,7 @@ export async function createIrohServerClient(
       send: (envelope) => session.send(envelope),
       onMessage: (listener) => session.onMessage(listener),
       status: () => session.status?.() ?? transport.status(),
-      isClosed: () => panelClosed,
+      isClosed: () => panelClosed || session.isClosed(),
       // First-class duplex stream with the §1.6 upload body: the panel bridge
       // relay (ipcDispatcher) feeds a panel's reassembled request body here and
       // it rides the request's bidirectional QUIC stream.

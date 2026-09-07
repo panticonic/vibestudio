@@ -1257,9 +1257,10 @@ describe("IpcDispatcher", () => {
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("panel relay failed"));
     });
 
-    it("recycles (and re-opens) only a terminally closed session", async () => {
+    it("recycles a terminal pre-lease session and reopens only after its lease is ready", async () => {
       const panelWc = makeWebContents(31);
       let closed = false;
+      let leaseReady = true;
       const firstSend = vi.fn();
       const firstClose = vi.fn();
       const secondSend = vi.fn();
@@ -1282,7 +1283,8 @@ describe("IpcDispatcher", () => {
       makeDispatcher({
         resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
         getWebContentsForCaller: () => panelWc,
-        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        getPanelRuntimeConnection: () =>
+          leaseReady ? { runtimeEntityId: "entity-1", connectionId: "conn-1" } : undefined,
         openPanelSession,
       });
 
@@ -1293,9 +1295,18 @@ describe("IpcDispatcher", () => {
       await vi.waitFor(() => expect(firstSend).toHaveBeenCalledTimes(1));
 
       closed = true; // lease revoke / server-side teardown: terminal
+      leaseReady = false;
       ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r2") as never
+      );
+      await vi.waitFor(() => expect(firstClose).toHaveBeenCalledOnce());
+      expect(openPanelSession).toHaveBeenCalledOnce();
+
+      leaseReady = true;
+      ipcHandlers.get("vibestudio:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r3") as never
       );
       await vi.waitFor(() => expect(secondSend).toHaveBeenCalledTimes(1));
 
