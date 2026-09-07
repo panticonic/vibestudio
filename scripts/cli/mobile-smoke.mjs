@@ -613,6 +613,9 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
     if (!(await cdpEvaluate(personal.socket, "document.cookie")).includes("vibestudio_workspace_probe=personal")) {
       throw new Error("Clearing System cookies affected the neighboring Personal profile");
     }
+    console.log("[mobile-smoke] Native cookies: clearing System preserved the neighboring Personal profile");
+    await fsp.writeFile(path.join(screenshotDir, "workspace-cookies-cleared.png"),
+      (await adbCaptureBuffer(device, "exec-out", "screencap", "-p")).stdout);
     await tapButtonByText(device, "Back", deadlineMs);
     await dismissNavigationDrawerIfOpen(device);
     await cdpEvaluate(
@@ -624,7 +627,7 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
     let openedPersonal = false;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const xml = await dumpWindowXml(device);
-      if (await tapVisibleNode(device, xml, "Open Personal,", { labelPrefix: true })) {
+      if (await tapVisibleNode(device, xml, "Open Personal, Only you")) {
         openedPersonal = true;
         break;
       }
