@@ -157,14 +157,20 @@ interface InboundRequest {
   settled: boolean;
 }
 
+interface OutboundRequest {
+  cancel(reason?: unknown, code?: bigint): Promise<void>;
+  targetWorkspaceId?: string;
+}
+
 class ClientSession implements IrohClientSession {
   /** Internal wire identity; intentionally absent from the public session API. */
   readonly sid = randomId();
   private readonly listeners = new Set<(envelope: RpcEnvelope) => void>();
   private readonly statusListeners = new Set<(status: RpcConnectionStatus) => void>();
   private readonly inboundRequests = new Map<string, InboundRequest>();
-  private readonly outboundRequests = new Map<string, IrohPhysicalBiStream>();
+  private readonly outboundRequests = new Map<string, OutboundRequest>();
   private openPromise: Promise<void> | null = null;
+  private requestGeneration = 0;
   private authenticatedCallerId: string | null = null;
   private lastServerBootId: string | null = null;
   private terminal = false;
@@ -237,38 +243,54 @@ class ClientSession implements IrohClientSession {
       }
     }
 
+    const generation = this.requestGeneration;
     const stream = await this.pipe.connection.openBi();
-    await writeIrohStreamPreamble(stream.send, {
-      k: "envelope",
-      sid: this.sid,
-      v: IROH_WIRE_VERSION,
-    });
-    await writeFrame(
-      stream.send,
-      new TextEncoder().encode(JSON.stringify(envelope)),
-      MAX_ENVELOPE_FRAME_BYTES
-    );
     const cancellable = signal !== undefined && requestId !== null;
-    // A request without caller cancellation has no bytes after its bounded
-    // envelope. Close that half immediately. Cancellable requests retain it
-    // only until their response settles so RESET_STREAM cannot be reordered on
-    // a second QUIC stream ahead of the request it cancels.
-    if (!cancellable) await stream.send.finish();
-
+    const cancel = async (_reason?: unknown, code = IROH_CANCEL_CODE): Promise<void> => {
+      signal?.removeEventListener("abort", abort);
+      if (requestId && this.outboundRequests.delete(requestId)) this.pipe.diagnosticsChanged();
+      await Promise.all([
+        stream.send.reset(code).catch(() => undefined),
+        stream.recv.stop(code).catch(() => undefined),
+      ]);
+    };
+    const abort = (): void => {
+      void cancel();
+    };
     if (
       requestId &&
       (envelope.message.type === "request" || envelope.message.type === "stream-request")
     ) {
-      this.outboundRequests.set(requestId, stream);
+      this.outboundRequests.set(requestId, {
+        cancel,
+        ...(envelope.targetWorkspaceId ? { targetWorkspaceId: envelope.targetWorkspaceId } : {}),
+      });
       this.pipe.diagnosticsChanged();
     }
-    const abort = (): void => {
-      void stream.send.reset(IROH_CANCEL_CODE).catch(() => undefined);
-      void stream.recv.stop(IROH_CANCEL_CODE).catch(() => undefined);
-      if (requestId && this.outboundRequests.delete(requestId)) this.pipe.diagnosticsChanged();
-    };
-    if (signal?.aborted) abort();
-    else signal?.addEventListener("abort", abort, { once: true });
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      if (this.terminal || generation !== this.requestGeneration) {
+        throw new Error(`Iroh session ${this.sid} closed while opening request`);
+      }
+      if (signal?.aborted) throw new Error("RPC aborted by caller");
+      await writeIrohStreamPreamble(stream.send, {
+        k: "envelope",
+        sid: this.sid,
+        v: IROH_WIRE_VERSION,
+      });
+      await writeFrame(
+        stream.send,
+        new TextEncoder().encode(JSON.stringify(envelope)),
+        MAX_ENVELOPE_FRAME_BYTES
+      );
+      // A request without caller cancellation ends at its bounded envelope.
+      // Cancellable requests retain the send half until their response settles,
+      // keeping cancellation ordered with this request on the same QUIC stream.
+      if (!cancellable) await stream.send.finish();
+    } catch (error) {
+      await cancel(error);
+      throw error;
+    }
     void this.readResponses(stream, requestId).finally(() => {
       if (cancellable) void stream.send.finish().catch(() => undefined);
       signal?.removeEventListener("abort", abort);
@@ -412,14 +434,11 @@ class ClientSession implements IrohClientSession {
   }
 
   private async cancelOutbound(message: RpcRequestCancel | RpcStreamCancel): Promise<void> {
-    const stream = this.outboundRequests.get(message.requestId);
-    if (!stream) return;
+    const outbound = this.outboundRequests.get(message.requestId);
+    if (!outbound) return;
     this.outboundRequests.delete(message.requestId);
     this.pipe.diagnosticsChanged();
-    await Promise.all([
-      stream.send.reset(IROH_CANCEL_CODE).catch(() => undefined),
-      stream.recv.stop(IROH_CANCEL_CODE).catch(() => undefined),
-    ]);
+    await outbound.cancel();
   }
 
   private async openStreamingRequest(
@@ -442,24 +461,43 @@ class ClientSession implements IrohClientSession {
       throw new Error("Catastrophic Iroh active-request ceiling exceeded");
     }
 
+    const generation = this.requestGeneration;
     const stream = await this.pipe.connection.openBi();
-    this.outboundRequests.set(request.requestId, stream);
-    this.pipe.diagnosticsChanged();
     let cancelled = false;
-    const cancel = (reason?: unknown): void => {
+    let requestBodyReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const cancel = async (reason?: unknown, code = IROH_CANCEL_CODE): Promise<void> => {
       if (cancelled) return;
       cancelled = true;
+      signal?.removeEventListener("abort", onAbort);
       this.outboundRequests.delete(request.requestId);
       this.pipe.diagnosticsChanged();
-      void stream.send.reset(IROH_CANCEL_CODE).catch(() => undefined);
-      void stream.recv.stop(IROH_CANCEL_CODE).catch(() => undefined);
-      if (body) void body.cancel(reason).catch(() => undefined);
+      if (requestBodyReader) void requestBodyReader.cancel(reason).catch(() => undefined);
+      else if (body) void body.cancel(reason).catch(() => undefined);
+      await Promise.all([
+        stream.send.reset(code).catch(() => undefined),
+        stream.recv.stop(code).catch(() => undefined),
+      ]);
     };
-    const onAbort = (): void =>
-      cancel((signal as (AbortSignal & { reason?: unknown }) | null | undefined)?.reason);
+    const onAbort = (): void => {
+      void cancel((signal as (AbortSignal & { reason?: unknown }) | null | undefined)?.reason);
+    };
+    this.outboundRequests.set(request.requestId, {
+      cancel,
+      ...(envelope.targetWorkspaceId ? { targetWorkspaceId: envelope.targetWorkspaceId } : {}),
+    });
+    this.pipe.diagnosticsChanged();
     signal?.addEventListener("abort", onAbort, { once: true });
 
     try {
+      if (this.terminal || generation !== this.requestGeneration) {
+        throw new Error(`Iroh session ${this.sid} closed while opening request`);
+      }
+      // Opening the native stream is asynchronous. An abort during that await
+      // predates the listener, so check again before sending the request.
+      if (signal?.aborted) {
+        onAbort();
+        throw new Error("Streaming RPC aborted by caller");
+      }
       await writeIrohStreamPreamble(stream.send, {
         body: body != null,
         k: "stream",
@@ -472,13 +510,27 @@ class ClientSession implements IrohClientSession {
         new TextEncoder().encode(JSON.stringify(envelope)),
         MAX_ENVELOPE_FRAME_BYTES
       );
+      requestBodyReader = body?.getReader();
     } catch (error) {
       signal?.removeEventListener("abort", onAbort);
       cancel(error);
       throw error;
     }
 
-    void this.pumpRequestBody(stream, body, cancel).catch(cancel);
+    let uploadSettled = false;
+    let responseSettled = false;
+    const settle = (): void => {
+      // Response EOF does not end a duplex upload. Keep its cancellation owner
+      // until both halves settle, including uploads waiting on caller data.
+      if (!uploadSettled || !responseSettled) return;
+      signal?.removeEventListener("abort", onAbort);
+      this.outboundRequests.delete(request.requestId);
+      this.pipe.diagnosticsChanged();
+    };
+    void this.pumpRequestBody(stream, requestBodyReader, cancel).then(() => {
+      uploadSettled = true;
+      settle();
+    }, cancel);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const head = await Promise.race([
       readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES).then(decodeIrohStreamResponseHead),
@@ -490,9 +542,14 @@ class ClientSession implements IrohClientSession {
         );
         (timeout as unknown as { unref?: () => void }).unref?.();
       }),
-    ]).finally(() => {
-      if (timeout) clearTimeout(timeout);
-    });
+    ])
+      .catch((error: unknown) => {
+        cancel(error);
+        throw error;
+      })
+      .finally(() => {
+        if (timeout) clearTimeout(timeout);
+      });
     if (head.error) {
       cancel(head.error.message);
       throw new RemoteRpcError(
@@ -503,9 +560,8 @@ class ClientSession implements IrohClientSession {
       );
     }
     const responseBody = irohReceiveStreamBody(stream.recv, cancel, () => {
-      signal?.removeEventListener("abort", onAbort);
-      this.outboundRequests.delete(request.requestId);
-      this.pipe.diagnosticsChanged();
+      responseSettled = true;
+      settle();
     });
     return {
       status: head.status,
@@ -518,7 +574,7 @@ class ClientSession implements IrohClientSession {
 
   private async pumpRequestBody(
     stream: IrohPhysicalBiStream,
-    body: ReadableStream<Uint8Array> | null | undefined,
+    reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
     cancel: (reason?: unknown) => void
   ): Promise<void> {
     // There is no upload after the request envelope. Close this half now—not
@@ -526,11 +582,10 @@ class ClientSession implements IrohClientSession {
     // after Content-Length bytes without an extra EOF read; coupling closure to
     // that read leaked otherwise successful asset streams and exhausted QUIC
     // stream credit during cold panel loads.
-    if (!body) {
+    if (!reader) {
       await stream.send.finish();
       return;
     }
-    const reader = body.getReader();
     try {
       while (true) {
         const { value, done } = await reader.read();
@@ -572,6 +627,7 @@ class ClientSession implements IrohClientSession {
   }
 
   private emitTransportFailure(requestId: string, error: Error): void {
+    const targetWorkspaceId = this.outboundRequests.get(requestId)?.targetWorkspaceId;
     const response: RpcResponse = {
       type: "response",
       requestId,
@@ -582,17 +638,23 @@ class ClientSession implements IrohClientSession {
     this.emit({
       from: "main",
       target: this.authenticatedCallerId ?? "",
-      delivery: { caller: { callerId: "main", callerKind: "unknown" } },
+      delivery: {
+        caller: {
+          callerId: "main",
+          callerKind: "unknown",
+          ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+        },
+      },
       provenance: [],
       message: response,
     });
   }
 
   private failOutstanding(error: Error): void {
-    for (const [requestId, stream] of this.outboundRequests) {
-      void stream.send.reset(IROH_SESSION_CLOSE_CODE).catch(() => undefined);
-      void stream.recv.stop(IROH_SESSION_CLOSE_CODE).catch(() => undefined);
+    this.requestGeneration += 1;
+    for (const [requestId, outbound] of this.outboundRequests) {
       this.emitTransportFailure(requestId, error);
+      void outbound.cancel(error, IROH_SESSION_CLOSE_CODE);
     }
     this.outboundRequests.clear();
     for (const inbound of this.inboundRequests.values()) {
@@ -887,6 +949,7 @@ export function irohReceiveStreamBody(
           controller.close();
         } else controller.enqueue(chunk);
       } catch (error) {
+        onCancel?.(error);
         settle();
         controller.error(error);
       }

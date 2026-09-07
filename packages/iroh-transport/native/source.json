@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/n0-computer/iroh-ffi.git",
+  "commit": "5e451092dba0c1a09ee83ff6e5be37b1152a5c58",
+  "bindingVersion": "1.1.0",
+  "baseCargoLockSha256": "3e0dbd3b87ba9a85833ace8802661128c6965766566655607981eadc6df719b4",
+  "patchedCargoLockSha256": "799f7a1add403031f3703379647e86bb2be44cfe1823f0a2b099a63bd7ee3c45",
+  "patch": "iroh-ffi-stream-cancellation.patch",
+  "patchSha256": "ba6b8a409a873e1aa8a53e7f46095eafe97b55bc8b6853255d3d92f0c942db51"
+}
