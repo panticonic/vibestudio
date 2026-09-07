@@ -299,6 +299,58 @@ describe("IpcDispatcher", () => {
     await ipcDispatcher.shutdown();
   });
 
+  it("preserves connection-loss identity from an admitted workspace UI session", async () => {
+    const contents = makeWebContents(59);
+    const unavailable = Object.assign(new Error("Workspace server is temporarily unavailable"), {
+      code: "CONNECTION_LOST",
+      errorKind: "transport" as const,
+    });
+    const session = {
+      send: vi.fn().mockRejectedValue(unavailable),
+      onMessage: vi.fn(() => vi.fn()),
+      close: vi.fn(async () => {}),
+      isClosed: () => false,
+    };
+    const caller = {
+      callerId: "native:System:shell",
+      runtimeId: "shell-app",
+      workspaceId: "system",
+      callerKind: "app" as const,
+    };
+    const destination = {
+      workspaceId: "system",
+      dispatcher: createTestServiceDispatcher(),
+      serverClient: { openHostUiSession: vi.fn(async () => session) },
+    } as unknown as WorkspaceIpcRuntime;
+    const { ipcDispatcher } = makeDispatcher({
+      resolve: () => caller,
+      resolveWorkspaceUiRuntime: async () => destination,
+      getWebContentsForCaller: () => contents,
+    });
+
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: contents } as never,
+      rpcEnvelope("shell-app", "app", {
+        type: "request",
+        requestId: "unavailable",
+        fromId: "shell-app",
+        method: "events.watch",
+        args: [],
+      }) as never
+    );
+
+    await vi.waitFor(() =>
+      expectSentRpcMessage(contents, "shell-app", {
+        type: "response",
+        requestId: "unavailable",
+        error: "Workspace server is temporarily unavailable",
+        errorKind: "transport",
+        errorCode: "CONNECTION_LOST",
+      })
+    );
+    await ipcDispatcher.shutdown();
+  });
+
   it("dispatches admitted native services in the destination with host UI authority", async () => {
     const contents = makeWebContents(56);
     const destinationDispatcher = createTestServiceDispatcher();

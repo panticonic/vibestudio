@@ -243,7 +243,7 @@ export class IpcDispatcher {
         this.rejectRequestEnvelope(
           event.sender,
           attested,
-          error instanceof Error ? error.message : String(error),
+          error,
           envelope.targetWorkspaceId ?? caller.workspaceId ?? this.deps.workspaceId
         );
       });
@@ -403,11 +403,7 @@ export class IpcDispatcher {
           })
         )
         .catch((error: unknown) => {
-          this.rejectRequestEnvelope(
-            sender,
-            envelope,
-            error instanceof Error ? error.message : String(error)
-          );
+          this.rejectRequestEnvelope(sender, envelope, error);
         });
       return;
     }
@@ -1010,9 +1006,13 @@ export class IpcDispatcher {
   private rejectRequestEnvelope(
     sender: WebContents,
     envelope: RpcEnvelope,
-    error: string,
+    error: unknown,
     responderWorkspaceId = this.deps.workspaceId
   ): void {
+    const messageText = error instanceof Error ? error.message : String(error);
+    const errorKind = rpcErrorKindOf(error, "access");
+    const errorCode = (error as { code?: unknown } | null)?.code;
+    const errorData = rpcErrorDataOf(error);
     const message = envelope.message;
     if (message?.type === "stream-request") {
       // A stream has no response envelope, so silence here would strand the
@@ -1024,7 +1024,13 @@ export class IpcDispatcher {
         envelope,
         (message as RpcStreamRequest).requestId,
         FRAME_ERROR,
-        JSON.stringify({ status: 403, message: error, errorKind: "access" }),
+        JSON.stringify({
+          status: errorKind === "access" ? 403 : 502,
+          message: messageText,
+          errorKind,
+          ...(typeof errorCode === "string" ? { code: errorCode } : {}),
+          ...(errorData !== undefined ? { errorData } : {}),
+        }),
         responderWorkspaceId
       );
       return;
@@ -1036,8 +1042,10 @@ export class IpcDispatcher {
       {
         type: "response",
         requestId: (message as RpcRequest).requestId,
-        error,
-        errorKind: "access",
+        error: messageText,
+        errorKind,
+        ...(typeof errorCode === "string" ? { errorCode } : {}),
+        ...(errorData !== undefined ? { errorData } : {}),
       },
       responderWorkspaceId
     );
