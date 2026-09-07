@@ -20,7 +20,6 @@ import {
   startMemoryMonitor,
 } from "./memoryMonitor.js";
 import { setMenuEventService, setMenuViewManager, setupMenu } from "./menu.js";
-import { setupTestApi } from "./testApi.js";
 import { getResourcesPath } from "./paths.js";
 import { assertPresent } from "../lintHelpers";
 
@@ -388,8 +387,14 @@ export class ApplicationWindowController {
     const systemId = this.deps.getSystemWorkspaceId();
     const services = systemId ? this.workspaceServices.get(systemId) : undefined;
     if (!services || lifetime.appOrchestrator) return;
+    const appPanelView = lifetime.panelViews.get(services.serverSession.workspaceId);
     const appOrchestrator = new AppOrchestrator({
-      getPanelView: () => lifetime.panelViews.get(services.serverSession.workspaceId) ?? null,
+      getPanelView: () =>
+        !lifetime.closed &&
+        this.currentLifetime === lifetime &&
+        lifetime.panelViews.get(services.serverSession.workspaceId) === appPanelView
+          ? (appPanelView ?? null)
+          : null,
       statePath: services.serverSession.statePath,
     });
     lifetime.appOrchestrator = appOrchestrator;
@@ -421,12 +426,6 @@ export class ApplicationWindowController {
           }`
         );
       });
-
-    setupTestApi(
-      services.panelOrchestrator,
-      services.panelRegistry,
-      lifetime.panelViews.get(services.serverSession.workspaceId) ?? null
-    );
   }
 
   private setupApplicationMenu(window: BaseWindow, viewManager: ViewManager): void {

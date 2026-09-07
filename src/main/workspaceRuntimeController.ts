@@ -19,6 +19,7 @@ import type { ApplicationWindowController } from "./applicationWindowController.
 import { WorkspaceNativeViews } from "./workspaceNativeViews.js";
 import { createViewService } from "./services/viewService.js";
 import { createMenuService } from "./services/menuService.js";
+import { createAppService } from "./services/appService.js";
 import { requireAppCapability } from "./services/appCapabilities.js";
 import { createDesktopEventsService } from "./services/desktopEventsService.js";
 import { createBrowserVaultNativeClient } from "./services/browserVaultNativeClient.js";
@@ -54,6 +55,10 @@ export function createDesktopWorkspaceRuntime(deps: {
   view?: Pick<
     Parameters<typeof createViewService>[0],
     "authorizeWorkspaceMaterialization" | "onNativeSlotChanged"
+  >;
+  app?: Pick<
+    Parameters<typeof createAppService>[0],
+    "shellSurfaces" | "onOpenShellSurface" | "getAppOrchestrator" | "initialFocusedWorkspaceId"
   >;
   onRecovered?(kind: "resubscribe" | "cold-recover"): Promise<void> | void;
   adBlockManager: import("./adblock/adBlockManager.js").AdBlockManager;
@@ -184,12 +189,14 @@ export function createDesktopWorkspaceRuntime(deps: {
     if (attention) deps.events?.onAttentionRequired?.(attention.title, attention.message);
   });
   let semanticRecoveryEpoch = 0;
-  let recoveryPending = false;
+  let latestConnection = {
+    status: connection.serverClient.getConnectionStatus(),
+    isRemote: connection.connectionMode === "remote",
+  };
+  let recoveryPending = latestConnection.status !== "connected";
   const publishConnectionStatus = (status: import("./serverClient.js").ConnectionStatus) => {
-    eventService.emit("server-connection-changed", {
-      status,
-      isRemote: connection.connectionMode === "remote",
-    });
+    latestConnection = { ...latestConnection, status };
+    eventService.emit("server-connection-changed", latestConnection);
   };
   const recover = async (kind: "resubscribe" | "cold-recover") => {
     if (closed) return;
@@ -353,6 +360,15 @@ export function createDesktopWorkspaceRuntime(deps: {
           return window.viewManager;
         };
         container.registerRpc(
+          createAppService({
+            ...deps.app,
+            panelOrchestrator: controller.orchestrator,
+            serverClient: connection.serverClient,
+            getViewManager,
+            connectionMode: connection.connectionMode,
+          })
+        );
+        container.registerRpc(
           createViewService({
             ...deps.view,
             workspaceId,
@@ -377,7 +393,10 @@ export function createDesktopWorkspaceRuntime(deps: {
         container.registerRpc(
           createDesktopEventsService({
             eventService,
-            snapshots: { "panel-tree-invalidated": () => latestTree },
+            snapshots: {
+              "panel-tree-invalidated": () => latestTree,
+              "server-connection-changed": () => latestConnection,
+            },
             onWatchOpened: (events, context) => {
               const manager = window.viewManager;
               if (!manager) throw new Error("Desktop window is closed");

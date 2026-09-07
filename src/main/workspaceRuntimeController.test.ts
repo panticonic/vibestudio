@@ -131,6 +131,7 @@ function fixture(workspaceId: string, personal = false) {
   const directEvents = new Map<string, (payload: unknown) => void>();
   const serverClient = {
     call: vi.fn(async () => undefined),
+    getConnectionStatus: () => "connected",
     onDirectEvent: vi.fn((event: string, handler: (payload: unknown) => void) => {
       directEvents.set(event, handler);
       return release;
@@ -156,6 +157,7 @@ function fixture(workspaceId: string, personal = false) {
       publishedServices: [],
       onNotificationAction: personalAction,
     });
+  const openShellSurface = vi.fn();
   const runtime = createDesktopWorkspaceRuntime({
     connection: {
       workspaceId,
@@ -165,6 +167,7 @@ function fixture(workspaceId: string, personal = false) {
       serverClient,
     } as unknown as WorkspaceSessionConnection,
     personal,
+    app: { shellSurfaces: () => ["settings", "about"], onOpenShellSurface: openShellSurface },
     events,
     window: window as unknown as ApplicationWindowController,
     authorize: async () => {
@@ -195,10 +198,59 @@ function fixture(workspaceId: string, personal = false) {
     directEvents,
     events,
     personalAction,
+    openShellSurface,
   };
 }
 
+async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
+  owner.window.viewManager.getViewInfo.mockReturnValue({
+    type: "app",
+    hostChrome: true,
+    capabilities: ["panel-hosting"],
+    workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+    codeIdentity: { source: "apps/shell" },
+  });
+  const definition = owner.runtime.dispatcher
+    .getServiceDefinitions()
+    .find((service) => service.name === "desktopEvents")!;
+  const response = (await definition.handler!(
+    { caller: createHostCaller("native-system-shell", "shell") },
+    "watch",
+    [["server-connection-changed"], "connection-state"]
+  )) as Response;
+  const reader = response.body!.getReader();
+  try {
+    const ready = await reader.read();
+    expect(JSON.parse(new TextDecoder().decode(ready.value))).toMatchObject({ kind: "watching" });
+    const snapshot = await reader.read();
+    const record = JSON.parse(new TextDecoder().decode(snapshot.value));
+    expect(record).toMatchObject({ kind: "snapshot", event: "server-connection-changed" });
+    return record.payload as { status: string; isRemote: boolean };
+  } finally {
+    await reader.cancel();
+  }
+}
+
 describe("workspace runtime ownership", () => {
+  it("offers the same native navigation service in Personal, System and ordinary workspaces", async () => {
+    const owners = [fixture("personal", true), fixture("system"), fixture("project")];
+    for (const owner of owners) {
+      await owner.runtime.start();
+      const service = owner.runtime.dispatcher
+        .getServiceDefinitions()
+        .find((entry) => entry.name === "app")!;
+      expect(service).toBeDefined();
+      const context = { caller: createVerifiedCaller("panel:onboarding", "panel") };
+      await service.handler!(context, "openShellSurface", [
+        { kind: "settings", section: "devices" },
+      ]);
+      expect(owner.openShellSurface).toHaveBeenCalledExactlyOnceWith({
+        kind: "settings",
+        section: "devices",
+      });
+    }
+  });
+
   it.each(["app", "panel", "shell"] as const)(
     "rejects an unadmitted %s watch before it can observe already-retained private host events",
     async (kind) => {
@@ -394,6 +446,7 @@ describe("workspace runtime ownership", () => {
   it("keeps each workspace disconnected until its subscription and panel recovery finish", async () => {
     const owner = fixture("personal", true);
     await owner.runtime.start();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "connected", isRemote: false });
     const emit = vi.spyOn(owner.runtime.eventService, "emit");
     const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
     const replay = deferred<void>();
@@ -406,8 +459,10 @@ describe("workspace runtime ownership", () => {
     emit.mockClear();
     status("connected");
     expect(emit).not.toHaveBeenCalled();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
     const recovery = owner.runtime.recover("resubscribe");
     expect(emit).not.toHaveBeenCalled();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
     replay.resolve();
     await recovery;
     expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce();
@@ -416,6 +471,13 @@ describe("workspace runtime ownership", () => {
       status: "connected",
       isRemote: false,
     });
+    expect(await connectionSnapshot(owner)).toEqual({ status: "connected", isRemote: false });
+    await owner.runtime.close();
+    emit.mockClear();
+    status("disconnected");
+    status("connected");
+    await owner.runtime.recover("cold-recover");
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it("reports failed lease cleanup after stopping the remaining owned resources", async () => {

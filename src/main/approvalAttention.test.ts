@@ -172,6 +172,38 @@ describe("createApprovalAttention", () => {
     expect(electronMocks.notificationInstances).toHaveLength(1);
   });
 
+  it("retires absent snapshot owners without erasing concurrent new requests", async () => {
+    const pending = deferred<WorkspaceApprovalSnapshot[]>();
+    const attention = createApprovalAttention({
+      getWindow: () => makeWindow() as never,
+      listPending: () => pending.promise,
+    });
+    attention.handlePendingChanged(snapshot([makeApproval()], "shared"));
+    const sharedNotification = electronMocks.notificationInstances[0]!;
+    const refresh = attention.refresh();
+    attention.handlePendingChanged(snapshot([makeApproval()], "personal"));
+    pending.resolve([]);
+    await refresh;
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    expect(sharedNotification.close).toHaveBeenCalledOnce();
+    attention.removeWorkspace("personal");
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+  });
+
+  it("ignores a retired notification click instead of dismissing a new owner's request", () => {
+    const window = makeWindow();
+    const attention = makeAttention(window);
+    attention.handlePendingChanged(snapshot([makeApproval()], "personal"));
+    attention.handlePendingChanged(snapshot([makeApproval()], "shared"));
+    const [oldNotification, currentNotification] = electronMocks.notificationInstances;
+    oldNotification!.handlers.get("click")?.();
+    expect(currentNotification!.close).not.toHaveBeenCalled();
+    expect(window.focus).not.toHaveBeenCalled();
+    currentNotification!.handlers.get("click")?.();
+    expect(currentNotification!.close).toHaveBeenCalledOnce();
+    expect(window.focus).toHaveBeenCalledOnce();
+  });
+
   it("tracks the badge count and clears attention when the queue drains", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);

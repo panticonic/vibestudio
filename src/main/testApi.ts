@@ -54,6 +54,9 @@ export interface PanelLayoutAudit {
 export type { PanelReadinessSnapshot } from "./panelReadiness.js";
 
 export interface TestApi {
+  forWorkspace(workspaceId: string): Promise<TestApi>;
+  listWorkspaces(): Promise<import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]>;
+
   /** Get the full panel tree as a flat array */
   getPanelTree(): Panel[];
 
@@ -204,16 +207,39 @@ declare global {
  * Set up the test API on the global object.
  * This is only called when VIBESTUDIO_TEST_MODE=1.
  */
-export function setupTestApi(
-  panelOrchestrator: PanelOrchestrator,
-  panelRegistry: PanelRegistry,
-  panelView: PanelView | null
-): void {
-  if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") {
-    return;
-  }
+export interface TestWorkspaceOwner {
+  panelOrchestrator: PanelOrchestrator;
+  panelRegistry: PanelRegistry;
+  getPanelView(): PanelView | null;
+}
 
-  console.log("[TestApi] Setting up test API for E2E testing");
+export function setupTestApi(
+  owner: TestWorkspaceOwner,
+  selectors: {
+    resolveWorkspace(workspaceId: string): Promise<TestWorkspaceOwner>;
+    listWorkspaces(): ReturnType<TestApi["listWorkspaces"]>;
+  }
+): void {
+  if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") return;
+  const owners = new WeakMap<PanelOrchestrator, TestApi>();
+  const getApi = (workspace: TestWorkspaceOwner): TestApi => {
+    let api = owners.get(workspace.panelOrchestrator);
+    if (!api) {
+      api = createWorkspaceTestApi(workspace, {
+        forWorkspace: async (id) => getApi(await selectors.resolveWorkspace(id)),
+        listWorkspaces: selectors.listWorkspaces,
+      });
+      owners.set(workspace.panelOrchestrator, api);
+    }
+    return api;
+  };
+  global.__testApi = getApi(owner);
+}
+
+function createWorkspaceTestApi(
+  { panelOrchestrator, panelRegistry, getPanelView }: TestWorkspaceOwner,
+  selectors: Pick<TestApi, "forWorkspace" | "listWorkspaces">
+): TestApi {
   const panelDiagnostics = new Map<
     string,
     {
@@ -232,12 +258,14 @@ export function setupTestApi(
   };
 
   const hostedShellCaller = (): { callerId: string; callerKind: "app" } => {
+    const panelView = getPanelView();
     const appId = panelView?.getViewManager().getVisibleHostChromeAppId();
     if (!appId) throw new Error("No hosted shell app is visible");
     return { callerId: appId, callerKind: "app" };
   };
 
-  global.__testApi = {
+  return {
+    ...selectors,
     getPanelTree(): Panel[] {
       const result: Panel[] = [];
       const traverse = (panel: Panel) => {
@@ -261,6 +289,7 @@ export function setupTestApi(
     },
 
     getPanelCodeIdentity(id: string): HostedCodeIdentity | null {
+      const panelView = getPanelView();
       return panelView?.getViewManager().getViewInfo(id)?.codeIdentity ?? null;
     },
 
@@ -269,6 +298,7 @@ export function setupTestApi(
     },
 
     getFocusedPanelWebContentsId(): string | null {
+      const panelView = getPanelView();
       const focused = electronWebContents.getFocusedWebContents();
       if (!focused || !panelView) return null;
       return panelView.findViewIdByWebContentsId(focused.id);
@@ -311,6 +341,7 @@ export function setupTestApi(
     },
 
     async getPanelReadiness(panelId): Promise<PanelReadinessSnapshot> {
+      const panelView = getPanelView();
       const panel = panelRegistry.getPanel(panelId);
       const nativeSlotBound =
         panelView
@@ -334,6 +365,7 @@ export function setupTestApi(
     readPanelInitializationFailure,
 
     async getPanelText(panelId): Promise<string> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -341,6 +373,7 @@ export function setupTestApi(
     },
 
     async getPanelHtml(panelId): Promise<string> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -351,6 +384,7 @@ export function setupTestApi(
     },
 
     async startPanelDiagnostics(panelId): Promise<void> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -423,6 +457,7 @@ export function setupTestApi(
     },
 
     async getPanelLayoutAudit(panelId): Promise<PanelLayoutAudit> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -477,10 +512,12 @@ export function setupTestApi(
     },
 
     getNativePanelSlotDebugInfo() {
+      const panelView = getPanelView();
       return panelView?.getViewManager().getNativePanelSlotDebugInfo() ?? [];
     },
 
     getHostViewDebugInfo() {
+      const panelView = getPanelView();
       const viewManager = panelView?.getViewManager();
       if (!viewManager) {
         return {
@@ -508,6 +545,7 @@ export function setupTestApi(
     },
 
     async clickPanelSelector(panelId, selector): Promise<boolean> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -577,6 +615,7 @@ export function setupTestApi(
     },
 
     async clickPanelText(panelId, selector, text): Promise<boolean> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -595,6 +634,7 @@ export function setupTestApi(
     },
 
     async executePanelScript<T = unknown>(panelId: string, script: string): Promise<T> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -602,6 +642,7 @@ export function setupTestApi(
     },
 
     async getPanelSelectorWindowPoint(panelId, selector): Promise<{ x: number; y: number } | null> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -630,6 +671,7 @@ export function setupTestApi(
     },
 
     async typePanelText(panelId, text): Promise<void> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -693,6 +735,7 @@ export function setupTestApi(
     },
 
     async callTerminalPanel(panelId, method, args): Promise<unknown> {
+      const panelView = getPanelView();
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
@@ -723,6 +766,7 @@ export function setupTestApi(
     },
 
     unloadPanel(panelId): void {
+      const panelView = getPanelView();
       if (!panelView) return;
       const wc = panelView.getWebContents(panelId);
       if (wc && !wc.isDestroyed()) {

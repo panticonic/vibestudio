@@ -107,6 +107,7 @@ export function createApprovalAttention(deps: {
       timeoutType: "never",
     });
     notification.on("click", () => {
+      if (activeNotification?.notification !== notification) return;
       focusShell();
       closeNotification();
     });
@@ -184,6 +185,11 @@ export function createApprovalAttention(deps: {
         const pending = await deps.listPending();
         if (disposed) return;
         if (Array.isArray(pending)) {
+          const present = new Set(pending.map((snapshot) => snapshot.workspaceId));
+          for (const [workspaceId, snapshot] of before) {
+            if (!present.has(workspaceId) && workspaces.get(workspaceId) === snapshot)
+              workspaces.set(workspaceId, null);
+          }
           for (const snapshot of pending) {
             if (workspaces.get(snapshot.workspaceId) === before.get(snapshot.workspaceId))
               workspaces.set(snapshot.workspaceId, snapshot);

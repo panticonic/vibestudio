@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PanelView } from "./panelView.js";
+import { AppOrchestrator } from "./appOrchestrator.js";
 
 type WindowEvent = "focus" | "close" | "closed";
 
@@ -196,6 +197,9 @@ describe("ApplicationWindowController window lifetime", () => {
     } as unknown as WorkspaceWindowServices;
     harness.controller.attachWorkspaceServices(services);
     const firstAppOwner = harness.controller.appOrchestrator;
+    const oldViewLookup = vi.mocked(AppOrchestrator).mock.calls[0]![0].getPanelView;
+    const firstPanelView = harness.controller.getWorkspacePanelView("system");
+    expect(oldViewLookup()).toBe(firstPanelView);
     expect(firstAppOwner).not.toBeNull();
     harness.controller.detachWorkspace("system");
     expect(harness.controller.getWorkspacePanelView("system")).toBeNull();
@@ -204,6 +208,10 @@ describe("ApplicationWindowController window lifetime", () => {
 
     harness.controller.attachWorkspaceServices(services);
     expect(harness.controller.appOrchestrator).not.toBe(firstAppOwner);
+    expect(oldViewLookup()).toBeNull();
+    expect(vi.mocked(AppOrchestrator).mock.calls[1]![0].getPanelView()).toBe(
+      harness.controller.getWorkspacePanelView("system")
+    );
     const manager = expectPresent(mocks.viewManagers[0]);
     expect(manager.onNativeSlotFocused).toHaveBeenCalledOnce();
     expect(manager.onViewCrashed).toHaveBeenCalledOnce();

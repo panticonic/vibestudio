@@ -656,14 +656,20 @@ function canAccessIncomingPanelLocations(webContentsId: number): boolean {
  * event that surface already listens for. Every entry point — `app.openShellSurface`,
  * `vibestudio://ask|about|command|surface` deep links, menu items — converges here.
  */
-function dispatchShellSurface(target: ShellSurfaceDescriptor): void {
-  const focusedId = applicationWindow.focusedWorkspace;
-  const focusedEvents = focusedId ? openNativeControllers.get(focusedId)?.eventService : undefined;
+function dispatchShellSurface(
+  target: ShellSurfaceDescriptor,
+  workspaceId = applicationWindow.focusedWorkspace
+): void {
+  const workspaceEvents = workspaceId
+    ? openNativeControllers.get(workspaceId)?.eventService
+    : undefined;
   switch (target.kind) {
     case "settings":
       eventService.emit("open-settings", {
         section: target.section ?? "connection",
-        ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
+        ...((target.workspaceId ?? workspaceId)
+          ? { workspaceId: target.workspaceId ?? workspaceId! }
+          : {}),
       });
       return;
     case "workspace-chooser":
@@ -673,15 +679,15 @@ function dispatchShellSurface(target: ShellSurfaceDescriptor): void {
       );
       return;
     case "about":
-      focusedEvents?.emit("navigate-about", { page: target.page });
+      workspaceEvents?.emit("navigate-about", { page: target.page });
       return;
     case "command-agent": {
       const { kind: _kind, ...request } = target;
-      focusedEvents?.emit("open-command-agent", request);
+      workspaceEvents?.emit("open-command-agent", request);
       return;
     }
     case "panel-command":
-      focusedEvents?.emit("run-panel-command", {
+      workspaceEvents?.emit("run-panel-command", {
         panelId: target.panelId,
         commandId: target.commandId,
       });
@@ -2147,6 +2153,10 @@ app.on("ready", async () => {
       const runtime = createDesktopWorkspaceRuntime({
         connection,
         personal: membership.privateRole === "personal",
+        app: {
+          shellSurfaces: () => (IS_HEADLESS_HOST ? [] : SHELL_SURFACE_KINDS),
+          onOpenShellSurface: (target) => dispatchShellSurface(target, id),
+        },
         events: {
           onAttentionRequired: handleAttentionRequired,
           onApprovalPendingChanged: (pending) =>
@@ -2388,6 +2398,12 @@ app.on("ready", async () => {
     const workspaceController = createDesktopWorkspaceRuntime({
       connection: conn,
       personal: false,
+      app: {
+        getAppOrchestrator: () => applicationWindow.appOrchestrator,
+        initialFocusedWorkspaceId: conn.initialFocusedWorkspaceId,
+        shellSurfaces: () => (IS_HEADLESS_HOST ? [] : SHELL_SURFACE_KINDS),
+        onOpenShellSurface: (target) => dispatchShellSurface(target, conn.workspaceId),
+      },
       headless: IS_HEADLESS_HOST,
       eventService,
       dispatcher,
@@ -2533,7 +2549,22 @@ app.on("ready", async () => {
     // The same workspace runtime owns ordinary native services and presentation
     // for every workspace. System adds only its app/account host services below.
     // Set up test API for E2E testing (only when VIBESTUDIO_TEST_MODE=1)
-    setupTestApi(workspaceController.orchestrator, workspaceController.registry, null);
+    const testOwner = (runtime: DesktopUiWorkspaceRuntime) => ({
+      panelOrchestrator: runtime.orchestrator,
+      panelRegistry: runtime.registry,
+      getPanelView: () => {
+        if (openNativeControllers.get(runtime.workspaceId) !== runtime)
+          throw new Error("Workspace runtime is no longer active");
+        return applicationWindow.getWorkspacePanelView(runtime.workspaceId);
+      },
+    });
+    setupTestApi(testOwner(workspaceController), {
+      resolveWorkspace: async (id) => testOwner(await ensureDesktopWorkspace(id)),
+      listWorkspaces: () =>
+        conn.hubControlClient.call("hubControl", "listWorkspaces", []) as Promise<
+          import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]
+        >,
+    });
     setMenuWorkspaceResolver(() => {
       const id = applicationWindow.focusedWorkspace;
       return id ? (openNativeControllers.get(id) ?? null) : null;
@@ -2563,25 +2594,11 @@ app.on("ready", async () => {
     // hosts are resolved from their lifecycle owner when an RPC is invoked.
     const getViewManager = () => assertPresent(applicationWindow.viewManager);
 
-    const { createAppService } = await import("./services/appService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
     const electronContainer = workspaceController.container;
     const { serverClient: sc } = conn;
 
-    // Shell-only services
-    electronContainer.registerRpc(
-      createAppService({
-        panelOrchestrator: workspaceController.orchestrator,
-        serverClient: sc,
-        getViewManager,
-        getAppOrchestrator: () => applicationWindow.appOrchestrator,
-        connectionMode: conn.connectionMode,
-        initialFocusedWorkspaceId: conn.initialFocusedWorkspaceId,
-        remoteHost: undefined,
-        shellSurfaces: () => (IS_HEADLESS_HOST ? [] : SHELL_SURFACE_KINDS),
-        onOpenShellSurface: dispatchShellSurface,
-      })
-    );
+    // Account-host services belong to the System workspace.
     const { createHubControlHostService } = await import("./services/hubControlService.js");
     electronContainer.registerRpc(
       createHubControlHostService({
