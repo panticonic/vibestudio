@@ -78,6 +78,8 @@ import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
 import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
+import { prepareBuildProviderResources } from "./buildProviderResources.js";
+import { getUserDataPath } from "@vibestudio/env-paths";
 import type {
   BuildProvider,
   BuildProviderArtifact,
@@ -3817,18 +3819,35 @@ async function buildApp(
       sourceRoot,
       "runtime-root"
     );
+    let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
+    let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;
     try {
-      const providerInput: BuildProviderInput = {
+      // A provider executes in the workspace native domain. Its npm input must
+      // be the exact declared closure, never the host-wide resolution fallback.
+      dependencies = await acquireExternalDeps(env.externalDeps, env.dependencyOverrides, {
+        appRoot: _appRoot,
+        patches: env.dependencyPatches,
+      });
+      const input: BuildProviderInput = {
         target: "react-native",
         unitName: node.name,
         sourcePath: appSourcePath,
         dependencyProjection: {
-          nodeModulesPath: env.nodeModulesDir || null,
+          nodeModulesPath: dependencies.nodeModulesDir || null,
           modules: collectBuildProviderModules(node, graph, sourceRoot, env.outdir),
         },
         effectiveVersion: ev,
         manifest: extractedManifest,
       };
+      const worker = _immutableTreeWorker;
+      if (!worker) throw new Error("builder is not initialized");
+      resources = await prepareBuildProviderResources({
+        buildsRoot: path.join(getUserDataPath(), "builds"),
+        sourceRoot,
+        input,
+        materialize: (source, destination) => worker.materialize(source, destination),
+      });
+      const providerInput = resources.input;
       const output = await provider.build(providerInput);
       const entries = await materializeBuildProviderArtifacts(
         provider,
@@ -3861,7 +3880,12 @@ async function buildApp(
       };
       return buildStore.put(providerBuildKey, { entries }, metadata);
     } finally {
-      await env.cleanup();
+      try {
+        await resources?.dispose();
+      } finally {
+        dependencies?.release();
+        await env.cleanup();
+      }
     }
   }
 

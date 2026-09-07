@@ -405,7 +405,7 @@ describe("buildUnit app builds", () => {
       JSON.stringify({ name: "@platform/fake", version: "0.1.0", type: "module" })
     );
     fs.writeFileSync(path.join(platformPackage, "src", "index.ts"), "export const fake = true;\n");
-    initBuilder(testNodeModules, path.dirname(testNodeModules), runIsolatedBuildJob);
+    initBuilder(testNodeModules, path.resolve(__dirname, "../../.."), runIsolatedBuildJob);
     const appDir = path.join(workspaceRoot, "apps", "mobile");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
@@ -449,6 +449,9 @@ describe("buildUnit app builds", () => {
       activeBuildKey: "provider-build",
       build: async (input) => {
         providerInput = input;
+        expect(fs.readFileSync(path.join(input.sourcePath, "index.tsx"), "utf8")).toContain(
+          "function App"
+        );
         projectedPlatformSource = fs.readFileSync(
           path.join(input.dependencyProjection.modules["@platform/fake"]!, "src", "index.ts"),
           "utf8"
@@ -470,8 +473,11 @@ describe("buildUnit app builds", () => {
           },
         };
       },
-      streamArtifact: async (_artifact, input) =>
-        new Response(`bundle:${input.unitName}:${input.effectiveVersion}`),
+      streamArtifact: async (_artifact, input) => {
+        // Provider inputs remain admitted until every lazy artifact is consumed.
+        expect(fs.existsSync(path.join(input.sourcePath, "index.tsx"))).toBe(true);
+        return new Response(`bundle:${input.unitName}:${input.effectiveVersion}`);
+      },
     });
 
     const graph = discoverPackageGraph(workspaceRoot);
@@ -512,15 +518,18 @@ describe("buildUnit app builds", () => {
     });
     expect(result.sourceStateHash).toBe(SOURCE_STATE_HASH);
     expect(providerInput).toMatchObject({
-      sourcePath: appDir,
+      sourcePath: expect.stringContaining(path.join(root, "state", "builds", ".provider-inputs")),
       dependencyProjection: {
         nodeModulesPath: null,
         modules: {
-          "@platform/fake": expect.stringContaining("workspace-modules"),
-          "@workspace-apps/mobile": appDir,
+          "@platform/fake": expect.stringContaining(
+            path.join(root, "state", "builds", ".provider-inputs")
+          ),
+          "@workspace-apps/mobile": providerInput!.sourcePath,
         },
       },
     });
+    expect(fs.existsSync(providerInput!.sourcePath)).toBe(false);
     expect(projectedPlatformSource).toBe("export const fake = true;\n");
     expect(providerInput!.dependencyProjection.modules["@platform/fake"]).not.toBe(platformPackage);
     expect(providerInput).not.toHaveProperty("workspaceRoot");

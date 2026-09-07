@@ -81,6 +81,13 @@ same user's host permissions from accessing or tampering with their underlying
 files. Documentation and UI must not present service authorization as equivalent
 to OS containment.
 
+Native build providers receive an owned, read-only input closure under their
+workspace’s admitted builds directory: selected source repositories, installed
+platform modules and the exact npm dependency environment. Shared caches, host
+checkouts and global compiler scratch directories remain outside that resource
+set. The owner retains these inputs through artifact streaming and removes them
+when the build invocation ends.
+
 The process environment is explicitly constructed. Host shell startup files,
 SSH agents, arbitrary API keys and ambient IPC handles are not automatically
 inherited. Required credentials and tool configuration are deliberately

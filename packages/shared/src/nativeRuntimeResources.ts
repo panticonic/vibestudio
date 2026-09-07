@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { getCACertificates } from "node:tls";
@@ -58,6 +58,13 @@ export function prepareNativeRuntime(input: {
       installedRoot,
       ...collectInstalledRuntimeReadRoots([installedExecutable, ...sharedObjects], platform)
     );
+    // MXC supplies the Unix executables and compiler libraries. Linux keeps
+    // their public C/C++ headers in separate include trees, which must also be
+    // readable for workspace builds and npm native-addon lifecycle scripts.
+    // These are installed system resources, never writable guest state.
+    if (platform === "linux") {
+      read.push(...["/usr/include", "/usr/local/include"].filter(existsSync));
+    }
   }
   // TLS trust is an installed runtime dependency too. Capture the owner's
   // effective roots through Node's public API (available before our 22.19

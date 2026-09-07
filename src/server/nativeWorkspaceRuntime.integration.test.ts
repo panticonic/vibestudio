@@ -34,16 +34,23 @@ it("runs the production disk receiver under its platform execution contract", as
     `
     const assert = require('node:assert/strict');
     const fs = require('node:fs/promises');
+    const { execFileSync } = require('node:child_process');
     (async () => {
-      const [source] = JSON.parse(process.env.VIBESTUDIO_DEV_TEMPLATE_SOURCES);
-      assert.deepEqual(source.pin, ${JSON.stringify(pin)});
-      assert.equal(process.env.VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED, '1');
-      const destination = process.env.HOME + '/template-copy';
-      await fs.cp(source.checkout, destination, { recursive: true });
-      assert.equal(await fs.readFile(destination + '/template.txt', 'utf8'), 'local candidate');
+      assert.equal(process.env.VIBESTUDIO_DEV_TEMPLATE_SOURCES, undefined);
+      assert.equal(process.env.VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED, undefined);
       if (process.platform !== 'win32') {
-        await assert.rejects(fs.writeFile(source.checkout + '/template.txt', 'changed'));
+        await assert.rejects(fs.readFile(${JSON.stringify(checkout + "/template.txt")}, 'utf8'));
       }
+      // Native test adapters spawn their engine as another Node child. It
+      // inherits the workspace's OS boundary without a Node permission list.
+      execFileSync(process.execPath, ['-e', ${JSON.stringify(`
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        assert.equal(fs.readFileSync(${JSON.stringify(path.join(sourceRoot, "source.txt"))}, 'utf8'), 'immutable source');
+        const canary = ${JSON.stringify(path.join(root, "host-canary"))};
+        if (process.platform === 'win32') assert.equal(fs.readFileSync(canary, 'utf8'), 'host secret');
+        else assert.throws(() => fs.readFileSync(canary));
+      `)}], { env: {}, stdio: 'pipe' });
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `
   );

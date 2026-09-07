@@ -12,11 +12,6 @@ import {
   type ProcessAdapterOptions,
 } from "@vibestudio/process-adapter";
 import { createFsDiskPort } from "./services/fsDiskPort.js";
-import {
-  readDevelopmentTemplateSources,
-  DEVELOPMENT_TEMPLATE_SOURCES_ENV,
-  DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
-} from "@vibestudio/workspace/developmentTemplateSources";
 
 /** Installed owner of a workspace's single native domain. The containing state
  * directory is an ownership anchor, never itself a guest resource grant. */
@@ -81,14 +76,6 @@ export async function startNativeWorkspaceRuntime(input: {
   const ripgrep = path.join(runtimeRoot, platform === "win32" ? "rg.exe" : "rg");
   await copyFile(rgPath, ripgrep);
   const runtime = prepareNativeRuntime({ appRoot: input.appRoot, runtimeRoot, platform });
-  // Local template sources are launch-selected resources. Carry their exact
-  // coordinates and read grants together across the native execution boundary.
-  const templateSources = await Promise.all(
-    readDevelopmentTemplateSources().map(async (source) => ({
-      ...source,
-      checkout: await realpath(source.checkout),
-    }))
-  );
   const { executable } = runtime;
   const identity = createHash("sha256");
   for (const resource of [
@@ -123,19 +110,8 @@ export async function startNativeWorkspaceRuntime(input: {
         ].join(path.delimiter),
         LANG: "C.UTF-8",
         ...runtime.environment,
-        ...(templateSources.length > 0
-          ? {
-              [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(templateSources),
-              [DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV]: "1",
-            }
-          : {}),
       },
-      read: [
-        ...runtime.readPaths,
-        sourceRoot,
-        buildsRoot,
-        ...templateSources.map((source) => source.checkout),
-      ],
+      read: [...runtime.readPaths, sourceRoot, buildsRoot],
       // These are owner-selected anchors, never the destinations of guest links.
       // Unix MXC enforces these grants; Windows uses normal host permissions.
       write: [home, scratchRoot, extensionStorage],

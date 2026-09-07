@@ -180,7 +180,14 @@ export async function stageNodeRuntime(appRoot = repositoryRoot, target = nodeRu
       }) + "\n",
       { flag: "wx" }
     );
-    await rename(archiveRoot, output);
+    try {
+      await rename(archiveRoot, output);
+    } catch (error) {
+      // Parallel builds publish the same immutable distribution. The winner's
+      // complete tree is usable only after the same receipt/inventory check
+      // below; never delete or replace it to make this publication win.
+      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error;
+    }
     return await assertNodeRuntimeArtifacts(appRoot, target);
   } finally {
     await rm(staging, { recursive: true, force: true });

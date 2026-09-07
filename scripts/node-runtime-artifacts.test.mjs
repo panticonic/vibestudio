@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   NODE_RUNTIME_VERSION,
   NODE_RUNTIME_TARGETS,
@@ -12,6 +14,7 @@ import {
   nodeRuntimeDirectory,
   verifyNodeRuntimeArchive,
   assertNodeRuntimeArtifacts,
+  stageNodeRuntime,
 } from "./node-runtime-artifacts.mjs";
 
 test("pins CI and all supported installed runtime targets to the same official release", async () => {
@@ -36,6 +39,38 @@ test("pins CI and all supported installed runtime targets to the same official r
   }
   assert.throws(() => nodeRuntimeTarget("win32", "arm64"), /Unsupported/);
 });
+test(
+  "concurrent publishers reuse the verified winning distribution",
+  { skip: process.platform === "win32" },
+  async () => {
+    const appRoot = await mkdtemp(path.join(os.tmpdir(), "node-artifact-publish-"));
+    try {
+      const archiveName = "fixture-node.tar.gz";
+      const source = path.join(appRoot, "fixture-node");
+      const cache = path.join(appRoot, ".cache", "node-distributions");
+      await mkdir(path.join(source, "bin"), { recursive: true });
+      await mkdir(cache, { recursive: true });
+      await writeFile(path.join(source, "bin", "node"), "synthetic installed binary");
+      const archive = path.join(cache, archiveName);
+      await promisify(execFile)("tar", ["-czf", archive, "-C", appRoot, "fixture-node"]);
+      const target = {
+        ...nodeRuntimeTarget("linux", "x64"),
+        archive: archiveName,
+        sha256: createHash("sha256")
+          .update(await readFile(archive))
+          .digest("hex"),
+      };
+      const results = await Promise.all([
+        stageNodeRuntime(appRoot, target),
+        stageNodeRuntime(appRoot, target),
+      ]);
+      assert.deepEqual(results[0], results[1]);
+      assert.deepEqual(await assertNodeRuntimeArtifacts(appRoot, target), results[0]);
+    } finally {
+      await rm(appRoot, { recursive: true, force: true });
+    }
+  }
+);
 test("rejects substituted downloads before extraction", () => {
   const content = Buffer.from("verified fixture archive");
   const target = { archive: "fixture", sha256: createHash("sha256").update(content).digest("hex") };
