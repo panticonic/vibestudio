@@ -42,16 +42,12 @@ import {
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
 import {
-  WorkspaceUiSessions,
+  UiSessions,
   type NativeIpcCaller,
   type WorkspaceIpcRuntime,
-  type ResolveWorkspaceUiRuntime,
-} from "./workspaceUiSessions.js";
-export type {
-  NativeIpcCaller,
-  WorkspaceIpcRuntime,
-  ResolveWorkspaceUiRuntime,
-} from "./workspaceUiSessions.js";
+  type ResolveUiRuntime,
+} from "./uiSessions.js";
+export type { NativeIpcCaller, WorkspaceIpcRuntime, ResolveUiRuntime } from "./uiSessions.js";
 import type { PanelSession, ServerClient } from "./serverClient.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { createIpcResponsivenessReporter } from "./ipcResponsiveness.js";
@@ -152,7 +148,7 @@ export interface IpcDispatcherDeps {
   resolveWorkspaceRuntime?: (
     workspaceId: string
   ) => WorkspaceIpcRuntime | Promise<WorkspaceIpcRuntime>;
-  resolveWorkspaceUiRuntime?: ResolveWorkspaceUiRuntime;
+  resolveUiRuntime?: ResolveUiRuntime;
   getCodeIdentityForCaller?: (callerId: string) => VerifiedCodeIdentity | null;
   getWebContentsForCaller: (callerId: string) => WebContents | null;
   /**
@@ -179,7 +175,7 @@ export interface IpcDispatcherDeps {
 export class IpcDispatcher {
   private deps: IpcDispatcherDeps;
   private shuttingDown = false;
-  private readonly workspaceUi: WorkspaceUiSessions;
+  private readonly uiSessions: UiSessions;
   private readonly uiStreamRelays = new Map<string, BridgeStreamRelay>();
   private readonly uiDestroyHooked = new Set<number>();
   private readonly appMessageBridges = new Map<string, () => void>();
@@ -207,8 +203,8 @@ export class IpcDispatcher {
 
   constructor(deps: IpcDispatcherDeps) {
     this.deps = deps;
-    this.workspaceUi = new WorkspaceUiSessions(
-      deps.resolveWorkspaceUiRuntime ?? (async () => null),
+    this.uiSessions = new UiSessions(
+      deps.resolveUiRuntime ?? (async () => null),
       (caller, envelope) => {
         const sender = deps.getWebContentsForCaller(caller.callerId);
         if (sender && !sender.isDestroyed()) sender.send("vibestudio:rpc:message", envelope);
@@ -262,12 +258,13 @@ export class IpcDispatcher {
     ipcMain.handle("vibestudio:rpc:stream-open", (event, msg: BridgeStreamOpen) => {
       const owner = this.deps.resolveCallerForWebContents(event.sender.id);
       if (owner?.callerKind === "app") {
-        return this.workspaceUi
+        return this.uiSessions
           .require(
             owner,
-            workspaceRpcDestination(msg.envelope.destination) ??
-              owner.workspaceId ??
-              this.deps.workspaceId
+            msg.envelope.destination ?? {
+              kind: "workspace",
+              workspaceId: owner.workspaceId ?? this.deps.workspaceId,
+            }
           )
           .then(() => {
             this.hookUiTeardown(event.sender, owner);
@@ -333,22 +330,29 @@ export class IpcDispatcher {
         workspaceId: caller.workspaceId ?? this.deps.workspaceId,
       });
     {
-      const uiRuntime = await this.workspaceUi.admit(
+      const uiRuntime = await this.uiSessions.admit(
         caller,
-        workspaceRpcDestination(envelope.destination) ?? caller.workspaceId ?? this.deps.workspaceId
+        envelope.destination ?? {
+          kind: "workspace",
+          workspaceId: caller.workspaceId ?? this.deps.workspaceId,
+        }
       );
       if (uiRuntime) {
         if (sender.isDestroyed() || this.shuttingDown) return;
         this.hookUiTeardown(sender, caller);
         const message = envelope.message;
         const method = "method" in message ? message.method : "";
+        const workspaceRuntime = uiRuntime.workspace;
         const local =
-          envelope.target === "main" && uiRuntime.dispatcher.hasService(method.split(".")[0] ?? "");
+          workspaceRuntime &&
+          envelope.target === "main" &&
+          workspaceRuntime.dispatcher.hasService(method.split(".")[0] ?? "");
         if (
           local ||
-          (message.type === "stream-cancel" &&
+          (workspaceRuntime &&
+            message.type === "stream-cancel" &&
             this.activeIpcStreams.has(
-              this.ipcStreamKey(sender.id, message.requestId, uiRuntime.workspaceId)
+              this.ipcStreamKey(sender.id, message.requestId, workspaceRuntime.workspaceId)
             ))
         ) {
           await this.handleEnvelope(
@@ -356,16 +360,18 @@ export class IpcDispatcher {
             caller.callerId,
             "shell",
             envelope,
-            uiRuntime,
+            workspaceRuntime!,
             caller.runtimeId ?? caller.callerId
           );
         } else {
-          const session = await this.workspaceUi.session(caller, uiRuntime);
-          await session.send(this.workspaceUi.envelope(caller, uiRuntime, envelope));
+          const session = await this.uiSessions.session(caller, uiRuntime);
+          await session.send(this.uiSessions.envelope(caller, uiRuntime, envelope));
         }
         return;
       }
     }
+    if (envelope.destination?.kind === "hub")
+      throw new RpcBoundaryError("This renderer is not admitted as hub UI", "access");
     const runtime = await this.sourceRuntime(caller);
     if (envelope.destination) {
       envelope = stampEnvelopeCaller(envelope, {
@@ -430,16 +436,17 @@ export class IpcDispatcher {
     const relay = createBridgeStreamRelay({
       chunkFormat: "binary",
       openStream: async (envelope, signal, body) => {
-        const runtime = await this.workspaceUi.require(
+        const runtime = await this.uiSessions.require(
           caller,
-          workspaceRpcDestination(envelope.destination) ??
-            caller.workspaceId ??
-            this.deps.workspaceId
+          envelope.destination ?? {
+            kind: "workspace",
+            workspaceId: caller.workspaceId ?? this.deps.workspaceId,
+          }
         );
-        const session = await this.workspaceUi.session(caller, runtime);
+        const session = await this.uiSessions.session(caller, runtime);
         if (!session.streamReadable) throw new Error("Workspace UI upload transport unavailable");
         return session.streamReadable(
-          this.workspaceUi.envelope(caller, runtime, envelope),
+          this.uiSessions.envelope(caller, runtime, envelope),
           signal,
           body
         );
@@ -453,7 +460,7 @@ export class IpcDispatcher {
   }
 
   /** Identity replacement/revocation must release sessions before reusing a native view. */
-  async revokeWorkspaceUiCaller(callerId: string): Promise<void> {
+  async revokeUiCaller(callerId: string): Promise<void> {
     const sender = this.deps.getWebContentsForCaller(callerId);
     if (sender) {
       const prefix = `${sender.id}\u0000`;
@@ -466,7 +473,7 @@ export class IpcDispatcher {
     }
     this.uiStreamRelays.get(callerId)?.destroy("Workspace UI admission revoked");
     this.uiStreamRelays.delete(callerId);
-    await this.workspaceUi.closeCaller(callerId);
+    await this.uiSessions.closeCaller(callerId);
   }
 
   private hookUiTeardown(sender: WebContents, caller: NativeIpcCaller): void {
@@ -474,7 +481,7 @@ export class IpcDispatcher {
     this.uiDestroyHooked.add(sender.id);
     sender.once("destroyed", () => {
       this.uiDestroyHooked.delete(sender.id);
-      void this.revokeWorkspaceUiCaller(caller.callerId);
+      void this.revokeUiCaller(caller.callerId);
     });
   }
 
@@ -489,7 +496,7 @@ export class IpcDispatcher {
     this.shuttingDown = true;
     for (const relay of this.uiStreamRelays.values()) relay.destroy("Desktop app shutting down");
     this.uiStreamRelays.clear();
-    await this.workspaceUi.close();
+    await this.uiSessions.close();
 
     for (const unsubscribe of this.appMessageBridges.values()) unsubscribe();
     this.appMessageBridges.clear();

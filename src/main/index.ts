@@ -461,7 +461,7 @@ installProcessSignalShutdown(process, () => {
 const applicationWindow = new ApplicationWindowController({
   getSystemWorkspaceId: () => serverSession?.workspaceId ?? null,
   onCodeIdentityChanged: (nativeId) => {
-    void activeIpcDispatcher?.revokeWorkspaceUiCaller(nativeId).catch(console.error);
+    void activeIpcDispatcher?.revokeUiCaller(nativeId).catch(console.error);
   },
   eventService,
   isHeadlessHost: IS_HEADLESS_HOST,
@@ -2465,7 +2465,7 @@ app.on("ready", async () => {
     const ipcDispatcher = new IpcDispatcher({
       workspaceId: conn.workspaceId,
       resolveWorkspaceRuntime: ensureDesktopWorkspace,
-      resolveWorkspaceUiRuntime: async (caller, destination) => {
+      resolveUiRuntime: async (caller, destination) => {
         const vm = applicationWindow.viewManager;
         const view = vm?.getViewInfo(caller.callerId);
         if (caller.callerKind !== "app" || !view?.hostChrome) return null;
@@ -2486,10 +2486,21 @@ app.on("ready", async () => {
         ) {
           throw new Error("Only your System workspace may host desktop UI");
         }
-        if (!workspaces.some((entry) => entry.workspaceId === destination)) {
+        if (
+          destination.kind === "workspace" &&
+          !workspaces.some((entry) => entry.workspaceId === destination.workspaceId)
+        ) {
           throw new Error("You no longer have access to this workspace");
         }
-        const target = await ensureDesktopWorkspace(destination);
+        const workspace =
+          destination.kind === "workspace"
+            ? await ensureDesktopWorkspace(destination.workspaceId)
+            : undefined;
+        const target = {
+          destination,
+          serverClient: workspace?.serverClient ?? conn.hubControlClient,
+          ...(workspace ? { workspace } : {}),
+        };
         const current = vm?.getViewInfo(caller.callerId);
         if (
           !current?.hostChrome ||
@@ -2505,7 +2516,15 @@ app.on("ready", async () => {
           "listWorkspaces",
           []
         )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
-        if (!currentMembers.some((entry) => entry.workspaceId === destination))
+        if (
+          currentMembers.find((entry) => entry.privateRole === "system")?.workspaceId !==
+          identity.workspaceId
+        )
+          throw new Error("System workspace access was removed during UI admission");
+        if (
+          destination.kind === "workspace" &&
+          !currentMembers.some((entry) => entry.workspaceId === destination.workspaceId)
+        )
           throw new Error("Workspace access was removed during startup");
         return target;
       },

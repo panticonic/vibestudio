@@ -14,7 +14,7 @@ import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindi
 import {
   IpcDispatcher,
   type NativeIpcCaller,
-  type ResolveWorkspaceUiRuntime,
+  type ResolveUiRuntime,
   type WorkspaceIpcRuntime,
 } from "./ipcDispatcher.js";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -77,7 +77,7 @@ function expectSentRpcMessage(
 
 function makeDispatcher(opts: {
   resolve: (webContentsId: number) => NativeIpcCaller | null;
-  resolveWorkspaceUiRuntime?: ResolveWorkspaceUiRuntime;
+  resolveUiRuntime?: ResolveUiRuntime;
   resolveWorkspaceRuntime?: (workspaceId: string) => WorkspaceIpcRuntime;
   getCodeIdentityForCaller?: (callerId: string) => VerifiedCodeIdentity | null;
   getWebContentsForCaller?: (callerId: string) => ReturnType<typeof makeWebContents> | null;
@@ -139,7 +139,7 @@ function makeDispatcher(opts: {
     serverClient,
     getShellWebContents: (opts.getShellWebContents ?? (() => null)) as never,
     resolveCallerForWebContents: opts.resolve,
-    resolveWorkspaceUiRuntime: opts.resolveWorkspaceUiRuntime,
+    resolveUiRuntime: opts.resolveUiRuntime,
     resolveWorkspaceRuntime: opts.resolveWorkspaceRuntime,
     getCodeIdentityForCaller: opts.getCodeIdentityForCaller,
     getWebContentsForCaller: (opts.getWebContentsForCaller ?? (() => null)) as never,
@@ -218,11 +218,15 @@ describe("IpcDispatcher", () => {
         dispatcher: createTestServiceDispatcher(),
         serverClient: { openHostUiSession: vi.fn(async () => session) },
       } as unknown as WorkspaceIpcRuntime;
-      const admit = vi.fn(async () => destination);
+      const admit = vi.fn(async () => ({
+        destination: { kind: "workspace" as const, workspaceId: destination.workspaceId },
+        serverClient: destination.serverClient,
+        workspace: destination,
+      }));
       const { serverClient, ipcDispatcher } = makeDispatcher({
         resolve: () => caller,
         getWebContentsForCaller: () => contents,
-        resolveWorkspaceUiRuntime: admit,
+        resolveUiRuntime: admit,
       });
       const messages: RpcMessage[] = [
         { type: "request", requestId: "read", fromId: "shell-app", method: "read", args: [] },
@@ -250,11 +254,14 @@ describe("IpcDispatcher", () => {
           )
         );
       }
-      expect(admit).toHaveBeenCalledWith(caller, targetWorkspaceId ?? "system");
+      expect(admit).toHaveBeenCalledWith(caller, {
+        kind: "workspace",
+        workspaceId: targetWorkspaceId ?? "system",
+      });
       expect(destination.serverClient.openHostUiSession).toHaveBeenCalledOnce();
       expect(serverClient.callAs).not.toHaveBeenCalled();
       expect(serverClient.sendAs).not.toHaveBeenCalled();
-      await ipcDispatcher.revokeWorkspaceUiCaller(caller.callerId);
+      await ipcDispatcher.revokeUiCaller(caller.callerId);
       expect(session.close).toHaveBeenCalledOnce();
       await ipcDispatcher.shutdown();
     }
@@ -270,7 +277,7 @@ describe("IpcDispatcher", () => {
     };
     const { ipcDispatcher, serverClient } = makeDispatcher({
       resolve: () => caller,
-      resolveWorkspaceUiRuntime: async () => {
+      resolveUiRuntime: async () => {
         throw new Error("Membership revoked");
       },
     });
@@ -360,12 +367,12 @@ describe("IpcDispatcher", () => {
       expect(response?.delivery.caller).not.toHaveProperty("workspaceId");
       if (responseType === "response") {
         expect(response?.message).toMatchObject({
-          error: "This receiver requires a workspace RPC destination",
+          error: "This renderer is not admitted as hub UI",
           errorKind: "access",
         });
       } else {
         expect(JSON.parse((response?.message as { payload: string }).payload)).toMatchObject({
-          message: "This receiver requires a workspace RPC destination",
+          message: "This renderer is not admitted as hub UI",
           errorKind: "access",
         });
       }
@@ -412,12 +419,82 @@ describe("IpcDispatcher", () => {
     const destination = { kind: "hub" } as const;
 
     await expect(rpc.call("main", "workspace.getInfo", [], { destination })).rejects.toMatchObject({
-      message: "This receiver requires a workspace RPC destination",
+      message: "This renderer is not admitted as hub UI",
       errorKind: "access",
     });
     await expect(rpc.stream("main", "events.subscribe", [], { destination })).rejects.toThrow(
-      "This receiver requires a workspace RPC destination"
+      "This renderer is not admitted as hub UI"
     );
+    await ipcDispatcher.shutdown();
+  });
+
+  it("routes admitted hub UI calls on the hub session without local redispatch", async () => {
+    const contents = makeWebContents(60);
+    const caller = {
+      callerId: "native:system:app",
+      runtimeId: "shell-app",
+      workspaceId: "system",
+      callerKind: "app" as const,
+    };
+    let incoming!: (envelope: RpcEnvelope) => void;
+    const session = {
+      send: vi.fn(),
+      close: vi.fn(async () => {}),
+      isClosed: () => false,
+      onMessage: vi.fn((handler: (envelope: RpcEnvelope) => void) => {
+        incoming = handler;
+        return vi.fn();
+      }),
+    };
+    const hub = {
+      openHostUiSession: vi.fn(async () => session),
+    } as unknown as WorkspaceIpcRuntime["serverClient"];
+    const { ipcDispatcher, serverClient } = makeDispatcher({
+      resolve: () => caller,
+      getWebContentsForCaller: () => contents,
+      resolveUiRuntime: async () => ({ destination: { kind: "hub" }, serverClient: hub }),
+    });
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: contents } as never,
+      {
+        ...rpcEnvelope("forged", "server", {
+          type: "request",
+          requestId: "hub-read",
+          fromId: "forged",
+          method: "shellApproval.listPending",
+          args: [],
+        }),
+        destination: { kind: "hub" },
+      } as never
+    );
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalledOnce());
+    const sent = session.send.mock.calls[0]![0] as RpcEnvelope;
+    expect(sent.destination).toBeUndefined();
+    expect(sent.delivery.caller).toEqual({ callerId: "shell-app", callerKind: "shell" });
+    expect(serverClient.callAs).not.toHaveBeenCalled();
+    expect(serverClient.sendAs).not.toHaveBeenCalled();
+    incoming(
+      rpcEnvelope(
+        "main",
+        "server",
+        { type: "response", requestId: "hub-read", result: [] },
+        undefined,
+        "shell-app"
+      )
+    );
+    await vi.waitFor(() =>
+      expect(contents.send).toHaveBeenCalledWith(
+        "vibestudio:rpc:message",
+        expect.objectContaining({
+          from: "hub",
+          target: "shell-app",
+          destination: { kind: "workspace", workspaceId: "system" },
+          delivery: expect.objectContaining({ caller: { callerId: "hub", callerKind: "server" } }),
+        })
+      )
+    );
+    await ipcDispatcher.revokeUiCaller(caller.callerId);
+    expect(session.close).toHaveBeenCalledOnce();
     await ipcDispatcher.shutdown();
   });
 
@@ -446,7 +523,11 @@ describe("IpcDispatcher", () => {
     } as unknown as WorkspaceIpcRuntime;
     const { ipcDispatcher } = makeDispatcher({
       resolve: () => caller,
-      resolveWorkspaceUiRuntime: async () => destination,
+      resolveUiRuntime: async () => ({
+        destination: { kind: "workspace", workspaceId: destination.workspaceId },
+        serverClient: destination.serverClient,
+        workspace: destination,
+      }),
       getWebContentsForCaller: () => contents,
     });
 
@@ -493,7 +574,11 @@ describe("IpcDispatcher", () => {
     };
     const { ipcDispatcher } = makeDispatcher({
       resolve: () => caller,
-      resolveWorkspaceUiRuntime: async () => destination,
+      resolveUiRuntime: async () => ({
+        destination: { kind: "workspace", workspaceId: destination.workspaceId },
+        serverClient: destination.serverClient,
+        workspace: destination,
+      }),
     });
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: contents } as never,
@@ -1574,7 +1659,11 @@ describe("IpcDispatcher", () => {
       const { ipcDispatcher, serverClient } = makeDispatcher({
         resolve: () => caller,
         getWebContentsForCaller: () => contents,
-        resolveWorkspaceUiRuntime: async () => destination,
+        resolveUiRuntime: async () => ({
+          destination: { kind: "workspace", workspaceId: destination.workspaceId },
+          serverClient: destination.serverClient,
+          workspace: destination,
+        }),
       });
       await ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
         { sender: contents } as never,
@@ -1609,7 +1698,7 @@ describe("IpcDispatcher", () => {
         },
       });
       expect(serverClient.openPanelSession).not.toHaveBeenCalled();
-      await ipcDispatcher.revokeWorkspaceUiCaller(caller.callerId);
+      await ipcDispatcher.revokeUiCaller(caller.callerId);
       expect(session.close).toHaveBeenCalledOnce();
       await ipcDispatcher.shutdown();
     });
