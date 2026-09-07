@@ -157,6 +157,21 @@ export function retireUnitClearanceGrants(input: {
   });
 }
 
+/** Revoke the exact outgoing grants captured before replacement began. */
+export function retireUnitClearanceGrantIds(input: {
+  grantStore: CapabilityGrantStore;
+  grantIds: readonly string[];
+  now?: number;
+}): number {
+  const now = input.now ?? Date.now();
+  return input.grantStore.transaction(() =>
+    input.grantIds.reduce(
+      (revoked, grantId) => revoked + (input.grantStore.revoke(grantId, now) ? 1 : 0),
+      0
+    )
+  );
+}
+
 /**
  * Which of a unit's declared requests a review may pre-authorize, with the row
  * key each is identified by.

@@ -72,6 +72,17 @@ function approvalStore() {
 }
 
 describe("createBuildUnitChangeApprovalProvider", () => {
+  const serviceReview = (action: string) => ({
+    capability: "workspace-service:task-board-store",
+    providerUnit: "meta/task-board-store",
+    catalogDigest: "candidate-catalog",
+    presentation: {
+      action,
+      authorityCategory: { domain: "automation" as const, verb: "manage" as const },
+      notability: "everyday" as const,
+    },
+  });
+
   it("uses the workspace resolver for both sides of an authority diff", async () => {
     const buildSystem = {
       listBuildUnitIdentities: vi.fn(async (ref?: string) => [
@@ -131,6 +142,60 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     const review = await provider.unitChangeApprovalForCommit(state);
 
     expect(review.units[0]?.displayName).toBe("About Vibestudio");
+  });
+
+  it("treats identical exact service authority as unchanged across a code-only update", async () => {
+    const buildSystem = {
+      listBuildUnitIdentities: vi.fn(async (ref?: string) => [
+        identity({
+          stateHash: ref ? state : previousState,
+          effectiveVersion: ref ? "ev-new" : "ev-old",
+          serviceReviews: [serviceReview("manage the task board")],
+        }),
+      ]),
+    };
+    const provider = createBuildUnitChangeApprovalProvider({
+      getBuildSystem: () => buildSystem as never,
+      admissionStore: approvalStore() as never,
+      describeCapability: (capability) => ({
+        title: capability,
+        action: capability,
+        description: capability,
+        group: "other",
+      }),
+    });
+
+    await expect(provider.unitChangeApprovalForCommit(state)).resolves.toMatchObject({
+      units: [],
+      unchangedCount: 1,
+    });
+  });
+
+  it("reviews a direct service presentation change even when consumer EV is unchanged", async () => {
+    const buildSystem = {
+      listBuildUnitIdentities: vi.fn(async (ref?: string) => [
+        identity({
+          stateHash: ref ? state : previousState,
+          serviceReviews: [
+            serviceReview(ref ? "manage the candidate task board" : "manage the old task board"),
+          ],
+        }),
+      ]),
+    };
+    const provider = createBuildUnitChangeApprovalProvider({
+      getBuildSystem: () => buildSystem as never,
+      admissionStore: approvalStore() as never,
+      describeCapability: (capability) => ({
+        title: capability,
+        action: capability,
+        description: capability,
+        group: "other",
+      }),
+    });
+
+    const review = await provider.unitChangeApprovalForCommit(state);
+    expect(review.units).toHaveLength(1);
+    expect(review.unchangedCount).toBe(0);
   });
 
   it("surfaces an affected panel and its added authority from the exact candidate view", async () => {
@@ -201,7 +266,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
               },
             ],
           },
-          serviceBindingDigest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          serviceAuthorityDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
         },
       ],
       "publication"

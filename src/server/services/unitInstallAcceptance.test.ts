@@ -328,6 +328,73 @@ describe("acceptUnitInstallReview", () => {
     expect([...heldClearanceRowKeys({ grantStore, ...updated })]).toEqual([]);
   });
 
+  it("replaces only captured grants when authority changes at the same effective version", () => {
+    const identity = {
+      repoPath: "panels/news",
+      effectiveVersion: "ev-same",
+      authority: authority("workspace.files.write", "notifications"),
+    };
+    acceptUnitInstallReview(
+      { admissionStore, grantStore },
+      {
+        units: [{ identity, clearedRowKeys: [rowKey("workspace.files.write")] }],
+        origin: "publication",
+      }
+    );
+
+    acceptUnitInstallReview(
+      { admissionStore, grantStore },
+      {
+        units: [
+          {
+            identity,
+            previous: { repoPath: identity.repoPath, effectiveVersion: identity.effectiveVersion },
+            clearedRowKeys: [rowKey("notifications")],
+          },
+        ],
+        origin: "publication",
+      }
+    );
+
+    expect([...heldClearanceRowKeys({ grantStore, ...identity })]).toEqual([
+      rowKey("notifications"),
+    ]);
+  });
+
+  it("restores captured grants and removes replacements when same-version preparation fails", () => {
+    const identity = {
+      repoPath: "panels/news",
+      effectiveVersion: "ev-same",
+      authority: authority("workspace.files.write", "notifications"),
+    };
+    acceptUnitInstallReview(
+      { admissionStore, grantStore },
+      {
+        units: [{ identity, clearedRowKeys: [rowKey("workspace.files.write")] }],
+        origin: "publication",
+      }
+    );
+    const prepared = prepareUnitInstallReview(
+      { admissionStore, grantStore },
+      {
+        units: [
+          {
+            identity,
+            previous: { repoPath: identity.repoPath, effectiveVersion: identity.effectiveVersion },
+            clearedRowKeys: [rowKey("notifications")],
+          },
+        ],
+        origin: "publication",
+      }
+    );
+
+    prepared.failed(new Error("publication failed"));
+
+    expect([...heldClearanceRowKeys({ grantStore, ...identity })]).toEqual([
+      rowKey("workspace.files.write"),
+    ]);
+  });
+
   // A unit arriving for the first time has nothing to inherit, so one click
   // still adds the complete slate.
   it("gives a unit with no previous version everything its manifest makes clearable", () => {

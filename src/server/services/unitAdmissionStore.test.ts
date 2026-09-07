@@ -271,6 +271,31 @@ describe("UnitAdmissionStore", () => {
     expect([...store.admittedOriginKeys()]).toEqual([]);
   });
 
+  it("rejects a malformed legacy service binding digest instead of laundering it", () => {
+    const filePath = path.join(stateLayout(root).authority.root, "admitted-unit-versions.json");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 4,
+        admissions: [
+          {
+            repoPath: "panels/example",
+            effectiveVersion: "ev-1",
+            authorityDigest: "a".repeat(64),
+            serviceBindingDigest: "bad",
+            origin: "launch-gate",
+            admittedAt: 1,
+          },
+        ],
+      })
+    );
+
+    expect(() => new UnitAdmissionStore({ statePath: root })).toThrow(
+      "Invalid admitted-unit-version record"
+    );
+  });
+
   it("records nothing about a source when the server could not derive one", () => {
     const store = new UnitAdmissionStore({ statePath: root, resolveSourceOrigin: () => null });
     store.admit(identity, "launch-gate");

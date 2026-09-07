@@ -130,7 +130,10 @@ export function createBuildUnitChangeApprovalProvider(deps: {
         serviceRequests: authority.serviceRequests,
         provides: authority.provides,
       },
-      serviceBindingDigest: sha256Canonical(serviceBindings),
+      serviceAuthorityDigest: sha256Canonical({
+        serviceBindingDigest: sha256Canonical(serviceBindings),
+        serviceReviews,
+      }),
     };
     // A prepared publication may have completed admission before its ref write
     // failed. Exact identity is the durable deduplication key in every case;
@@ -177,6 +180,7 @@ export function createBuildUnitChangeApprovalProvider(deps: {
           serviceRequests: previousAuthority.serviceRequests,
           provides: previousAuthority.provides,
           serviceBindings: previous?.serviceBindings ?? [],
+          serviceReviews: previous?.serviceReviews ?? [],
         }) ===
           sha256Canonical({
             requests: authority.requests,

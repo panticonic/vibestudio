@@ -8,7 +8,7 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   heldClearanceRowKeys,
   mintUnitClearanceGrants,
-  retireUnitClearanceGrants,
+  retireUnitClearanceGrantIds,
 } from "./unitClearanceGrants.js";
 import type {
   UnitAdmissionIdentity,
@@ -158,8 +158,8 @@ export function prepareUnitInstallReview(
         ...(deps.presentationFor ? { presentationFor: deps.presentationFor } : {}),
       });
       issuedGrantIds = issued.flatMap((grant) => (grant.id ? [grant.id] : []));
-      if (previous.length > 0) {
-        retireUnitClearanceGrants({ grantStore, units: previous, now: retiredAt });
+      if (retiredGrantIds.length > 0) {
+        retireUnitClearanceGrantIds({ grantStore, grantIds: retiredGrantIds, now: retiredAt });
       }
     }
   } catch (error) {

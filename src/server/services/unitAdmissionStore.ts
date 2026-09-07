@@ -35,7 +35,7 @@ interface AdmittedUnitVersion {
   repoPath: string;
   effectiveVersion: string;
   authorityDigest: string;
-  serviceBindingDigest: string;
+  serviceAuthorityDigest: string;
   origin: UnitAdmissionOrigin;
   admittedAt: number;
   /**
@@ -77,7 +77,7 @@ interface AdmittedUnitVersion {
 export type UnitSourceOrigin = UnitInstallSourceOrigin;
 
 interface AdmittedUnitVersionFile {
-  schemaVersion: 4;
+  schemaVersion: 4 | 5;
   admissions: AdmittedUnitVersion[];
 }
 
@@ -85,7 +85,7 @@ export interface UnitAdmissionIdentity {
   repoPath: string;
   effectiveVersion: string;
   authority: UnitAuthorityManifest;
-  serviceBindingDigest?: string;
+  serviceAuthorityDigest?: string;
 }
 
 export interface UnitAdmissionRecord extends UnitAdmissionIdentity {
@@ -317,7 +317,7 @@ export class UnitAdmissionStore {
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         authorityDigest: authorityDigest(identity.authority),
-        serviceBindingDigest: identity.serviceBindingDigest ?? sha256Canonical([]),
+        serviceAuthorityDigest: identity.serviceAuthorityDigest ?? emptyServiceAuthorityDigest(),
         origin,
         admittedAt: now,
         ...(source
@@ -422,13 +422,23 @@ export class UnitAdmissionStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    const parsed = JSON.parse(source) as Partial<AdmittedUnitVersionFile>;
-    if (parsed.schemaVersion !== 4 || !Array.isArray(parsed.admissions)) {
+    const parsed = JSON.parse(source) as { schemaVersion?: unknown; admissions?: unknown[] };
+    if (
+      (parsed.schemaVersion !== 4 && parsed.schemaVersion !== 5) ||
+      !Array.isArray(parsed.admissions)
+    ) {
       throw new Error(
         "Unit admission state is not from the current system epoch; recreate this pre-release instance"
       );
     }
-    for (const admission of parsed.admissions) {
+    for (const rawAdmission of parsed.admissions) {
+      if (parsed.schemaVersion === 4 && !isV4Admission(rawAdmission)) {
+        throw new Error(`Invalid admitted-unit-version record in ${this.filePath}`);
+      }
+      const admission =
+        parsed.schemaVersion === 4 && rawAdmission && typeof rawAdmission === "object"
+          ? migrateV4Admission(rawAdmission as Record<string, unknown>)
+          : rawAdmission;
       if (!isAdmission(admission)) {
         throw new Error(`Invalid admitted-unit-version record in ${this.filePath}`);
       }
@@ -439,7 +449,7 @@ export class UnitAdmissionStore {
   private save(admissions = this.admissions): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
     const state: AdmittedUnitVersionFile = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       admissions: [...admissions.values()].sort((left, right) =>
         identityKey(left).localeCompare(identityKey(right))
       ),
@@ -463,20 +473,35 @@ function identityKey(
   identity:
     | Pick<
         AdmittedUnitVersion,
-        "repoPath" | "effectiveVersion" | "authorityDigest" | "serviceBindingDigest"
+        "repoPath" | "effectiveVersion" | "authorityDigest" | "serviceAuthorityDigest"
       >
     | UnitAdmissionIdentity
 ): string {
   const digest =
     "authorityDigest" in identity ? identity.authorityDigest : authorityDigest(identity.authority);
-  const serviceBindingDigest = identity.serviceBindingDigest ?? sha256Canonical([]);
-  return `${identity.repoPath}\0${identity.effectiveVersion}\0${digest}\0${serviceBindingDigest}`;
+  const serviceAuthorityDigest = identity.serviceAuthorityDigest ?? emptyServiceAuthorityDigest();
+  return `${identity.repoPath}\0${identity.effectiveVersion}\0${digest}\0${serviceAuthorityDigest}`;
+}
+
+function emptyServiceAuthorityDigest(): string {
+  return sha256Canonical({ serviceBindingDigest: sha256Canonical([]), serviceReviews: [] });
+}
+
+function migrateV4Admission(record: Record<string, unknown>): Record<string, unknown> {
+  const { serviceBindingDigest, ...rest } = record;
+  return {
+    ...rest,
+    serviceAuthorityDigest:
+      typeof serviceBindingDigest === "string"
+        ? sha256Canonical({ serviceBindingDigest, serviceReviews: [] })
+        : serviceBindingDigest,
+  };
 }
 
 const ADMISSION_KEYS = new Set([
   "admittedAt",
   "authorityDigest",
-  "serviceBindingDigest",
+  "serviceAuthorityDigest",
   "effectiveVersion",
   "origin",
   "repoPath",
@@ -489,6 +514,21 @@ const ADMISSION_KEYS = new Set([
   "sourceSelfName",
   "sourceIsWorkspaceRoot",
 ]);
+
+const V4_ADMISSION_KEYS = new Set([
+  ...[...ADMISSION_KEYS].filter((key) => key !== "serviceAuthorityDigest"),
+  "serviceBindingDigest",
+]);
+
+function isV4Admission(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) => V4_ADMISSION_KEYS.has(key)) &&
+    typeof record["serviceBindingDigest"] === "string" &&
+    /^[0-9a-f]{64}$/u.test(record["serviceBindingDigest"])
+  );
+}
 
 function isAdmission(value: unknown): value is AdmittedUnitVersion {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -513,8 +553,8 @@ function isAdmission(value: unknown): value is AdmittedUnitVersion {
     record["effectiveVersion"].length > 0 &&
     typeof record["authorityDigest"] === "string" &&
     /^[0-9a-f]{64}$/u.test(record["authorityDigest"]) &&
-    typeof record["serviceBindingDigest"] === "string" &&
-    /^[0-9a-f]{64}$/u.test(record["serviceBindingDigest"]) &&
+    typeof record["serviceAuthorityDigest"] === "string" &&
+    /^[0-9a-f]{64}$/u.test(record["serviceAuthorityDigest"]) &&
     UNIT_ADMISSION_ORIGINS.includes(record["origin"] as UnitAdmissionOrigin) &&
     typeof record["admittedAt"] === "number" &&
     Number.isFinite(record["admittedAt"])
