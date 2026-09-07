@@ -20,6 +20,7 @@ import {
 import {
   addRemoteWorkspaceMember,
   createRemoteWorkspace,
+  ensureRemoteUserWorkspaces,
   inviteRemoteUser,
   listRemoteDevices,
   listRemoteWorkspaceMembers,
@@ -336,6 +337,24 @@ async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
         },
       }
     );
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+async function remoteEnsureUserWorkspaces(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const credentials = requirePairedCredentials();
+    const pair = await ensureRemoteUserWorkspaces(credentials);
+    printResult(pair, {
+      json,
+      human: () => {
+        console.log(`Personal: ${pair.personal.name}`);
+        console.log(`System: ${pair.system.name}`);
+      },
+    });
     return 0;
   } catch (error) {
     return printError(error, { json });
@@ -777,6 +796,14 @@ const remoteCommands: CliCommand[] = [
     usage: "vibestudio remote workspaces",
     flags: [JSON_FLAG],
     run: remoteWorkspaceList,
+  },
+  {
+    group: "remote",
+    name: "ensure-user-workspaces",
+    summary: "Prepare your private Personal and System workspaces, preserving existing ones",
+    usage: "vibestudio remote ensure-user-workspaces",
+    flags: [JSON_FLAG],
+    run: remoteEnsureUserWorkspaces,
   },
   {
     group: "remote",

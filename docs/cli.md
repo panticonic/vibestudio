@@ -168,6 +168,12 @@ vibestudio remote status
 vibestudio remote logout
 ```
 
+`vibestudio remote ensure-user-workspaces` prepares your private Personal and
+System workspaces through the same host operation used by desktop and mobile.
+It preserves existing workspaces and returns both names (`--json` also includes
+their IDs). Use `remote select` with the returned name to work in either one.
+It does not switch the current workspace automatically.
+
 `pair-device` creates another device link for the current account.
 `invite-user` creates or selects an account, grants explicit workspace access,
 and creates that account's first device link. Both commands require an existing

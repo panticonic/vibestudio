@@ -173,6 +173,13 @@ export async function listRemoteWorkspaces(
   return await withControl(creds, (client) => client.listWorkspaces());
 }
 
+/** Prepare the authenticated account's private pair through the same host operation as apps. */
+export async function ensureRemoteUserWorkspaces(
+  creds: DeviceCredential
+): Promise<{ personal: RemoteWorkspaceEntry; system: RemoteWorkspaceEntry }> {
+  return await withControl(creds, (client) => client.ensureUserWorkspaces());
+}
+
 export async function createRemoteWorkspace(
   creds: DeviceCredential,
   options: CreateRemoteWorkspaceOptions
