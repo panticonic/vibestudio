@@ -21,9 +21,43 @@ const context = (userId: string) => ({
 });
 
 describe("approval audience", () => {
+  it("keeps account-scope approvals private and revokes visibility with account access", async () => {
+    const active = new Set(["alice", "bob"]);
+    const scopeAccess = { isMember: (id: string) => active.has(id), isAdmin: () => false };
+    const queue = createApprovalQueue({ eventService: new EventService(), scopeAccess });
+    const service = createShellApprovalService({ approvalQueue: queue, scopeAccess });
+    const pending = queue.request({
+      kind: "capability",
+      callerId: "shell:alice",
+      callerKind: "system",
+      repoPath: "",
+      effectiveVersion: "",
+      capability: "hub.workspaces.create",
+      title: "Create workspace",
+      requestedByUserId: "alice",
+    });
+    try {
+      const visible = (await service.handler(
+        context("alice"),
+        "listPending",
+        []
+      )) as PendingApproval[];
+      expect(visible).toHaveLength(1);
+      expect(await service.handler(context("bob"), "listPending", [])).toEqual([]);
+      active.delete("alice");
+      expect(await service.handler(context("alice"), "listPending", [])).toEqual([]);
+      await expect(
+        service.handler(context("alice"), "resolve", [visible[0]!.approvalId, "once"])
+      ).rejects.toThrow("No pending approval");
+    } finally {
+      queue.cancelForCaller("shell:alice");
+      await pending;
+    }
+  });
+
   it("rejects private approvals with no eligible member before they enter the queue", () => {
     const events = new EventService();
-    const queue = createApprovalQueue({ eventService: events, workspaceAccess: access });
+    const queue = createApprovalQueue({ eventService: events, scopeAccess: access });
     const capabilityAttempt = (requestedByUserId?: string) => () =>
       queue.request({
         kind: "capability",
@@ -85,7 +119,7 @@ describe("approval audience", () => {
   it("counts ready workspace creation reviews while leaving native bootstrap decisions to their owner", async () => {
     const queue = createApprovalQueue({
       eventService: new EventService(),
-      workspaceAccess: access,
+      scopeAccess: access,
     });
     const pending = (["panel", "app"] as const).map((kind) =>
       queue.requestWithHandle({
@@ -130,8 +164,8 @@ describe("approval audience", () => {
 
   it("keeps two users' same-caller grants separate and refuses another member's decision", async () => {
     const events = new EventService();
-    const queue = createApprovalQueue({ eventService: events, workspaceAccess: access });
-    const service = createShellApprovalService({ approvalQueue: queue, workspaceAccess: access });
+    const queue = createApprovalQueue({ eventService: events, scopeAccess: access });
+    const service = createShellApprovalService({ approvalQueue: queue, scopeAccess: access });
     const request = {
       callerId: "shared-worker",
       callerKind: "worker" as const,
@@ -243,7 +277,7 @@ describe("approval audience", () => {
 
   it("projects pending and resolved watch events for their authenticated owner", async () => {
     const events = new EventService();
-    const queue = createApprovalQueue({ eventService: events, workspaceAccess: access });
+    const queue = createApprovalQueue({ eventService: events, scopeAccess: access });
     const open = (userId: string) =>
       events
         .openWatch({

@@ -67,9 +67,9 @@ describe("shellApprovalService", () => {
     };
     const approvalQueue = createApprovalQueue({
       eventService: { emitProjected: vi.fn() } as never,
-      workspaceAccess: access,
+      scopeAccess: access,
     });
-    const service = createShellApprovalService({ approvalQueue, workspaceAccess: access });
+    const service = createShellApprovalService({ approvalQueue, scopeAccess: access });
     const decision = approvalQueue.request({
       kind: "credential",
       callerId: "do:agent:one",
@@ -392,11 +392,17 @@ describe("shellApprovalService", () => {
   });
 
   it("rejects a second verdict and records only the accepted resolution", async () => {
+    const scopeAccess = { isMember: (id: string) => id === "alice", isAdmin: () => false };
+    const caller = {
+      ...createVerifiedCaller("shell:alice", "shell"),
+      subject: { userId: "alice", handle: "alice" },
+    };
     const approvalQueue = createApprovalQueue({
       eventService: { emitProjected: vi.fn() } as never,
+      scopeAccess,
     });
     const metrics = createPushMetrics();
-    const service = createShellApprovalService({ approvalQueue, metrics });
+    const service = createShellApprovalService({ approvalQueue, metrics, scopeAccess });
     const pendingPromise = approvalQueue.request({
       kind: "capability",
       callerId: "panel-1",
@@ -405,18 +411,13 @@ describe("shellApprovalService", () => {
       effectiveVersion: "hash-1",
       capability: "external.open",
       title: "Open external browser",
+      requestedByUserId: "alice",
     });
     const approvalId = approvalQueue.listPending()[0]!.approvalId;
 
-    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolve", [
-      approvalId,
-      "once",
-    ]);
+    await service.handler({ caller }, "resolve", [approvalId, "once"]);
     await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolve", [
-        approvalId,
-        "deny",
-      ])
+      service.handler({ caller }, "resolve", [approvalId, "deny"])
     ).rejects.toMatchObject({ name: "ServiceError", code: "ENOENT" });
 
     await expect(pendingPromise).resolves.toBe("once");

@@ -37,7 +37,7 @@ import { isAuthorizedChrome } from "./chromeTrust.js";
 import {
   approvalVisibleToUser,
   isHostApprovalObserver,
-  type ApprovalWorkspaceAccess,
+  type ApprovalScopeAccess,
 } from "@vibestudio/shared/approvalVisibility";
 
 /**
@@ -85,7 +85,7 @@ export function createShellApprovalService(deps: {
   deviceLabelFor?: (deviceId: string) => string | undefined;
   workspaceCreationReviewState?: () => WorkspaceCreationReviewState;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  workspaceAccess?: ApprovalWorkspaceAccess;
+  scopeAccess?: ApprovalScopeAccess;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
@@ -102,9 +102,9 @@ export function createShellApprovalService(deps: {
     };
     const pending = approvalQueue.listPending();
     if (isHostApprovalObserver(owner)) return pending;
-    if (!owner.userId || !deps.workspaceAccess) return [];
+    if (!owner.userId || !deps.scopeAccess) return [];
     return pending.filter((approval) =>
-      approvalVisibleToUser(approval, owner.userId!, deps.workspaceAccess!)
+      approvalVisibleToUser(approval, owner.userId!, deps.scopeAccess!)
     );
   };
   const preparePresenter = (capability: string) => (ctx: ServiceContext) => {

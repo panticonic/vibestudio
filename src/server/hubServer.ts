@@ -2019,8 +2019,17 @@ async function startHubControlTransport(
     statePath: path.join(configDir, "hub-control-state"),
   });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
+  const eventService = new EventService();
+  const approvalScopeAccess = {
+    isMember: (userId: string) => {
+      const user = state.userStore.getUser(userId);
+      return !!user && user.revokedAt === undefined;
+    },
+    isAdmin: () => false,
+  };
   const approvalQueue = createApprovalQueue({
-    eventService: new EventService(),
+    eventService,
+    scopeAccess: approvalScopeAccess,
   });
   const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
   const acquisitions = new AcquisitionCoordinator({ approvalQueue, grantStore });
@@ -2042,7 +2051,31 @@ async function startHubControlTransport(
   dispatcher.registerService(
     createShellApprovalService({
       approvalQueue,
+      scopeAccess: approvalScopeAccess,
       deviceLabelFor: (deviceId) => state.identityDb.getDevice(deviceId)?.label,
+    })
+  );
+  const { createEventsServiceDefinition, eventWatchOwner } =
+    await import("@vibestudio/service-schemas/bindings/eventsServiceDefinition");
+  const { approvalVisibleToUser, isHostApprovalObserver } =
+    await import("@vibestudio/shared/approvalVisibility");
+  dispatcher.registerService(
+    createEventsServiceDefinition(eventService, {
+      snapshots: {
+        "shell-approval:pending-changed": (ctx) => {
+          const owner = eventWatchOwner(ctx);
+          const pending = approvalQueue.listPending();
+          return {
+            pending: isHostApprovalObserver(owner)
+              ? pending
+              : pending.filter(
+                  (approval) =>
+                    owner.userId &&
+                    approvalVisibleToUser(approval, owner.userId, approvalScopeAccess)
+                ),
+          };
+        },
+      },
     })
   );
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey, tier }) =>
@@ -2062,6 +2095,7 @@ async function startHubControlTransport(
   const { createHubCredentialRedeemer } = await import("./services/authService.js");
   const rpcServer = new RpcServer({
     tokenManager: state.tokenManager,
+    eventService,
     dispatcher,
     ensureUserlandDoReady: async () => {
       throw new Error("Hub control transport cannot invoke workspace Durable Objects");

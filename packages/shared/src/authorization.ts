@@ -60,7 +60,7 @@ export interface AuthorityEvaluationInput {
 
 /** Convert one canonical denial into stable agent/UI remediation data. */
 export function authorityFailureForDecision(
-  decision: AuthorizationDecision,
+  decision: Omit<AuthorizationDecision, "requirement"> & { requirement?: AuthorityRequirement },
   input: {
     capability: string;
     resourceKey: string;

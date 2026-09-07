@@ -17,7 +17,7 @@ import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import {
   approvalVisibleToUser,
-  type ApprovalWorkspaceAccess,
+  type ApprovalScopeAccess,
 } from "@vibestudio/shared/approvalVisibility";
 import type { ApprovalQueueWithListeners } from "./approvalQueue.js";
 import type { PushDeliveryTarget, PushServiceInternal } from "./pushService.js";
@@ -33,7 +33,7 @@ interface ApprovalPushBridgeDeps {
    * the workspace administrators who can decide an unowned admission review.
    */
   workspaceMemberUserIds: () => readonly string[];
-  workspaceAccess?: ApprovalWorkspaceAccess;
+  scopeAccess?: ApprovalScopeAccess;
   delayMs?: number;
   presenceMaxAgeMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -179,8 +179,8 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
       .filter(
         (registration) =>
           members.has(registration.userId) &&
-          deps.workspaceAccess &&
-          approvalVisibleToUser(approval, registration.userId, deps.workspaceAccess)
+          deps.scopeAccess &&
+          approvalVisibleToUser(approval, registration.userId, deps.scopeAccess)
       )
       .map((registration) => ({ userId: registration.userId, clientId: registration.clientId }))
       .filter((target) => !delivered.has(`${target.userId}\0${target.clientId}`));

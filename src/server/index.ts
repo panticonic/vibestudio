@@ -1064,7 +1064,7 @@ async function main() {
     await import("@vibestudio/shared/approvalVisibility");
   const approvalQueue = createApprovalQueue({
     eventService,
-    workspaceAccess: approvalWorkspaceAccess,
+    scopeAccess: approvalWorkspaceAccess,
     installReviewSelections,
     workspaceCapabilityDefinitions: authorityCapabilities,
     presentationFor: describeCapability,
@@ -3293,7 +3293,7 @@ async function main() {
           shellPresence: shellPresence.internal,
           // Include root's implicit membership, which intentionally has no row.
           workspaceMemberUserIds: listWorkspaceMemberUserIds,
-          workspaceAccess: approvalWorkspaceAccess,
+          scopeAccess: approvalWorkspaceAccess,
         });
       },
       stop: async (bridge: import("./services/approvalPushBridge.js").ApprovalPushBridge) => {
@@ -3307,7 +3307,7 @@ async function main() {
   container.registerRpc(
     createShellApprovalService({
       approvalQueue,
-      workspaceAccess: approvalWorkspaceAccess,
+      scopeAccess: approvalWorkspaceAccess,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
       workspaceCreationReviewState: () => workspaceCreationReviewState,
       hasAppCapability: (callerId, capability) =>

@@ -15,7 +15,7 @@ import {
   approvalAudience,
   approvalVisibleToUser,
   isHostApprovalObserver,
-  type ApprovalWorkspaceAccess,
+  type ApprovalScopeAccess,
 } from "@vibestudio/shared/approvalVisibility";
 import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 import { RpcBoundaryError } from "@vibestudio/rpc";
@@ -720,7 +720,7 @@ export type SensitiveActionQueue = ApprovalQueue;
 
 export function createApprovalQueue(deps: {
   eventService: EventService;
-  workspaceAccess?: ApprovalWorkspaceAccess;
+  scopeAccess?: ApprovalScopeAccess;
   /**
    * Carries what the user checked from the review that accepted it to the
    * admission that mints it. Absent only in tests that never accept a review.
@@ -774,23 +774,22 @@ export function createApprovalQueue(deps: {
   const entriesByDedupKey = new Map<string, QueueEntry>();
   const preparationsByProducerKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
-  const workspaceAccess = deps.workspaceAccess ?? { isMember: () => false, isAdmin: () => false };
+  const scopeAccess = deps.scopeAccess ?? { isMember: () => false, isAdmin: () => false };
   const assertAnswerableAudience = (approval: PendingApproval): void => {
     const audience = approvalAudience(approval);
     // Source admission is deliberately a workspace-administrator decision. All
-    // other approvals are private and require a current workspace member.
+    // other approvals are private and require current access to the owning scope.
     if (audience?.kind === "workspace-admin") return;
-    if (audience?.kind === "user" && workspaceAccess.isMember(audience.userId)) return;
+    if (audience?.kind === "user" && scopeAccess.isMember(audience.userId)) return;
     const reason =
       audience?.kind === "user"
-        ? "Approval requester is not a member of this workspace"
-        : "Approval has no eligible workspace audience";
+        ? "Approval requester is not admitted to this scope"
+        : "Approval has no eligible audience";
     const authorityFailure = authorityFailureForDecision(
       {
         allowed: false,
         code: "receiver-rejected",
         reason,
-        requirement: { kind: "relationship", name: "workspace-member" },
       },
       {
         capability: `approvals.${approval.kind}`,
@@ -806,7 +805,7 @@ export function createApprovalQueue(deps: {
     if (
       entry &&
       resolver &&
-      !approvalVisibleToUser(entry.approval, resolver.subject.userId, workspaceAccess)
+      !approvalVisibleToUser(entry.approval, resolver.subject.userId, scopeAccess)
     )
       throw new Error("This approval is not available to this account");
   };
@@ -825,7 +824,7 @@ export function createApprovalQueue(deps: {
       if (!owner.userId) return undefined;
       return {
         pending: pending.filter((approval) =>
-          approvalVisibleToUser(approval, owner.userId!, workspaceAccess)
+          approvalVisibleToUser(approval, owner.userId!, scopeAccess)
         ),
       };
     });
@@ -904,7 +903,7 @@ export function createApprovalQueue(deps: {
   function emitResolved(event: ApprovalResolvedEvent, approval: PendingApproval): void {
     eventService.emitProjected("shell-approval:resolved", (owner) =>
       isHostApprovalObserver(owner) ||
-      (owner.userId && approvalVisibleToUser(approval, owner.userId, workspaceAccess))
+      (owner.userId && approvalVisibleToUser(approval, owner.userId, scopeAccess))
         ? event
         : undefined
     );

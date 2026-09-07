@@ -1,8 +1,10 @@
 import type { PendingApproval } from "./approvals.js";
 import { filterRuntimeApprovals } from "./bootstrapApprovals.js";
 
-export interface ApprovalWorkspaceAccess {
+export interface ApprovalScopeAccess {
+  /** Whether this account is still admitted to the queue's owning scope. */
   isMember(userId: string): boolean;
+  /** Only workspace scopes admit unowned source reviews to administrators. */
   isAdmin(userId: string): boolean;
 }
 
@@ -24,7 +26,7 @@ export function isHostApprovalObserver(owner: {
 export function approvalVisibleToUser(
   approval: PendingApproval,
   userId: string,
-  access: ApprovalWorkspaceAccess
+  access: ApprovalScopeAccess
 ): boolean {
   if (!userId || !access.isMember(userId)) return false;
   const audience = approvalAudience(approval);

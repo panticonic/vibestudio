@@ -31,7 +31,10 @@ const USER_1_TARGETS = [DELIVERED_TARGETS[0]!];
 const MEMBER_USER_IDS = ["user-1", "user-2"];
 
 function createQueue() {
-  return createApprovalQueue({ eventService: { emitProjected: vi.fn() } as never });
+  return createApprovalQueue({
+    eventService: { emitProjected: vi.fn() } as never,
+    scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+  });
 }
 
 function createPushMock(): PushServiceInternal & { triggerRegistrationsChanged(): void } {
@@ -238,7 +241,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -275,7 +278,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -301,7 +304,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => members,
-      workspaceAccess: { isMember: (id) => members.includes(id), isAdmin: () => false },
+      scopeAccess: { isMember: (id) => members.includes(id), isAdmin: () => false },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -328,7 +331,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -360,7 +363,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => active,
         markActive: vi.fn(),
@@ -391,7 +394,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -421,7 +424,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -465,7 +468,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -502,7 +505,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -539,7 +542,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -567,7 +570,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -597,7 +600,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -659,7 +662,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -698,7 +701,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -730,7 +733,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -770,7 +773,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
-      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),

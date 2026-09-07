@@ -9,7 +9,7 @@ function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0
       emitProjected: (event: string, project: (owner: unknown) => unknown) =>
         emit(event, project({ callerId: "server", callerKind: "server" })),
     } as never,
-    workspaceAccess: { isMember: () => true, isAdmin: () => true },
+    scopeAccess: { isMember: () => true, isAdmin: () => true },
     ...overrides,
   });
   return { queue, emit };

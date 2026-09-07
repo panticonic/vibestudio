@@ -3072,7 +3072,7 @@ describe("EgressProxy", () => {
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const approvalQueue = createApprovalQueue({
       eventService: { emitProjected: vi.fn() } as never,
-      workspaceAccess: {
+      scopeAccess: {
         isMember: (userId) => userId === "user-1",
         isAdmin: () => false,
       },
