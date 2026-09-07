@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -70,12 +70,17 @@ test(
       // A live instance retains this executable path while another instance
       // rebuilds the host. Cleaning compiler output must not retire a runtime.
       await writeFile(path.join(appRoot, "dist", "old-host-entry.js"), "obsolete");
+      const launcher = path.join(appRoot, "dist", "mxc", "linux-x64", "lxc-exec");
+      await mkdir(path.dirname(launcher), { recursive: true });
+      await writeFile(launcher, "#!/bin/sh\nprintf 'sandbox-alive'\n");
+      await chmod(launcher, 0o755);
       cleanHostBuildOutput(appRoot);
       await assert.rejects(readFile(path.join(appRoot, "dist", "old-host-entry.js")), {
         code: "ENOENT",
       });
       const launch = await promisify(execFile)(results[0].executable, []);
       assert.equal(launch.stdout, "runtime-alive");
+      assert.equal((await promisify(execFile)(launcher, [])).stdout, "sandbox-alive");
       assert.deepEqual(await stageNodeRuntime(appRoot, target), results[0]);
     } finally {
       await rm(appRoot, { recursive: true, force: true });
