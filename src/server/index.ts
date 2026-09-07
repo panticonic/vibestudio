@@ -6140,6 +6140,7 @@ async function main() {
       const activeEntity = entityCache.resolveActive(registered.runtime.id);
       return resolveLiveExecutionCaller({
         registered,
+        subject: userSubjectSource.resolve(registered.runtime.id, registered.runtime.kind),
         activeEntity,
         executionSession: agentExecutionSessions.resolve(registered.runtime.id),
         contextTestPolicy: activeEntity

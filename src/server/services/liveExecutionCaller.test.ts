@@ -99,9 +99,28 @@ const executionSession = {
 } satisfies ExecutionAdmissionFact;
 
 describe("live execution caller resolution", () => {
+  it("refreshes user attribution independently of the registered image", () => {
+    const resolve = (subject: { userId: string; handle: string } | null) =>
+      resolveLiveExecutionCaller({
+        registered: { ...registered, subject: { userId: "stale-user", handle: "stale" } },
+        subject,
+        activeEntity,
+        executionSession: null,
+        contextTestPolicy: null,
+      });
+    const subject = { userId: "current-user", handle: "current" };
+    expect(resolve(subject)).toMatchObject({
+      subject,
+      code: registered.code,
+      runtime: registered.runtime,
+    });
+    expect(resolve(null)?.subject).toBeUndefined();
+  });
+
   it("joins a registered image to the current agent session and case policy", () => {
     expect(
       resolveLiveExecutionCaller({
+        subject: null,
         registered,
         activeEntity,
         executionSession,
@@ -144,6 +163,7 @@ describe("live execution caller resolution", () => {
     const isCodeApproved = vi.fn(() => true);
     expect(
       resolveLiveExecutionCaller({
+        subject: null,
         registered,
         activeEntity,
         executionSession: null,
@@ -158,6 +178,7 @@ describe("live execution caller resolution", () => {
   it("does not invent code approval when the exact version is unapproved", () => {
     expect(
       resolveLiveExecutionCaller({
+        subject: null,
         registered,
         activeEntity,
         executionSession: null,
@@ -171,6 +192,7 @@ describe("live execution caller resolution", () => {
   it("rejects a stale session whose live context no longer matches", () => {
     expect(
       resolveLiveExecutionCaller({
+        subject: null,
         registered,
         activeEntity: { ...activeEntity, contextId: "ctx-replaced" },
         executionSession,

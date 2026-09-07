@@ -85,6 +85,8 @@ export function refineExecutionTestPolicy(
  */
 export function resolveLiveExecutionCaller(input: {
   registered: VerifiedCaller;
+  /** Resolve through the same live account source as RPC, never image registration. */
+  subject: NonNullable<VerifiedCaller["subject"]> | null;
   activeEntity: EntityRecord | null;
   executionSession: ExecutionAdmissionFact | null;
   contextTestPolicy: AgentExecutionTestPolicy | null;
@@ -97,6 +99,7 @@ export function resolveLiveExecutionCaller(input: {
 }): VerifiedCaller | null {
   const {
     registered,
+    subject,
     activeEntity,
     executionSession,
     contextTestPolicy,
@@ -127,6 +130,7 @@ export function resolveLiveExecutionCaller(input: {
     testPolicy: _registeredTestPolicy,
     code: registeredCode,
     codeApproved: registeredCodeApproved,
+    subject: _registeredSubject,
     ...stable
   } = registered;
   const code = executionSession
@@ -139,6 +143,7 @@ export function resolveLiveExecutionCaller(input: {
   const resolvedTaskAuthority = executionSession?.taskAuthority ?? taskAuthority;
   const resolved: VerifiedCaller = {
     ...stable,
+    ...(subject ? { subject } : {}),
     ...(code ? { code } : {}),
     ...(!executionSession && registeredCodeApproved ? { codeApproved: true } : {}),
     ...(agentBinding ? { agentBinding } : {}),
