@@ -323,7 +323,11 @@ export function launchGateView(input: {
       ? LAUNCH_GATE_COPY.programsIncluding(programs, extensions.length)
       : null,
     nativeCodeWarning:
-      extensions.length > 0 ? HOST_APPROVAL_COPY.installReview.nativeCodeWarning : null,
+      extensions.length > 0
+        ? HOST_APPROVAL_COPY.installReview.nativeCodeWarning(
+            input.approvals[0]?.executionPlatform,
+          )
+        : null,
     sources,
     sourcesExpandedByDefault,
     disclosureLabel: sourcesExpandedByDefault

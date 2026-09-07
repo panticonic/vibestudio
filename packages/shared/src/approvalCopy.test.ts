@@ -81,6 +81,23 @@ function installReview(overrides: Record<string, unknown>) {
 }
 
 describe("approvalCopy", () => {
+  it("describes runtime execution on the executing host platform", () => {
+    const approval = {
+      ...base,
+      kind: "capability",
+      capability: "runtime.code-execution.manage",
+      title: "Run code",
+      executionPlatform: "windows",
+    } satisfies PendingCapabilityApproval;
+
+    expect(getApprovalCopy(approval).summary).toContain(
+      "Windows host with the host account's permissions"
+    );
+    expect(
+      getApprovalCopy({ ...approval, executionPlatform: "linux" }).summary
+    ).toContain("run in a sandbox on the Linux host");
+  });
+
   const fixtures: Array<{
     name: string;
     approval: PendingApproval;
@@ -401,7 +418,7 @@ describe("approvalCopy", () => {
       title: "Add News",
       summaryIncludes: "news briefings",
       warning:
-        "On Windows, workspace commands and extensions run with your account's host permissions. Linux and macOS contain workspace code; separately approved host actions can access the host.",
+        "Native workspace execution depends on the workspace host's platform protections. Separately approved host actions can run outside those protections.",
       detailsOpen: true,
       // Native code is the one thing here worth a raised voice, and a raised
       // voice is amber — the warning above says it in full either way.

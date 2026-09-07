@@ -49,6 +49,23 @@ function unitInstallReviewRequest(
 }
 
 describe("approvalQueue", () => {
+  it("seals the executing server platform instead of accepting requester presentation", () => {
+    const { queue } = createQueue({ executionPlatform: "darwin" });
+    void queue.request({
+      ...unitInstallReviewRequest(),
+      executionPlatform: "windows",
+    } as UnitInstallReviewQueueRequest);
+
+    expect(queue.listPending()[0]?.executionPlatform).toBe("macos");
+  });
+
+  it("omits an unknown host platform instead of changing runtime admission", () => {
+    const { queue } = createQueue({ executionPlatform: "aix" });
+    void queue.request(unitInstallReviewRequest());
+
+    expect(queue.listPending()[0]).not.toHaveProperty("executionPlatform");
+  });
+
   it("coalesces browser site consent across panel incarnations", () => {
     const { queue } = createQueue();
     const common = {

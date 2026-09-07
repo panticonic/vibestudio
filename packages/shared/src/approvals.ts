@@ -310,6 +310,8 @@ export interface PendingApprovalBase {
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
+  /** Operating system of the server that will execute workspace-native code. */
+  executionPlatform?: "windows" | "macos" | "linux";
   /** Authenticated requesting account; personal consent is never transferable to another member. */
   requestedByUserId?: string;
   /** Canonical acquisition operation that owns this one human decision. */

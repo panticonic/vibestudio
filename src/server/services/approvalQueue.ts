@@ -720,6 +720,8 @@ export type SensitiveActionQueue = ApprovalQueue;
 
 export function createApprovalQueue(deps: {
   eventService: EventService;
+  /** Actual workspace server platform; never accepted from an approval requester. */
+  executionPlatform?: NodeJS.Platform;
   scopeAccess?: ApprovalScopeAccess;
   /**
    * Carries what the user checked from the review that accepted it to the
@@ -1316,6 +1318,16 @@ export function createApprovalQueue(deps: {
     };
   }
 
+  const serverPlatform = deps.executionPlatform ?? process.platform;
+  const executionPlatform: PendingApproval["executionPlatform"] =
+    serverPlatform === "win32"
+      ? "windows"
+      : serverPlatform === "darwin"
+        ? "macos"
+        : serverPlatform === "linux"
+          ? "linux"
+          : undefined;
+
   function createPendingApproval(req: ApprovalQueueRequest): PendingApproval {
     const requester = resolveRequesterFor(req);
     const callerTitle = requester?.title ?? resolveTitle(req.callerId);
@@ -1327,6 +1339,7 @@ export function createApprovalQueue(deps: {
       repoPath: req.repoPath,
       effectiveVersion: req.effectiveVersion,
       requestedAt: Date.now(),
+      ...(executionPlatform ? { executionPlatform } : {}),
       ...(req.requestedByUserId ? { requestedByUserId: req.requestedByUserId } : {}),
       ...(req.operationId ? { operationId: req.operationId } : {}),
       ...(req.taskSubject ? { taskSubject: req.taskSubject } : {}),

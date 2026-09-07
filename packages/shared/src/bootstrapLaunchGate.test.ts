@@ -44,7 +44,10 @@ function part(overrides: Partial<InstallReviewPart> = {}): InstallReviewPart {
   };
 }
 
-function review(parts: InstallReviewPart[]): PendingUnitInstallReviewApproval {
+function review(
+  parts: InstallReviewPart[],
+  executionPlatform: PendingUnitInstallReviewApproval["executionPlatform"] = "linux"
+): PendingUnitInstallReviewApproval {
   return {
     kind: "unit-install-review",
     approvalId: "gate-1",
@@ -53,6 +56,7 @@ function review(parts: InstallReviewPart[]): PendingUnitInstallReviewApproval {
     repoPath: "meta",
     effectiveVersion: "",
     requestedAt: 1,
+    executionPlatform,
     mode: "adopt-root",
     title: "Start this workspace?",
     description: "",
@@ -98,13 +102,29 @@ describe("the common case", () => {
     expect(view.acceptLabel).toBe("Start");
   });
 
-  it("never buries the fact that native code runs outside our protections", () => {
+  it("discloses the execution contract of the workspace host", () => {
     const withExtension = launchGateView({
       approvals: [review([part({ kind: "extension", label: "Extension", target: null })])],
     });
     expect(withExtension.nativeCodeWarning).toBe(
-      "On Windows, workspace commands and extensions run with your account's host permissions. Linux and macOS contain workspace code; separately approved host actions can access the host."
+      "Workspace commands and extensions run in a sandbox on the Linux host. Separately approved host actions can run outside that sandbox."
     );
+    expect(
+      launchGateView({
+        approvals: [
+          review([part({ kind: "extension", label: "Extension", target: null })], "windows"),
+        ],
+      }).nativeCodeWarning
+    ).toBe(
+      "Workspace commands and extensions run on the Windows host with the host account's permissions."
+    );
+    expect(
+      launchGateView({
+        approvals: [
+          review([part({ kind: "extension", label: "Extension", target: null })], "macos"),
+        ],
+      }).nativeCodeWarning
+    ).toContain("run in a sandbox on the macOS host");
     expect(launchGateView({ approvals: [review([part()])] }).nativeCodeWarning).toBeNull();
   });
 });
@@ -417,7 +437,7 @@ describe("the terminal form", () => {
     expect(text).toContain("https://github.com/acme/studio  at v2.1");
     expect(text).toContain('"Acme Studio" — name given by this template');
     expect(text).toContain("You haven't run code from github.com/acme before.");
-    expect(text).toContain("On Windows, workspace commands and extensions");
+    expect(text).toContain("run in a sandbox on the Linux host");
     expect(text).toContain("Vibestudio won't start. Nothing is installed or changed.");
     expect(text).toContain("[Start] / [Quit]");
   });

@@ -851,10 +851,10 @@ function getInstallReviewCopy(approval: PendingUnitInstallReviewApproval): Appro
   return {
     title,
     summary,
-    // The one warning that never hides: native code runs outside our
-    // protections, and that is true of every extension regardless of origin.
+    // The one warning that never hides: extensions execute native code under
+    // the workspace host's platform contract, regardless of origin.
     ...(approval.parts.some((part) => part.kind === "extension")
-      ? { warning: copy.nativeCodeWarning }
+      ? { warning: copy.nativeCodeWarning(approval.executionPlatform) }
       : {}),
   };
 }
@@ -865,6 +865,13 @@ const CAPABILITY_COPY_HANDLERS: Record<
   string,
   (approval: PendingCapabilityApproval) => ApprovalCopyResult | null
 > = {
+  "runtime.code-execution.manage"(approval) {
+    return {
+      title: approval.title,
+      summary:
+        `Start, watch, or stop a workspace program. ${HOST_APPROVAL_COPY.installReview.nativeCodeWarning(approval.executionPlatform)}`,
+    };
+  },
   "workspace-service:channel"(approval) {
     const caller = getApprovalCallerPresentation(approval).label;
     const conversation =

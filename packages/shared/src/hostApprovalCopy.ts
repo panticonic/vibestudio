@@ -19,6 +19,18 @@ export interface EditableCapabilityCopy {
   group: string;
 }
 
+export type HostExecutionPlatform = "windows" | "macos" | "linux";
+
+export function nativeExecutionDisclosure(platform?: HostExecutionPlatform): string {
+  if (platform === "windows")
+    return "Workspace commands and extensions run on the Windows host with the host account's permissions.";
+  if (platform === "linux")
+    return "Workspace commands and extensions run in a sandbox on the Linux host. Separately approved host actions can run outside that sandbox.";
+  if (platform === "macos")
+    return "Workspace commands and extensions run in a sandbox on the macOS host. Separately approved host actions can run outside that sandbox.";
+  return "Native workspace execution depends on the workspace host's platform protections. Separately approved host actions can run outside those protections.";
+}
+
 type InstallPartCounts = {
   panels: number;
   agents: number;
@@ -471,8 +483,7 @@ export const HOST_APPROVAL_COPY = {
       keepOld: "Keep running the version you already reviewed.",
     },
     /** Disclose the platform execution contract before workspace code runs. */
-    nativeCodeWarning:
-      "On Windows, workspace commands and extensions run with your account's host permissions. Linux and macOS contain workspace code; separately approved host actions can access the host.",
+    nativeCodeWarning: nativeExecutionDisclosure,
   },
 
   headlines: {
@@ -775,8 +786,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     authorityCategory: { domain: "automation", verb: "manage" },
     title: "Run code",
     action: "run a workspace program",
-    description:
-      "Start, watch, or stop a workspace program. On Windows it runs with your account's host permissions; Linux and macOS apply workspace confinement.",
+    description: `Start, watch, or stop a workspace program. ${nativeExecutionDisclosure()}`,
     group: "runtime",
   },
   {
