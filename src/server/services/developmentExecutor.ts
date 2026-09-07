@@ -24,11 +24,10 @@ import {
   type BuildArtifactInput,
 } from "../buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
+import { DevelopmentRunRoots } from "./developmentRunRoots.js";
 
 const execFileAsync = promisify(execFile);
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
-const RUN_ID = /^[A-Za-z0-9._-]{1,160}$/u;
-const MARKER = ".vibestudio-development-run.json";
 const REGULAR_MODE = 0o100644;
 const EXECUTABLE_MODE = 0o100755;
 
@@ -101,12 +100,13 @@ export class DevelopmentExecutor {
   private readonly attempts = new Map<string, number>();
   private readonly stopping = new Map<string, number>();
   private toolchainPromise: Promise<ExactToolchain> | null = null;
+  readonly runRoots: DevelopmentRunRoots;
 
   constructor(
     private readonly deps: {
       workspaceId: string;
       hostExecutionDigest: string;
-      root: string;
+      runRoots: DevelopmentRunRoots;
       planSource(input: {
         contextId: string;
         repositoryId: string;
@@ -115,7 +115,9 @@ export class DevelopmentExecutor {
       materializeSource(plan: ExactRepositorySnapshotPlan, destination: string): Promise<void>;
       onLog?: (runId: string, stream: "stdout" | "stderr", line: string) => void;
     }
-  ) {}
+  ) {
+    this.runRoots = deps.runRoots;
+  }
 
   async prepareExact(input: {
     session: DevelopmentSession;
@@ -131,7 +133,7 @@ export class DevelopmentExecutor {
         { code: "EEXECUTOR_UNAVAILABLE" }
       );
     }
-    this.assertRunId(input.runId);
+    this.runRoots.runRoot(input.runId);
     const recipe = input.recipe;
     if (recipe.platform !== process.platform || recipe.arch !== process.arch) {
       throw Object.assign(
@@ -260,7 +262,7 @@ export class DevelopmentExecutor {
 
   async materialize(plan: PreparedDevelopmentBuild): Promise<void> {
     const runRoot = this.runRoot(plan.runId);
-    await this.claimRunRoot(runRoot, plan.runId, plan.snapshot.snapshotDigest);
+    await this.runRoots.claim(plan.runId, plan.snapshot.snapshotDigest);
     const sourceRoot = path.join(runRoot, "source");
     const baseRoot = path.join(runRoot, "base");
     await fs.rm(sourceRoot, { recursive: true, force: true });
@@ -282,7 +284,7 @@ export class DevelopmentExecutor {
   ): Promise<ExecutionArtifactRefV1> {
     this.verifyRunPlan(run, plan);
     const runRoot = this.runRoot(run.runId);
-    await this.assertOwnedRoot(runRoot, run.runId, run.snapshot.snapshotDigest);
+    await this.runRoots.assertOwned(run.runId, run.snapshot.snapshotDigest);
     const sourceRoot = path.join(runRoot, "source");
     const home = path.join(runRoot, "home");
     const store = path.join(runRoot, "pnpm-store");
@@ -348,9 +350,7 @@ export class DevelopmentExecutor {
 
   async retire(run: DevelopmentRun): Promise<void> {
     await this.stop(run.runId);
-    const runRoot = this.runRoot(run.runId);
-    await this.assertOwnedRoot(runRoot, run.runId, run.snapshot.snapshotDigest);
-    await fs.rm(runRoot, { recursive: true, force: true });
+    await this.runRoots.retire(run.runId, run.snapshot.snapshotDigest);
     this.attempts.delete(run.runId);
     this.stopping.delete(run.runId);
   }
@@ -361,7 +361,7 @@ export class DevelopmentExecutor {
   ): Promise<OwnedDevelopmentLaunch> {
     this.verifyRunPlan(run, plan);
     const runRoot = this.runRoot(run.runId);
-    await this.assertOwnedRoot(runRoot, run.runId, run.snapshot.snapshotDigest);
+    await this.runRoots.assertOwned(run.runId, run.snapshot.snapshotDigest);
     if (!run.artifact) {
       throw Object.assign(new Error("Development launch has no verified artifact owner"), {
         code: "ESTATE",
@@ -410,8 +410,7 @@ export class DevelopmentExecutor {
     plan: PreparedDevelopmentBuild
   ): Promise<DevelopmentClientArtifactSource> {
     this.verifyRunPlan(run, plan);
-    const runRoot = this.runRoot(run.runId);
-    await this.assertOwnedRoot(runRoot, run.runId, run.snapshot.snapshotDigest);
+    await this.runRoots.assertOwned(run.runId, run.snapshot.snapshotDigest);
     if (!run.artifact) {
       throw Object.assign(new Error("Development client has no verified artifact owner"), {
         code: "ESTATE",
@@ -528,7 +527,9 @@ export class DevelopmentExecutor {
         builtAt: new Date().toISOString(),
       }
     );
-    return executionArtifactRefFromBuild(this.deps.workspaceId, build);
+    const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+    await this.runRoots.publish(run.runId, run.snapshot.snapshotDigest, artifact);
+    return artifact;
   }
 
   private runCommand(
@@ -646,60 +647,7 @@ export class DevelopmentExecutor {
   }
 
   private runRoot(runId: string): string {
-    this.assertRunId(runId);
-    return path.join(this.deps.root, runId);
-  }
-
-  private assertRunId(runId: string): void {
-    if (!RUN_ID.test(runId))
-      throw Object.assign(new Error("Invalid development run id"), { code: "EINVAL" });
-  }
-
-  private async claimRunRoot(
-    runRoot: string,
-    runId: string,
-    snapshotDigest: string
-  ): Promise<void> {
-    await fs.mkdir(this.deps.root, { recursive: true, mode: 0o700 });
-    const base = await fs.realpath(this.deps.root);
-    const relative = path.relative(base, path.resolve(runRoot));
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw Object.assign(new Error("Development run root escaped its owner"), {
-        code: "EACCES",
-      });
-    }
-    try {
-      await this.assertOwnedRoot(runRoot, runId, snapshotDigest);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    await fs.mkdir(runRoot, { recursive: false, mode: 0o700 });
-    await fs.writeFile(
-      path.join(runRoot, MARKER),
-      `${JSON.stringify({ version: 1, runId, snapshotDigest })}\n`,
-      { encoding: "utf8", mode: 0o600, flag: "wx" }
-    );
-  }
-
-  private async assertOwnedRoot(
-    runRoot: string,
-    runId: string,
-    snapshotDigest: string
-  ): Promise<void> {
-    const marker = JSON.parse(await fs.readFile(path.join(runRoot, MARKER), "utf8")) as Record<
-      string,
-      unknown
-    >;
-    if (
-      marker["version"] !== 1 ||
-      marker["runId"] !== runId ||
-      marker["snapshotDigest"] !== snapshotDigest
-    ) {
-      throw Object.assign(new Error(`Development root ${runRoot} has a foreign owner marker`), {
-        code: "EOWNERSHIP",
-      });
-    }
+    return this.runRoots.runRoot(runId);
   }
 
   private verifyRunPlan(run: DevelopmentRun, plan: PreparedDevelopmentBuild): void {

@@ -1033,18 +1033,6 @@ async function main() {
     return presentationDispatch(method, args);
   };
   let developmentDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
-  developmentRunRootProvider.bind({
-    id: "development-run",
-    mandatory: true,
-    async snapshotRoots(epoch) {
-      if (!developmentDispatch) {
-        throw new Error("Base development service is not reachable for retention");
-      }
-      return (await developmentDispatch("snapshotExecutionRoots", [
-        { epoch },
-      ])) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
-    },
-  });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const { resolveApprovalCallerTitle, resolveApprovalRequester } =
     await import("./services/approvalCallerTitle.js");
@@ -4754,6 +4742,16 @@ async function main() {
     attachedHostAuthorityCeiling,
     workspaceChildHub,
     panelRuntimeCoordinator,
+    executionPublicationPort: executionPublicationJournal,
+    bindDevelopmentRunRootProvider: (provider) => developmentRunRootProvider.bind(provider),
+    snapshotLegacyDevelopmentRoots: async (epoch) => {
+      if (!developmentDispatch) {
+        throw new Error("Base development service is not reachable for legacy retention migration");
+      }
+      return (await developmentDispatch("snapshotExecutionRoots", [
+        { epoch },
+      ])) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
+    },
   });
   {
     const { createMobileNativeService } = await import("./services/mobileNativeService.js");

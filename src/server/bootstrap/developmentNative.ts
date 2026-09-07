@@ -12,6 +12,11 @@ import type { AttachedHostEndpoint } from "../services/attachedHostProtocol.js";
 import type { ServerLogStore } from "../services/serverLogStore.js";
 import type { WorkspaceChildHubPort } from "../workspaceChildHubPort.js";
 import type { createAttachedHostPublicationPorts } from "../services/attachedHostTransport.js";
+import type {
+  ExecutionPublicationPort,
+  ExecutionRoot,
+  ExecutionRootProvider,
+} from "@vibestudio/shared/execution/retention";
 
 function readHostExecutionDigest(repoRoot: string): string {
   const record = JSON.parse(
@@ -41,11 +46,15 @@ export interface DevelopmentNativeBootstrapDeps {
   attachedHostAuthorityCeiling: readonly CapabilityScope[];
   workspaceChildHub: Pick<WorkspaceChildHubPort, "mintDeviceInvite">;
   panelRuntimeCoordinator: Pick<PanelRuntimeCoordinator, "resolvePresentationCallerForRuntime">;
+  executionPublicationPort: ExecutionPublicationPort;
+  bindDevelopmentRunRootProvider(provider: ExecutionRootProvider): void;
+  snapshotLegacyDevelopmentRoots(epoch: number): Promise<readonly ExecutionRoot[]>;
 }
 
 /** Wire the exact native effects consumed by the userland development builtin. */
 export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps): Promise<void> {
   const { DevelopmentExecutor } = await import("../services/developmentExecutor.js");
+  const { DevelopmentRunRoots } = await import("../services/developmentRunRoots.js");
   const { IsolatedDevelopmentHostExecutor } =
     await import("../services/isolatedDevelopmentHostExecutor.js");
   const { DevelopmentClientExecutorRegistry } =
@@ -77,6 +86,13 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
       : {}),
   });
   let clientExecutorDefinition: ServiceDefinition | null = null;
+  const developmentRunRoots = new DevelopmentRunRoots({
+    root: deps.layout.development.runsDir,
+    workspaceId: deps.workspaceId,
+    publicationJournal: deps.executionPublicationPort,
+    legacyRoots: (epoch) => deps.snapshotLegacyDevelopmentRoots(epoch),
+  });
+  deps.bindDevelopmentRunRootProvider(developmentRunRoots);
 
   deps.container.registerManaged({
     name: "developmentClientExecutor",
@@ -107,7 +123,7 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
       developmentExecutor = new DevelopmentExecutor({
         workspaceId: deps.workspaceId,
         hostExecutionDigest,
-        root: deps.layout.development.runsDir,
+        runRoots: developmentRunRoots,
         planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),

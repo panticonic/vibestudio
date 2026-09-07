@@ -18,9 +18,20 @@ import {
 } from "./developmentExecutor.js";
 import { developmentRecipeFixture } from "./developmentRecipeFixture.test-helper.js";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
+import { DevelopmentRunRoots } from "./developmentRunRoots.js";
 
 const roots: string[] = [];
 const digest = (character: string): string => character.repeat(64);
+const publicationJournal = {
+  reserve: () => ({ reservationId: "reservation:test", epoch: 0 }),
+  finalize: () => undefined,
+};
+const runRoots = (root: string) =>
+  new DevelopmentRunRoots({
+    root: path.join(root, "runs"),
+    workspaceId: "workspace:test",
+    publicationJournal,
+  });
 const pair = {
   kind: "combined" as const,
   hostRepositoryId: "repository:vibestudio",
@@ -220,7 +231,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
-      root: path.join(root, "runs"),
+      runRoots: runRoots(root),
       planSource,
       materializeSource: vi.fn(),
     });
@@ -256,7 +267,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
-      root: path.join(root, "runs"),
+      runRoots: runRoots(root),
       planSource: async ({ repositoryId }) =>
         repositoryId === "repository:base"
           ? sourcePlan("repository:base", "templates/base")
@@ -293,7 +304,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
-      root: path.join(root, "runs"),
+      runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "pnpm-lock.yaml"), "lock");
@@ -325,6 +336,14 @@ describe("DevelopmentExecutor exact private execution", () => {
     const stored = getBuild(plan.snapshot.snapshotDigest);
 
     expect(artifact.buildKey).toBe(plan.snapshot.snapshotDigest);
+    await expect(executor.runRoots.snapshotRoots(1)).resolves.toEqual([
+      {
+        owner: "development-run",
+        ownerId: plan.runId,
+        reason: "active",
+        artifact,
+      },
+    ]);
     expect(stored?.metadata.sourceStateHash).toBe(plan.snapshot.pair.host.contentRoot);
     expect(stored?.metadata.sourceState).toEqual(plan.snapshot.pair.host.repositoryState);
     const environment = stored?.artifacts.find((entry) => entry.path === "dist/environment.json");
@@ -343,7 +362,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
-      root: path.join(root, "runs"),
+      runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       materializeSource: async () => {},
     });
@@ -372,7 +391,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
-      root: path.join(root, "runs"),
+      runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "build.mjs"), "");
@@ -407,7 +426,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
-      root: path.join(root, "runs"),
+      runRoots: runRoots(root),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         materializations += 1;
