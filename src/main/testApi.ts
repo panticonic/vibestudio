@@ -221,14 +221,22 @@ export function setupTestApi(
   }
 ): void {
   if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") return;
+  const assertHostedChrome = () => {
+    const appId = owner.getPanelView()?.getViewManager().getVisibleHostChromeAppId();
+    if (!appId) throw new Error("No hosted shell app is visible");
+  };
   const owners = new WeakMap<PanelOrchestrator, TestApi>();
   const getApi = (workspace: TestWorkspaceOwner): TestApi => {
     let api = owners.get(workspace.panelOrchestrator);
     if (!api) {
-      api = createWorkspaceTestApi(workspace, {
-        forWorkspace: async (id) => getApi(await selectors.resolveWorkspace(id)),
-        listWorkspaces: selectors.listWorkspaces,
-      });
+      api = createWorkspaceTestApi(
+        workspace,
+        {
+          forWorkspace: async (id) => getApi(await selectors.resolveWorkspace(id)),
+          listWorkspaces: selectors.listWorkspaces,
+        },
+        assertHostedChrome
+      );
       owners.set(workspace.panelOrchestrator, api);
     }
     return api;
@@ -238,7 +246,8 @@ export function setupTestApi(
 
 function createWorkspaceTestApi(
   { panelOrchestrator, panelRegistry, getPanelView }: TestWorkspaceOwner,
-  selectors: Pick<TestApi, "forWorkspace" | "listWorkspaces">
+  selectors: Pick<TestApi, "forWorkspace" | "listWorkspaces">,
+  assertHostedChrome: () => void
 ): TestApi {
   const panelDiagnostics = new Map<
     string,
@@ -257,11 +266,12 @@ function createWorkspaceTestApi(
     entry.records.push({ ...diagnostic, timestamp: Date.now() });
   };
 
-  const hostedShellCaller = (): { callerId: string; callerKind: "app" } => {
-    const panelView = getPanelView();
-    const appId = panelView?.getViewManager().getVisibleHostChromeAppId();
-    if (!appId) throw new Error("No hosted shell app is visible");
-    return { callerId: appId, callerKind: "app" };
+  const assertNativePanelAction = (): void => {
+    // Native System chrome acts as the admitted shell for its selected
+    // workspace. It is not an app installed in each destination workspace.
+    // Keep both the captured destination and the hosted chrome live.
+    if (!getPanelView()) throw new Error("PanelView not available");
+    assertHostedChrome();
   };
 
   return {
@@ -305,27 +315,21 @@ function createWorkspaceTestApi(
     },
 
     async createPanel(parentId, source, options) {
+      assertNativePanelAction();
       const { stateArgs, ...createOptions } = options ?? {};
-      return panelOrchestrator.createPanel(
-        parentId,
-        source,
-        createOptions,
-        stateArgs,
-        hostedShellCaller()
-      );
+      return panelOrchestrator.createPanel(parentId, source, createOptions, stateArgs);
     },
 
     async createBrowserPanel(parentId, url, options) {
-      return panelOrchestrator.createBrowserUrlPanel(
-        parentId,
-        url,
-        { focus: options?.focus !== false },
-        hostedShellCaller()
-      );
+      assertNativePanelAction();
+      return panelOrchestrator.createBrowserUrlPanel(parentId, url, {
+        focus: options?.focus !== false,
+      });
     },
 
     async navigatePanel(panelId, source, options) {
-      return panelOrchestrator.navigatePanel(panelId, source, options, hostedShellCaller());
+      assertNativePanelAction();
+      return panelOrchestrator.navigatePanel(panelId, source, options);
     },
 
     async closePanel(id) {

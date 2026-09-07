@@ -335,10 +335,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     stateArgs?: Record<string, unknown>,
     scopedCaller?: ScopedServerCaller
   ): Promise<{ id: string; title: string }> {
-    // App callers (the shell's test API, app-view links) create under their own
-    // capability-gated authority via a scoped connection. Panel-hosted links
-    // pass no scoped caller and are translated by the trusted host (see
-    // panelView). The source view becomes the parent slot when it's a panel,
+    // Ordinary app-view links create under their own capability-gated authority
+    // via a scoped connection. Admitted native chrome and panel-hosted links
+    // use the trusted host path (see panelView). The source view becomes the parent slot when it's a panel,
     // otherwise this is a new root panel.
     const caller = this.registry.getPanel(callerId);
     return this.createViaProductRuntime(
