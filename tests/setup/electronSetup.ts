@@ -34,6 +34,9 @@ import {
 import { registerRunCleanupPath, releaseRunCleanupPath } from "./e2eCleanupLedger.js";
 import {
   DEV_TEMPLATE_SOURCES_ENV,
+  DEFAULT_WORKSPACE_TEMPLATES_ENV,
+  INITIAL_WORKSPACE_TEMPLATE_ENV,
+  type E2eRootTemplate,
   deriveE2eRootTemplate,
   requireE2eRootTemplate,
 } from "./e2eRootTemplate.js";
@@ -75,6 +78,9 @@ export interface TestApp {
   window: Page;
   /** Path to the isolated test workspace */
   workspacePath: string;
+  /** Exact authenticated owner selected by this fixture. */
+  workspaceId: string;
+  systemWorkspaceId: string;
   /** Captured stdout and stderr from the Electron process. */
   getOutput: () => string;
   /** Tail of the isolated local hub log, where workspace build diagnostics live. */
@@ -131,17 +137,23 @@ interface ManagedWorkspaceInfo {
  */
 const CASE_ROOT_TEMPLATE_FILE = "case-root-template.json";
 
-function readCaseRootTemplateEnv(testRoot: string): Record<string, string> {
+interface CaseRootTemplateSelection {
+  template: E2eRootTemplate;
+  privateRole?: "personal" | "system";
+}
+function readCaseRootTemplateSelection(testRoot: string): CaseRootTemplateSelection | null {
   const selectionPath = path.join(testRoot, CASE_ROOT_TEMPLATE_FILE);
-  if (!fs.existsSync(selectionPath)) return {};
-  const selection = JSON.parse(fs.readFileSync(selectionPath, "utf8")) as {
-    pin: unknown;
-    checkout: string;
-  };
+  return fs.existsSync(selectionPath)
+    ? (JSON.parse(fs.readFileSync(selectionPath, "utf8")) as CaseRootTemplateSelection)
+    : null;
+}
+function readCaseRootTemplateEnv(testRoot: string): Record<string, string> {
+  const selection = readCaseRootTemplateSelection(testRoot);
+  if (!selection) return {};
   return {
-    [DEV_TEMPLATE_SOURCES_ENV]: JSON.stringify([
-      { pin: selection.pin, checkout: selection.checkout },
-    ]),
+    [DEV_TEMPLATE_SOURCES_ENV]: JSON.stringify(selection.template.sources),
+    [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(selection.template.defaultTemplates),
+    [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(selection.template.defaultTemplates.system),
   };
 }
 
@@ -214,6 +226,7 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
 export async function createManagedTestWorkspace(
   options: {
     configureSource?: (sourceRoot: string) => void;
+    privateRole?: "personal" | "system";
   } = {}
 ): Promise<string> {
   const runRootTemplate = requireE2eRootTemplate();
@@ -226,17 +239,19 @@ export async function createManagedTestWorkspace(
   // copy of it: the workspace imports its semantic state from the pinned tree,
   // so anything the case wants the runtime to read has to be committed into a
   // root of its own before the workspace names it.
-  const rootTemplate = options.configureSource
-    ? await deriveE2eRootTemplate({
-        base: runRootTemplate,
-        workRoot: path.join(testRoot, "case-root-template"),
-        configureSource: options.configureSource,
-      })
-    : runRootTemplate;
+  const rootTemplate =
+    options.configureSource || options.privateRole
+      ? await deriveE2eRootTemplate({
+          base: runRootTemplate,
+          workRoot: path.join(testRoot, "case-root-template"),
+          configureSource: options.configureSource ?? (() => {}),
+          distribution: options.privateRole,
+        })
+      : runRootTemplate;
   if (rootTemplate !== runRootTemplate) {
     fs.writeFileSync(
       path.join(testRoot, CASE_ROOT_TEMPLATE_FILE),
-      `${JSON.stringify({ pin: rootTemplate.pin, checkout: rootTemplate.checkout }, null, 2)}\n`,
+      `${JSON.stringify({ template: rootTemplate, privateRole: options.privateRole }, null, 2)}\n`,
       "utf8"
     );
   }
@@ -261,7 +276,7 @@ export async function createManagedTestWorkspace(
     // the selected child creates and admits the workspace. Pre-scaffolding the
     // directory here bypasses launch-record dispatch and is no longer a valid
     // first-run lifecycle.
-    centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
+    if (!options.privateRole) centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
     // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
     // policy in this fixture's private identity database so Electron can take
     // its normal graceful shutdown path without opening an interactive dialog.
@@ -304,9 +319,10 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   } = options;
 
   const projectRoot = path.resolve(__dirname, "../..");
-  const workspacePath = workspace ?? (await createManagedTestWorkspace());
+  let workspacePath = workspace ?? (await createManagedTestWorkspace());
   const workspaceInfo = getWorkspaceInfo(workspacePath);
   const ownsWorkspace = workspace === undefined;
+  const privateRole = readCaseRootTemplateSelection(workspaceInfo.testRoot)?.privateRole;
 
   // Determine the main entry point
   const mainPath = path.resolve(projectRoot, "dist", "main.cjs");
@@ -333,7 +349,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     "--no-sandbox",
     `--user-data-dir=${electronUserDataDir}`,
     projectRoot,
-    `--workspace=${workspaceInfo.workspaceName}`,
+    ...(privateRole ? [] : [`--workspace=${workspaceInfo.workspaceName}`]),
   ];
   if (initialPanel) {
     args.push(`--panel=${initialPanel}`);
@@ -494,11 +510,30 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   // Get the first window and wait for the test bridge. Readiness failures must
   // carry the detached hub log because child startup diagnostics live there.
   let window: Page;
+  let workspaceId: string;
+  let systemWorkspaceId: string;
   try {
     window = await app.firstWindow({ timeout: launchTimeout });
     await window.waitForLoadState("domcontentloaded");
     await waitForTestApiReady(app, launchTimeout, output);
     testApiReady = true;
+    const catalog = await app.evaluate(async () => {
+      if (!globalThis.__testApi) throw new Error("Test API is unavailable");
+      return globalThis.__testApi.listWorkspaces();
+    });
+    const owner = catalog.find((entry) =>
+      privateRole ? entry.privateRole === privateRole : entry.name === workspaceInfo.workspaceName
+    );
+    const system = catalog.find((entry) => entry.privateRole === "system");
+    if (!owner || !system)
+      throw new Error("Fixture workspace owners are absent from the authenticated catalog");
+    workspaceId = owner.workspaceId;
+    systemWorkspaceId = system.workspaceId;
+    workspacePath = path.join(
+      getCentralDataDirFromEnv(workspaceInfo.env),
+      "workspaces",
+      owner.name
+    );
   } catch (error) {
     const electronDetails = output.join("").trim();
     const hubDetails = readLogTail(
@@ -524,6 +559,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     app,
     window,
     workspacePath,
+    workspaceId,
+    systemWorkspaceId,
     getOutput: () => output.join(""),
     getHubOutput: () =>
       readLogTail(
@@ -616,16 +653,15 @@ export async function approvePendingStartupUnits(
  */
 export async function approvePendingWorkspaceCreationReview(
   app: ElectronApplication,
-  approvalIds?: readonly string[]
+  approvalIds?: readonly string[],
+  workspaceId?: string
 ): Promise<void> {
   await app.evaluate(
-    async (_electron, requestedApprovalIds) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: Pick<TestApi, "rpcCall">;
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
+    async (_electron, request) => {
+      const root = globalThis.__testApi;
+      if (!root) throw new Error("Test API not available");
+      const testApi = request.workspaceId ? await root.forWorkspace(request.workspaceId) : root;
+      const requestedApprovalIds = request.approvalIds;
 
       let requested = requestedApprovalIds ? new Set(requestedApprovalIds) : null;
       if (!requested) {
@@ -691,7 +727,7 @@ export async function approvePendingWorkspaceCreationReview(
         ]);
       }
     },
-    approvalIds ? [...approvalIds] : null
+    { approvalIds: approvalIds ? [...approvalIds] : null, workspaceId }
   );
 }
 
@@ -912,7 +948,10 @@ export async function waitForPanel(
 /**
  * Get the panel tree from the main process via TestApi.
  */
-export async function getPanelTree(app: ElectronApplication): Promise<
+export async function getPanelTree(
+  app: ElectronApplication,
+  workspaceId?: string
+): Promise<
   Array<{
     id: string;
     title: string;
@@ -924,24 +963,7 @@ export async function getPanelTree(app: ElectronApplication): Promise<
     };
   }>
 > {
-  return app.evaluate(() => {
-    const testApi = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getPanelTree();
-  }) as Promise<
-    Array<{
-      id: string;
-      title: string;
-      children: unknown[];
-      snapshot?: {
-        source?: string;
-        contextId?: string;
-        stateArgs?: Record<string, unknown>;
-      };
-    }>
-  >;
+  return callTestApi(app, "getPanelTree", [], workspaceId);
 }
 
 /**
@@ -1264,28 +1286,20 @@ export async function assertNoMainProcessErrors(
   );
 }
 
-export async function getPanelText(app: ElectronApplication, panelId: string): Promise<string> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as { __testApi?: { getPanelText: (id: string) => Promise<string> } }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getPanelText(id);
-  }, panelId);
+export async function getPanelText(
+  app: ElectronApplication,
+  panelId: string,
+  workspaceId?: string
+): Promise<string> {
+  return callTestApi(app, "getPanelText", [panelId], workspaceId);
 }
 
-export async function getPanelHtml(app: ElectronApplication, panelId: string): Promise<string> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as { __testApi?: { getPanelHtml: (id: string) => Promise<string> } }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getPanelHtml(id);
-  }, panelId);
+export async function getPanelHtml(
+  app: ElectronApplication,
+  panelId: string,
+  workspaceId?: string
+): Promise<string> {
+  return callTestApi(app, "getPanelHtml", [panelId], workspaceId);
 }
 
 export type PanelDiagnostic = {
@@ -1318,32 +1332,18 @@ export interface PanelLayoutAudit {
 
 export async function startPanelDiagnostics(
   app: ElectronApplication,
-  panelId: string
+  panelId: string,
+  workspaceId?: string
 ): Promise<void> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as { __testApi?: { startPanelDiagnostics: (id: string) => Promise<void> } }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.startPanelDiagnostics(id);
-  }, panelId);
+  return callTestApi(app, "startPanelDiagnostics", [panelId], workspaceId);
 }
 
 export async function getPanelDiagnostics(
   app: ElectronApplication,
-  panelId: string
+  panelId: string,
+  workspaceId?: string
 ): Promise<PanelDiagnostic[]> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as { __testApi?: { getPanelDiagnostics: (id: string) => PanelDiagnostic[] } }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getPanelDiagnostics(id);
-  }, panelId);
+  return callTestApi(app, "getPanelDiagnostics", [panelId], workspaceId);
 }
 
 export async function getPanelLayoutAudit(
@@ -1443,24 +1443,10 @@ export async function clickPanelText(
 export async function executePanelScript<T = unknown>(
   app: ElectronApplication,
   panelId: string,
-  script: string
+  script: string,
+  workspaceId?: string
 ): Promise<T> {
-  return app.evaluate(
-    async (_electron, args) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            executePanelScript: <T = unknown>(id: string, script: string) => Promise<T>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.executePanelScript<T>(args.panelId, args.script);
-    },
-    { panelId, script }
-  );
+  return callTestApi<T>(app, "executePanelScript", [panelId, script], workspaceId);
 }
 
 export async function getPanelSelectorWindowPoint(
@@ -1568,4 +1554,22 @@ export async function takeScreenshot(window: Page, name: string): Promise<Buffer
   return window.screenshot({
     path: path.join(screenshotDir, `${name}.png`),
   });
+}
+
+/** Invoke the existing native test surface with an explicit captured workspace owner. */
+export async function callTestApi<T = unknown>(
+  app: ElectronApplication,
+  method: keyof TestApi,
+  args: unknown[],
+  workspaceId?: string
+): Promise<T> {
+  return app.evaluate(
+    async (_electron, request) => {
+      const root = globalThis.__testApi;
+      if (!root) throw new Error("Test API not available");
+      const owner = request.workspaceId ? await root.forWorkspace(request.workspaceId) : root;
+      return (owner[request.method] as (...args: unknown[]) => unknown)(...request.args);
+    },
+    { method, args, workspaceId }
+  ) as Promise<T>;
 }

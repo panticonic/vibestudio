@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test";
 import * as fsSync from "node:fs";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 
@@ -8,6 +7,7 @@ import { CredentialStore } from "@vibestudio/credential-client/store";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import {
   createManagedTestWorkspace,
+  callTestApi,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   getPanelDiagnostics,
   getPanelHtml,
@@ -26,6 +26,7 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 type PendingApproval = {
   approvalId: string;
+  workspaceId: string;
   kind: string;
   title?: string;
   capability?: string;
@@ -190,7 +191,7 @@ function configureWorkspaceSourceForApproval(
   // configured first turn disappears and the lazy chat correctly stays idle.
   const initialChat = config.initPanels?.find((panel) => panel.source === "panels/chat");
   if (!initialChat) throw new Error("Expected an initial chat panel in the workspace config");
-  const initialPrompt = initialChat.stateArgs?.initialPrompt;
+  const initialPrompt = initialChat.stateArgs?.["initialPrompt"];
   if (typeof initialPrompt !== "string" || initialPrompt.trim().length === 0) {
     throw new Error("Expected the shipped initial chat panel to declare a non-empty initialPrompt");
   }
@@ -202,29 +203,31 @@ function configureWorkspaceSourceForApproval(
 }
 
 async function listPendingApprovals(testApp: TestApp): Promise<PendingApproval[]> {
-  return rpcCall(testApp, "shellApproval", "listPending", []) as Promise<PendingApproval[]>;
+  const owners = [...new Set([testApp.systemWorkspaceId, testApp.workspaceId])];
+  return (
+    await Promise.all(
+      owners.map(async (workspaceId) => {
+        const pending = (await rpcCall(
+          testApp,
+          "shellApproval",
+          "listPending",
+          [],
+          workspaceId
+        )) as PendingApproval[];
+        return pending.map((approval) => ({ ...approval, workspaceId }));
+      })
+    )
+  ).flat();
 }
 
 async function rpcCall(
   testApp: TestApp,
   service: string,
   method: string,
-  args: unknown[] = []
+  args: unknown[] = [],
+  workspaceId = testApp.workspaceId
 ): Promise<unknown> {
-  return testApp.app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      return testApi.rpcCall(request.service, request.method, request.args);
-    },
-    { service, method, args }
-  );
+  return callTestApi(testApp.app, "rpcCall", [service, method, args], workspaceId);
 }
 
 async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
@@ -356,35 +359,6 @@ async function capabilityApprovalUiSnapshot(
     }
     return null;
   }, approvalId ?? null);
-}
-
-async function hostedShellHasApprovalUi(testApp: TestApp): Promise<boolean> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    let hasHostedShellChrome = false;
-    let hasApprovalSurface = false;
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const result = (await contents.executeJavaScript(
-          `(() => ({
-            // The explicit shell marker avoids treating a generic launch-page
-            // menu or stale WebContents as the hosted application.
-            hasHostedShellChrome: Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')),
-            hasApprovalSurface: Boolean(document.querySelector(".approval-card, .approval-pill")),
-          }))()`,
-          true
-        )) as {
-          hasHostedShellChrome: boolean;
-          hasApprovalSurface: boolean;
-        };
-        hasHostedShellChrome ||= result.hasHostedShellChrome;
-        hasApprovalSurface ||= result.hasApprovalSurface;
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    return hasHostedShellChrome && hasApprovalSurface;
-  });
 }
 
 async function hostedShellHasChrome(testApp: TestApp): Promise<boolean> {
@@ -628,7 +602,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     error: error instanceof Error ? error.message : String(error),
   }));
   const launchResult = await new HostLaunchClient((service, method, args) =>
-    rpcCall(testApp, service, method, args)
+    rpcCall(testApp, service, method, args, testApp.systemWorkspaceId)
   )
     .launch("electron")
     .catch((error: unknown) => ({
@@ -651,18 +625,18 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   const shellDom = await listShellDomSnapshots(testApp).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error),
   }));
-  const panels = await getPanelTree(testApp.app).catch(() => []);
+  const panels = await getPanelTree(testApp.app, testApp.workspaceId).catch(() => []);
   const panelDetails = [];
   const channelNames: string[] = [];
   for (const panel of panels) {
     const id = panel.id;
-    const text = await getPanelText(testApp.app, id).catch((error: unknown) =>
+    const text = await getPanelText(testApp.app, id, testApp.workspaceId).catch((error: unknown) =>
       error instanceof Error ? `ERROR: ${error.message}` : `ERROR: ${String(error)}`
     );
     const stateArgs = panel.snapshot?.stateArgs as Record<string, unknown> | undefined;
     const channelName =
-      typeof stateArgs?.channelName === "string"
-        ? stateArgs.channelName
+      typeof stateArgs?.["channelName"] === "string"
+        ? stateArgs["channelName"]
         : text.match(/\bchat-[a-z0-9]+\b/)?.[0];
     if (channelName) channelNames.push(channelName);
     panelDetails.push({
@@ -710,11 +684,12 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
             resources,
             bundleFetch,
           };
-        })()`
+        })()`,
+        testApp.workspaceId
       ).catch((error: unknown) => ({
         error: error instanceof Error ? error.message : String(error),
       })),
-      htmlSummary: await getPanelHtml(testApp.app, id)
+      htmlSummary: await getPanelHtml(testApp.app, id, testApp.workspaceId)
         .then((html) => ({
           length: html.length,
           hasLoader: html.includes("/__loader.js"),
@@ -725,7 +700,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         .catch((error: unknown) => ({
           error: error instanceof Error ? error.message : String(error),
         })),
-      diagnostics: await getPanelDiagnostics(testApp.app, id).catch(() => []),
+      diagnostics: await getPanelDiagnostics(testApp.app, id, testApp.workspaceId).catch(() => []),
     });
   }
   const channelParticipants = [];
@@ -755,7 +730,8 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`,
+            testApp.workspaceId
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -778,7 +754,8 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
                 role: event.payload?.payload?.message?.role ?? event.payload?.message?.role,
                 content: String(event.payload?.payload?.message?.content ?? event.payload?.message?.content ?? event.payload?.content ?? "").slice(0, 300),
               })),
-            })))()`
+            })))()`,
+            testApp.workspaceId
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -797,7 +774,8 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`,
+            testApp.workspaceId
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -876,15 +854,15 @@ async function collectStartupAgentCompletion(
   testApp: TestApp,
   expectedInitialPrompt: string
 ): Promise<StartupAgentCompletionState> {
-  const panels = await getPanelTree(testApp.app).catch(() => []);
+  const panels = await getPanelTree(testApp.app, testApp.workspaceId).catch(() => []);
   const firstPanelId = panels[0]?.id;
   const channelNames = new Set<string>();
   for (const panel of panels) {
     const stateArgs = panel.snapshot?.stateArgs as Record<string, unknown> | undefined;
     const channelName =
-      typeof stateArgs?.channelName === "string"
-        ? stateArgs.channelName
-        : (await getPanelText(testApp.app, panel.id).catch(() => "")).match(
+      typeof stateArgs?.["channelName"] === "string"
+        ? stateArgs["channelName"]
+        : (await getPanelText(testApp.app, panel.id, testApp.workspaceId).catch(() => "")).match(
             /\bchat-[a-z0-9]+\b/
           )?.[0];
     if (channelName) channelNames.add(channelName);
@@ -892,7 +870,9 @@ async function collectStartupAgentCompletion(
   if (!firstPanelId) {
     return { complete: false, channels: [], errors: ["No panel is available for RPC inspection"] };
   }
-  const panelSurfaceText = await getPanelText(testApp.app, firstPanelId).catch(() => "");
+  const panelSurfaceText = await getPanelText(testApp.app, firstPanelId, testApp.workspaceId).catch(
+    () => ""
+  );
   const surfaceAgentHandle = panelSurfaceText.match(/@ai-chat-[a-z0-9-]+/i)?.[0] ?? null;
   // A completed first turn can be fully rendered in the panel after the agent
   // has retired its live subscription. Keep the user-visible contract as a
@@ -1035,7 +1015,8 @@ async function collectStartupAgentCompletion(
             )
           ).then((events) => events.filter((event) => event !== null)),
         };
-      })()`
+      })()`,
+      testApp.workspaceId
     ).catch((error: unknown) => {
       errors.push(
         `${channelName}: replay inspection failed: ${
@@ -1181,10 +1162,9 @@ async function collectStartupAgentCompletion(
       const debugState = await executePanelScript(
         testApp.app,
         firstPanelId,
-        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
-      ).catch((error: unknown) => {
-        return null;
-      });
+        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`,
+        testApp.workspaceId
+      ).catch(() => null);
       const state = (debugState as { result?: unknown } | null)?.result ?? debugState;
       const loop =
         state && typeof state === "object" && (state as { loops?: Record<string, unknown> }).loops
@@ -1248,7 +1228,8 @@ async function resolveWorkspaceServiceFromPanel(
     `(async () => {
       const { workers } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
       return workers.resolveService(${JSON.stringify(query)}, ${JSON.stringify(objectKey)});
-    })()`
+    })()`,
+    testApp.workspaceId
   );
 }
 
@@ -1285,7 +1266,7 @@ function isOpenAiCredentialApproval(approval: PendingApproval): boolean {
 
 async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<string[]> {
   const observedInstallReviews = new Set<string>();
-  let startupState: "approval" | "ready" | "waiting" = "waiting";
+  const startupState: { current: "approval" | "ready" | "waiting" } = { current: "waiting" };
   try {
     await expect
       .poll(
@@ -1295,15 +1276,15 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
             observedInstallReviews.add(describeApproval(approval));
           }
           if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp))) {
-            startupState = "approval";
-            return startupState;
+            startupState.current = "approval";
+            return startupState.current;
           }
           if (await hostedShellHasChrome(testApp)) {
-            startupState = "ready";
-            return startupState;
+            startupState.current = "ready";
+            return startupState.current;
           }
-          startupState = "waiting";
-          return startupState;
+          startupState.current = "waiting";
+          return startupState.current;
         },
         { timeout: 90_000, intervals: [500, 1000, 2000] }
       )
@@ -1313,7 +1294,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     throw error;
   }
 
-  if (startupState === "approval") {
+  if (startupState.current === "approval") {
     // `startupState` is "approval" for either surface: the launch gate window
     // (accept label "Start"), or the workspace shell already up and showing the
     // in-app install review. Accept whichever is actually on screen — the same
@@ -1346,8 +1327,8 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     })
     .toBe(false);
 
-  for (const panel of await getPanelTree(testApp.app)) {
-    await startPanelDiagnostics(testApp.app, panel.id).catch(() => {});
+  for (const panel of await getPanelTree(testApp.app, testApp.workspaceId)) {
+    await startPanelDiagnostics(testApp.app, panel.id, testApp.workspaceId).catch(() => {});
   }
 
   const drainDeadline = Date.now() + 120_000;
@@ -1378,10 +1359,17 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
       // resolve the one-time workspace adoption through the typed host helper
       // so a large full-surface render cannot make this fixture race its own
       // startup transition.
-      await approvePendingWorkspaceCreationReview(
-        testApp.app,
-        pendingInstallReviews.map(({ approvalId }) => approvalId)
-      );
+      for (const workspaceId of new Set(
+        pendingInstallReviews.map((approval) => approval.workspaceId)
+      )) {
+        await approvePendingWorkspaceCreationReview(
+          testApp.app,
+          pendingInstallReviews
+            .filter((approval) => approval.workspaceId === workspaceId)
+            .map(({ approvalId }) => approvalId),
+          workspaceId
+        );
+      }
     }
     if (pendingCredentialCount > 0) {
       try {
@@ -1456,7 +1444,9 @@ async function approveInitialChatServiceApprovals(testApp: TestApp): Promise<voi
       pending
         .filter(
           (approval) =>
-            approval.kind === "capability" && targetCapabilities.has(approval.capability)
+            approval.kind === "capability" &&
+            typeof approval.capability === "string" &&
+            targetCapabilities.has(approval.capability)
         )
         .map((approval) => approval.approvalId)
     );
@@ -1466,6 +1456,7 @@ async function approveInitialChatServiceApprovals(testApp: TestApp): Promise<voi
     const targets = pending.filter(
       (approval) =>
         approval.kind === "capability" &&
+        typeof approval.capability === "string" &&
         targetCapabilities.has(approval.capability) &&
         !clickedApprovalIds.has(approval.approvalId)
     );
@@ -1556,6 +1547,7 @@ test.describe("Desktop Startup Approvals", () => {
   test("launch gate starts shell, then in-app approvals unblock initial chats", async () => {
     let configuredInitialPrompt = "";
     workspaceDir = await createManagedTestWorkspace({
+      privateRole: "personal",
       configureSource: (sourceRoot) => {
         configuredInitialPrompt = configureWorkspaceSourceForApproval(sourceRoot);
       },
@@ -1614,7 +1606,7 @@ test.describe("Desktop Startup Approvals", () => {
       await attachStartupDiagnostics(testApp);
       const [pending, panels] = await Promise.all([
         listPendingApprovals(testApp).catch(() => []),
-        getPanelTree(testApp.app).catch(() => []),
+        getPanelTree(testApp.app, testApp.workspaceId).catch(() => []),
       ]);
       throw new Error(
         `Initial chat did not complete: ${JSON.stringify({
@@ -1639,6 +1631,7 @@ test.describe("Desktop Startup Approvals", () => {
     const prompt =
       "Read skills/onboarding/SKILL.md first. Then run a short sandbox eval that fetches https://example.com and tell me the page title.";
     workspaceDir = await createManagedTestWorkspace({
+      privateRole: "personal",
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot, prompt);
       },
@@ -1685,6 +1678,7 @@ test.describe("Desktop Startup Approvals", () => {
       throw error;
     }
 
+    if (!networkApproval) throw new Error("Expected the pending network approval");
     expect(networkApproval).toMatchObject({
       kind: "capability",
       capability: "network.response.read",
@@ -1697,17 +1691,22 @@ test.describe("Desktop Startup Approvals", () => {
       allowedDecisions: ["once", "session", "task", "deny"],
     });
 
-    let rendered: Awaited<ReturnType<typeof capabilityApprovalUiSnapshot>> = null;
+    const rendered: { current: Awaited<ReturnType<typeof capabilityApprovalUiSnapshot>> } = {
+      current: null,
+    };
     await expect
       .poll(
         async () => {
-          rendered = await capabilityApprovalUiSnapshot(testApp!, networkApproval!.approvalId);
-          return rendered?.text ?? "";
+          rendered.current = await capabilityApprovalUiSnapshot(
+            testApp!,
+            networkApproval!.approvalId
+          );
+          return rendered.current?.text ?? "";
         },
         { timeout: 45_000, intervals: [250, 500, 1000, 2000] }
       )
       .toContain("Connect to example.com");
-    expect(rendered?.buttons).toEqual(
+    expect(rendered.current?.buttons).toEqual(
       expect.arrayContaining([
         "Connect once",
         "Allow this site",
@@ -1715,15 +1714,15 @@ test.describe("Desktop Startup Approvals", () => {
         "Don't allow",
       ])
     );
-    expect(rendered?.buttons).not.toContain("Always for AI Chat");
-    expect(rendered?.buttons).not.toContain("Don't allow and stop asking");
-    expect(rendered?.buttons).not.toContain("Remember for this version");
-    expect(rendered).toMatchObject({
+    expect(rendered.current?.buttons).not.toContain("Always for AI Chat");
+    expect(rendered.current?.buttons).not.toContain("Don't allow and stop asking");
+    expect(rendered.current?.buttons).not.toContain("Remember for this version");
+    expect(rendered.current).toMatchObject({
       role: "dialog",
       labelledByText: "Connect to example.com",
       keyboardShortcuts: "Enter D Escape ArrowLeft ArrowRight",
     });
-    expect(rendered?.describedByText.length).toBeGreaterThan(0);
+    expect(rendered.current?.describedByText.length).toBeGreaterThan(0);
 
     expect(await clickShellButton(testApp, /^Connect once$/, networkApproval.approvalId)).toBe(
       true
@@ -1763,9 +1762,10 @@ test.describe("Desktop Startup Approvals", () => {
     // execution: it targets the workspace-creation grant for the app and the
     // exact shell incarnation restored on the second process.
     workspaceDir = await createManagedTestWorkspace({
+      privateRole: "personal",
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot);
-        const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
+        const configPath = path.join(sourceRoot, "meta", "template.yml");
         const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
           initPanels?: unknown[];
         };

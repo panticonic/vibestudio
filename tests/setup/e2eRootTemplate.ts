@@ -181,13 +181,24 @@ export async function deriveE2eRootTemplate(input: {
   base: E2eRootTemplate;
   workRoot: string;
   configureSource: (sourceRoot: string) => void;
+  distribution?: keyof DefaultWorkspaceTemplates;
 }): Promise<E2eRootTemplate> {
+  const selectedPin = input.distribution
+    ? input.base.defaultTemplates[input.distribution]
+    : input.base.pin;
+  const selectedSource = input.base.sources.find(
+    (source) =>
+      source.pin.url === selectedPin.url &&
+      source.pin.commit === selectedPin.commit &&
+      source.pin.snapshot === selectedPin.snapshot
+  );
+  if (!selectedSource) throw new Error("Selected E2E distribution has no exact source checkout");
   const checkout = path.join(input.workRoot, "checkout");
   fs.mkdirSync(path.dirname(checkout), { recursive: true, mode: 0o700 });
-  execFileSync("git", ["clone", "--local", "--no-checkout", input.base.checkout, checkout], {
+  execFileSync("git", ["clone", "--local", "--no-checkout", selectedSource.checkout, checkout], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  git(checkout, ["checkout", "-B", "vibestudio-e2e-case", input.base.pin.commit]);
+  git(checkout, ["checkout", "-B", "vibestudio-e2e-case", selectedPin.commit]);
   input.configureSource(checkout);
   regenerateRootRuntimeManifest(checkout);
   git(checkout, ["add", "-A"]);
@@ -206,7 +217,7 @@ export async function deriveE2eRootTemplate(input: {
   const gitClient = new GitClient();
   const { pin } = await inspectRootTemplateCheckout({
     checkout,
-    url: input.base.pin.url,
+    url: selectedPin.url,
     git: gitClient,
     sink: hashOnlySink,
   });
@@ -216,7 +227,16 @@ export async function deriveE2eRootTemplate(input: {
     templateRoot: path.join(input.workRoot, "root-template"),
     gitClient,
   });
-  return { ...input.base, pin, checkout, materializedSource };
+  return {
+    ...input.base,
+    pin,
+    checkout,
+    materializedSource,
+    defaultTemplates: input.distribution
+      ? { ...input.base.defaultTemplates, [input.distribution]: pin }
+      : input.base.defaultTemplates,
+    sources: [...input.base.sources, { pin, checkout }],
+  };
 }
 
 /**

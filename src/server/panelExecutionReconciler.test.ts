@@ -11,69 +11,81 @@ import { PanelExecutionReconciler } from "./panelExecutionReconciler.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { WorkspaceDOTestable } from "../../packages/builtin/src/workspace-state/testFixture.js";
 
-it("activates durable distribution seeds through ordinary preparing-panel recovery", async () => {
-  const { instance } = await createTestDO(WorkspaceDOTestable);
-  const [seed] = instance.initializePanels([{ source: "about/new", stateArgs: { welcome: true } }]);
-  const activate = vi.fn(async (spec: RuntimeCodePanelEntityCreateSpec) => {
-    const active = instance.entityAdvanceExecution({
-      kind: "panel",
-      source: { repoPath: spec.execution.source, effectiveVersion: "seed-ev" },
-      key: spec.key!,
-      contextId: spec.contextId!,
-      stateArgs: spec.stateArgs,
-      parentId: "server",
-      activeBuildKey: "a".repeat(64),
-      activeExecutionDigest: "b".repeat(64),
-      activeAuthority: { requests: [], provides: [] },
+it.each([
+  { source: "about/new", stateArgs: { welcome: true } },
+  {
+    source: "panels/chat",
+    stateArgs: {
+      initialPrompt: "I just opened this workspace for the first time, help me get onboarded.",
+      systemPrompt: "Read skills/onboarding/SKILL.md and render onboarding-setup-overview inline.",
+    },
+  },
+])(
+  "activates durable $source distribution seeds through ordinary preparing-panel recovery",
+  async (initialPanel) => {
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const [seed] = instance.initializePanels([initialPanel]);
+    const activate = vi.fn(async (spec: RuntimeCodePanelEntityCreateSpec) => {
+      const active = instance.entityAdvanceExecution({
+        kind: "panel",
+        source: { repoPath: spec.execution.source, effectiveVersion: "seed-ev" },
+        key: spec.key!,
+        contextId: spec.contextId!,
+        stateArgs: spec.stateArgs,
+        parentId: "server",
+        activeBuildKey: "a".repeat(64),
+        activeExecutionDigest: "b".repeat(64),
+        activeAuthority: { requests: [], provides: [] },
+      });
+      return {
+        id: active.id,
+        kind: "panel" as const,
+        source: active.source,
+        contextId: active.contextId,
+        targetId: active.id,
+      };
     });
-    return {
-      id: active.id,
-      kind: "panel" as const,
-      source: active.source,
-      contextId: active.contextId,
-      targetId: active.id,
-    };
-  });
-  const onError = vi.fn();
-  const reconciler = new PanelExecutionReconciler({
-    getDetail: async (slotId) => instance.panelTreeDetail(slotId),
-    resolveSlotByEntity: async (id) => instance.slotResolveByEntity(id),
-    listPreparingPanels: async () => instance.entityListPreparingByKind("panel"),
-    activate,
-    onError,
-  });
-  await reconciler.recoverPreparingPanels();
-  expect(onError).not.toHaveBeenCalled();
-  expect(activate).toHaveBeenCalledWith({
-    kind: "panel",
-    execution: { surface: "code", source: "about/new" },
-    key: seed!.entity.key,
-    contextId: seed!.entity.contextId,
-    stateArgs: { welcome: true },
-  });
-  expect(instance.panelTreeDetail(seed!.slot.slot_id)?.entity.status).toBe("active");
-  // Exercise the real native lease boundary: reserved runtime keys must use
-  // the same panel:nav- namespace as ordinary panel navigation.
-  const coordinator = new PanelRuntimeCoordinator();
-  coordinator.registerClient({
-    clientSessionId: "seed-viewer",
-    ownerCallerId: "shell:seed-viewer",
-    label: "Seed viewer",
-    platform: "desktop",
-  });
-  const acquisition = coordinator.acquire(seed!.entity.id, {
-    slotId: seed!.slot.slot_id,
-    clientSessionId: "seed-viewer",
-    connectionId: "seed-connection",
-  });
-  expect(acquisition.acquired).toBe(true);
-  expect(coordinator.authorizePanelConnection(seed!.entity.id, "seed-connection")).toEqual({
-    ok: true,
-  });
-  coordinator.release(seed!.entity.id, "seed-connection");
-  await reconciler.recoverPreparingPanels();
-  expect(activate).toHaveBeenCalledOnce();
-});
+    const onError = vi.fn();
+    const reconciler = new PanelExecutionReconciler({
+      getDetail: async (slotId) => instance.panelTreeDetail(slotId),
+      resolveSlotByEntity: async (id) => instance.slotResolveByEntity(id),
+      listPreparingPanels: async () => instance.entityListPreparingByKind("panel"),
+      activate,
+      onError,
+    });
+    await reconciler.recoverPreparingPanels();
+    expect(onError).not.toHaveBeenCalled();
+    expect(activate).toHaveBeenCalledWith({
+      kind: "panel",
+      execution: { surface: "code", source: initialPanel.source },
+      key: seed!.entity.key,
+      contextId: seed!.entity.contextId,
+      stateArgs: initialPanel.stateArgs,
+    });
+    expect(instance.panelTreeDetail(seed!.slot.slot_id)?.entity.status).toBe("active");
+    // Exercise the real native lease boundary: reserved runtime keys must use
+    // the same panel:nav- namespace as ordinary panel navigation.
+    const coordinator = new PanelRuntimeCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "seed-viewer",
+      ownerCallerId: "shell:seed-viewer",
+      label: "Seed viewer",
+      platform: "desktop",
+    });
+    const acquisition = coordinator.acquire(seed!.entity.id, {
+      slotId: seed!.slot.slot_id,
+      clientSessionId: "seed-viewer",
+      connectionId: "seed-connection",
+    });
+    expect(acquisition.acquired).toBe(true);
+    expect(coordinator.authorizePanelConnection(seed!.entity.id, "seed-connection")).toEqual({
+      ok: true,
+    });
+    coordinator.release(seed!.entity.id, "seed-connection");
+    await reconciler.recoverPreparingPanels();
+    expect(activate).toHaveBeenCalledOnce();
+  }
+);
 
 const entity = {
   id: "panel:nav-entry-1",

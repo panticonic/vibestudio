@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end Android smoke test for a fresh internal app install accepting a
 // vibestudio://connect QR/deep link, activating the served RN bundle, connecting
-// the workspace app, and rendering a panel WebView.
+// the workspace app, and rendering the automatic Personal onboarding chat.
 
 import fsp from "node:fs/promises";
 import net from "node:net";
@@ -35,6 +35,8 @@ const androidDir = path.join(repoRoot, "apps", "mobile", "android");
 const defaultPackage = "app.vibestudio.mobile.internal";
 const defaultActivity = "app.vibestudio.mobile.MainActivity";
 const smokePrefix = "[VibestudioMobileSmoke]";
+const initialOnboardingPrompt =
+  "I just opened this workspace for the first time, help me get onboarded.";
 const screenshotDir = path.join(repoRoot, "test-results", "mobile-smoke");
 // Capture this before the smoke replaces HOME/XDG_CONFIG_HOME for its isolated
 // mutable server state. Content-addressed, receipt-validated build artifacts
@@ -165,8 +167,9 @@ Runner options:
   --agent-timeout-ms <ms>
                        Time to wait for the initial agent response after the
                        panel WebView loads. Defaults to 300000.
-  --skip-agent-turn    Validate pairing, panel rendering, durable cache, and
-                       recovery without waiting for the independent agent turn.
+  --skip-agent-turn    Require automatic Personal onboarding and its rendered
+                       initial prompt, but skip waiting for model completion.
+                       Pairing, durable cache, and recovery remain required.
   --keep-state         Retire owned processes but retain isolated smoke state
                        for inspection instead of deleting its directory.
   --help              Show this help message.
@@ -394,82 +397,19 @@ async function openPanelWebViewDebugger(
 
 async function assertMountedLauncher(socket, deadlineMs) {
   while (Date.now() < deadlineMs) {
-    const mounted = await cdpEvaluate(socket,
-      'Boolean(document.querySelector("#root textarea.launcher-input"))');
+    const mounted = await cdpEvaluate(
+      socket,
+      'Boolean(document.querySelector("#root textarea.launcher-input"))'
+    );
     if (mounted) {
       console.log("[mobile-smoke] Workspace launcher rendered its interactive React content");
       return;
     }
     await sleep(100);
   }
-  throw new Error("The workspace launcher reported ready but did not mount its interactive content");
-}
-
-async function dismissVisibleNotifications(device) {
-  const xml = await dumpWindowXml(device);
-  for (const label of collectWindowLabels(xml).filter((text) => text.startsWith("Dismiss notification:"))) {
-    await tapVisibleNode(device, xml, label);
-  }
-}
-
-async function createPanelFromChrome(device, logcat, deadlineMs) {
-  const before = logcat.phaseCount("workspace-panel-create-requested");
-  while (Date.now() < deadlineMs) {
-    if (logcat.phaseCount("workspace-panel-create-requested") > before) return;
-    await dismissVisibleNotifications(device);
-    const xml = await dumpWindowXml(device);
-    await tapVisibleNode(device, xml, "Create new panel");
-    await sleep(250);
-  }
-  throw new Error("The mobile app did not acknowledge the New panel gesture");
-}
-
-async function submitPanelLauncherPrompt(device, packageName, value, deadlineMs) {
-  const debuggerSession = await openPanelWebViewDebugger(
-    device,
-    packageName,
-    "/about/new/",
-    deadlineMs
+  throw new Error(
+    "The workspace launcher reported ready but did not mount its interactive content"
   );
-  try {
-    await assertMountedLauncher(debuggerSession.socket, deadlineMs);
-    const focused = await cdpEvaluate(
-      debuggerSession.socket,
-      `(() => { const input = document.querySelector("textarea.launcher-input"); ` +
-        `if (!(input instanceof HTMLTextAreaElement)) return false; input.focus(); return true; })()`
-    );
-    if (focused !== true) throw new Error("The launcher textarea is not present");
-    await cdpCommand(debuggerSession.socket, "Input.insertText", { text: value });
-    while (Date.now() < deadlineMs) {
-      const ready = await cdpEvaluate(
-        debuggerSession.socket,
-        `(() => { const input = document.querySelector("textarea.launcher-input"); ` +
-          `const selected = document.querySelector('[role="option"][aria-selected="true"]'); ` +
-          `return input?.value === ${JSON.stringify(value)} && selected !== null; })()`
-      );
-      if (ready === true) {
-        const key = {
-          key: "Enter",
-          code: "Enter",
-          windowsVirtualKeyCode: 13,
-          nativeVirtualKeyCode: 13,
-        };
-        await cdpCommand(debuggerSession.socket, "Input.dispatchKeyEvent", {
-          ...key,
-          type: "rawKeyDown",
-        });
-        await cdpCommand(debuggerSession.socket, "Input.dispatchKeyEvent", {
-          ...key,
-          type: "keyUp",
-        });
-        return;
-      }
-      await sleep(100);
-    }
-    throw new Error("Timed out waiting for the launcher to accept input and select a destination");
-  } finally {
-    await debuggerSession.close();
-  }
 }
 
 async function assertWorkspaceBrowserPermission(device, packageName, deadlineMs) {
@@ -594,28 +534,53 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
         foundCookies = true;
         break;
       }
-      await adb(device, "shell", "input", "swipe", String(Math.round(dimensions.width / 2)),
-        String(Math.round(dimensions.height * 0.8)), String(Math.round(dimensions.width / 2)),
-        String(Math.round(dimensions.height * 0.35)), "350");
+      await adb(
+        device,
+        "shell",
+        "input",
+        "swipe",
+        String(Math.round(dimensions.width / 2)),
+        String(Math.round(dimensions.height * 0.8)),
+        String(Math.round(dimensions.width / 2)),
+        String(Math.round(dimensions.height * 0.35)),
+        "350"
+      );
     }
     if (!foundCookies) {
       const diagnosticDir = path.join(repoRoot, "test-results", "mobile-smoke");
       await fsp.mkdir(diagnosticDir, { recursive: true });
-      await fsp.writeFile(path.join(diagnosticDir, "workspace-settings-failure.xml"), await dumpWindowXml(device));
-      await fsp.writeFile(path.join(diagnosticDir, "workspace-settings-failure.png"), (await adbCaptureBuffer(device, "exec-out", "screencap", "-p")).stdout);
+      await fsp.writeFile(
+        path.join(diagnosticDir, "workspace-settings-failure.xml"),
+        await dumpWindowXml(device)
+      );
+      await fsp.writeFile(
+        path.join(diagnosticDir, "workspace-settings-failure.png"),
+        (await adbCaptureBuffer(device, "exec-out", "screencap", "-p")).stdout
+      );
       throw new Error("Captured workspace website cookies setting is missing");
     }
     await tapButtonByText(device, "Clear cookies", deadlineMs);
-    while ((await cdpEvaluate(system.socket, "document.cookie")).includes("vibestudio_workspace_probe=")) {
-      if (Date.now() >= deadlineMs) throw new Error("Clearing System cookies did not clear its native profile");
+    while (
+      (await cdpEvaluate(system.socket, "document.cookie")).includes("vibestudio_workspace_probe=")
+    ) {
+      if (Date.now() >= deadlineMs)
+        throw new Error("Clearing System cookies did not clear its native profile");
       await sleep(100);
     }
-    if (!(await cdpEvaluate(personal.socket, "document.cookie")).includes("vibestudio_workspace_probe=personal")) {
+    if (
+      !(await cdpEvaluate(personal.socket, "document.cookie")).includes(
+        "vibestudio_workspace_probe=personal"
+      )
+    ) {
       throw new Error("Clearing System cookies affected the neighboring Personal profile");
     }
-    console.log("[mobile-smoke] Native cookies: clearing System preserved the neighboring Personal profile");
-    await fsp.writeFile(path.join(screenshotDir, "workspace-cookies-cleared.png"),
-      (await adbCaptureBuffer(device, "exec-out", "screencap", "-p")).stdout);
+    console.log(
+      "[mobile-smoke] Native cookies: clearing System preserved the neighboring Personal profile"
+    );
+    await fsp.writeFile(
+      path.join(screenshotDir, "workspace-cookies-cleared.png"),
+      (await adbCaptureBuffer(device, "exec-out", "screencap", "-p")).stdout
+    );
     await tapButtonByText(device, "Back", deadlineMs);
     await dismissNavigationDrawerIfOpen(device);
     await cdpEvaluate(
@@ -633,13 +598,23 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
       }
       const screenshot = await adbCaptureBuffer(device, "exec-out", "screencap", "-p");
       const { width, height } = decodePng(screenshot.stdout);
-      await adb(device, "shell", "input", "swipe", String(Math.round(width * 0.3)),
-        String(Math.round(height * 0.4)), String(Math.round(width * 0.3)),
-        String(Math.round(height * 0.8)), "350");
+      await adb(
+        device,
+        "shell",
+        "input",
+        "swipe",
+        String(Math.round(width * 0.3)),
+        String(Math.round(height * 0.4)),
+        String(Math.round(width * 0.3)),
+        String(Math.round(height * 0.8)),
+        "350"
+      );
     }
     if (!openedPersonal) {
       const xml = await dumpWindowXml(device);
-      throw new Error(`Personal workspace is absent from the stacked drawer: ${summarizeLabels(collectWindowLabels(xml))}`);
+      throw new Error(
+        `Personal workspace is absent from the stacked drawer: ${summarizeLabels(collectWindowLabels(xml))}`
+      );
     }
     await dismissNavigationDrawerIfOpen(device);
     if ((await cdpEvaluate(personal.socket, "location.href")) !== originalUrl) {
@@ -654,7 +629,7 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
   }
 }
 
-async function waitForChatPanelRendered(device, packageName, expectedMessage, deadlineMs) {
+async function waitForOnboardingChatRendered(device, packageName, deadlineMs) {
   const debuggerSession = await openPanelWebViewDebugger(
     device,
     packageName,
@@ -667,18 +642,18 @@ async function waitForChatPanelRendered(device, packageName, expectedMessage, de
       const state = await cdpEvaluate(
         debuggerSession.socket,
         `(() => { const text = document.body?.innerText?.trim() ?? ""; ` +
-          `const placeholder = ["Loading conversation…", "Starting chat…", ` +
-          `"Loading your conversation", "Preparing model choices", ` +
-          `"Preparing your agent", "Waiting for workspace review"]` +
-          `.some((copy) => text.includes(copy)); ` +
-          `return { rendered: ${
-            expectedMessage === null
-              ? "text.length > 0 && !placeholder"
-              : `text.includes(${JSON.stringify(expectedMessage)})`
-          }, ` +
-          `text: text.slice(0, 500) }; })()`
+          `return { rendered: text.includes(${JSON.stringify(initialOnboardingPrompt)}), ` +
+          `text: text.slice(0, 500), workspaceId: globalThis.__vibestudioGatewayConfig?.workspace, ` +
+          `initialPrompt: globalThis.__vibestudioStateArgs?.initialPrompt }; })()`
       );
-      if (state?.rendered === true) return;
+      if (state?.rendered === true) {
+        if (state.initialPrompt !== initialOnboardingPrompt) {
+          throw new Error(
+            "The mounted chat did not receive the shipped automatic onboarding prompt"
+          );
+        }
+        return state;
+      }
       lastBodyText = typeof state?.text === "string" ? state.text : lastBodyText;
       await sleep(100);
     }
@@ -1313,22 +1288,32 @@ function unescapeXmlAttribute(value) {
     .replace(/&amp;/g, "&");
 }
 
-/**
- * Probe the durable turn state of whatever workspace the run actually created.
- *
- * The name is not the smoke's to choose: the workspace is created during
- * pairing, from the phone, so naming a directory here is a guess. Guessing
- * `default` is how this probe silently degraded — the run creates
- * `workspaces/mobile-smoke`, so every lookup landed on a path that does not
- * exist, reported "trajectory_turns table not found yet" forever, and timed the
- * smoke out while the panel on screen plainly showed the completed turn. Scan
- * the workspaces root instead; a missing directory then means no workspace, not
- * a misspelled one.
- */
+/** Resolve the mounted chat's exact immutable Personal designation. */
+async function resolvePersonalStateDir(ready, onboarding) {
+  if (typeof onboarding.workspaceId !== "string" || !onboarding.workspaceId) {
+    throw new Error("The automatic onboarding chat did not expose its workspace identity");
+  }
+  const rows = await sqliteJson(
+    path.join(path.dirname(ready.workspacesRoot), "server-auth", "identity.db"),
+    `SELECT w.name FROM user_workspaces AS u
+     JOIN workspaces AS w ON w.workspace_id = u.workspace_id
+     WHERE u.role = 'personal' AND u.workspace_id = ${sqlString(onboarding.workspaceId)}`
+  );
+  if (rows.length !== 1 || typeof rows[0].name !== "string") {
+    throw new Error(
+      "The automatic onboarding chat is not owned by the designated Personal workspace"
+    );
+  }
+  return path.join(ready.workspacesRoot, rows[0].name, "state");
+}
+
+/** Probe only the workspace that owns the visibly rendered onboarding chat. */
 function createAgentTurnProbe(ready) {
-  const workspacesRoot = typeof ready?.workspacesRoot === "string" ? ready.workspacesRoot : "";
+  if (typeof ready?.personalStateDir !== "string" || !ready.personalStateDir) {
+    throw new Error("Agent completion requires the verified Personal onboarding workspace");
+  }
   return {
-    workspacesRoot,
+    stateDir: ready.personalStateDir,
     sqliteFiles: null,
     tableDbs: new Map(),
     warned: false,
@@ -1336,63 +1321,60 @@ function createAgentTurnProbe(ready) {
 }
 
 async function probeInitialAgentTurn(probe) {
-  if (!probe?.workspacesRoot) {
-    return { kind: "unavailable", summary: "ready file did not include workspacesRoot" };
-  }
-
   const turnDbs = await getDatabasesWithTable(probe, "trajectory_turns");
   if (!turnDbs.length) {
     return { kind: "pending", summary: "trajectory_turns table not found yet" };
   }
 
-  let latest = null;
+  let first = null;
   for (const dbPath of turnDbs) {
     const rows = await sqliteJson(
       dbPath,
       `SELECT turn_id, opened_at, closed_at, summary
        FROM trajectory_turns
-       ORDER BY opened_at DESC
+       WHERE opened_at IS NOT NULL
+       ORDER BY opened_at ASC
        LIMIT 1`
     ).catch(() => []);
     for (const row of rows) {
       const openedAt = Date.parse(String(row.opened_at ?? "")) || 0;
-      if (!latest || openedAt > latest.openedAt) {
-        latest = { ...row, openedAt };
+      if (!first || openedAt < first.openedAt) {
+        first = { ...row, openedAt };
       }
     }
   }
 
-  if (!latest?.turn_id) {
+  if (!first?.turn_id) {
     return { kind: "pending", summary: "no agent turn run has started yet" };
   }
 
-  const messageSummary = await countCompletedAssistantMessages(probe, latest.turn_id);
+  const messageSummary = await countCompletedAssistantMessages(probe, first.turn_id);
   if (messageSummary.failedAssistant > 0) {
     return {
       kind: "failed",
-      summary: `${latest.turn_id} failedAssistant=${messageSummary.failedAssistant}`,
+      summary: `${first.turn_id} failedAssistant=${messageSummary.failedAssistant}`,
     };
   }
 
-  const closed = latest.closed_at != null;
+  const closed = first.closed_at != null;
   if (closed && messageSummary.completedAssistant > 0) {
     return {
       kind: "completed",
-      summary: `${latest.turn_id} closed completedAssistant=${messageSummary.completedAssistant}`,
+      summary: `${first.turn_id} closed completedAssistant=${messageSummary.completedAssistant}`,
     };
   }
   if (closed) {
     return {
       kind: "failed",
       summary:
-        `${latest.turn_id} closed without a completed assistant message` +
-        (latest.summary ? ` summary=${latest.summary}` : ""),
+        `${first.turn_id} closed without a completed assistant message` +
+        (first.summary ? ` summary=${first.summary}` : ""),
     };
   }
 
   return {
     kind: "pending",
-    summary: `${latest.turn_id} open completedAssistant=${messageSummary.completedAssistant}`,
+    summary: `${first.turn_id} open completedAssistant=${messageSummary.completedAssistant}`,
   };
 }
 
@@ -1436,22 +1418,9 @@ async function getDatabasesWithTable(probe, table) {
 async function getSqliteFiles(probe) {
   if (probe.sqliteFiles?.length) return probe.sqliteFiles;
   const files = [];
-  for (const stateDir of await workspaceStateDirs(probe.workspacesRoot)) {
-    // `.databases` is the declared home for workspace SQLite (see stateLayout);
-    // fall back to the state root so an older on-disk layout still probes.
-    const databases = await listSqliteFiles(path.join(stateDir, ".databases")).catch(() => []);
-    files.push(...(databases.length ? databases : await listSqliteFiles(stateDir).catch(() => [])));
-  }
+  files.push(...(await listSqliteFiles(path.join(probe.stateDir, ".databases")).catch(() => [])));
   probe.sqliteFiles = [...new Set(files)];
   return probe.sqliteFiles;
-}
-
-/** Every workspace this server has on disk, named by the run rather than by us. */
-async function workspaceStateDirs(workspacesRoot) {
-  const entries = await fsp.readdir(workspacesRoot, { withFileTypes: true }).catch(() => []);
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(workspacesRoot, entry.name, "state"));
 }
 
 async function listSqliteFiles(root) {
@@ -2283,13 +2252,6 @@ async function main() {
     // Panel creation/materialization is another independent lifecycle. Do not
     // let connection or approval work consume its deadline.
     const managedPanelDeadlineMs = Date.now() + options.timeoutMs;
-    // The product no longer creates an onboarding panel during workspace
-    // startup. Exercise the default user path instead of relying on hidden
-    // fixture state: open the standard new-panel launcher directly.
-    if (!options.noTap) {
-      await createPanelFromChrome(options.device, logcat, managedPanelDeadlineMs);
-      console.log("[mobile-smoke] Mobile app accepted New panel through its chrome");
-    }
     for (const phase of [
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
@@ -2299,45 +2261,15 @@ async function main() {
       await waitForPhaseTappingApprovals(options.device, logcat, phase, managedPanelDeadlineMs);
     }
 
-    // Start a real chat from the launcher with intentionally vague wording.
-    // This keeps the agent-turn assertion meaningful after removal of the
-    // automatic onboarding turn and also exercises mobile WebView navigation.
-    if (!options.noTap) {
-      const chatLoadedCount = logcat.phaseCount("workspace-panel-webview-loaded");
-      const chatReadyCount = logcat.phaseCount("workspace-panel-ready");
-      // UIAutomator cannot see DOM controls inside Android WebViews, and the
-      // launcher's autoFocus can be lost while React Native swaps the panel
-      // document into place. Focus the actual semantic DOM control through the
-      // debuggable internal WebView, then dispatch browser input events through
-      // Chromium's input domain. Waiting for the selected option proves React
-      // processed the text before Enter is delivered; no screen coordinates,
-      // native-focus assumptions, or timing sleeps are involved.
-      await submitPanelLauncherPrompt(
-        options.device,
-        options.packageName,
-        "Help me get started",
-        managedPanelDeadlineMs
-      );
-      // about/new navigates its existing managed panel to panels/chat, so this
-      // is a WebView route transition rather than a second panel activation.
-      await logcat.waitForPhaseAfter(
-        "workspace-panel-webview-loaded",
-        chatLoadedCount,
-        options.pairingTimeoutMs
-      );
-      await logcat.waitForPhaseAfter(
-        "workspace-panel-ready",
-        chatReadyCount,
-        options.pairingTimeoutMs
-      );
-      await waitForChatPanelRendered(
-        options.device,
-        options.packageName,
-        "Help me get started",
-        managedPanelDeadlineMs
-      );
-      console.log("[mobile-smoke] Started a chat through the new-panel launcher");
-    }
+    // The shipped Personal distribution must seed and start onboarding itself.
+    // Neither --no-tap nor --skip-agent-turn substitutes a manually created chat.
+    const onboarding = await waitForOnboardingChatRendered(
+      options.device,
+      options.packageName,
+      managedPanelDeadlineMs
+    );
+    readyInfo.personalStateDir = await resolvePersonalStateDir(readyInfo, onboarding);
+    console.log("[mobile-smoke] Automatic Personal onboarding prompt rendered");
     if (await dismissNavigationDrawerIfOpen(options.device)) {
       console.log("[mobile-smoke] Dismissed the native panel drawer before visual validation");
     }
@@ -2401,10 +2333,9 @@ async function main() {
       appRestartPanelReadyCount,
       options.pairingTimeoutMs
     );
-    await waitForChatPanelRendered(
+    await waitForOnboardingChatRendered(
       options.device,
       options.packageName,
-      null,
       Date.now() + options.pairingTimeoutMs
     );
     if (
@@ -2448,6 +2379,7 @@ async function main() {
     );
     readyInfo = {
       ...restartedReady,
+      personalStateDir: readyInfo.personalStateDir,
       workspacesRoot: path.join(serverConfig, "vibestudio", "workspaces"),
     };
     await logcat.waitForPhaseAfter(
@@ -2460,10 +2392,9 @@ async function main() {
     // document lifecycle signals and correctly do not recur here. Assert the
     // shell recovery signal, the still-rendered chat below, and the absence of
     // cacheable pipe misses instead.
-    await waitForChatPanelRendered(
+    await waitForOnboardingChatRendered(
       options.device,
       options.packageName,
-      null,
       Date.now() + options.pairingTimeoutMs
     );
     if (

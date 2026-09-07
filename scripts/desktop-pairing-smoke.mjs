@@ -10,10 +10,11 @@
 // a visually successful frame.
 //
 // The app pairs and connects IN-PROCESS — the chooser no longer relaunches — so
-// the entire flow is observed through a SINGLE Electron launch handle. Cleanup is
-// crash-proof: it never assumes app.process()/app.close() succeed and always
-// SIGKILLs the Electron pid + child server so no orphan process survives
-// a pass or a failure.
+// pairing and recovery retain that Electron launch handle. The optional shared-user
+// scenario owns a second isolated profile and launch. Cleanup runs on pass or
+// failure: local ephemeral launches quit normally, then the retained owned hub
+// PID is checked and any survivors are terminated before temporary state is removed.
+// Remote server processes and every native profile are also owned by this run.
 //
 import fsp from "node:fs/promises";
 import fs from "node:fs";
@@ -34,12 +35,18 @@ import {
   resolveDevelopmentBase,
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
+import { terminateOwnedProcessTree } from "./owned-process-tree.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createMacosTestKeychain } from "./macos-test-keychain.mjs";
 import {
   formatDesktopDiagnostics,
   unexpectedDesktopDiagnostics,
 } from "./lib/desktop-smoke-diagnostics.mjs";
+import {
+  chromePage,
+  nativeRpc,
+  runSharedMemberRevocation,
+} from "./lib/desktop-shared-revocation.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 
@@ -76,10 +83,12 @@ function evaluateElectron(app, pageFunction, arg, label, timeoutMs = ELECTRON_EV
 
 function parseArgs(argv) {
   const options = {
-    timeoutMs: 420_000,
+    timeoutMs: 600_000,
     launchTimeoutMs: 180_000,
     readyFile: defaultReadyFile,
     productionBase: false,
+    sharedMemberRevocation: false,
+    local: false,
     baseCheckout: null,
     help: false,
   };
@@ -98,6 +107,10 @@ function parseArgs(argv) {
       options.baseCheckout = path.resolve(argv[++i] ?? "");
     } else if (arg === "--production-base") {
       options.productionBase = true;
+    } else if (arg === "--local") {
+      options.local = true;
+    } else if (arg === "--shared-member-revocation") {
+      options.sharedMemberRevocation = true;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -123,13 +136,15 @@ Usage:
   node scripts/desktop-pairing-smoke.mjs [options]
 
 Runner options:
-  --timeout-ms <ms>         Time to wait for server readiness. Defaults to 420000.
+  --timeout-ms <ms>         Overall acceptance budget. Defaults to 600000.
   --launch-timeout-ms <ms>  Time to wait for Electron launch and shell load.
                             Defaults to 180000.
   --ready-file <path>       Server ready-file path. Defaults to an OS temp path.
   --base-checkout <dir>     Use this Base checkout for this run only.
   --production-base        Use the canonical pinned production Base instead of
                             the selected development checkout.
+  --local                  Verify account-only local startup instead of remote pairing.
+  --shared-member-revocation Also exercise a second member with an open approval.
   --help                    Show this help message.
 
 The smoke consumes the hub's one-time root desktop invite and connects through
@@ -368,7 +383,7 @@ function hasElectronDisplay() {
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
-async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvironment) {
+async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvironment, register) {
   if (!fs.existsSync(mainPath)) {
     throw new Error(`Electron main entry not found at ${mainPath}. Run pnpm build first.`);
   }
@@ -390,11 +405,16 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
     ...desktopEnvironment.env,
   };
 
+  delete env.VIBESTUDIO_INSTANCE_ROOT;
+  if (!deepLink) env.VIBESTUDIO_INSTANCE_ROOT = path.join(tempRoot, "instance");
+  delete env.VIBESTUDIO_WORKSPACE;
   await fsp.mkdir(env.HOME, { recursive: true });
   await fsp.mkdir(env.XDG_CONFIG_HOME, { recursive: true });
 
   const userDataDir = path.join(tempRoot, "electron-user-data");
-  console.log(`[desktop-smoke] Launching Electron with Iroh pairing deep link`);
+  console.log(
+    `[desktop-smoke] Launching Electron ${deepLink ? "with Iroh pairing deep link" : "with account-only local startup"}`
+  );
   // The desktop shell ingests the pairing material via the vibestudio://connect
   // deep link passed as an argv: protocolHandler.enqueueFirstArgvLink(process.argv)
   // (src/main/index.ts) scans argv on first launch, the bootstrap chooser drains
@@ -405,12 +425,15 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
       "--no-sandbox",
       ...desktopEnvironment.electronArgs,
       `--user-data-dir=${userDataDir}`,
-      mainPath,
-      deepLink,
+      // Load the application package, as pnpm dev does, so Electron uses its
+      // actual version/name metadata when starting the owned local server.
+      repoRoot,
+      ...(deepLink ? [deepLink] : ["--ephemeral"]),
     ],
     env,
     timeout: launchTimeoutMs,
   });
+  register(app);
   const child = app.process();
   child.stdout?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stdout));
   child.stderr?.on("data", (chunk) => prefixAndWrite("electron", chunk.toString(), process.stderr));
@@ -765,6 +788,81 @@ async function waitAndClickHostedShellButton(app, label, timeoutMs) {
   );
 }
 
+async function evaluateHostedChrome(app, expression, label, timeoutMs = 5000) {
+  return evaluateElectron(
+    app,
+    async ({ webContents }, expression) => {
+      const url = globalThis.__testApi?.getHostViewDebugInfo?.().hostedShellUrl;
+      const chrome = webContents
+        .getAllWebContents()
+        .find((entry) => !entry.isDestroyed() && entry.getURL() === url);
+      if (!chrome) throw new Error("Hosted desktop chrome is unavailable");
+      return chrome.executeJavaScript(expression, true);
+    },
+    expression,
+    label,
+    timeoutMs
+  );
+}
+
+async function waitForChromeResult(app, expression, label, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await evaluateHostedChrome(app, expression, label);
+    if (result) return result;
+    await sleep(100);
+  }
+  throw new Error(`Timed out ${label}`);
+}
+
+async function selectWorkspace(app, name, timeoutMs) {
+  const label = `Open ${name}`;
+  const clicked = await waitForChromeResult(
+    app,
+    `(() => {
+    const button = [...document.querySelectorAll('button')].find((entry) =>
+      entry.getAttribute('aria-label') === ${JSON.stringify(label)} && entry.getClientRects().length && !entry.closest('[hidden]'));
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  })()`,
+    `selecting ${name}`,
+    timeoutMs
+  );
+  if (!clicked) throw new Error(`Could not select ${name}`);
+  await waitForChromeResult(
+    app,
+    `([...document.querySelectorAll('button')].some((entry) =>
+    entry.getAttribute('aria-label') === ${JSON.stringify(label)} && entry.getAttribute('aria-current') === 'location'))`,
+    `waiting for ${name} workspace focus`,
+    timeoutMs
+  );
+}
+
+async function workspaceTreeIds(app, name, timeoutMs) {
+  return waitForChromeResult(
+    app,
+    `(() => {
+    const section = [...document.querySelectorAll('.workspace-section')].find((entry) =>
+      entry.getAttribute('aria-label') === ${JSON.stringify(`${name} workspace`)});
+    const ids = [...(section?.querySelectorAll('[data-panel-id]') ?? [])].map((entry) => entry.getAttribute('data-panel-id'));
+    return ids.length ? [...new Set(ids)].sort() : null;
+  })()`,
+    `reading ${name} workspace tree`,
+    timeoutMs
+  );
+}
+
+async function waitForConnectionStatus(app, connected, timeoutMs) {
+  return waitForChromeResult(
+    app,
+    `([...document.querySelectorAll('button[aria-label]')].some((entry) =>
+    entry.getClientRects().length && ${connected ? "/^Connected to /" : "/^(Disconnected from |Reconnecting to server|Connecting to server)/"}.test(entry.getAttribute('aria-label'))))`,
+    `waiting for ${connected ? "restored" : "interrupted"} server connection`,
+    timeoutMs
+  );
+}
+
 async function dismissConnectionDialog(app) {
   return evaluateElectron(
     app,
@@ -922,6 +1020,205 @@ async function getHostViewDebugInfo(app) {
   );
 }
 
+async function readInitialPanelHistory(app, webContentsId, workspaceId) {
+  return evaluateElectron(
+    app,
+    async ({ webContents }, { webContentsId, workspaceId }) => {
+      const contents = webContents.fromId(webContentsId);
+      if (!contents) throw new Error("Initial panel WebContents is missing");
+      const query = async (workspaceId) => {
+        const bridge = window.__vibestudioShell;
+        const entityId = window.__vibestudioEntityId;
+        if (!bridge || !entityId || window.__vibestudioSourceRepo !== "about/new")
+          throw new Error("History acceptance must run inside the actual New panel");
+        const requestId = `native-history-${crypto.randomUUID()}`;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            off();
+            reject(new Error("Initial panel history query did not settle"));
+          }, 15_000);
+          const off = bridge.onEnvelope(({ message }) => {
+            if (message.type !== "response" || message.requestId !== requestId) return;
+            clearTimeout(timer);
+            off();
+            if ("error" in message) {
+              reject(new Error(`Initial panel history query failed: ${message.error}`));
+            } else if (!Array.isArray(message.result)) {
+              reject(new Error("Initial panel history returned an invalid result"));
+            } else resolve({ rowCount: message.result.length });
+          });
+          const caller = { callerId: entityId, callerKind: "panel", workspaceId };
+          Promise.resolve(
+            bridge.postEnvelope({
+              from: entityId,
+              target: "main",
+              delivery: { caller },
+              provenance: [caller],
+              message: {
+                type: "request",
+                requestId,
+                fromId: entityId,
+                method: "extensions.invokeProvider",
+                args: ["browserData", "getHistory", [{ limit: 60 }]],
+              },
+            })
+          ).catch((error) => {
+            clearTimeout(timer);
+            off();
+            reject(error);
+          });
+        });
+      };
+      return contents.executeJavaScript(`(${query.toString()})(${JSON.stringify(workspaceId)})`);
+    },
+    { webContentsId, workspaceId },
+    "reading history through the actual initial panel identity",
+    20_000
+  );
+}
+
+async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) {
+  let latestObservation = null;
+  while (Date.now() < deadline) {
+    if (await clickDesktopButton(app, /^Add to workspace$/i)) {
+      await sleep(750);
+      continue;
+    }
+    const layout = await evaluateHostedChrome(
+      app,
+      `(() => {
+      const runtime = [...document.querySelectorAll('.workspace-desktop-runtime')]
+        .find((element) => element.getClientRects().length && !element.closest('[hidden]'));
+      const pane = runtime?.querySelector('[data-pane-panel-id]');
+      if (!runtime || !pane) return null;
+      const available = runtime.getBoundingClientRect();
+      const bounds = pane.getBoundingClientRect();
+      return { panelId: pane.getAttribute('data-pane-panel-id'),
+        availableWidth: available.width, paneWidth: bounds.width,
+        rightGap: available.right - bounds.right };
+    })()`,
+      "reading the initial Personal pane geometry"
+    );
+    if (layout?.panelId) {
+      const page = await chromePage(app, deadline);
+      const snapshot = await nativeRpc(page, workspaceId, "view.getLocalPresentation", [
+        layout.panelId,
+      ]);
+      if (snapshot.presentation.state === "failed")
+        throw new Error(`Initial Personal panel failed: ${JSON.stringify(snapshot.presentation)}`);
+      if (snapshot.presentation.state !== "ready") {
+        await sleep(250);
+        continue;
+      }
+      const slot = await evaluateElectron(
+        app,
+        ({ BaseWindow }, webContentsId) => {
+          const view = BaseWindow.getAllWindows()
+            .flatMap((window) => window.contentView.children)
+            .find((child) => child.webContents?.id === webContentsId);
+          return view ? { bounds: view.getBounds(), visible: view.getVisible() } : null;
+        },
+        snapshot.presentation.webContentsId,
+        "reading the initial Personal native view"
+      );
+      if (slot?.visible && slot.bounds.width > 0 && slot.bounds.height > 0) {
+        if (layout.paneWidth < layout.availableWidth * 0.95 || layout.rightGap > 12)
+          throw new Error(
+            `Initial Personal pane does not fill its workspace: ${JSON.stringify(layout)}`
+          );
+        const rendered = await evaluateElectron(
+          app,
+          async ({ webContents }, id) => {
+            const contents = webContents.fromId(id);
+            if (!contents) throw new Error("Personal panel WebContents is missing");
+            const observation = await contents.executeJavaScript(`(() => {
+              const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
+              const args = window.__vibestudioStateArgs ?? {};
+              const setup = document.querySelector('[data-inline-ui-id="onboarding-setup-overview"]');
+              return {
+                source: window.__vibestudioSourceRepo,
+                text: document.body.innerText,
+                configuredPrompt: args.initialPrompt === initialPrompt,
+                configuredSystemPrompt: typeof args.systemPrompt === "string" &&
+                  args.systemPrompt.includes("Vibestudio onboarding assistant"),
+                submittedPrompt: [...document.querySelectorAll('[data-message-role="player"]')]
+                  .some((message) => message.textContent.includes(initialPrompt)),
+                setupReady: Boolean(setup?.textContent.includes("Your Vibestudio") &&
+                  setup.querySelector('[aria-label="Refresh setup overview"]'))
+              };
+            })()`);
+            return {
+              ...observation,
+              image: (await contents.capturePage()).toPNG().toString("base64"),
+            };
+          },
+          snapshot.presentation.webContentsId,
+          "reading the captured Personal panel experience"
+        );
+        const observed = {
+          source: rendered.source,
+          configuredPrompt: rendered.configuredPrompt,
+          configuredSystemPrompt: rendered.configuredSystemPrompt,
+          submittedPrompt: rendered.submittedPrompt,
+          setupReady: rendered.setupReady,
+        };
+        if (JSON.stringify(observed) !== JSON.stringify(latestObservation)) {
+          latestObservation = observed;
+          console.log(`[desktop-smoke] Captured Personal panel: ${JSON.stringify(observed)}`);
+        }
+        if (rendered.source !== expectedSource) {
+          await sleep(250);
+          continue;
+        }
+        let history;
+        if (expectedSource === "panels/chat") {
+          if (!rendered.configuredPrompt || !rendered.configuredSystemPrompt)
+            throw new Error("Personal initial chat lost its configured onboarding prompt options");
+          if (!rendered.submittedPrompt || !rendered.setupReady) {
+            await sleep(500);
+            continue;
+          }
+        } else {
+          if (!rendered.text.includes("Jump to a panel")) {
+            await sleep(250);
+            continue;
+          }
+          history = await readInitialPanelHistory(
+            app,
+            snapshot.presentation.webContentsId,
+            workspaceId
+          );
+          if (rendered.text.includes("History suggestions couldn't be loaded."))
+            throw new Error("Personal New panel displayed its canonical history-query failure");
+          if (rendered.text.includes("The panel catalog could not be loaded."))
+            throw new Error("Personal New panel could not load its workspace panel catalog");
+        }
+        const artifactRoot = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
+        await fsp.mkdir(artifactRoot, { recursive: true, mode: 0o700 });
+        const screenshotPath = path.join(
+          artifactRoot,
+          `personal-${expectedSource.split("/").at(-1)}-${Date.now()}.png`
+        );
+        await fsp.writeFile(screenshotPath, Buffer.from(rendered.image, "base64"), { mode: 0o600 });
+        return {
+          ...layout,
+          nativeWidth: slot.bounds.width,
+          nativeHeight: slot.bounds.height,
+          source: rendered.source,
+          ...(history
+            ? { history }
+            : { submittedPrompt: rendered.submittedPrompt, setupReady: rendered.setupReady }),
+          screenshotPath,
+        };
+      }
+    }
+    await sleep(250);
+  }
+  throw new Error(
+    `Personal ${expectedSource} did not complete its native experience within the acceptance deadline: ${JSON.stringify(latestObservation)}`
+  );
+}
+
 async function getPanelTree(app) {
   return evaluateElectron(
     app,
@@ -934,7 +1231,7 @@ async function getPanelTree(app) {
   );
 }
 
-async function waitForRenderedPanel(app, timeoutMs) {
+async function waitForSystemNewPanel(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
   let workspaceInstallApprovals = 0;
@@ -962,8 +1259,7 @@ async function waitForRenderedPanel(app, timeoutMs) {
           if (initializationFailure) return { initializationFailure };
 
           const panels = testApi.getPanelTree();
-          const panel =
-            panels.find((entry) => entry.snapshot?.source === "panels/chat") ?? panels[0];
+          const panel = panels.find((entry) => entry.snapshot?.source === "about/new");
           if (!panel) return { panel: null };
           const readiness = await testApi.getPanelReadiness(panel.id);
           let text = "";
@@ -991,49 +1287,17 @@ async function waitForRenderedPanel(app, timeoutMs) {
         `Desktop panel initialization failed: ${JSON.stringify(latest.initializationFailure)}`
       );
     }
-    if (latest.readiness?.terminal && latest.readiness.nativeSlotBound) {
+    if (
+      latest.readiness?.terminal &&
+      latest.readiness.nativeSlotBound &&
+      latest.text.includes("Jump to a panel")
+    ) {
       return { ...latest, workspaceInstallApprovals };
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(
     `Timed out waiting for a ready, native-bound panel surface. Last state: ${JSON.stringify(latest)}`
-  );
-}
-
-const CHAT_STARTUP_COPY = [
-  "Loading your conversation",
-  "Preparing model choices",
-  "Preparing your agent",
-  "Waiting for workspace review",
-];
-
-async function waitForChatExperienceReady(app, panelId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let latestText = "";
-  while (Date.now() < deadline) {
-    latestText = await evaluateElectron(
-      app,
-      async (_electron, id) => {
-        const testApi = globalThis.__testApi;
-        if (!testApi) throw new Error("Desktop test API is not available");
-        return (await testApi.getPanelText(id)).replace(/\s+/g, " ").trim();
-      },
-      panelId,
-      "waiting for the chat experience to become ready",
-      Math.min(30_000, Math.max(1_000, deadline - Date.now()))
-    ).catch((error) => {
-      if (error instanceof Error && error.message.includes("evaluation timed out"))
-        return latestText;
-      throw error;
-    });
-    if (latestText && CHAT_STARTUP_COPY.every((copy) => !latestText.includes(copy))) {
-      return latestText.slice(0, 500);
-    }
-    await sleep(250);
-  }
-  throw new Error(
-    `Chat panel remained in its startup experience after its native surface was ready: ${JSON.stringify(latestText.slice(0, 800))}`
   );
 }
 
@@ -1154,8 +1418,7 @@ async function createAndWaitForNewPanel(app, existingPanelIds, timeoutMs) {
 }
 
 async function saveScreenshot(app) {
-  const pages = app.windows();
-  const page = pages[0] ?? (await app.firstWindow({ timeout: 5_000 }));
+  const page = await chromePage(app, Date.now() + 5_000);
   await fsp.mkdir(screenshotDir, { recursive: true });
   const screenshotPath = path.join(
     screenshotDir,
@@ -1211,6 +1474,8 @@ async function main() {
   }
 
   const children = [];
+  const desktopApps = [];
+  const desktopEnvironments = [];
   let electronApp = null;
   let cleanupPromise;
   let tempRoot = "";
@@ -1220,12 +1485,61 @@ async function main() {
   const cleanup = () => {
     if (cleanupPromise) return cleanupPromise;
     cleanupPromise = (async () => {
-      // closeElectron is crash-proof, but wrap anyway so a throw can never strand
-      // the child server killed below.
-      try {
-        await closeElectron(electronApp);
-      } catch {
-        // ignore — children are still killed below.
+      const cleanupErrors = [];
+      let localTreesGone = true;
+      // Attempt every registered owner even when one cleanup reports failure.
+      for (const app of desktopApps.toReversed()) {
+        try {
+          if (options.local) {
+            // The normal ephemeral quit owns ordered runtime and hub shutdown.
+            // Retain its exact ready PID before the inspector/app can disappear,
+            // so a crashed native process cannot orphan its detached hub.
+            let hubPid;
+            try {
+              const ready = parseHubReadyPayload(
+                JSON.parse(
+                  await fsp.readFile(
+                    path.join(tempRoot, "instance", "server-auth", "hub-ready.json"),
+                    "utf8"
+                  )
+                )
+              );
+              hubPid = ready.pid;
+            } catch (error) {
+              if (error.code !== "ENOENT") throw error;
+            }
+            let timer;
+            try {
+              await Promise.race([
+                app.close(),
+                new Promise((_, reject) => {
+                  timer = setTimeout(
+                    () => reject(new Error("Local native quit timed out")),
+                    90_000
+                  );
+                }),
+              ]);
+            } catch {
+              // Always prove the retained hub is gone, even after native failure.
+            } finally {
+              clearTimeout(timer);
+            }
+            if (hubPid) {
+              const result = await terminateOwnedProcessTree(hubPid);
+              if (!result.gone)
+                throw new Error(result.detail ?? "Local desktop hub survived cleanup");
+            }
+          }
+        } catch (error) {
+          // Continue closing every owner, but retain a local profile whose
+          // detached hub could still be using it and report the failed proof.
+          if (options.local) {
+            localTreesGone = false;
+            cleanupErrors.push(error);
+          }
+        } finally {
+          await closeElectron(app);
+        }
       }
       // Processes are registered in dependency order (session bus, keyring,
       // server). Stop and await them in reverse order so a dependent
@@ -1247,10 +1561,22 @@ async function main() {
       try {
         await fsp.unlink(options.readyFile);
       } catch {}
-      desktopEnvironment?.dispose?.();
-      if (tempRoot) {
-        await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+      for (const environment of desktopEnvironments.toReversed()) {
+        try {
+          await environment.dispose?.();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
       }
+      if (tempRoot && localTreesGone) {
+        try {
+          await fsp.rm(tempRoot, { recursive: true, force: true });
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      if (cleanupErrors.length)
+        throw new AggregateError(cleanupErrors, "Desktop smoke cleanup failed");
     })();
     return cleanupPromise;
   };
@@ -1271,6 +1597,7 @@ async function main() {
       process.platform === "darwin"
         ? createMacosTestKeychain({ home: path.join(tempRoot, "home"), electronBinary })
         : await startEphemeralLinuxSecretService(tempRoot, children);
+    desktopEnvironments.push(desktopEnvironment);
 
     // 1. Start the same remote-serve launcher users run. No relay override is
     // supplied, so this exercises the production public-relay defaults.
@@ -1291,6 +1618,8 @@ async function main() {
       HOME: serverHome,
       XDG_CONFIG_HOME: serverConfig,
     };
+    delete serverEnv.VIBESTUDIO_INSTANCE_ROOT;
+    delete serverEnv.VIBESTUDIO_WORKSPACE;
     const developmentBase = await resolveDevelopmentBase({
       repoRoot,
       checkpointTarget: path.join(tempRoot, "base-checkpoint"),
@@ -1319,6 +1648,94 @@ async function main() {
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
       console.log("[desktop-smoke] Base: canonical pinned production release");
+    }
+    if (options.local) {
+      const sourceEnvironment = Object.fromEntries(
+        Object.entries(serverEnv).filter(([key]) =>
+          [
+            "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES",
+            "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE",
+            "VIBESTUDIO_DEV_TEMPLATE_SOURCES",
+            "VIBESTUDIO_SHARED_DERIVED_CACHE_DIR",
+            "VIBESTUDIO_SERVER_ENTRY",
+          ].includes(key)
+        )
+      );
+      electronApp = await launchDesktopApp(
+        null,
+        tempRoot,
+        options.launchTimeoutMs,
+        {
+          ...desktopEnvironment,
+          env: { ...desktopEnvironment.env, ...sourceEnvironment },
+        },
+        (app) => desktopApps.push(app)
+      );
+      await waitForDesktopShell(electronApp, Math.max(1000, deadlineMs - Date.now()));
+      await waitForShellOverlayCleared(electronApp, Math.max(1000, deadlineMs - Date.now()));
+      const page = await chromePage(electronApp, deadlineMs);
+      const catalog = await nativeRpc(page, undefined, "hubControl.listWorkspaces", []);
+      if (
+        catalog.length !== 2 ||
+        !catalog.some((entry) => entry.privateRole === "personal") ||
+        !catalog.some((entry) => entry.privateRole === "system")
+      ) {
+        throw new Error("Local startup did not create exactly Personal and System");
+      }
+      await waitForChromeResult(
+        electronApp,
+        `Boolean(document.querySelector('[aria-label="Open Personal"][aria-current="location"]'))`,
+        "waiting for initial Personal focus",
+        Math.max(1000, deadlineMs - Date.now())
+      );
+      const personal = catalog.find((entry) => entry.privateRole === "personal");
+      const initial = await waitForPersonalPanel(
+        electronApp,
+        personal.workspaceId,
+        "panels/chat",
+        deadlineMs
+      );
+      const initialIds = await workspaceTreeIds(
+        electronApp,
+        "Personal",
+        Math.max(1000, deadlineMs - Date.now())
+      );
+      if (initialIds.length !== 1 || initialIds[0] !== initial.panelId)
+        throw new Error("Personal did not initialize exactly one onboarding conversation");
+      console.log(
+        `[desktop-smoke] Local Personal initial panel fills workspace: ${JSON.stringify(initial)}`
+      );
+      await waitForChromeResult(
+        electronApp,
+        `["Personal", "System"].every((label) =>
+          [...document.querySelectorAll('section[aria-label="' + label + ' workspace"] img')]
+            .some((image) => image.src.startsWith('data:image/') && image.complete && image.naturalWidth > 0))`,
+        "waiting for both workspace-owned icons to decode",
+        Math.min(15_000, Math.max(1000, deadlineMs - Date.now()))
+      );
+      if (
+        !(await waitAndClickHostedShellButton(
+          electronApp,
+          /^New panel$/i,
+          Math.max(1000, deadlineMs - Date.now())
+        ))
+      )
+        throw new Error("Personal workspace did not expose its focused New panel control");
+      const newPanel = await waitForPersonalPanel(
+        electronApp,
+        personal.workspaceId,
+        "about/new",
+        deadlineMs
+      );
+      console.log(
+        `[desktop-smoke] Separately opened Personal New and read history: ${JSON.stringify(newPanel)}`
+      );
+      await assertCleanDesktopDiagnostics(electronApp);
+      console.log(
+        "[desktop-smoke] PASS account-only local startup; exactly Personal/System; one initial onboarding chat auto-submitted its configured prompt and rendered setup inline at full width; separately opened Personal New and read history; both workspace icons decoded"
+      );
+      await cleanup();
+      return;
     }
     const serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
@@ -1360,7 +1777,8 @@ async function main() {
       deepLink,
       tempRoot,
       options.launchTimeoutMs,
-      desktopEnvironment
+      desktopEnvironment,
+      (app) => desktopApps.push(app)
     );
     const result = await waitForDesktopShell(electronApp, options.launchTimeoutMs);
     const panels = await getPanelTree(electronApp).catch(() => []);
@@ -1376,42 +1794,25 @@ async function main() {
         result.snapshots.find((snapshot) => snapshot.title === HOSTED_SHELL_APP)?.url ??
         ""
     );
+    const pairedChrome = await chromePage(electronApp, deadlineMs);
+    const pairedCatalog = await nativeRpc(pairedChrome, undefined, "hubControl.listWorkspaces", []);
+    const pairedPersonal = pairedCatalog.find((entry) => entry.privateRole === "personal");
+    if (!pairedPersonal) throw new Error("Paired account is missing Personal");
+    await selectWorkspace(electronApp, "Personal", Math.max(1000, deadlineMs - Date.now()));
+    const onboarding = await waitForPersonalPanel(
+      electronApp,
+      pairedPersonal.workspaceId,
+      "panels/chat",
+      deadlineMs
+    );
+    console.log(
+      `[desktop-smoke] Initial Personal onboarding completed: ${JSON.stringify(onboarding)}`
+    );
     // Native testApi intentionally captures the immutable System controller.
     // Select that same workspace visibly before asserting its panel tree/readiness.
-    const selectedSystem = await waitAndClickHostedShellButton(
-      electronApp,
-      /^Open System$/i,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
-    if (!selectedSystem) throw new Error("Could not select the System workspace");
-    const focusedSystem = await evaluateElectron(
-      electronApp,
-      async ({ webContents }, timeoutMs) => {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-          const url = globalThis.__testApi?.getHostViewDebugInfo?.().hostedShellUrl;
-          const chrome = webContents
-            .getAllWebContents()
-            .find((entry) => !entry.isDestroyed() && entry.getURL() === url);
-          const focused =
-            chrome &&
-            (await chrome
-              .executeJavaScript(
-                `document.querySelector('[aria-label="Open System"]')?.getAttribute('aria-current') === 'location'`
-              )
-              .catch(() => false));
-          if (focused) return true;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        return false;
-      },
-      Math.min(30000, Math.max(1000, deadlineMs - Date.now())),
-      "waiting for the selected System workspace presentation",
-      35000
-    );
-    if (!focusedSystem) throw new Error("System workspace selection did not finish");
+    await selectWorkspace(electronApp, "System", Math.max(1000, deadlineMs - Date.now()));
     console.log("[desktop-smoke] Selected System workspace for native controller assertions");
-    const renderedPanel = await waitForRenderedPanel(
+    const renderedPanel = await waitForSystemNewPanel(
       electronApp,
       Math.max(1_000, deadlineMs - Date.now())
     );
@@ -1442,12 +1843,11 @@ async function main() {
     if (!workspaceIconLoaded)
       throw new Error("System workspace icon bytes did not render in chrome");
     console.log("[desktop-smoke] Workspace-owned icon bytes rendered in native chrome");
-    const chatExperience = await waitForChatExperienceReady(
-      electronApp,
-      renderedPanel.panel.id,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
-    console.log(`[desktop-smoke] Chat experience ready: ${chatExperience}`);
+    if (
+      renderedPanel.panel.source !== "about/new" ||
+      !renderedPanel.text.includes("Jump to a panel")
+    )
+      throw new Error("System's own initial New panel did not render");
     const panelIds = new Set((await getPanelTree(electronApp)).map((panel) => panel.id));
     const newPanel = await createAndWaitForNewPanel(
       electronApp,
@@ -1462,6 +1862,152 @@ async function main() {
     console.log(`[desktop-smoke] Native page title projected: ${projectedTitle}`);
     await verifySettingsEvent(electronApp, Math.max(1_000, deadlineMs - Date.now()));
     await assertCleanDesktopDiagnostics(electronApp);
+
+    // Preserve the same desktop and credentials while the owned server restarts.
+    // A restored transport must resume its workspace owners, not pair a new client.
+    await dismissConnectionDialog(electronApp);
+    const workspaceIdentityBefore = await evaluateElectron(
+      electronApp,
+      () => globalThis.__testApi.rpcCall("workspace", "getInfo", []),
+      undefined,
+      "capturing System workspace identity"
+    );
+    if (!workspaceIdentityBefore.id) throw new Error("System workspace identity is missing");
+    const ownerChrome = await chromePage(electronApp, deadlineMs);
+    const privateWorkspaces = await nativeRpc(
+      ownerChrome,
+      undefined,
+      "hubControl.listWorkspaces",
+      []
+    );
+    const personalWorkspace = privateWorkspaces.find((entry) => entry.privateRole === "personal");
+    if (!personalWorkspace)
+      throw new Error("Personal workspace is missing from the paired catalog");
+    const systemIdsBefore = (await getPanelTree(electronApp)).map((panel) => panel.id).sort();
+    await selectWorkspace(electronApp, "Personal", 30000);
+    const personalIdsBefore = await workspaceTreeIds(electronApp, "Personal", 30000);
+    await selectWorkspace(electronApp, "System", 30000);
+    await waitForConnectionStatus(electronApp, true, 30000);
+    console.log(
+      "[desktop-smoke] Restarting the owned server with the desktop and device credential retained"
+    );
+    serverChild.kill("SIGTERM");
+    await waitForChildExit(serverChild, 60000);
+    if (serverChild.exitCode == null && serverChild.signalCode == null) {
+      throw new Error("Owned server did not stop for the reconnect scenario");
+    }
+    await waitForConnectionStatus(electronApp, false, 30000);
+    await fsp.rm(options.readyFile, { force: true });
+    const restoredServer = spawnManaged(process.execPath, serverArgs, {
+      cwd: repoRoot,
+      env: serverEnv,
+      label: "server-restored",
+    });
+    children.push(restoredServer);
+    await waitForSpawn(restoredServer, process.execPath, serverArgs);
+    await waitForServerReady(
+      options.readyFile,
+      restoredServer,
+      Math.max(1000, deadlineMs - Date.now())
+    );
+    await waitForConnectionStatus(electronApp, true, Math.max(1000, deadlineMs - Date.now()));
+    const workspaceIdentityAfter = await evaluateElectron(
+      electronApp,
+      () => globalThis.__testApi.rpcCall("workspace", "getInfo", []),
+      undefined,
+      "checking restored System workspace identity",
+      30000
+    );
+    if (!workspaceIdentityBefore.id || workspaceIdentityBefore.id !== workspaceIdentityAfter.id) {
+      throw new Error("Reconnect changed the owning System workspace");
+    }
+    await selectWorkspace(electronApp, "Personal", 30000);
+    const restoredChrome = await chromePage(electronApp, deadlineMs);
+    await nativeRpc(restoredChrome, personalWorkspace.workspaceId, "vcs.mainState", []);
+    const personalIdsAfter = await workspaceTreeIds(electronApp, "Personal", 30000);
+    if (JSON.stringify(personalIdsAfter) !== JSON.stringify(personalIdsBefore)) {
+      throw new Error("Reconnect changed the retained Personal panel tree");
+    }
+    await selectWorkspace(electronApp, "System", 30000);
+    const systemIdsAfter = (await getPanelTree(electronApp)).map((panel) => panel.id).sort();
+    if (JSON.stringify(systemIdsAfter) !== JSON.stringify(systemIdsBefore)) {
+      throw new Error("Reconnect changed the retained System panel tree");
+    }
+    await waitForSystemNewPanel(electronApp, Math.max(1000, deadlineMs - Date.now()));
+    const restoredNewPanel = await createAndWaitForNewPanel(
+      electronApp,
+      new Set(systemIdsAfter),
+      Math.max(1000, deadlineMs - Date.now())
+    );
+    const personalIdsAfterMutation = await workspaceTreeIds(electronApp, "Personal", 30000);
+    if (personalIdsAfterMutation.includes(restoredNewPanel.panel.id)) {
+      throw new Error("Post-reconnect System New escaped into Personal");
+    }
+    console.log(
+      "[desktop-smoke] Reconnected without pairing; System and Personal trees retained; focused System New succeeded"
+    );
+    const reconnectedScreenshot = await saveScreenshot(electronApp);
+    console.log(
+      `[desktop-smoke] Reconnected chrome: ${path.relative(repoRoot, reconnectedScreenshot)}`
+    );
+    await assertCleanDesktopDiagnostics(electronApp);
+    if (options.sharedMemberRevocation) {
+      await runSharedMemberRevocation({
+        ownerApp: electronApp,
+        launchMember: async (memberDeepLink) => {
+          const memberRoot = await fsp.mkdtemp(path.join(tempRoot, "member-"));
+          const environment =
+            process.platform === "darwin"
+              ? createMacosTestKeychain({ home: path.join(memberRoot, "home"), electronBinary })
+              : await startEphemeralLinuxSecretService(memberRoot, children);
+          desktopEnvironments.push(environment);
+          const member = await launchDesktopApp(
+            memberDeepLink,
+            memberRoot,
+            Math.min(options.launchTimeoutMs, Math.max(1000, deadlineMs - Date.now())),
+            environment,
+            (app) => desktopApps.push(app)
+          );
+          await waitForDesktopShell(member, Math.max(1000, deadlineMs - Date.now()));
+          await dismissConnectionDialog(member);
+          await waitForShellOverlayCleared(member, Math.max(1000, deadlineMs - Date.now()));
+          return member;
+        },
+        prepareWorkspace: async (app, workspace) => {
+          const page = await chromePage(app, deadlineMs);
+          await nativeRpc(page, undefined, "hubControl.routeWorkspace", [
+            { workspaceId: workspace.workspaceId },
+          ]);
+          await selectWorkspace(app, workspace.name, Math.max(1000, deadlineMs - Date.now()));
+          while (Date.now() < deadlineMs) {
+            const state = await nativeRpc(
+              page,
+              workspace.workspaceId,
+              "shellApproval.getWorkspaceCreationReviewState",
+              []
+            );
+            if (state.status === "resolved" || state.status === "not-required") {
+              await waitForShellOverlayCleared(app, Math.max(1000, deadlineMs - Date.now()));
+              return;
+            }
+            if (state.status === "failed") throw new Error(state.error);
+            await clickDesktopButton(app, /^Add to workspace$/i);
+            await sleep(750);
+          }
+          throw new Error(
+            "Workspace creation review did not settle before the acceptance deadline"
+          );
+        },
+        receiptPath: path.join(
+          repoRoot,
+          "test-results",
+          "desktop-pairing-smoke",
+          `shared-revocation-${Date.now()}.json`
+        ),
+        timeoutMs: Math.max(1000, deadlineMs - Date.now()),
+      });
+      for (const app of desktopApps) await assertCleanDesktopDiagnostics(app);
+    }
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);
     if (screenshotPath) {
       console.log(`[desktop-smoke] Post-pair window: ${path.relative(repoRoot, screenshotPath)}`);
