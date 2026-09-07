@@ -124,6 +124,7 @@ import type {
   ServiceBindingFact,
   WorkspaceServiceReviewFact,
 } from "@vibestudio/shared/authority/unitInstallReview";
+import { isProductBuiltinService } from "@vibestudio/shared/authority/productBuiltinIndex";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1086,12 +1087,11 @@ export async function initBuildSystemV2(
     const capabilities = (node.manifest.authority?.requests ?? [])
       .map((request) => request.capability)
       .filter((capability) => capability.startsWith("workspace-service:"));
-    return Promise.all(
+    const facts = await Promise.all(
       capabilities.map(async (capability) => {
-        if (!environment) {
-          return { capability, providerUnit: null, catalogDigest: null, presentation: null };
-        }
+        if (!environment) return null;
         const serviceName = capability.slice("workspace-service:".length);
+        if (isProductBuiltinService(serviceName)) return null;
         const resolution = await environment.resolveService(serviceName);
         if (resolution.kind !== "resolved" && resolution.kind !== "inaccessible") {
           return { capability, providerUnit: null, catalogDigest: null, presentation: null };
@@ -1108,9 +1108,10 @@ export async function initBuildSystemV2(
             authorityCategory: binding.presentation,
             notability: binding.notability ?? "headline",
           },
-        };
+        } satisfies WorkspaceServiceReviewFact;
       })
     );
+    return facts.filter((fact) => fact !== null);
   };
   const serviceDeclarationProofError = (
     node: GraphNode,

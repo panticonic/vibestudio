@@ -245,6 +245,28 @@ describe("install clearance", () => {
     expect(issued).toEqual([]);
   });
 
+  it("does not mint a statically known service missing from the candidate state", () => {
+    const capability = "workspace-service:models";
+    expect(
+      mintUnitClearanceGrants({
+        grantStore,
+        units: [
+          {
+            repoPath: "panels/chat",
+            effectiveVersion: "ev-candidate",
+            authority: authority([{ capability }]),
+            serviceReviews: [
+              { capability, providerUnit: null, catalogDigest: null, presentation: null },
+            ],
+          },
+        ],
+        origin: "publication",
+        decidedBy: "user:alice",
+        issuedBy: "host:vibestudio",
+      })
+    ).toEqual([]);
+  });
+
   it("withholds a grant for a row the user deselected, and admits the unit anyway", () => {
     const manifest = authority([
       { capability: "workspace.files.write" },

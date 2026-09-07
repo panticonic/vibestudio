@@ -380,6 +380,34 @@ describe("building rows from a declaration", () => {
     ]);
   });
 
+  it("does not grant a statically known service that is missing from the candidate state", () => {
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:models")],
+      serviceReviews: [
+        {
+          capability: "workspace-service:models",
+          providerUnit: null,
+          catalogDigest: null,
+          presentation: null,
+        },
+      ],
+    });
+
+    expect(notableRows).toEqual([]);
+    expect(everydayRows).toEqual([expect.objectContaining({ selectable: false })]);
+  });
+
+  it("keeps host-known services clearable when no dynamic candidate fact applies", () => {
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:workspace.state")],
+      serviceReviews: [],
+    });
+
+    expect([...notableRows, ...everydayRows]).toEqual([
+      expect.objectContaining({ selectable: true }),
+    ]);
+  });
+
   it("leaves a service row unbound when no declaration resolved to it", () => {
     const { notableRows, everydayRows } = installReviewRows({
       requests: [request("workspace-service:local-notifications")],

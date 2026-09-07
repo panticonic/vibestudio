@@ -406,6 +406,7 @@ function buildPermissionRow(input: {
   // Unreviewed means unknown, and unknown is never quietly granted or quietly
   // hidden: contextual for clearance, headline for display (§6.1, §10).
   const reviewed =
+    input.serviceReview?.presentation !== null &&
     row.unrecognized !== true &&
     (definition !== undefined ||
       declaredServiceReview !== undefined ||

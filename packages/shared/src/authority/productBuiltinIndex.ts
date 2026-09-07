@@ -28,3 +28,7 @@ export function productBuiltinCategory(
 ): NonNullable<CapabilityPresentation["authorityCategory"]> | null {
   return categories.get(capability) ?? null;
 }
+
+export function isProductBuiltinService(name: string): boolean {
+  return PRODUCT_BUILTIN_CATALOG.some((entry) => entry.kind === "service" && entry.name === name);
+}
