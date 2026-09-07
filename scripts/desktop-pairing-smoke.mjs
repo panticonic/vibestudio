@@ -1930,6 +1930,18 @@ async function main() {
     if (JSON.stringify(personalIdsAfter) !== JSON.stringify(personalIdsBefore)) {
       throw new Error("Reconnect changed the retained Personal panel tree");
     }
+    const recoveredOnboarding = await waitForPersonalPanel(
+      electronApp,
+      personalWorkspace.workspaceId,
+      "panels/chat",
+      Math.min(deadlineMs, Date.now() + 30000)
+    );
+    if (recoveredOnboarding.panelId !== onboarding.panelId) {
+      throw new Error("Reconnect replaced the automatic onboarding panel");
+    }
+    console.log(
+      `[desktop-smoke] Recovered Personal onboarding: ${JSON.stringify(recoveredOnboarding)}`
+    );
     await selectWorkspace(electronApp, "System", 30000);
     const systemIdsAfter = (await getPanelTree(electronApp)).map((panel) => panel.id).sort();
     if (JSON.stringify(systemIdsAfter) !== JSON.stringify(systemIdsBefore)) {
@@ -2021,7 +2033,7 @@ async function main() {
         `hostedShell=${hostedShellUrl}; ` +
         `panels=${Array.isArray(panels) ? panels.length : "unknown"}; ` +
         `renderedPanel=${JSON.stringify(renderedPanel)}; ` +
-        `chatExperience=${JSON.stringify(chatExperience)}; ` +
+        `onboarding=${JSON.stringify(onboarding)}; ` +
         `projectedTitle=${JSON.stringify(projectedTitle)}; ` +
         `newPanel=${JSON.stringify(newPanel)}` +
         (screenshotPath ? `; screenshot=${path.relative(repoRoot, screenshotPath)}` : "")
