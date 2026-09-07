@@ -1417,108 +1417,23 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
   return [...observedInstallReviews];
 }
 
-/**
- * The initial chat is expected to pause on its two ordinary workspace-service
- * capabilities. The panel and its agent worker can request those capabilities
- * at slightly different times, so wait for a quiet queue after the last one is
- * approved before handing control to the completion assertion. Contextual
- * approvals (for example network access) remain with the scenario that tests
- * them explicitly.
+/** Ordinary declared service access is covered by the accepted installation.
+ * Approving it again here would make a missing admission grant look like a
+ * successful onboarding run. Credential and network decisions remain explicit
+ * in the scenarios that exercise those contextual permissions.
  */
-async function approveInitialChatServiceApprovals(testApp: TestApp): Promise<void> {
-  const targetCapabilities = new Set(["workspace-service:models", "workspace-service:channel"]);
-  const deadline = Date.now() + 120_000;
-  let lastTargetSeenAt = Date.now();
-  const clickedApprovalIds = new Set<string>();
-
-  while (Date.now() < deadline) {
-    const pending = await listPendingApprovals(testApp);
-    const pendingTargetIds = new Set(
-      pending
-        .filter(
-          (approval) =>
-            approval.kind === "capability" &&
-            typeof approval.capability === "string" &&
-            targetCapabilities.has(approval.capability)
-        )
-        .map((approval) => approval.approvalId)
-    );
-    for (const approvalId of clickedApprovalIds) {
-      if (!pendingTargetIds.has(approvalId)) clickedApprovalIds.delete(approvalId);
-    }
-    const targets = pending.filter(
+async function assertNoUnexpectedChatServiceApprovals(testApp: TestApp): Promise<void> {
+  const capabilities = new Set(["workspace-service:models", "workspace-service:channel"]);
+  const unexpected = (await listPendingApprovals(testApp))
+    .filter(
       (approval) =>
         approval.kind === "capability" &&
         typeof approval.capability === "string" &&
-        targetCapabilities.has(approval.capability) &&
-        !clickedApprovalIds.has(approval.approvalId)
-    );
-    if (targets.length > 0) {
-      lastTargetSeenAt = Date.now();
-      try {
-        await expect
-          .poll(
-            () =>
-              clickShellButtonByPreference(
-                testApp,
-                [/^Trust(?: this)? version$/, /^Use this session$/],
-                targets[0]!.approvalId
-              ),
-            { timeout: 30_000, intervals: [250, 500, 1_000, 2_000] }
-          )
-          .toBe(true);
-        clickedApprovalIds.add(targets[0]!.approvalId);
-      } catch (error) {
-        await attachStartupDiagnostics(testApp);
-        throw error;
-      }
-      continue;
-    }
-    // Install-review trust may already cover these exact service versions, in
-    // which case no per-use card is expected. A bounded quiet queue is the
-    // contract; the completion poll below continues draining any late card.
-    if (Date.now() - lastTargetSeenAt >= 10_000) return;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  throw new Error(
-    `Timed out waiting for the initial chat service approvals to settle: ${JSON.stringify({
-      pending: (await listPendingApprovals(testApp)).map((approval) => ({
-        ...approval,
-        parts: undefined,
-      })),
-      capabilityUi: await capabilityApprovalUiSnapshot(testApp),
-      shell: (await listShellDomSnapshots(testApp)).map((snapshot) => ({
-        title: snapshot.title,
-        url: snapshot.url,
-        hasApprovalBar: snapshot.hasApprovalBar,
-        buttons: snapshot.buttons,
-        textTail: snapshot.text.slice(-800),
-      })),
-    })}`
-  );
-}
-
-/**
- * A chat can request its channel in phases: the initial resolveService call
- * creates the first approval, while replay/participant reads can create a
- * second one after the first turn has started. Keep the user-facing E2E flow
- * advancing that same visible approval rather than treating the late request
- * as an agent failure.
- */
-async function approvePendingChatServiceApprovalIfPresent(testApp: TestApp): Promise<boolean> {
-  const targetCapabilities = new Set(["workspace-service:models", "workspace-service:channel"]);
-  const approval = (await listPendingApprovals(testApp)).find(
-    (candidate) =>
-      candidate.kind === "capability" &&
-      typeof candidate.capability === "string" &&
-      targetCapabilities.has(candidate.capability)
-  );
-  if (!approval) return false;
-  return clickShellButtonByPreference(
-    testApp,
-    [/^Trust(?: this)? version$/, /^Use this session$/],
-    approval.approvalId
+        capabilities.has(approval.capability)
+    )
+    .map(({ approvalId, capability }) => ({ approvalId, capability }));
+  expect(unexpected, "Installation must grant the initial chat's declared service access").toEqual(
+    []
   );
 }
 
@@ -1553,14 +1468,14 @@ test.describe("Desktop Startup Approvals", () => {
     });
 
     await reachHostedShellAndDrainStartupApprovals(testApp);
-    await approveInitialChatServiceApprovals(testApp);
+    await assertNoUnexpectedChatServiceApprovals(testApp);
 
     let lastCompletion: StartupAgentCompletionState | null = null;
     try {
       await expect
         .poll(
           async () => {
-            await approvePendingChatServiceApprovalIfPresent(testApp!);
+            await assertNoUnexpectedChatServiceApprovals(testApp!);
             const state = await collectStartupAgentCompletion(testApp!, configuredInitialPrompt);
             lastCompletion = state;
             const failures = state.channels.flatMap((channel) => channel.failures);
@@ -1682,13 +1597,14 @@ test.describe("Desktop Startup Approvals", () => {
       launchTimeout: 240_000,
     });
     await reachHostedShellAndDrainStartupApprovals(testApp);
-    await approveInitialChatServiceApprovals(testApp);
+    await assertNoUnexpectedChatServiceApprovals(testApp);
 
     let networkApproval: PendingApproval | undefined;
     try {
       await expect
         .poll(
           async () => {
+            await assertNoUnexpectedChatServiceApprovals(testApp!);
             networkApproval = (await listPendingApprovals(testApp!)).find(
               (approval) =>
                 approval.kind === "capability" &&
