@@ -117,9 +117,20 @@ export async function runSharedMemberRevocation({
   const membership = await nativeRpc(owner, undefined, "hubControl.listWorkspaceMembers", [
     { workspace: workspaceName },
   ]);
-  const memberRow = membership.members.find((entry) => entry.userId === invitation.user.id);
+  const memberRow = membership.members.find((entry) => entry.userId === invitation.user.userId);
   if (!memberRow || memberRow.role !== "member")
-    throw new Error("The paired approval account is not an ordinary workspace member");
+    throw new Error(
+      `The paired approval account is not an ordinary workspace member: ${JSON.stringify({
+        invitedUserId: invitation.user.userId,
+        workspaceId: workspace.workspaceId,
+        returnedWorkspaceId: membership.workspaceId,
+        members: membership.members.map(({ userId, role, accountRole }) => ({
+          userId,
+          role,
+          accountRole,
+        })),
+      })}`
+    );
   const panel = await nativeRpc(member, workspace.workspaceId, "view.createPanel", [
     null,
     "browser:https://example.com",
@@ -164,7 +175,7 @@ export async function runSharedMemberRevocation({
     "waiting for the member-owned website approval",
     deadline
   );
-  if (pending.ownerUserId !== invitation.user.id)
+  if (pending.ownerUserId !== invitation.user.userId)
     throw new Error("Website approval belongs to a different account");
   const ownerPending = await nativeRpc(
     owner,
@@ -204,7 +215,7 @@ export async function runSharedMemberRevocation({
   const removal = await nativeRpc(owner, undefined, "hubControl.removeWorkspaceMember", [
     {
       workspace: workspaceName,
-      userId: invitation.user.id,
+      userId: invitation.user.userId,
     },
   ]);
   if (!removal.removed || removal.closedSessions < 1)
@@ -260,7 +271,7 @@ export async function runSharedMemberRevocation({
     kind: "native-shared-member-approval-revocation",
     trigger: "authenticated native IPC browserPermissions.request for a real browser panel",
     workspaceId: workspace.workspaceId,
-    memberUserId: invitation.user.id,
+    memberUserId: invitation.user.userId,
     approvalId: pending.approvalId,
     visibleBeforeRevocation: true,
     ordinaryMember: true,

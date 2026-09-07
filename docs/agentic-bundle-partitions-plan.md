@@ -13,9 +13,26 @@ The current catalog has no scenario that jointly creates a panel, its store and 
 declaration, publishes them, and drives a persistent UI effect without unexpected
 approval. Add that exact acceptance case; separate service and app-building tests do
 not close this gap. The reported task-board panel contains the exact declared store
-request. Candidate publication currently uses a live capability presentation resolver;
-whether this loses clearance for a service introduced by that same transaction is
-under investigation. Audit creation, import, publication, updates and revocation together.
+request. The owning defect was confirmed: candidate publication used the live capability
+presentation resolver, which could not describe a service introduced by the same
+transaction. Host `9ed904d35`, `38fb3ace0` and `2d11204b9` carry exact candidate
+service facts through review rendering and grant issuance, including direct requests
+without a protocol. Missing dynamic services remain explicit negative facts; actual
+product services come from the generated builtin catalog. The UI-to-grant regression
+passes (18 tests), as does the subsequent candidate classification coverage (52).
+The atomic generated-app acceptance case remains required.
+
+The wider audit found two related update defects: previous/candidate authority hashes
+used different fields, and admission deduplication omitted exact service review facts.
+It also found that replacing grants by rescanning their code subject after minting
+could revoke the replacement grants when the consumer's effective version stayed the
+same. Host `12625a2ec` uses one service-authority identity and retires the exact outgoing
+grant records captured by the transaction; it does not invent a different code identity.
+Unchanged publication, changed service facts, same-version replacement and
+failed-publication rollback pass together (57 focused tests and normal host checks).
+Legacy admission records are validated before migration. Template/upstream protected
+publication converges on the same acceptance path. Native generated-app acceptance
+remains outstanding before closing this audit.
 
 The reported missing `@workspace/test-runtime` was not an undeclared app dependency:
 the captured failing worker manifest already declared it. Distribution dependency
@@ -35,12 +52,17 @@ this; `648475e7e` uses the proper one-argument shared invocation and verifies th
 contract (84 schema/workspace tests). This is evidence that direct handler tests alone
 are insufficient for serialized RPC contracts.
 
-The latest desktop native replay preserved the original onboarding panel and setup
-card across server restart, with full-width title bar and no private owner bands.
-Its strict renderer gate still failed on a cold-recovery warning, so the complete
-native suite is not passing. Base `d7a9c7a` repairs the owning cause: shared object
-identity in the onboarding catalog made its cached scope value non-serializable.
-The exact serializer and setup tests pass (20); replay remains required. Read-only
+The latest desktop native replay on host `2fcecd5f6` preserved the same original
+onboarding panel and setup card across server restart, with full-width title bar,
+no private owner bands and clean renderer diagnostics. Base `d7a9c7a` fixed the
+previous cold-recovery warning: shared object identity in the onboarding catalog
+made its cached scope value non-serializable. The exact serializer and setup tests
+pass (20), and the native replay now verifies recovery. This native fixture uses a
+deterministic model; it does not prove live-provider one-time credential approval.
+The full suite still failed later in its shared-member phase because the new harness
+read `invitation.user.id` instead of the existing API's `userId`. Correct the harness
+without weakening its membership/revocation assertions and rerun that phase. The owned
+native applications, hub and temporary state were cleaned up after the failure. Read-only
 CDP coverage (`8be57b927`, 24 tests) proves bounded screenshots remain available while
 raw mutable endpoint acquisition is rejected. The debug workflow documents that
 distinction; this does not establish an unrestricted read-only DOM automation API.
@@ -51,6 +73,41 @@ runtime filesystem operations, not grounds to pre-authorize native shell executi
 Startup performance profiling uses another owned instance and coordinates measurement
 windows with the sweep. Neither activity is complete; record final run IDs, failures,
 repairs, measurements and cleanup before claiming their acceptance gates passed.
+
+The broad sweep also exposed host rebuild cleanup deleting the Node executable and
+MXC launcher used by already-running instances. Host `7a5d36dc8` and `71a6d1fde`
+preserve those publisher-owned runtime inputs while removing compiler outputs; the
+existing publisher verifies their integrity and owns atomic replacement. The runtime
+survival tests pass (4). This is not proof that every other lazy host artifact remains
+available across a concurrent rebuild.
+
+Startup profiling identified avoidable instance-local derived caches. Host `40cd51852`
+reuses verified profile-shared build payloads while resealing workspace-owned execution
+metadata. A fresh same-source instance measured 8,541 ms versus 11,639 ms for its
+first cold profile; this is repeat-instance reuse, not first-ever startup acceleration.
+Host `2fcecd5f6` then removes duplicate metadata parsing/copying and artifact checks
+after successful atomic hydration. The non-typecheck remainder fell from 1,313 to
+910 ms, but total profile time rose from typecheck variance, so no overall improvement
+is claimed for that second measurement. Focused tests pass (38) and every owned
+profiling instance has been stopped.
+
+The retained startup-approval E2E previously approved extra model/channel service
+prompts, concealing lost installation clearance. Host `30744cc98` removes that
+substitution and asserts no unexpected service prompts while preserving explicit
+credential/network decisions and the original automatic onboarding. The original
+launch-gate scenario passes in a native desktop (45 seconds), with its setup-card
+screenshot inspected and fixture cleanup complete. The broader acceptance matrix
+and remaining original startup scenarios are not thereby declared passing.
+
+Credential audit remains open: `resolveCredential` authorizes access to a private
+credential summary, then actual egress separately authorizes use. Choosing "once"
+at the first step does not authorize the second. Model calls and `forAudience`
+follow this sequence; direct fetch/Git already let egress own the concrete operation.
+The model path also consumes account claims before its SDK sends a request, so simply
+removing the first check would expose private metadata. Re-derive selection, metadata
+access and actual-operation consent together, using the existing operation identity
+where appropriate; do not hide the second prompt or issue a broader persistent grant.
+There is no end-to-end passing one-time model-operation test yet.
 
 Implementation evidence so far includes a real isolated standalone System bootstrap
 passing all system-test doctor checks, followed by `build-service` passing with no
