@@ -26,7 +26,8 @@ import {
   type StoredMobileConnection,
   type StoredShellPairing,
 } from "./storedCredential.js";
-import { restoreRoutedConnectionPair, resumeMobileConnection } from "./resumeConnection.js";
+import { resumeMobileConnection } from "./resumeConnection.js";
+import { MobileWorkspaceAccount } from "./workspaceAccount.js";
 
 export type {
   FreshShellPairing,
@@ -55,6 +56,7 @@ export interface IrohConnection {
   session: IrohClientSession;
   transport: LifecycleIrohClientPipe;
   callerId: string;
+  serverId?: string;
   endpointIdentityId: string;
   /** Shared physical endpoint owner for the retained hub/workspace pair. */
   endpointPool: MobileEndpointPool;
@@ -298,6 +300,47 @@ export async function reconnectViaIroh(
   return connection;
 }
 
+/**
+ * Open the stable account pipe once. Workspace routing stays in memory: opening
+ * another workspace never changes the native bundle source or the saved pairing.
+ * All children use the same returning credential provider and endpoint owner.
+ */
+export async function connectMobileAccount(
+  stored: StoredMobileConnection,
+  oauthCallbackMode: OAuthCallbackMode
+): Promise<MobileWorkspaceAccount> {
+  let current = stored;
+  let persistence = Promise.resolve();
+  const provider = makeReturningShellTokenProvider(stored.credential);
+  const onPaired = (credential: ShellCredential): Promise<void> => {
+    provider.setCredential(credential);
+    current = replaceMobileConnectionCredential(current, credential);
+    const snapshot = current;
+    persistence = persistence.then(() => persistStoredMobileConnection(snapshot));
+    return persistence;
+  };
+  const control = await establishIrohConnection(
+    stored.controlPairing,
+    provider,
+    stored.endpointIdentityId,
+    oauthCallbackMode,
+    { onPaired }
+  );
+  control.deviceId = stored.credential.deviceId;
+  return new MobileWorkspaceAccount(control, async (reach, onRecovery) => {
+    const child = await establishIrohConnection(
+      reach,
+      provider,
+      stored.endpointIdentityId,
+      oauthCallbackMode,
+      { onPaired, onRecovery },
+      control.endpointPool
+    );
+    child.deviceId = stored.credential.deviceId;
+    return child;
+  });
+}
+
 export function reconnectMobileSession(
   stored: StoredMobileConnection,
   oauthCallbackMode: OAuthCallbackMode,
@@ -314,31 +357,5 @@ export function reconnectMobileSession(
         controlConnection?.endpointPool
       ),
     persist: persistStoredMobileConnection,
-    connectRoutedPair: async (current, onCredentialStored) => {
-      const endpointPool = new MobileEndpointPool(
-        current.endpointIdentityId,
-        current.controlPairing.relays
-      );
-      return restoreRoutedConnectionPair(
-        () =>
-          reconnectViaIroh(
-            current,
-            oauthCallbackMode,
-            undefined,
-            "control",
-            onCredentialStored,
-            endpointPool
-          ),
-        () =>
-          reconnectViaIroh(
-            current,
-            oauthCallbackMode,
-            onRecovery,
-            "workspace",
-            onCredentialStored,
-            endpointPool
-          )
-      );
-    },
   });
 }

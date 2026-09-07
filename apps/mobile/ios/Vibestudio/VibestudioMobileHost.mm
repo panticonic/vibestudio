@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <WebKit/WebKit.h>
+extern WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope);
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTReloadCommand.h>
@@ -23,6 +25,15 @@
 @implementation VibestudioMobileHost
 
 RCT_EXPORT_MODULE();
+
+RCT_EXPORT_METHOD(clearWorkspaceCookies:(NSString *)scope resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (scope.length == 0) { reject(@"workspace_cookie_clear_failed", @"A workspace browser profile is required", nil); return; }
+    [VibestudioWorkspaceDataStore(scope) removeDataOfTypes:[NSSet setWithObject:WKWebsiteDataTypeCookies]
+        modifiedSince:[NSDate distantPast] completionHandler:^{ resolve(nil); }];
+  });
+}
+
 
 static NSString *const VibestudioActiveBundleLocalPath = @"activeBundle.localPath";
 static NSString *const VibestudioActiveBundleBuildKey = @"activeBundle.buildKey";
@@ -213,12 +224,14 @@ RCT_EXPORT_METHOD(appendBundleChunk:(NSString *)bytesBase64
     if (reset) {
       [self closeBundleStream];
       NSString *safeBuildKey = [self safePathSegment:buildKey];
-      NSString *safeArtifact = [self safePathSegment:artifactPath];
+      NSString *safeArtifact = [self validatedArtifactPath:artifactPath];
       NSURL *cacheURL = [[NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask] firstObject];
       NSURL *dirURL = [[cacheURL URLByAppendingPathComponent:@"vibestudio-rn" isDirectory:YES] URLByAppendingPathComponent:safeBuildKey isDirectory:YES];
       [NSFileManager.defaultManager createDirectoryAtURL:dirURL withIntermediateDirectories:YES attributes:nil error:nil];
       NSURL *finalURL = [dirURL URLByAppendingPathComponent:safeArtifact isDirectory:NO];
-      NSURL *transferURL = [dirURL URLByAppendingPathComponent:[safeArtifact stringByAppendingString:@".transfer"] isDirectory:NO];
+      [NSFileManager.defaultManager createDirectoryAtURL:finalURL.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+      if (self.bundleTransferPath) [NSFileManager.defaultManager removeItemAtPath:self.bundleTransferPath error:nil];
+      NSURL *transferURL = [cacheURL URLByAppendingPathComponent:[@"vibestudio-artifact-" stringByAppendingString:NSUUID.UUID.UUIDString] isDirectory:NO];
       [NSFileManager.defaultManager createFileAtPath:transferURL.path contents:nil attributes:nil];
       self.bundleFinalPath = finalURL.path;
       self.bundleTransferPath = transferURL.path;
@@ -1281,17 +1294,24 @@ RCT_EXPORT_METHOD(assetStoreClear:(RCTPromiseResolveBlock)resolve
 
 - (NSString *)safePathSegment:(NSString *)value
 {
-  NSMutableString *out = [NSMutableString stringWithCapacity:value.length];
-  NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"];
-  for (NSUInteger index = 0; index < value.length; index++) {
-    unichar ch = [value characterAtIndex:index];
-    if ([allowed characterIsMember:ch]) {
-      [out appendFormat:@"%C", ch];
-    } else {
-      [out appendString:@"_"];
+  NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z0-9_-]{1,200}$" options:0 error:nil];
+  if ([pattern numberOfMatchesInString:value options:0 range:NSMakeRange(0, value.length)] != 1) {
+    [NSException raise:@"VibestudioInvalidBuildKey" format:@"Invalid bundle build key"];
+  }
+  return value;
+}
+
+- (NSString *)validatedArtifactPath:(NSString *)value
+{
+  if (value.length == 0 || [value containsString:@"\\"] || [value rangeOfCharacterFromSet:[NSCharacterSet controlCharacterSet]].location != NSNotFound) {
+    [NSException raise:@"VibestudioInvalidArtifactPath" format:@"Invalid artifact path"];
+  }
+  for (NSString *segment in [value componentsSeparatedByString:@"/"]) {
+    if (segment.length == 0 || [segment isEqualToString:@"."] || [segment isEqualToString:@".."]) {
+      [NSException raise:@"VibestudioInvalidArtifactPath" format:@"Invalid artifact path"];
     }
   }
-  return out.length > 0 ? out : @"bundle";
+  return value;
 }
 
 @end

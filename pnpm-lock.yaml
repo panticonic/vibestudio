@@ -28,6 +28,9 @@ patchedDependencies:
   react-native-tcp-socket@6.4.1:
     hash: 3419de9bf5c49768f1b92d3c596bf9c1fa202f60cd5bcc029f157b93b17ce131
     path: patches/react-native-tcp-socket.patch
+  react-native-webview@13.16.1:
+    hash: 097e5605fb7f5471cb10d56c0fd8ca5ce5614600124b94c43e82a6f37e56997c
+    path: patches/react-native-webview@13.16.1.patch
 
 importers:
 
@@ -547,7 +550,7 @@ importers:
         version: 4.7.3(react-native-reanimated@3.19.5(@babel/core@7.29.7)(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
       react-native-webview:
         specifier: 13.16.1
-        version: 13.16.1(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
+        version: 13.16.1(patch_hash=097e5605fb7f5471cb10d56c0fd8ca5ce5614600124b94c43e82a6f37e56997c)(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
       web-streams-polyfill:
         specifier: ^3.3.3
         version: 3.3.3
@@ -12911,9 +12914,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -18033,7 +18034,7 @@ snapshots:
     optionalDependencies:
       react-native-reanimated: 3.19.5(@babel/core@7.29.7)(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
 
-  react-native-webview@13.16.1(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0):
+  react-native-webview@13.16.1(patch_hash=097e5605fb7f5471cb10d56c0fd8ca5ce5614600124b94c43e82a6f37e56997c)(react-native@0.79.7(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0):
     dependencies:
       escape-string-regexp: 4.0.0
       invariant: 2.2.4

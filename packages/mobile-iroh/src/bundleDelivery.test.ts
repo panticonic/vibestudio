@@ -7,9 +7,19 @@ vi.mock("react-native", () => ({
   Platform: { OS: "android" },
 }));
 vi.mock("react-native-keychain", () => ({}));
+vi.mock("./connect.js", () => ({
+  loadShellCredential: async () => ({
+    schemaVersion: 5,
+    phase: "routed",
+    credential: { deviceId: "device", refreshToken: "test-token" },
+  }),
+}));
 
 import {
   streamArtifactToNative,
+  selectPlatformArtifacts,
+  activateApprovedWorkspaceApp,
+  RN_HOST_ABI,
   type BundleDeliveryRpc,
   type NativeBundleHost,
 } from "./bundleDelivery.js";
@@ -33,6 +43,10 @@ function response(chunks: Uint8Array[], start: number, total: number) {
 
 function nativeHost(): NativeBundleHost {
   return {
+    openSafariBrowserDataExport: vi.fn(async () => ({ opened: false })),
+    pickBrowserImportArchive: vi.fn(async () => null),
+    readBrowserImportEntry: vi.fn(async () => ({ dataBase64: "", eof: true })),
+    releaseBrowserImportArchive: vi.fn(async () => undefined),
     appendBundleChunk: vi.fn(async () => undefined),
     finalizeBundleWrite: vi.fn(),
     activatePreparedAppBundle: vi.fn(),
@@ -133,5 +147,98 @@ describe("mobile bundle delivery over Iroh", () => {
       expect.objectContaining({ headers: expect.objectContaining({ Range: "bytes=2-" }) }),
     ]);
     expect(host.appendBundleChunk).toHaveBeenLastCalledWith("AwQ=", "build", "index.bundle", false);
+  });
+});
+
+describe("complete native app artifact delivery", () => {
+  function artifact(path: string, role = "asset", platform = "android") {
+    return {
+      path,
+      role,
+      platform,
+      integrity: `sha256-${"a".repeat(64)}`,
+      url: `https://host.test/_a/build/${path}`,
+    };
+  }
+  it("preserves the runnable platform tree and rejects path collisions before transfer", () => {
+    const primary = artifact("android/index.bundle", "primary");
+    const image = artifact("android/drawable-mdpi/logo.png");
+    expect(
+      selectPlatformArtifacts(
+        { artifacts: [primary, image, artifact("ios/index.bundle", "primary", "ios")] },
+        "android"
+      )
+    ).toEqual({ primary, artifacts: [primary, image] });
+    for (const path of [
+      "../logo.png",
+      "/logo.png",
+      "android/../logo.png",
+      "android//logo.png",
+      "android\\logo.png",
+      primary.path,
+    ]) {
+      expect(() =>
+        selectPlatformArtifacts({ artifacts: [primary, artifact(path)] }, "android")
+      ).toThrow(/invalid or duplicate/);
+    }
+  });
+  it("verifies every platform asset before activating the primary bundle", async () => {
+    const artifacts = [
+      artifact("android/index.bundle", "primary"),
+      artifact("android/drawable-mdpi/logo.png"),
+      artifact("ios/index.bundle", "primary", "ios"),
+    ];
+    const events: string[] = [];
+    const rpc = {
+      streamReadable: vi.fn(async (_target, _method, args) => {
+        const route = args[0].path;
+        if (route.includes("bootstrap"))
+          return {
+            status: 200,
+            headers: [],
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    JSON.stringify({
+                      bootstrap: { buildKey: "build", rnHostAbi: RN_HOST_ABI, artifacts },
+                    })
+                  )
+                );
+                controller.close();
+              },
+            }),
+          };
+        events.push(route);
+        return response([new Uint8Array([1])], 0, 1);
+      }),
+    } as unknown as BundleDeliveryRpc;
+    const host = nativeHost();
+    let path = "";
+    host.appendBundleChunk = vi.fn(async (_bytes, _build, artifactPath) => {
+      path = artifactPath;
+    });
+    host.finalizeBundleWrite = vi.fn(async () => {
+      events.push(`verified:${path}`);
+      return { localPath: `/cache/build/${path}` };
+    });
+    host.activatePreparedAppBundle = vi.fn(async () => {
+      events.push("activate");
+      return { activated: true };
+    });
+    const transport = { rpc, close: vi.fn(async () => undefined) };
+    await activateApprovedWorkspaceApp(transport, { nativeHost: host });
+    expect(events).toEqual([
+      "/_a/build/android/index.bundle",
+      "verified:android/index.bundle",
+      "/_a/build/android/drawable-mdpi/logo.png",
+      "verified:android/drawable-mdpi/logo.png",
+      "activate",
+    ]);
+    expect(host.activatePreparedAppBundle).toHaveBeenCalledWith(
+      "/cache/build/android/index.bundle",
+      "build",
+      artifacts[0]!.integrity
+    );
   });
 });

@@ -1,7 +1,7 @@
 # Vibestudio iOS CocoaPods configuration
 # Requires CocoaPods 1.15+ and Xcode 16+
 
-platform :ios, '15.0'
+platform :ios, '17.0'
 
 # Resolve React Native's CocoaPods helpers through Node so pnpm hoisting and the
 # workspace root layout work the same as a flat app-local node_modules install.
@@ -46,7 +46,7 @@ target 'Vibestudio' do
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
         # Minimum deployment target
-        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
       end
     end
   end

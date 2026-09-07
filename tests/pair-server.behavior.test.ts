@@ -99,6 +99,8 @@ describe("pair-server runner", () => {
           expect(env.VIBESTUDIO_HOST).toBe("127.0.0.1");
           expect(env.VIBESTUDIO_IROH_RELAYS).toBe("https://one.example/,https://two.example/");
           expect(serverArgs).toContain("--ready-file");
+          expect(serverArgs).not.toContain("--require-electron-ready");
+          expect(serverArgs).not.toContain("--require-mobile-ready");
           queueMicrotask(() => child.emit("exit", 0, null));
           return child;
         },

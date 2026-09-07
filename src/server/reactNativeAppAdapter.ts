@@ -140,15 +140,21 @@ export class ReactNativeAppAdapter {
       (artifact) => artifact.role === "primary"
     );
     if (!hasMobilePrimaryArtifacts(primaryArtifacts)) return null;
+    const platformArtifacts = (build.artifacts ?? []).filter(
+      (artifact) => artifact.role === "primary" || artifact.role === "asset"
+    );
     if (
-      primaryArtifacts.some(
-        (artifact) => typeof artifact.integrity !== "string" || artifact.integrity.length === 0
+      platformArtifacts.some(
+        (artifact) =>
+          typeof artifact.integrity !== "string" ||
+          artifact.integrity.length === 0 ||
+          (artifact.platform !== "android" && artifact.platform !== "ios")
       )
     ) {
       return null;
     }
     const buildKey = entry.activeBundleKey;
-    const artifacts = primaryArtifacts.map((artifact) => ({
+    const artifacts = platformArtifacts.map((artifact) => ({
       path: artifact.path,
       role: artifact.role,
       contentType: artifact.contentType,

@@ -1,5 +1,11 @@
 # Vibestudio Mobile
 
+Workspace browser profiles require iOS 17 or later. Android requires a System
+WebView supporting AndroidX WebKit's `MULTI_PROFILE` capability. The native host
+binds each browser view to one account/workspace profile before loading content;
+unsupported engines show an update message and never use shared browser storage.
+This native contract is `rn-host-5`.
+
 This directory contains the shipped native host: the Android/iOS projects,
 first-pairing and recovery bootstrap, Metro boundary, native modules, signing,
 and release packaging. It is trusted host code and changes only with a native

@@ -322,7 +322,13 @@ function cdpEvaluate(socket, expression) {
   return cdpCommand(socket, "Runtime.evaluate", { expression, returnByValue: true });
 }
 
-async function openPanelWebViewDebugger(device, packageName, urlFragment, deadlineMs) {
+async function openPanelWebViewDebugger(
+  device,
+  packageName,
+  urlFragment,
+  deadlineMs,
+  matchesUrl = () => true
+) {
   let lastFailure = "no debuggable WebView target was found";
   while (Date.now() < deadlineMs) {
     const pidResult = await adbCapture(device, "shell", "pidof", packageName).catch(() => null);
@@ -349,7 +355,8 @@ async function openPanelWebViewDebugger(device, packageName, urlFragment, deadli
           (candidate) =>
             typeof candidate.webSocketDebuggerUrl === "string" &&
             typeof candidate.url === "string" &&
-            candidate.url.includes(urlFragment)
+            candidate.url.includes(urlFragment) &&
+            matchesUrl(candidate.url)
         );
         if (!target) {
           lastFailure = `the debuggable WebView did not expose a ${urlFragment} document`;
@@ -385,6 +392,38 @@ async function openPanelWebViewDebugger(device, packageName, urlFragment, deadli
   throw new Error(`Timed out opening the launcher WebView debugger: ${lastFailure}`);
 }
 
+async function assertMountedLauncher(socket, deadlineMs) {
+  while (Date.now() < deadlineMs) {
+    const mounted = await cdpEvaluate(socket,
+      'Boolean(document.querySelector("#root textarea.launcher-input"))');
+    if (mounted) {
+      console.log("[mobile-smoke] Workspace launcher rendered its interactive React content");
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error("The workspace launcher reported ready but did not mount its interactive content");
+}
+
+async function dismissVisibleNotifications(device) {
+  const xml = await dumpWindowXml(device);
+  for (const label of collectWindowLabels(xml).filter((text) => text.startsWith("Dismiss notification:"))) {
+    await tapVisibleNode(device, xml, label);
+  }
+}
+
+async function createPanelFromChrome(device, logcat, deadlineMs) {
+  const before = logcat.phaseCount("workspace-panel-create-requested");
+  while (Date.now() < deadlineMs) {
+    if (logcat.phaseCount("workspace-panel-create-requested") > before) return;
+    await dismissVisibleNotifications(device);
+    const xml = await dumpWindowXml(device);
+    await tapVisibleNode(device, xml, "Create new panel");
+    await sleep(250);
+  }
+  throw new Error("The mobile app did not acknowledge the New panel gesture");
+}
+
 async function submitPanelLauncherPrompt(device, packageName, value, deadlineMs) {
   const debuggerSession = await openPanelWebViewDebugger(
     device,
@@ -393,6 +432,7 @@ async function submitPanelLauncherPrompt(device, packageName, value, deadlineMs)
     deadlineMs
   );
   try {
+    await assertMountedLauncher(debuggerSession.socket, deadlineMs);
     const focused = await cdpEvaluate(
       debuggerSession.socket,
       `(() => { const input = document.querySelector("textarea.launcher-input"); ` +
@@ -429,6 +469,185 @@ async function submitPanelLauncherPrompt(device, packageName, value, deadlineMs)
     throw new Error("Timed out waiting for the launcher to accept input and select a destination");
   } finally {
     await debuggerSession.close();
+  }
+}
+
+async function assertWorkspaceBrowserPermission(device, packageName, deadlineMs) {
+  // An OS-level grant must never bypass this site's workspace consent.
+  await adb(device, "shell", "pm", "grant", packageName, "android.permission.CAMERA");
+  const page = await openPanelWebViewDebugger(device, packageName, "/panels/chat/", deadlineMs);
+  try {
+    await cdpEvaluate(
+      page.socket,
+      `(() => {
+      window.__workspaceCameraProbe = "pending";
+      navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+        stream.getTracks().forEach(track => track.stop());
+        window.__workspaceCameraProbe = "granted";
+      }, error => { window.__workspaceCameraProbe = error.name; });
+      return true;
+    })()`
+    );
+    let dismissed = false;
+    while (Date.now() < deadlineMs) {
+      const xml = await dumpWindowXml(device);
+      if (await openWaitingWorkspaceApprovals(device, xml)) continue;
+      if (xml.includes('resource-id="approval-action-dismiss"')) {
+        const labels = collectWindowLabels(xml).join("\n");
+        if (!labels.includes("Personal") || !/camera/i.test(labels)) {
+          throw new Error(
+            "Website camera approval did not identify its Personal workspace and capability"
+          );
+        }
+        await fsp.mkdir(screenshotDir, { recursive: true });
+        const screenshot = await adbCaptureBuffer(device, "exec-out", "screencap", "-p");
+        await fsp.writeFile(
+          path.join(screenshotDir, "workspace-website-approval.png"),
+          screenshot.stdout
+        );
+        dismissed = await tapVisibleNodeByResourceId(device, xml, "approval-action-dismiss");
+        if (dismissed) break;
+      }
+      const state = await cdpEvaluate(page.socket, "window.__workspaceCameraProbe");
+      if (state !== "pending")
+        throw new Error(`Camera request bypassed the workspace approval queue: ${state}`);
+      await sleep(150);
+    }
+    if (!dismissed) throw new Error("Website camera approval did not appear");
+    while (Date.now() < deadlineMs) {
+      const state = await cdpEvaluate(page.socket, "window.__workspaceCameraProbe");
+      if (state === "NotAllowedError") {
+        await tapOptionalButtonByLabelPrefix(device, "Close approvals");
+        console.log(
+          "[mobile-smoke] Website camera permission: OS-granted camera denied by captured Personal workspace decision"
+        );
+        return;
+      }
+      if (state !== "pending")
+        throw new Error(`Dismissed website camera permission returned ${state}`);
+      await sleep(100);
+    }
+    throw new Error("Dismissed website camera request did not settle");
+  } finally {
+    await page.close();
+  }
+}
+
+async function assertWorkspaceBrowserIsolation(device, packageName, logcat, deadlineMs) {
+  const personal = await openPanelWebViewDebugger(device, packageName, "/panels/chat/", deadlineMs);
+  let system = null;
+  try {
+    await cdpEvaluate(
+      personal.socket,
+      'document.cookie = "vibestudio_workspace_probe=personal; path=/; SameSite=Strict"'
+    );
+    const originalUrl = await cdpEvaluate(personal.socket, "location.href");
+    await tapButtonByText(device, "Open panel drawer", deadlineMs);
+    await waitForVisibleLabel(device, "Your workspaces", deadlineMs);
+    await fsp.mkdir(screenshotDir, { recursive: true });
+    const drawer = await adbCaptureBuffer(device, "exec-out", "screencap", "-p");
+    await fsp.writeFile(path.join(screenshotDir, "workspace-drawer.png"), drawer.stdout);
+    const loaded = logcat.phaseCount("workspace-panel-webview-loaded");
+    await tapButtonByText(device, "New panel in System", deadlineMs);
+    await logcat.waitForPhaseAfter(
+      "workspace-panel-webview-loaded",
+      loaded,
+      Math.max(1, deadlineMs - Date.now())
+    );
+    system = await openPanelWebViewDebugger(
+      device,
+      packageName,
+      "/about/new/",
+      deadlineMs,
+      (url) => new URL(url).origin !== new URL(originalUrl).origin
+    );
+    await assertMountedLauncher(system.socket, deadlineMs);
+    const systemCookie = await cdpEvaluate(system.socket, "document.cookie");
+    if (systemCookie.includes("vibestudio_workspace_probe=personal")) {
+      throw new Error("System received Personal browser cookies across workspace profiles");
+    }
+    await cdpEvaluate(
+      system.socket,
+      'document.cookie = "vibestudio_workspace_probe=system; path=/; SameSite=Strict"'
+    );
+    const personalCookie = await cdpEvaluate(personal.socket, "document.cookie");
+    if (
+      !personalCookie.includes("vibestudio_workspace_probe=personal") ||
+      personalCookie.includes("vibestudio_workspace_probe=system")
+    ) {
+      throw new Error("Switching to System changed the retained Personal browser profile");
+    }
+    // Both facades use 127.0.0.1; cookies ignore port, so this proves native
+    // profile isolation rather than merely different localStorage origins.
+    const systemUrl = await cdpEvaluate(system.socket, "location.href");
+    if (new URL(originalUrl).hostname !== new URL(systemUrl).hostname) {
+      throw new Error("Browser profile probe must compare cookies for the same hostname");
+    }
+    await tapButtonByText(device, "Open panel drawer", deadlineMs);
+    await tapButtonByText(device, "Open your settings", deadlineMs);
+    await waitForVisibleLabel(device, "Settings", deadlineMs);
+    const screenshot = await adbCaptureBuffer(device, "exec-out", "screencap", "-p");
+    const dimensions = decodePng(screenshot.stdout);
+    let foundCookies = false;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (await tapVisibleNode(device, await dumpWindowXml(device), "Clear website cookies")) {
+        foundCookies = true;
+        break;
+      }
+      await adb(device, "shell", "input", "swipe", String(Math.round(dimensions.width / 2)),
+        String(Math.round(dimensions.height * 0.8)), String(Math.round(dimensions.width / 2)),
+        String(Math.round(dimensions.height * 0.35)), "350");
+    }
+    if (!foundCookies) {
+      const diagnosticDir = path.join(repoRoot, "test-results", "mobile-smoke");
+      await fsp.mkdir(diagnosticDir, { recursive: true });
+      await fsp.writeFile(path.join(diagnosticDir, "workspace-settings-failure.xml"), await dumpWindowXml(device));
+      await fsp.writeFile(path.join(diagnosticDir, "workspace-settings-failure.png"), (await adbCaptureBuffer(device, "exec-out", "screencap", "-p")).stdout);
+      throw new Error("Captured workspace website cookies setting is missing");
+    }
+    await tapButtonByText(device, "Clear cookies", deadlineMs);
+    while ((await cdpEvaluate(system.socket, "document.cookie")).includes("vibestudio_workspace_probe=")) {
+      if (Date.now() >= deadlineMs) throw new Error("Clearing System cookies did not clear its native profile");
+      await sleep(100);
+    }
+    if (!(await cdpEvaluate(personal.socket, "document.cookie")).includes("vibestudio_workspace_probe=personal")) {
+      throw new Error("Clearing System cookies affected the neighboring Personal profile");
+    }
+    await tapButtonByText(device, "Back", deadlineMs);
+    await dismissNavigationDrawerIfOpen(device);
+    await cdpEvaluate(
+      personal.socket,
+      'document.cookie = "vibestudio_workspace_probe=; Max-Age=0; path=/"'
+    );
+    await tapButtonByText(device, "Open panel drawer", deadlineMs);
+    await waitForVisibleLabel(device, "Your workspaces", deadlineMs);
+    let openedPersonal = false;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const xml = await dumpWindowXml(device);
+      if (await tapVisibleNode(device, xml, "Open Personal,", { labelPrefix: true })) {
+        openedPersonal = true;
+        break;
+      }
+      const screenshot = await adbCaptureBuffer(device, "exec-out", "screencap", "-p");
+      const { width, height } = decodePng(screenshot.stdout);
+      await adb(device, "shell", "input", "swipe", String(Math.round(width * 0.3)),
+        String(Math.round(height * 0.4)), String(Math.round(width * 0.3)),
+        String(Math.round(height * 0.8)), "350");
+    }
+    if (!openedPersonal) {
+      const xml = await dumpWindowXml(device);
+      throw new Error(`Personal workspace is absent from the stacked drawer: ${summarizeLabels(collectWindowLabels(xml))}`);
+    }
+    await dismissNavigationDrawerIfOpen(device);
+    if ((await cdpEvaluate(personal.socket, "location.href")) !== originalUrl) {
+      throw new Error("Returning to Personal replaced its retained panel document");
+    }
+    console.log(
+      "[mobile-smoke] Workspace isolation: System and Personal keep separate browser cookies and retained panel focus"
+    );
+  } finally {
+    await system?.close();
+    await personal.close();
   }
 }
 
@@ -823,6 +1042,13 @@ async function waitForLogcatReady(device, logcat) {
   await logcat.waitForPhase(phase);
 }
 
+async function openWaitingWorkspaceApprovals(device, xml) {
+  const label = collectWindowLabels(xml).find((value) =>
+    /^Approvals, [1-9]\d* waiting$/.test(value)
+  );
+  return label ? tapVisibleNode(device, xml, label) : false;
+}
+
 async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
   let lastApprovalTap = 0;
   while (Date.now() < deadlineMs) {
@@ -830,6 +1056,7 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
       const xml = await dumpWindowXml(device);
+      if (await openWaitingWorkspaceApprovals(device, xml)) continue;
       const reviewedUnits = await tapVisibleNodeByResourceId(
         device,
         xml,
@@ -855,6 +1082,7 @@ async function settleWorkspaceStartupApprovals(device, deadlineMs) {
   let resolved = 0;
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
+    if (await openWaitingWorkspaceApprovals(device, xml)) continue;
     // Address the action itself, not its enabled-looking text child. React
     // Native leaves that child enabled while the parent button is disabled and
     // marked busy during installation; tapping/logging the child repeatedly
@@ -875,6 +1103,10 @@ async function settleWorkspaceStartupApprovals(device, deadlineMs) {
     }
     const labels = collectWindowLabels(xml);
     if (hasVisibleApprovalPrompt(labels)) {
+      // Landing one review may require a second queued review. Browse the
+      // existing queue while that action is pending; do not retap its busy button.
+      const advanced = await tapVisibleNodeByResourceId(device, xml, "approval-queue-next");
+      if (!advanced) await tapVisibleNodeByResourceId(device, xml, "approval-queue-prev");
       await sleep(250);
       continue;
     }
@@ -882,6 +1114,14 @@ async function settleWorkspaceStartupApprovals(device, deadlineMs) {
     await sleep(250);
   }
   throw new Error("Timed out resolving cold-start workspace approvals");
+}
+
+async function waitForVisibleLabel(device, text, deadlineMs) {
+  while (Date.now() < deadlineMs) {
+    if (findNodeBounds(await dumpWindowXml(device), text)) return;
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for visible Android label "${text}"`);
 }
 
 async function tapButtonByText(device, text, deadlineMs) {
@@ -932,11 +1172,11 @@ async function tapOptionalButtonByLabelPrefix(device, text, timeoutMs = 6_000) {
 
 async function dismissNavigationDrawerIfOpen(device) {
   const xml = await dumpWindowXml(device);
-  if (!findNodeBounds(xml, "YOUR PANELS")) return false;
+  if (!findNodeBounds(xml, "Your workspaces")) return false;
   await adb(device, "shell", "input", "keyevent", "KEYCODE_BACK");
   const deadlineMs = Date.now() + 5_000;
   while (Date.now() < deadlineMs) {
-    if (!findNodeBounds(await dumpWindowXml(device), "YOUR PANELS")) return true;
+    if (!findNodeBounds(await dumpWindowXml(device), "Your workspaces")) return true;
     await sleep(100);
   }
   throw new Error("Android navigation drawer remained open after the Back action");
@@ -1295,6 +1535,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     const text = labels.join("\n");
     lastLabels = labels;
 
+    if (await openWaitingWorkspaceApprovals(device, xml)) continue;
     if (await tapVisibleNode(device, xml, "Approve all")) {
       await sleep(1_000);
       continue;
@@ -1902,15 +2143,24 @@ async function main() {
       explicitCheckout: options.baseCheckout,
     });
     if (developmentBase) {
-      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
-      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
+      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentBase.pins);
+      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(developmentBase.pins.base);
+      serverEnv.VIBESTUDIO_DEV_TEMPLATE_SOURCES = JSON.stringify(
+        Object.keys(developmentBase.pins).map((name) => ({
+          pin: developmentBase.pins[name],
+          checkout: developmentBase.checkouts[name],
+        }))
+      );
       // Write-back belongs to the source development instance alone; a smoke
       // must never publish back into the developer's Base checkout.
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
       console.log(
-        `[mobile-smoke] Base:      ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+        `[mobile-smoke] System:    ${developmentBase.pins.system.commit} from ${developmentBase.sourceCheckout}`
       );
-      await assertBaseCheckoutBootable({ repoRoot, checkout: developmentBase.checkout });
+      await assertBaseCheckoutBootable({
+        repoRoot,
+        checkout: developmentBase.checkouts.base,
+      });
     } else {
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
@@ -2034,8 +2284,8 @@ async function main() {
     // startup. Exercise the default user path instead of relying on hidden
     // fixture state: open the standard new-panel launcher directly.
     if (!options.noTap) {
-      await tapButtonByText(options.device, "Create new panel", managedPanelDeadlineMs);
-      console.log("[mobile-smoke] Created a panel through the mobile app chrome");
+      await createPanelFromChrome(options.device, logcat, managedPanelDeadlineMs);
+      console.log("[mobile-smoke] Mobile app accepted New panel through its chrome");
     }
     for (const phase of [
       "workspace-panel-activate-start",
@@ -2094,6 +2344,20 @@ async function main() {
       readyInfo,
       { realModel: options.realModel, checkAgentTurn: !options.skipAgentTurn }
     );
+
+    if (!options.noTap) {
+      await assertWorkspaceBrowserPermission(
+        options.device,
+        options.packageName,
+        Date.now() + options.timeoutMs
+      );
+      await assertWorkspaceBrowserIsolation(
+        options.device,
+        options.packageName,
+        logcat,
+        Date.now() + options.timeoutMs
+      );
+    }
 
     // Recovery contract: a paired installation must cold-start without another
     // invite, then survive a server restart using the persisted device room and

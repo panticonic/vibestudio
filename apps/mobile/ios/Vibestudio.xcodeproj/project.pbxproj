@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4E2D41912C00000000000091 /* WorkspaceWebView.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41902C00000000000090 /* WorkspaceWebView.mm */; };
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
 		4E2D41012C00000000000001 /* VibestudioMobileHost.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41002C00000000000001 /* VibestudioMobileHost.mm */; };
 		4E2D41052C00000000000005 /* VibestudioAuthSession.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D41042C00000000000004 /* VibestudioAuthSession.mm */; };
@@ -19,6 +20,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		4E2D41902C00000000000090 /* WorkspaceWebView.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = WorkspaceWebView.mm; path = Vibestudio/WorkspaceWebView.mm; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* Vibestudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vibestudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FAF1A68108700A75B9A /* AppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AppDelegate.h; path = Vibestudio/AppDelegate.h; sourceTree = "<group>"; };
 		13B07FB01A68108700A75B9A /* AppDelegate.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = AppDelegate.mm; path = Vibestudio/AppDelegate.mm; sourceTree = "<group>"; };
@@ -55,6 +57,7 @@
 				13B07FAF1A68108700A75B9A /* AppDelegate.h */,
 				13B07FB01A68108700A75B9A /* AppDelegate.mm */,
 				4E2D41002C00000000000001 /* VibestudioMobileHost.mm */,
+				4E2D41902C00000000000090 /* WorkspaceWebView.mm */,
 				4E2D41042C00000000000004 /* VibestudioAuthSession.mm */,
 				4E2D41102C00000000000010 /* VibestudioIroh.swift */,
 				4E2D41122C00000000000012 /* VibestudioIrohBridge.m */,
@@ -286,6 +289,7 @@
 			files = (
 				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
 				4E2D41012C00000000000001 /* VibestudioMobileHost.mm in Sources */,
+				4E2D41912C00000000000091 /* WorkspaceWebView.mm in Sources */,
 				4E2D41052C00000000000005 /* VibestudioAuthSession.mm in Sources */,
 				4E2D41112C00000000000011 /* VibestudioIroh.swift in Sources */,
 				4E2D41132C00000000000013 /* VibestudioIrohBridge.m in Sources */,
@@ -308,7 +312,7 @@
 					DEVELOPMENT_TEAM = "$(VIBESTUDIO_IOS_TEAM_ID)";
 					ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Vibestudio/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -339,7 +343,7 @@
 					CURRENT_PROJECT_VERSION = 1;
 					DEVELOPMENT_TEAM = "$(VIBESTUDIO_IOS_TEAM_ID)";
 					INFOPLIST_FILE = Vibestudio/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -409,7 +413,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD = "";
 				LDPLUSPLUS = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -485,7 +489,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD = "";
 				LDPLUSPLUS = "";
 				LD_RUNPATH_SEARCH_PATHS = (

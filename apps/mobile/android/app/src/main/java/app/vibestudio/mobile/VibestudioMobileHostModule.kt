@@ -90,6 +90,30 @@ class VibestudioMobileHostModule(
     )
 
     @ReactMethod
+    fun clearWorkspaceCookies(scope: String, promise: Promise) {
+        Handler(Looper.getMainLooper()).post {
+            try {
+                require(scope.isNotBlank()) { "A workspace browser profile is required" }
+                check(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)) {
+                    "Update Android System WebView to manage workspace cookies"
+                }
+                val profile = androidx.webkit.ProfileStore.getInstance().getProfile(WorkspaceWebViewManager.profileName(scope))
+                if (profile == null) {
+                    promise.resolve(null)
+                } else {
+                    val cookies = profile.cookieManager
+                    cookies.removeAllCookies {
+                        cookies.flush()
+                        promise.resolve(null)
+                    }
+                }
+            } catch (error: Exception) {
+                promise.reject("workspace_cookie_clear_failed", error.message, error)
+            }
+        }
+    }
+
+    @ReactMethod
     fun openSafariBrowserDataExport(promise: Promise) {
         promise.resolve(Arguments.createMap().apply {
             putBoolean("opened", false)
@@ -223,11 +247,13 @@ class VibestudioMobileHostModule(
             if (reset) {
                 closeBundleStream()
                 val safeBuildKey = safePathSegment(buildKey)
-                val safeArtifact = safePathSegment(artifactPath)
+                val safeArtifact = validatedArtifactPath(artifactPath)
                 val dir = File(reactApplicationContext.cacheDir, "vibestudio-rn/$safeBuildKey")
-                dir.mkdirs()
-                bundleFinalFile = File(dir, safeArtifact)
-                bundleTransferFile = File(dir, "$safeArtifact.transfer")
+                val finalFile = File(dir, safeArtifact)
+                finalFile.parentFile?.mkdirs()
+                bundleFinalFile = finalFile
+                bundleTransferFile?.delete()
+                bundleTransferFile = File.createTempFile("vibestudio-artifact-", ".transfer", reactApplicationContext.cacheDir)
                 bundleStream = java.io.FileOutputStream(bundleTransferFile, false)
             }
             val stream = bundleStream
@@ -242,6 +268,8 @@ class VibestudioMobileHostModule(
 
     @ReactMethod
     fun finalizeBundleWrite(integrity: String, gzip: Boolean, promise: Promise) {
+        var transferToClean: File? = null
+        var verifiedToClean: File? = null
         try {
             val stream = bundleStream
                 ?: throw IllegalStateException("finalizeBundleWrite called before any chunk")
@@ -252,6 +280,7 @@ class VibestudioMobileHostModule(
                 ?: throw IllegalStateException("missing transfer file")
             val finalFile = bundleFinalFile
                 ?: throw IllegalStateException("missing bundle file")
+            transferToClean = transferFile
             bundleTransferFile = null
             bundleFinalFile = null
 
@@ -259,8 +288,10 @@ class VibestudioMobileHostModule(
             val input: java.io.InputStream =
                 if (gzip) java.util.zip.GZIPInputStream(java.io.FileInputStream(transferFile))
                 else java.io.FileInputStream(transferFile)
+            val verifiedFile = File.createTempFile(".verified-", ".tmp", finalFile.parentFile)
+            verifiedToClean = verifiedFile
             input.use { inp ->
-                java.io.FileOutputStream(finalFile).use { out ->
+                java.io.FileOutputStream(verifiedFile).use { out ->
                     val buf = ByteArray(64 * 1024)
                     while (true) {
                         val n = inp.read(buf)
@@ -280,6 +311,9 @@ class VibestudioMobileHostModule(
             ) {
                 throw IllegalStateException("React Native bundle integrity mismatch")
             }
+            if (!verifiedFile.renameTo(finalFile)) {
+                throw IllegalStateException("Could not publish verified React Native artifact")
+            }
             Log.i(TAG, "[VibestudioMobileSmoke] phase=native-bundle-prepared-from-bytes")
             promise.resolve(Arguments.createMap().apply {
                 putString("localPath", finalFile.absolutePath)
@@ -287,6 +321,9 @@ class VibestudioMobileHostModule(
         } catch (error: Exception) {
             closeBundleStream()
             promise.reject("bundle_finalize_failed", error.message, error)
+        } finally {
+            transferToClean?.delete()
+            verifiedToClean?.delete()
         }
     }
 
@@ -931,8 +968,16 @@ class VibestudioMobileHostModule(
         Runtime.getRuntime().exit(0)
     }
 
-    private fun safePathSegment(value: String): String =
-        value.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "bundle" }
+    private fun safePathSegment(value: String): String {
+        require(value.matches(Regex("[A-Za-z0-9_-]{1,200}"))) { "Invalid bundle build key" }
+        return value
+    }
+
+    private fun validatedArtifactPath(value: String): String {
+        require(value.isNotEmpty() && !value.contains('\\') && !value.contains('\u0000')) { "Invalid artifact path" }
+        require(value.split('/').all { it.isNotEmpty() && it != "." && it != ".." }) { "Invalid artifact path" }
+        return value
+    }
 
     private companion object {
         const val TAG = "VibestudioMobileHost"

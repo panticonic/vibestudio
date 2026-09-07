@@ -1,0 +1,141 @@
+--- a/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
++++ b/android/src/main/java/com/reactnativecommunity/webview/RNCWebView.java
+@@ -49,6 +49,14 @@
+ import java.util.Set;
+ 
+ public class RNCWebView extends WebView implements LifecycleEventListener {
++    /** Embedders may require document-scoped consent in addition to Android permissions. */
++    public void requestBrowserPermission(Object token, String origin, String[] resources, ValueCallback<Boolean> callback) {
++        callback.onReceiveValue(true);
++    }
++    public boolean finishBrowserPermission(Object token) { return true; }
++    public void cancelBrowserPermission(Object token) {}
++    public void onMainFrameNavigationStarted() {}
++
+     protected @Nullable
+     String injectedJS;
+     protected @Nullable
+--- a/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewClient.java
++++ b/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewClient.java
+@@ -87,6 +87,7 @@
+       mLastLoadFailed = false;
+ 
+       RNCWebView reactWebView = (RNCWebView) webView;
++      reactWebView.onMainFrameNavigationStarted();
+       reactWebView.callInjectedJavaScriptBeforeContentLoaded();
+     }
+ 
+--- a/android/src/main/java/com/reactnativecommunity/webview/RNCWebChromeClient.java
++++ b/android/src/main/java/com/reactnativecommunity/webview/RNCWebChromeClient.java
+@@ -144,6 +144,33 @@
+ 
+     @Override
+     public void onPermissionRequest(final PermissionRequest request) {
++        mWebView.requestBrowserPermission(request, request.getOrigin().toString(), request.getResources(), allowed -> {
++            if (allowed) requestAndroidPermissions(request);
++            else {
++                if (permissionRequest == request) {
++                    permissionRequest = null;
++                    grantedPermissions = null;
++                }
++                request.deny();
++            }
++        });
++    }
++
++    @Override
++    public void onPermissionRequestCanceled(PermissionRequest request) {
++        mWebView.cancelBrowserPermission(request);
++        if (permissionRequest == request) {
++            permissionRequest = null;
++            grantedPermissions = null;
++        }
++    }
++
++    private void grantBrowserPermission(PermissionRequest request, String[] resources) {
++        if (mWebView.finishBrowserPermission(request)) request.grant(resources);
++        else request.deny();
++    }
++
++    private void requestAndroidPermissions(final PermissionRequest request) {
+ 
+         grantedPermissions = new ArrayList<>();
+ 
+@@ -180,7 +207,7 @@
+ 
+         // If all the permissions are already granted, send the response to the WebView synchronously
+         if (requestedAndroidPermissions.isEmpty()) {
+-            request.grant(grantedPermissions.toArray(new String[0]));
++            grantBrowserPermission(request, grantedPermissions.toArray(new String[0]));
+             grantedPermissions = null;
+             return;
+         }
+@@ -193,8 +220,32 @@
+     }
+ 
+ 
++    private GeolocationPermissions.Callback browserGeolocationCallback;
++
+     @Override
+     public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
++        browserGeolocationCallback = callback;
++        mWebView.requestBrowserPermission(callback, origin, new String[] { "geolocation" }, allowed -> {
++            if (allowed) requestAndroidGeolocation(origin, callback);
++            else {
++                if (geolocationPermissionCallback == callback) {
++                    geolocationPermissionCallback = null;
++                    geolocationPermissionOrigin = null;
++                }
++                callback.invoke(origin, false, false);
++            }
++        });
++    }
++
++    @Override
++    public void onGeolocationPermissionsHidePrompt() {
++        if (browserGeolocationCallback != null) mWebView.cancelBrowserPermission(browserGeolocationCallback);
++        browserGeolocationCallback = null;
++        geolocationPermissionCallback = null;
++        geolocationPermissionOrigin = null;
++    }
++
++    private void requestAndroidGeolocation(String origin, GeolocationPermissions.Callback callback) {
+ 
+         if (ContextCompat.checkSelfPermission(this.mWebView.getThemedReactContext(), Manifest.permission.ACCESS_FINE_LOCATION)
+                 != PackageManager.PERMISSION_GRANTED) {
+@@ -205,10 +256,10 @@
+             geolocationPermissionCallback = callback;
+             geolocationPermissionOrigin = origin;
+ 
+-            requestPermissions(Collections.singletonList(Manifest.permission.ACCESS_FINE_LOCATION));
++            requestPermissions(java.util.Arrays.asList(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION));
+ 
+         } else {
+-            callback.invoke(origin, true, false);
++            callback.invoke(origin, mWebView.finishBrowserPermission(callback), false);
+         }
+     }
+ 
+@@ -268,11 +319,8 @@
+                     && geolocationPermissionCallback != null
+                     && geolocationPermissionOrigin != null) {
+ 
+-                if (granted) {
+-                    geolocationPermissionCallback.invoke(geolocationPermissionOrigin, true, false);
+-                } else {
+-                    geolocationPermissionCallback.invoke(geolocationPermissionOrigin, false, false);
+-                }
++                boolean current = mWebView.finishBrowserPermission(geolocationPermissionCallback);
++                geolocationPermissionCallback.invoke(geolocationPermissionOrigin, (granted || ContextCompat.checkSelfPermission(mWebView.getThemedReactContext(), Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) && current, false);
+ 
+                 geolocationPermissionCallback = null;
+                 geolocationPermissionOrigin = null;
+@@ -303,7 +351,7 @@
+         if (shouldAnswerToPermissionRequest
+                 && permissionRequest != null
+                 && grantedPermissions != null) {
+-            permissionRequest.grant(grantedPermissions.toArray(new String[0]));
++            grantBrowserPermission(permissionRequest, grantedPermissions.toArray(new String[0]));
+             permissionRequest = null;
+             grantedPermissions = null;
+         }

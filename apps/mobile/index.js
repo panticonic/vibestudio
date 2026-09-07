@@ -294,7 +294,7 @@ function LaunchTimeline({ session }) {
 }
 
 function VibestudioMobileHostBootstrap() {
-  const [status, setStatus] = useState("Loading approved workspace app...");
+  const [status, setStatus] = useState("Loading your System workspace app...");
   const [busy, setBusy] = useState(true);
   const [pendingConnect, setPendingConnect] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -510,7 +510,7 @@ function VibestudioMobileHostBootstrap() {
     setBusy(true);
     setApprovals([]);
     setLaunchSession(null);
-    setStatus("Loading approved workspace app...");
+    setStatus("Loading your System workspace app...");
     let connection = null;
     try {
       const initialUrl = await Linking.getInitialURL();
@@ -528,7 +528,7 @@ function VibestudioMobileHostBootstrap() {
         return;
       }
       setStatus(`Reconnecting to ${pairingLabel()}...`);
-      connection = await reconnectMobileSession(stored);
+      connection = await reconnectMobileSession(stored, "client-loopback");
       await runLaunchGate(connection);
     } catch (error) {
       const failure = await closeBootstrapConnectionAfterFailure(connection, error);

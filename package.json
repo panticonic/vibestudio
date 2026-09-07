@@ -157,6 +157,7 @@
       "query-string": "^9.5.1"
     },
     "patchedDependencies": {
+      "react-native-webview@13.16.1": "patches/react-native-webview@13.16.1.patch",
       "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch",
       "@react-navigation/core@7.21.13": "patches/@react-navigation__core@7.21.13.patch"
     }

@@ -226,7 +226,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
   let serverArgs = hooks.buildServerArgs
     ? hooks.buildServerArgs(options, LOOPBACK_HOST)
-    : buildServerArgs(options, config);
+    : buildServerArgs(options);
   let ownedReadyDir = null;
   let readyFile = readyFileFromServerArgs(serverArgs);
   if (!readyFile) {
@@ -557,7 +557,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   }
 }
 
-function buildServerArgs(options, config = {}) {
+function buildServerArgs(options) {
   const args = [
     serverEntryArg(),
     "--host",
@@ -575,8 +575,6 @@ function buildServerArgs(options, config = {}) {
   }
   args.push("--app-root", options.appRoot ?? repoRoot);
   if (options.readyFile) args.push("--ready-file", path.resolve(options.readyFile));
-  if (config.requireMobileReady) args.push("--require-mobile-ready");
-  if (config.requireElectronReady) args.push("--require-electron-ready");
   return args;
 }
 

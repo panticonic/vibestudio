@@ -3,7 +3,7 @@ import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { loadShellCredential } from "./connect.js";
 import { retryBundleTransfer } from "./bundleTransferRetry.js";
 
-export const RN_HOST_ABI = "rn-host-4";
+export const RN_HOST_ABI = "rn-host-5";
 
 export interface BrowserImportArchiveEntry {
   name: string;
@@ -207,17 +207,51 @@ async function gatewayFetchBytes(
   return bytes;
 }
 
-function selectPrimaryArtifact(bootstrap: Record<string, unknown>, platform: "ios" | "android") {
-  const artifacts = Array.isArray(bootstrap["artifacts"]) ? bootstrap["artifacts"] : [];
-  const artifact = artifacts.find(
-    (a) =>
-      a &&
-      typeof a === "object" &&
-      (a as Record<string, unknown>)["role"] === "primary" &&
-      (a as Record<string, unknown>)["platform"] === platform
-  ) as Record<string, unknown> | undefined;
-  if (!artifact) throw new Error(`No primary React Native bundle artifact for ${platform}`);
-  return artifact;
+export function selectPlatformArtifacts(
+  bootstrap: Record<string, unknown>,
+  platform: "ios" | "android"
+) {
+  const all = Array.isArray(bootstrap["artifacts"]) ? bootstrap["artifacts"] : [];
+  for (const artifact of all) {
+    if (
+      artifact?.role === "asset" &&
+      artifact.platform !== "android" &&
+      artifact.platform !== "ios"
+    ) {
+      throw new Error("React Native app assets must identify their platform");
+    }
+  }
+  const artifacts = all.filter(
+    (artifact): artifact is Record<string, unknown> =>
+      !!artifact &&
+      typeof artifact === "object" &&
+      artifact["platform"] === platform &&
+      (artifact["role"] === "primary" || artifact["role"] === "asset")
+  );
+  const primary = artifacts.filter((artifact) => artifact["role"] === "primary");
+  if (primary.length !== 1)
+    throw new Error(`Expected one primary React Native bundle artifact for ${platform}`);
+  const paths = new Set<string>();
+  for (const artifact of artifacts) {
+    const path = artifact["path"];
+    if (
+      typeof path !== "string" ||
+      path.includes("\\") ||
+      /[\x00-\x1f]/u.test(path) ||
+      path.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+      paths.has(path)
+    ) {
+      throw new Error("Mobile app manifest contains an invalid or duplicate artifact path");
+    }
+    if (
+      typeof artifact["integrity"] !== "string" ||
+      !/^sha256-[a-f0-9]{64}$/iu.test(artifact["integrity"]) ||
+      typeof artifact["url"] !== "string"
+    )
+      throw new Error("Mobile app artifact is missing integrity or URL");
+    paths.add(path);
+  }
+  return { primary: primary[0]!, artifacts };
 }
 
 function retryableMobileBootstrapError(error: unknown): boolean {
@@ -386,41 +420,46 @@ export async function activateApprovedWorkspaceApp(
   options.smokePhase?.("embedded-bundle-activate-start");
   const buildKey = String(bootstrap["buildKey"] ?? "");
   if (!buildKey) throw new Error("Mobile app bootstrap did not include a build key");
-  const artifact = selectPrimaryArtifact(bootstrap, platformName());
-  const integrity = String(artifact["integrity"] ?? "");
-  const artifactUrl = String(artifact["url"] ?? "");
-  if (!integrity || !artifactUrl)
-    throw new Error("Mobile app artifact is missing integrity or URL");
-  const artifactPath = new URL(artifactUrl).pathname;
-  const nativeArtifactPath = String(artifact["path"] ?? artifactPath);
-  const transfer = { offset: 0 };
-  const prepared = await retryBundleTransfer(
-    async () => {
-      const gzipped = await streamArtifactToNative(
-        rpc,
-        nativeHost,
-        { path: artifactPath, method: "GET" },
-        buildKey,
-        nativeArtifactPath,
-        transfer
-      );
-      return await nativeHost.finalizeBundleWrite(integrity, gzipped);
-    },
-    {
-      timeoutMs: MOBILE_BUNDLE_TRANSFER_TIMEOUT_MS,
-      onRetry: (error) => {
-        if (!transferCanResume(error)) transfer.offset = 0;
-        options.smokePhase?.("embedded-bundle-transfer-retry");
-        console.warn(
-          `[mobile-bundle] retrying offset=${transfer.offset}: ${error instanceof Error ? error.message : String(error)}`
+  const { primary, artifacts } = selectPlatformArtifacts(bootstrap, platformName());
+  let primaryPath: string | null = null;
+  for (const artifact of artifacts) {
+    const integrity = String(artifact["integrity"] ?? "");
+    const artifactUrl = String(artifact["url"] ?? "");
+    if (!integrity || !artifactUrl)
+      throw new Error("Mobile app artifact is missing integrity or URL");
+    const artifactPath = new URL(artifactUrl).pathname;
+    const nativeArtifactPath = String(artifact["path"] ?? artifactPath);
+    const transfer = { offset: 0 };
+    const prepared = await retryBundleTransfer(
+      async () => {
+        const gzipped = await streamArtifactToNative(
+          rpc,
+          nativeHost,
+          { path: artifactPath, method: "GET" },
+          buildKey,
+          nativeArtifactPath,
+          transfer
         );
+        return await nativeHost.finalizeBundleWrite(integrity, gzipped);
       },
-      wait: () =>
-        transport.waitUntilConnected?.(MOBILE_BUNDLE_RECONNECT_WAIT_MS) ??
-        new Promise((resolve) => setTimeout(resolve, MOBILE_BUNDLE_TRANSFER_RETRY_MS)),
-    }
-  );
-  await nativeHost.activatePreparedAppBundle(prepared.localPath, buildKey, integrity);
+      {
+        timeoutMs: MOBILE_BUNDLE_TRANSFER_TIMEOUT_MS,
+        onRetry: (error) => {
+          if (!transferCanResume(error)) transfer.offset = 0;
+          options.smokePhase?.("embedded-bundle-transfer-retry");
+          console.warn(
+            `[mobile-bundle] retrying offset=${transfer.offset}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        },
+        wait: () =>
+          transport.waitUntilConnected?.(MOBILE_BUNDLE_RECONNECT_WAIT_MS) ??
+          new Promise((resolve) => setTimeout(resolve, MOBILE_BUNDLE_TRANSFER_RETRY_MS)),
+      }
+    );
+    if (artifact === primary) primaryPath = prepared.localPath;
+  }
+  if (!primaryPath) throw new Error("Mobile app primary artifact was not prepared");
+  await nativeHost.activatePreparedAppBundle(primaryPath, buildKey, String(primary["integrity"]));
   await transport.close();
   await nativeHost.reloadActiveAppBundle();
   options.smokePhase?.("embedded-bundle-activate-complete");

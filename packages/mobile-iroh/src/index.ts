@@ -28,7 +28,9 @@ export {
   establishIrohConnection,
   reconnectViaIroh,
   reconnectMobileSession,
+  connectMobileAccount,
 } from "./connect.js";
+export { MobileWorkspaceAccount } from "./workspaceAccount.js";
 export { createMobileHubControlClient } from "./hubControlClient.js";
 export type {
   MobileHubControlClient,

@@ -1,5 +1,11 @@
 # Vibestudio iOS Native Project
 
+Workspace browser profiles require iOS 17 or later. Android requires a System
+WebView supporting AndroidX WebKit's `MULTI_PROFILE` capability. The native host
+binds each browser view to one account/workspace profile before loading content;
+unsupported engines show an update message and never use shared browser storage.
+This native contract is `rn-host-5`.
+
 The checked-in Xcode project is authoritative. Do not regenerate it with
 `react-native init`; update `Vibestudio.xcodeproj/project.pbxproj` directly when
 native sources, build phases, or configurations change.

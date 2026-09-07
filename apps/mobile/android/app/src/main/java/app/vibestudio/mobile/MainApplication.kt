@@ -20,6 +20,7 @@ class MainApplication : Application(), ReactApplication {
             override fun getPackages(): List<ReactPackage> =
                 PackageList(this).packages.apply {
                     add(VibestudioMobileHostPackage())
+                    add(WorkspaceWebViewPackage())
                     add(OAuthLoopbackPackage())
                     add(VibestudioIrohPackage())
                 }

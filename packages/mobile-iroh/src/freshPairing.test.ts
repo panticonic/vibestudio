@@ -22,7 +22,7 @@ const workspaceReach = {
 const pairingContext = { workspaceId: "ws-b" };
 const route = {
   workspace: "beta",
-  workspaceId: "ws-b",
+  workspaceId: "system-private",
   running: true as const,
   serverUrl: "https://workspace.example",
   workspaceReach,
@@ -41,6 +41,25 @@ function fixture(
   const events: string[] = [];
   const call = vi.fn(async (_target: string, method: string) => {
     events.push(method);
+    if (method === "hubControl.ensureUserWorkspaces")
+      return {
+        personal: {
+          workspaceId: "personal-private",
+          name: "Personal",
+          lastOpened: 0,
+          pendingApprovalCount: 0,
+          running: false,
+          privateRole: "personal",
+        },
+        system: {
+          workspaceId: "system-private",
+          name: "System",
+          lastOpened: 0,
+          pendingApprovalCount: 0,
+          running: true,
+          privateRole: "system",
+        },
+      };
     if (method === "hubControl.routeWorkspace") return overrides.route ?? route;
     throw new Error(`unexpected method: ${method}`);
   });
@@ -80,7 +99,7 @@ function fixture(
 }
 
 describe("fresh mobile Iroh pairing commit", () => {
-  it("persists pairing and route before opening the workspace", async () => {
+  it("authenticates the issuer account but loads native code only from its System workspace", async () => {
     const fixtureValue = fixture();
     const connection = await completeFreshMobilePairing({
       ...fixtureValue,
@@ -101,6 +120,7 @@ describe("fresh mobile Iroh pairing commit", () => {
         schemaVersion: 5,
         phase: "routed",
         workspacePairing: workspaceReach,
+        selectedWorkspaceId: "system-private",
       }),
     ]);
     expect(fixtureValue.connectWorkspace).toHaveBeenCalledWith(
@@ -110,9 +130,13 @@ describe("fresh mobile Iroh pairing commit", () => {
     );
     expect(fixtureValue.events).toEqual([
       "persist-paired",
+      "hubControl.ensureUserWorkspaces",
       "hubControl.routeWorkspace",
       "persist-routed",
       "connect-workspace",
+    ]);
+    expect(fixtureValue.call).toHaveBeenCalledWith("main", "hubControl.routeWorkspace", [
+      { workspaceId: "system-private" },
     ]);
     expect(connection.hubControlRpc).toBe(fixtureValue.controlConnection.rpc);
     await connection.close();

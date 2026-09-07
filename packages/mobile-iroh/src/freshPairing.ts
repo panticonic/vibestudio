@@ -1,10 +1,11 @@
-import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
+import { HubWorkspaceRouteSchema, hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import type { PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import type { IrohConnection } from "./connect.js";
 import { composeMobileSession } from "./connectionPair.js";
 import {
   createPairedMobileConnection,
   createRoutedMobileConnection,
+  selectMobileConnectionWorkspace,
   type ShellCredential,
   type FreshShellPairing,
   type StoredShellPairing,
@@ -28,8 +29,9 @@ export interface CompleteFreshMobilePairingOptions {
 
 /**
  * Commit a freshly redeemed mobile pairing as one fail-closed transaction.
- * The pairing issuer identifies the exact workspace, the hub returns its exact
- * durable reach, and Keychain persistence completes before success is exposed.
+ * The pairing issuer authenticates the account. The hub ensures its private
+ * workspaces and selects System as the native app source; Keychain persistence
+ * completes before success is exposed.
  * Every post-connect failure closes the session so a retry cannot accumulate a
  * half-paired keepalive loop.
  */
@@ -64,15 +66,19 @@ export async function completeFreshMobilePairing(
       controlConnection.endpointIdentityId
     );
     await persistConnection(paired);
+    const pair = hubControlMethods.ensureUserWorkspaces.returns.parse(
+      await controlConnection.rpc.call("main", "hubControl.ensureUserWorkspaces", [])
+    );
+    const source = selectMobileConnectionWorkspace(paired, pair.system.workspaceId);
     const route = HubWorkspaceRouteSchema.parse(
       await controlConnection.rpc.call("main", "hubControl.routeWorkspace", [
-        { workspaceId: pairingContext.workspaceId },
+        { workspaceId: source.selectedWorkspaceId },
       ])
     );
-    if (route.workspaceId !== pairingContext.workspaceId) {
-      throw new Error("Workspace route changed the pairing target");
+    if (route.workspaceId !== source.selectedWorkspaceId) {
+      throw new Error("Workspace route changed the System app source");
     }
-    const routed = createRoutedMobileConnection(paired, route.workspaceReach);
+    const routed = createRoutedMobileConnection(source, route.workspaceReach);
     await persistConnection(routed);
     const workspaceConnection = await connectWorkspace(
       route.workspaceReach,
@@ -80,6 +86,7 @@ export async function completeFreshMobilePairing(
       controlConnection
     );
     workspaceConnection.deviceId = credential.deviceId;
+    workspaceConnection.serverId = route.serverId;
     return composeMobileSession(controlConnection, workspaceConnection);
   } catch (error) {
     try {
