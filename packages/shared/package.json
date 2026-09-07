@@ -14,6 +14,7 @@
     "./approvalCopy": "./src/approvalCopy.ts",
     "./approvalVisibility": "./src/approvalVisibility.ts",
     "./approvalMarkdown": "./src/approvalMarkdown.ts",
+    "./approvalPresentation": "./src/approvalPresentation.ts",
     "./approvals": "./src/approvals.ts",
     "./asyncStateConvergenceLoop": "./src/asyncStateConvergenceLoop.ts",
     "./asyncStateArgsValidator": "./src/asyncStateArgsValidator.ts",

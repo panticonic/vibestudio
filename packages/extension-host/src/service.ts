@@ -16,6 +16,7 @@ import {
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import {
   ServiceError,
+  ServiceAccessError,
   verifiedInitiator,
   verifiedInitiatingUserId,
   type ServiceContext,
@@ -300,6 +301,10 @@ export interface ExtensionHostDeps {
   tokenManager: TokenManager;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
+  openUnitReviewFor(code: { repoPath: string; effectiveVersion: string }): {
+    approvalId: string;
+    title: string;
+  } | null;
   approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
   /** Stable launch-gate group for an extension (shared or one host target). */
   approvalBatchKeyFor?: (entry: ReviewedUnit) => string | undefined;
@@ -917,12 +922,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           await this.prepareTargetBuild(name);
           const entry = this.lookupForInvoke(name);
           if (!entry?.activeBundleKey) {
-            throw new ServiceError(
-              "extensions",
-              "invoke",
-              this.extensionNotInstalledMessage(name),
-              "ENOEXT"
-            );
+            throw this.extensionUnavailableError(name, "invoke");
           }
           const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
           const details = extensionMetadataDetails(build?.metadata);
@@ -1067,12 +1067,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       entry = this.lookupForInvoke(name);
     }
     if (!entry) {
-      throw new ServiceError(
-        "extensions",
-        operation,
-        this.extensionNotInstalledMessage(name),
-        "ENOEXT"
-      );
+      throw this.extensionUnavailableError(name, operation);
     }
     await this.ensureTargetRunning(entry, ctx.signal, operation);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
@@ -1288,12 +1283,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       entry = this.lookupForInvoke(name);
     }
     if (!entry) {
-      throw new ServiceError(
-        "extensions",
-        "invokeStream",
-        this.extensionNotInstalledMessage(name),
-        "ENOEXT"
-      );
+      throw this.extensionUnavailableError(name, "invokeStream");
     }
     this.assertPublicExtensionInvocationAllowed(entry, method, "invokeStream");
     if (!this.deps.extensionTransport.streamCallTarget) {
@@ -1579,6 +1569,36 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         "ENOTREADY"
       );
     }
+  }
+
+  private extensionUnavailableError(name: string, operation: string): ServiceError {
+    const entry = this.resolveInvocationEntry(name);
+    if (entry && !entry.activeBundleKey) {
+      const effectiveVersion = this.deps.buildSystem.getEffectiveVersion(entry.name);
+      const review = effectiveVersion
+        ? this.deps.openUnitReviewFor({ repoPath: entry.source.repo, effectiveVersion })
+        : null;
+      if (review) {
+        const reason = `Waiting for you to finish reviewing ${review.title}.`;
+        return new ServiceAccessError("extensions", operation, reason, "EREVIEWPENDING", {
+          authorityFailure: {
+            reasonCode: "review-pending",
+            reason,
+            remediation: {
+              kind: "resolve-open-review",
+              message: "Finish the review that is already open, then retry the exact invocation.",
+              review,
+            },
+          },
+        });
+      }
+    }
+    return new ServiceError(
+      "extensions",
+      operation,
+      this.extensionNotInstalledMessage(name),
+      "ENOEXT"
+    );
   }
 
   private extensionNotInstalledMessage(name: string): string {

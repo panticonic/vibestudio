@@ -88,6 +88,7 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
 function makeHost(
   overrides: {
     approvalDecision?: "accepted" | "deny";
+    openUnitReviewFor?: ExtensionHostDeps["openUnitReviewFor"];
     activeEv?: string | null;
     depEv?: string | null;
     activeDepEv?: string | null;
@@ -303,6 +304,7 @@ function makeHost(
     tokenManager: { ensureToken: vi.fn() } as any,
     eventService: eventService as any,
     approvalQueue,
+    openUnitReviewFor: overrides.openUnitReviewFor ?? (() => null),
     getGatewayUrl: () => "http://127.0.0.1:3000",
     getContextIdForCaller: overrides.getContextIdForCaller,
     resolveProviderExtensionName: overrides.resolveProviderExtensionName ?? (() => null),
@@ -1354,6 +1356,73 @@ describe("ExtensionHost activation", () => {
         }),
       }),
     ]);
+  });
+
+  it("returns the exact existing review for a declared extension with no approved build", async () => {
+    const openUnitReviewFor = vi.fn(() => ({
+      approvalId: "review-target",
+      title: "Workspace tools",
+    }));
+    const { host, extensionNode, approvalQueue } = makeHost({
+      activeBundleKey: null,
+      status: "pending-approval",
+      openUnitReviewFor,
+    });
+    const expected = {
+      code: "EREVIEWPENDING",
+      errorKind: "access",
+      errorData: {
+        authorityFailure: {
+          reasonCode: "review-pending",
+          remediation: {
+            kind: "resolve-open-review",
+            review: { approvalId: "review-target", title: "Workspace tools" },
+          },
+        },
+      },
+    };
+    await expect(
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "confirm", [])
+    ).rejects.toMatchObject(expected);
+    await expect(
+      host.invokeStream(panelCtx("panel-1"), extensionNode.name, "confirm", [])
+    ).rejects.toMatchObject(expected);
+    const preparation =
+      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+    await expect(
+      preparation(panelCtx("panel-1"), [extensionNode.name, "confirm", []])
+    ).rejects.toMatchObject(expected);
+    expect(openUnitReviewFor).toHaveBeenCalledWith({
+      repoPath: extensionNode.relativePath,
+      effectiveVersion: "ev-current",
+    });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("does not classify a pending registry entry as an open review when no exact review exists", async () => {
+    const { host, extensionNode } = makeHost({
+      activeBundleKey: null,
+      status: "pending-approval",
+      openUnitReviewFor: () => null,
+    });
+    await expect(
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "confirm", [])
+    ).rejects.toMatchObject({ code: "ENOEXT" });
+  });
+
+  it("keeps an active approved extension callable while an update awaits review", async () => {
+    const openUnitReviewFor = vi.fn(() => ({ approvalId: "update", title: "Updated tools" }));
+    const extensionTransport = { call: vi.fn(async () => "existing-build") };
+    const { host, extensionNode } = makeHost({
+      status: "pending-approval",
+      openUnitReviewFor,
+      extensionTransport,
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "confirm", [])).resolves.toBe(
+      "existing-build"
+    );
+    expect(openUnitReviewFor).not.toHaveBeenCalled();
   });
 
   it("fails with ENOEXT and never prompts when invoking an undeclared extension", async () => {
