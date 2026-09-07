@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   panelRendererViewReportSchema,
+  panelRuntimeAcquireResultSchema,
   panelRuntimeLeaseSchema,
 } from "./panelRuntime.js";
 
@@ -31,6 +32,18 @@ describe("panelRuntimeLeaseSchema", () => {
 
   it("accepts a lease without keepLoaded (optional)", () => {
     expect(() => panelRuntimeLeaseSchema.parse(baseLease)).not.toThrow();
+  });
+
+  it.each([true, false])("requires the authoritative version for acquired=%s", (acquired) => {
+    const result = { acquired, lease: baseLease, version: { epoch: "server-1", counter: 7 } };
+    expect(panelRuntimeAcquireResultSchema.parse(result)).toEqual(result);
+    expect(panelRuntimeAcquireResultSchema.safeParse({ acquired, lease: baseLease }).success).toBe(
+      false
+    );
+    expect(
+      panelRuntimeAcquireResultSchema.safeParse({ ...result, version: { epoch: "", counter: 7 } })
+        .success
+    ).toBe(false);
   });
 });
 

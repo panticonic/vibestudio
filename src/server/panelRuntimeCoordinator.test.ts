@@ -393,6 +393,53 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     expect(coordinator.authorizePanelConnection("panel:nav-a", "route-a")).toEqual({ ok: true });
   });
 
+  it("versions acquired, denied and takeover outcomes against the same lease event clock", () => {
+    const { coordinator } = resident();
+    const before = coordinator.getSnapshot().version;
+    const request = {
+      slotId: "panel:tree/a",
+      clientSessionId: "desktop",
+      connectionId: "route-b",
+    };
+    const existing = coordinator.acquire("panel:nav-a", request);
+    expect(existing.version).toEqual(before);
+    expect(existing.lease.connectionId).toBe("route-a");
+    coordinator.registerClient({ clientSessionId: "mobile", label: "Mobile", platform: "mobile" });
+    const denied = coordinator.acquire("panel:nav-a", { ...request, clientSessionId: "mobile" });
+    expect(denied.acquired).toBe(false);
+    expect(denied.version).toEqual(coordinator.getSnapshot().version);
+
+    const events: Array<{ version: { epoch: string; counter: number } }> = [];
+    const unsubscribe = coordinator.onLeaseChanged((event) => events.push(event));
+    const replaced = coordinator.takeOver("panel:nav-a", request);
+    unsubscribe();
+    expect(replaced.version).toEqual(events.at(-1)?.version);
+    expect(replaced.version).toEqual(coordinator.getSnapshot().version);
+    expect(replaced.version.epoch).toBe(before.epoch);
+    expect(replaced.version.counter).toBeGreaterThan(before.counter);
+    expect(replaced.lease.connectionId).toBe("route-b");
+  });
+
+  it("keeps an acquisition's version older than a release triggered by its notification", () => {
+    const { coordinator } = resident();
+    const events: Array<{ reason: string; version: { epoch: string; counter: number } }> = [];
+    const unsubscribe = coordinator.onLeaseChanged((event) => {
+      events.push(event);
+      if (event.reason === "acquired" && event.next?.connectionId === "route-b") {
+        coordinator.release("panel:nav-a", "route-b");
+      }
+    });
+    const acquired = coordinator.takeOver("panel:nav-a", {
+      slotId: "panel:tree/a",
+      clientSessionId: "desktop",
+      connectionId: "route-b",
+    });
+    unsubscribe();
+    expect(acquired.version).toEqual(events.find((event) => event.reason === "acquired")?.version);
+    expect(acquired.version.counter).toBeLessThan(coordinator.getSnapshot().version.counter);
+    expect(coordinator.getLease("panel:nav-a")).toBeNull();
+  });
+
   it("terminates lease-less attempts on unload and entity retirement", () => {
     const unloadedCoordinator = new PanelRuntimeCoordinator();
     const unloaded = unloadedCoordinator.ensureAttemptForSlot("panel:tree/u", "panel:nav-u");

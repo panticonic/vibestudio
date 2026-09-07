@@ -651,7 +651,7 @@ export class PanelRuntimeCoordinator {
         hostConnectionId,
       },
       "acquired"
-    );
+    ).lease;
   }
 
   /**
@@ -796,7 +796,7 @@ export class PanelRuntimeCoordinator {
         },
         "acquired",
         { defaultCdpLease: true }
-      ),
+      ).lease,
     };
   }
 
@@ -875,7 +875,7 @@ export class PanelRuntimeCoordinator {
       },
       "acquired",
       { defaultCdpLease: wasDefaultCdpLease }
-    );
+    ).lease;
   }
 
   acquire(
@@ -891,7 +891,7 @@ export class PanelRuntimeCoordinator {
     const existing = this.leases.get(entityId);
     if (existing) {
       if (existing.clientSessionId !== input.clientSessionId) {
-        return { acquired: false, lease: existing };
+        return { acquired: false, lease: existing, version: this.currentVersion() };
       }
       const attempt = this.currentAttempt(asPanelSlotId(input.slotId));
       if (
@@ -905,10 +905,10 @@ export class PanelRuntimeCoordinator {
         // rewriting that lease would create two valid-looking connection ids
         // whose events race in the host. Route replacement is the distinct,
         // explicit takeOver operation.
-        return { acquired: true, lease: existing };
+        return { acquired: true, lease: existing, version: this.currentVersion() };
       }
     }
-    return { acquired: true, lease: this.writeLease(entityId, input, "acquired") };
+    return { acquired: true, ...this.writeLease(entityId, input, "acquired") };
   }
 
   takeOver(
@@ -926,7 +926,7 @@ export class PanelRuntimeCoordinator {
       this.stopRouteAttempt(existing, "superseded", true);
       this.emitChange(entityId, existing.slotId, existing, null, "revoked");
     }
-    return { acquired: true, lease: this.writeLease(entityId, input, "acquired") };
+    return { acquired: true, ...this.writeLease(entityId, input, "acquired") };
   }
 
   release(
@@ -1086,7 +1086,7 @@ export class PanelRuntimeCoordinator {
     },
     reason: PanelRuntimeLeaseChangedReason,
     options: { defaultCdpLease?: boolean } = {}
-  ): PanelRuntimeLease {
+  ): { lease: PanelRuntimeLease; version: RuntimeLeaseVersion } {
     const client = this.clients.get(input.clientSessionId);
     if (!client) {
       throw new Error(`Unknown runtime client session: ${input.clientSessionId}`);
@@ -1137,8 +1137,8 @@ export class PanelRuntimeCoordinator {
         this.routeReachability.set(lease.connectionId, false);
       }
     }
-    this.emitChange(runtimeEntityId, slotId, previous, lease, reason);
-    return lease;
+    const version = this.emitChange(runtimeEntityId, slotId, previous, lease, reason);
+    return { lease, version };
   }
 
   private assignDefaultCdpHost(
@@ -1164,7 +1164,7 @@ export class PanelRuntimeCoordinator {
       },
       "acquired",
       { defaultCdpLease: true }
-    );
+    ).lease;
   }
 
   /**
@@ -1207,7 +1207,7 @@ export class PanelRuntimeCoordinator {
         },
         "acquired",
         { defaultCdpLease: wasDefaultCdpLease }
-      ),
+      ).lease,
     };
   }
 
@@ -1576,7 +1576,7 @@ export class PanelRuntimeCoordinator {
     previous: PanelRuntimeLease | null,
     next: PanelRuntimeLease | null,
     reason: PanelRuntimeLeaseChangedReason
-  ): void {
+  ): RuntimeLeaseVersion {
     const event: PanelRuntimeLeaseChangedEvent = {
       type: "panel:runtimeLeaseChanged",
       version: this.nextVersion(),
@@ -1600,6 +1600,8 @@ export class PanelRuntimeCoordinator {
       }
     }
     this.emitSlotObservationChanged(slotId);
+    // Return this mutation's version, even if a listener caused a later change.
+    return event.version;
   }
 
   private emitSlotObservationChanged(slotId: PanelSlotId): void {

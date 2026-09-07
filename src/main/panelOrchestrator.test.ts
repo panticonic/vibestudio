@@ -4,7 +4,10 @@ import type { Panel } from "@vibestudio/shared/types";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition";
-import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
+import type {
+  PanelRuntimeAcquireResult,
+  PanelRuntimeLease,
+} from "@vibestudio/shared/panel/panelLease";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 
@@ -198,21 +201,21 @@ function createOrchestrator(
       connectionId: string;
       keepLoaded?: boolean;
     }
-  ): Promise<PanelRuntimeLease> => {
+  ): Promise<PanelRuntimeAcquireResult> => {
     const orch = orchestratorRef;
     const next = runtimeLease(runtimeEntityId, request);
-    if (!orch) return next;
-    leaseVersionCounter += 1;
+    const version = { epoch: "test", counter: ++leaseVersionCounter };
+    if (!orch) return { acquired: true, lease: next, version };
     await orch.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
-      version: { epoch: "test", counter: leaseVersionCounter },
+      version,
       slotId: asPanelSlotId(request.slotId),
       runtimeEntityId: asPanelEntityId(runtimeEntityId),
       previous: null,
       next,
       reason: "acquired",
     });
-    return next;
+    return { acquired: true, lease: next, version };
   };
   const handleServerCall = async (_service: string, method: string, args?: unknown[]) => {
     if (method === "registerClient") return undefined;
@@ -222,8 +225,7 @@ function createOrchestrator(
         { slotId: string; clientSessionId: string; connectionId: string },
       ];
       if (!runtimeEntityId || !request) throw new Error("panelRuntime.acquire fixture needs args");
-      const lease = await dispatchAssignedLease(runtimeEntityId, request);
-      return { acquired: true, lease };
+      return dispatchAssignedLease(runtimeEntityId, request);
     }
     if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
     if (method === "reportView") return "reported";
@@ -951,7 +953,8 @@ describe("PanelOrchestrator local presentation", () => {
       { holderLabel: "Laptop" }
     );
     serverClient.call.mockImplementation(async (_service: string, method: string) => {
-      if (method === "acquire") return { acquired: false, lease: foreignLease };
+      if (method === "acquire")
+        return { acquired: false, lease: foreignLease, version: { epoch: "test", counter: 1 } };
       return undefined;
     });
 
@@ -1387,6 +1390,7 @@ describe("PanelOrchestrator.focusPanel", () => {
           ];
           return {
             acquired: false,
+            version: { epoch: "test", counter: 1 },
             lease: runtimeLease(runtimeEntityId, request, { holderLabel: "Desktop B" }),
           };
         }
@@ -2377,10 +2381,12 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       loaded.add(panelId);
     });
 
-    let settleAcquire!: (value: { acquired: true; lease: PanelRuntimeLease }) => void;
-    const acquireResponse = new Promise<{ acquired: true; lease: PanelRuntimeLease }>((resolve) => {
-      settleAcquire = resolve;
-    });
+    let settleAcquire!: (value: Extract<PanelRuntimeAcquireResult, { acquired: true }>) => void;
+    const acquireResponse = new Promise<Extract<PanelRuntimeAcquireResult, { acquired: true }>>(
+      (resolve) => {
+        settleAcquire = resolve;
+      }
+    );
     serverClient.call.mockImplementation(async (_service, method, args?: unknown[]) => {
       if (method === "registerClient") return undefined;
       if (method === "acquire") return acquireResponse;
@@ -2411,7 +2417,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       next: lease,
       reason: "acquired",
     });
-    settleAcquire({ acquired: true, lease });
+    settleAcquire({ acquired: true, lease, version: { epoch: "test", counter: 2 } });
 
     await Promise.all([loading, leaseEvent]);
     expect(serverClient.call.mock.calls.filter(([, method]) => method === "acquire")).toHaveLength(
@@ -2436,10 +2442,12 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     });
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
-    let settleAcquire!: (value: { acquired: true; lease: PanelRuntimeLease }) => void;
-    const acquireResponse = new Promise<{ acquired: true; lease: PanelRuntimeLease }>((resolve) => {
-      settleAcquire = resolve;
-    });
+    let settleAcquire!: (value: Extract<PanelRuntimeAcquireResult, { acquired: true }>) => void;
+    const acquireResponse = new Promise<Extract<PanelRuntimeAcquireResult, { acquired: true }>>(
+      (resolve) => {
+        settleAcquire = resolve;
+      }
+    );
     serverClient.call.mockImplementation(async (_service, method, args?: unknown[]) => {
       if (method === "registerClient") return undefined;
       if (method === "acquire") return acquireResponse;
@@ -2469,7 +2477,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       executionDigest: "d".repeat(64),
       authorityRequests: [],
     });
-    settleAcquire({ acquired: true, lease });
+    settleAcquire({ acquired: true, lease, version: { epoch: "test", counter: 2 } });
 
     await Promise.all([loading, activation]);
     expect(serverClient.call.mock.calls.filter(([, method]) => method === "acquire")).toHaveLength(

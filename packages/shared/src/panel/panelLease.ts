@@ -108,6 +108,7 @@ export interface PanelRuntimeLeaseChangedEvent {
   reason: PanelRuntimeLeaseChangedReason;
 }
 
+/** The outcome's coordinator version orders it against lease events and snapshots. */
 export type PanelRuntimeAcquireResult =
-  | { acquired: true; lease: PanelRuntimeLease }
-  | { acquired: false; lease: PanelRuntimeLease };
+  | { acquired: true; lease: PanelRuntimeLease; version: RuntimeLeaseVersion }
+  | { acquired: false; lease: PanelRuntimeLease; version: RuntimeLeaseVersion };

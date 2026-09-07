@@ -161,12 +161,14 @@ export const panelRuntimeAcquireResultSchema = z.union([
     .object({
       acquired: z.literal(true),
       lease: panelRuntimeLeaseSchema,
+      version: runtimeLeaseVersionSchema,
     })
     .strict(),
   z
     .object({
       acquired: z.literal(false),
       lease: panelRuntimeLeaseSchema,
+      version: runtimeLeaseVersionSchema,
     })
     .strict(),
 ]) satisfies z.ZodType<PanelRuntimeAcquireResult, z.ZodTypeDef, unknown>;
