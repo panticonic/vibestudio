@@ -33,7 +33,10 @@ export function createMenuService(deps: {
   return {
     name: "menu",
     description: "Native menus",
-    authority: { principals: ["user", "code"] },
+    // Hosted workspace chrome reaches Electron through its host-attributed
+    // shell session. The capability gate below still binds that host origin to
+    // the live, admitted chrome view.
+    authority: { principals: ["user", "host", "code"] },
     methods: menuMethods,
     handler: defineServiceHandler("menu", menuMethods, {
       showHamburger: (ctx, [position]) => {
