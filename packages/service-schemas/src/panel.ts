@@ -1,5 +1,7 @@
 /**
- * panel service method schemas.
+ * Electron-native panel presentation method schemas, composed into view.
+ * Verified System chrome invokes these through its native host origin; method
+ * handlers retain the sealed chrome and panel-hosting capability checks.
  */
 
 import { z } from "zod";
@@ -169,7 +171,7 @@ export const panelMethods = defineServiceMethods({
       "Commit and present a workspace panel under a parent on the current native host while runtime preparation continues in the background.",
     args: z.tuple([z.string().nullable(), z.string(), PanelCreateOptionsSchema.optional()]),
     returns: PanelCreateResultSchema,
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["user", "host", "code"] },
     access: WRITE_ACCESS,
   },
   focusPanel: {
@@ -192,7 +194,7 @@ export const panelMethods = defineServiceMethods({
         .optional(),
     ]),
     returns: PanelFocusResultSchema,
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["user", "host", "code"] },
     access: WRITE_ACCESS,
   },
   ensurePanelLoaded: {
@@ -208,7 +210,7 @@ export const panelMethods = defineServiceMethods({
       "Ensure a panel has a native view on this host without navigating to it or waiting for visible-slot readiness.",
     args: z.tuple([z.string()]),
     returns: PanelFocusResultSchema,
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["user", "host", "code"] },
     access: WRITE_ACCESS,
   },
   updateTheme: {
@@ -251,7 +253,7 @@ export const panelMethods = defineServiceMethods({
     description: "Return the current server-controlled theme identity tokens for hosted panels.",
     args: z.tuple([]),
     returns: ThemeConfigSchema,
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["user", "host", "code"] },
     access: READ_ACCESS,
   },
   getPresentation: {
