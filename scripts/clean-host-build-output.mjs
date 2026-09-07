@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const PRESERVED_DIST_ENTRIES = new Set([
+  // Official, checksum-pinned runtime distributions have their own atomic
+  // publisher. Live instances still launch from these
+  // paths; they are not disposable compiler output.
+  "node",
   // An app bake is an explicit, separately produced packaging input.
   "baked-app",
   // Full and source-prerequisite builds share this lock.

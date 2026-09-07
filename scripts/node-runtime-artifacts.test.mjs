@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { cleanHostBuildOutput } from "./clean-host-build-output.mjs";
 import {
   NODE_RUNTIME_VERSION,
   NODE_RUNTIME_TARGETS,
@@ -50,7 +51,7 @@ test(
       const cache = path.join(appRoot, ".cache", "node-distributions");
       await mkdir(path.join(source, "bin"), { recursive: true });
       await mkdir(cache, { recursive: true });
-      await writeFile(path.join(source, "bin", "node"), "synthetic installed binary");
+      await writeFile(path.join(source, "bin", "node"), "#!/bin/sh\nprintf 'runtime-alive'\n");
       const archive = path.join(cache, archiveName);
       await promisify(execFile)("tar", ["-czf", archive, "-C", appRoot, "fixture-node"]);
       const target = {
@@ -66,6 +67,16 @@ test(
       ]);
       assert.deepEqual(results[0], results[1]);
       assert.deepEqual(await assertNodeRuntimeArtifacts(appRoot, target), results[0]);
+      // A live instance retains this executable path while another instance
+      // rebuilds the host. Cleaning compiler output must not retire a runtime.
+      await writeFile(path.join(appRoot, "dist", "old-host-entry.js"), "obsolete");
+      cleanHostBuildOutput(appRoot);
+      await assert.rejects(readFile(path.join(appRoot, "dist", "old-host-entry.js")), {
+        code: "ENOENT",
+      });
+      const launch = await promisify(execFile)(results[0].executable, []);
+      assert.equal(launch.stdout, "runtime-alive");
+      assert.deepEqual(await stageNodeRuntime(appRoot, target), results[0]);
     } finally {
       await rm(appRoot, { recursive: true, force: true });
     }
