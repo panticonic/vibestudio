@@ -70,7 +70,11 @@ export class WorkspaceUiSessions {
     const opening = runtime.serverClient.openHostUiSession().then(async (session) => {
       if (this.closed || this.sessions.get(key) !== opening) {
         await session.close();
-        throw new Error("Workspace UI session was released while opening");
+        throw new RpcBoundaryError(
+          "Workspace UI session was released while opening",
+          "transport",
+          "CONNECTION_LOST"
+        );
       }
       let deliveryTail: Promise<void> = Promise.resolve();
       const unsubscribe = session.onMessage((envelope) => {

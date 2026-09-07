@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RpcEnvelope } from "@vibestudio/rpc";
+import { isRpcConnectionLost, type RpcEnvelope } from "@vibestudio/rpc";
 import { WorkspaceUiSessions, type WorkspaceIpcRuntime } from "./workspaceUiSessions.js";
 import type { HostUiSession } from "./serverClient.js";
 
@@ -100,7 +100,12 @@ describe("WorkspaceUiSessions", () => {
         })
     );
     const opening = directory.session(caller, runtime);
-    const rejection = expect(opening).rejects.toThrow("released while opening");
+    const rejection = expect(opening).rejects.toSatisfy(
+      (error: unknown) =>
+        isRpcConnectionLost(error) &&
+        error instanceof Error &&
+        error.message === "Workspace UI session was released while opening"
+    );
     const closing = directory.closeCaller(caller.callerId);
     complete(session);
     await Promise.all([rejection, closing]);
