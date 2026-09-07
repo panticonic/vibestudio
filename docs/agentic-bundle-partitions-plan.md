@@ -28,8 +28,10 @@ Base, Personal and System have separate positive source inventories. Examples,
 Google, News and Spectrolite have been converted to self-contained source snapshots.
 Their closures also validate from clean Git archives, independently of local
 untracked files: Base/Personal/System contain 61/74/99 repositories and the four
-optional templates contain 76/66/64/63. All include local template instructions and the
-Base testing companion. Packaged startup now needs exact publication receipts for
+optional templates contain 76/66/64/63. After the final desktop/mobile ownership
+fixes, System was rechecked independently from its clean committed archive: 99
+repositories and 1,906 files. All include local template instructions and the Base
+testing companion. Packaged startup now needs exact publication receipts for
 the three runtime distributions; the old single-Base release artifact does not
 supply those coordinates. No publication has been performed and no updater or
 release-recovery subsystem is being added.
@@ -73,10 +75,28 @@ isolated WebView data stores, and requires Android WebView's multi-profile featu
 An unsupported Android WebView must request an update rather than fall back to a
 shared browser profile. Native Android compilation has passed; iOS runtime
 verification remains outstanding.
-The latest Android run passed the ordinary agent lifecycle and workspace-owned
-camera denial, but System asset requests suffered delayed Iroh delivery around
-direct/relay path changes. Cookie-clearing acceptance is unfinished. A separate
-raw-binding experiment proved that the pinned native Iroh receive lock prevents
+Android acceptance passed the ordinary agent lifecycle, workspace-owned camera
+denial, and a selected System cookie clear that preserved Personal cookies. That
+run needed a manual Android Back action because Settings scrolled its navigation
+header out of view; the header now stays visible while its sections scroll. A
+subsequent unattended run still failed after intermittent System panel activation
+delays, so full unattended mobile acceptance remains outstanding. Its 45-second
+deadline covered the whole materialization attempt, including authorization and
+session readiness; it does not identify a slow RPC or establish a network cause.
+
+A bounded 90-second warm-state probe then mounted System successfully. Four
+instrumented host requests settled in 0–16 ms; the selected direct paths reported
+zero packet loss, MTU 1452 and RTT at most 4 ms. This successful probe does not
+explain the intermittent failure. Existing connection diagnostics now expose native
+path counters without adding a separate polling or logging subsystem. The canonical
+mobile readiness reader was also corrected to consume the current shell-ready event
+and honor indented Android epoch timestamps. Both diagnostic changes have focused
+regression coverage. A separate bounded native Settings check passed after the
+header fix: Back remained visible while scrolling, System cookie clearing succeeded,
+and Back returned to the workspace. It did not repeat the earlier Personal-cookie
+preservation check. All owned probe processes were cleaned up.
+
+A separate raw-binding experiment proved that the pinned native Iroh receive lock prevents
 `stop()` from interrupting a pending read. A rebuilt binding from the exact pinned
 upstream source now passes native cancellation checks and the existing real-QUIC
 RPC client tests, including response-head timeout and upload cancellation without
@@ -87,7 +107,7 @@ passes seven upstream endpoint tests and seven cancellation regressions; stock
 1.1.0 fails all seven cancellation regressions. Production npm/Maven/Swift pins
 remain unchanged, so the passing runs explicitly select the repaired local
 artifact. A coherent native dependency release is still required. This defect
-is not yet established as the cause of the mobile path delay.
+is not established as the cause of the intermittent mobile activation delay.
 
 The full host suite passed 6,382 tests across 742 files using that repaired native
 binding, with five opt-in suites skipped. The workspace suite passed 4,501 tests;
@@ -95,8 +115,35 @@ one 35-test fixture timed out loading modules during concurrent builds, then all
 35 passed in a focused rerun without changing the test or timeout. Two workspace
 tests remained skipped. Subsequent ownership fixes passed their focused tests,
 and repository commit checks, types, generated contracts and formatting passed.
+Subsequent review repaired desktop icon/focus ownership and mobile retained-view lease
+ordering. Lease acquisitions now carry the coordinator version already used by events
+and snapshots; clients do not invent another causal clock. Mobile's final lifecycle
+change passed 40 focused tests and all three userland typechecks; Android was not rerun
+for that final source change. Host acquisition/schema/orchestration checks passed,
+including exact event-version ordering when a listener releases a just-acquired lease.
+The typed gateway extraction passed 46 schema/handler tests plus the two typed-client
+guards without adding a method-specific exemption. Four native panel-method authority
+overrides were aligned with the existing native view service host contract; 47 focused
+tests retained rejection of unrelated hosts and ordinary apps. Concurrent icon streams
+also exposed one native IPC listener per stream; the preload now shares one listener,
+retaining operation-ID isolation and per-stream cancellation. Its 27 focused tests
+include 24 concurrent streams, foreign frames, terminal cleanup and surviving siblings.
+
+The final native Electron smoke passed fresh remote pairing over Iroh with the
+explicit repaired local binding. It exercised the host launch approval and two
+workspace source reviews, waited for System's focused presentation, verified
+native panel readiness and workspace-owned image decoding, then created a panel
+through the visible focused New action and checked native title projection and
+Settings. Strict diagnostics passed with no stream-listener warnings. All three
+workspace children exited cleanly, the hub shut down, and owned processes and
+temporary state were removed. The test now waits for actual workspace focus and
+all cleanup callers await the same teardown; retained hidden controls cannot
+satisfy its action lookup.
+
 These results do not establish stock-binding, iOS runtime, public application
-RPC, or website-to-agent/tool acceptance.
+RPC, or website-to-agent/tool acceptance. Native desktop reconnect and
+shared-member revocation during an open native approval still require separate
+acceptance evidence; fresh pairing does not establish them.
 
 Implementation is recorded in targeted local commits; nothing has been published:
 
@@ -105,8 +152,12 @@ Implementation is recorded in targeted local commits; nothing has been published
 | Host | `f5286e222`, `2c80d8dc0` | Native build containment, ownership/identity, standalone bootstrap and authority. |
 | Host | `b445eda44`, `18c72ed69` | Desktop and mobile native clients. |
 | Host | `15b8decc5` | Request lifecycle and reproducible native cancellation repair inputs; production binding unchanged. |
+| Host | `40e4c054b`, `7113aefc8`, `8a4641d52` | Exact private-workspace smoke label, native QUIC path diagnostics and current mobile readiness detection. |
+| Host | `6555a57`, `b8bcfc93f`, `367149dca` | Shared streamed gateway contract, authoritative lease outcome versions and verified native view authority. |
+| Host | `57657347d`, `ffd8e0c70` | One native IPC stream listener with independent response lifetimes; native pairing smoke with settled workspace focus and complete cleanup. |
 | Base | `1461b9a`, `391cc98` | Standalone source inventories, retained source integration and System-test ownership. |
-| Base | `0d801e2`, `731f20f` | Desktop and mobile workspace UI. |
+| Base | `0d801e2`, `731f20f`, `08ecf0e` | Desktop and mobile workspace UI, including persistent mobile Settings navigation. |
+| Base | `c572456`, `5dbcd61` | Workspace-owned desktop imagery/focus and mobile retained-view lease lifetime. |
 | Examples / Google | `662dc22` / `30e8d16` | Complete standalone source snapshots. |
 | News / Spectrolite | `74200f3` / `2b48cc2` | Complete standalone source snapshots; unrelated local edits preserved. |
 
@@ -794,7 +845,18 @@ open/focus System panels with explicit resource selection, as specified in secti
 Every panel action, Quickfire conversation, history target, notification, and approval
 carries its actual workspace independent of current focus. Search may aggregate metadata
 for the user without giving each app's agent the aggregate index. A pending approval cannot
-switch owners when the user focuses another section.
+switch owners when the user focuses another section. Icon and favicon retrieval and caches
+also belong to the immutable workspace client. System chrome's document origin cannot
+resolve another workspace's source icon. An RPC-less approval overlay receives only the
+owning approval controller's bounded, already-resolved image through existing presentation
+props. Initial refresh and delayed workspace opening must preserve a later explicit focus choice.
+
+Native runtime leases belong to retained views and their runtime incarnations. A timed-out
+bootstrap abandons its result without retiring a view that is still wanted. Eviction, runtime
+replacement and actual screen disposal retire that owner and finish exact lease cleanup;
+late acknowledgements cannot recreate it or release a newer view's route. Acquisition and
+takeover replies carry the same authoritative coordinator version as lease events and
+snapshots, so each retained owner rejects stale observations without a second local clock.
 
 Quickfire remains bound to its target workspace and context relationship. Changing focus
 may select another conversation; it cannot transport prior private memory or grants.
@@ -910,8 +972,8 @@ completion indicators/notifications identify the originating workspace and open 
 
 #### Approvals: visible ownership without interrupting every switch
 
-Reuse the existing approval queue, chip, desktop surfaces and mobile sheet, including the
-copy/actions defined in [the approval UX spec](approval-prompt-ux-spec.md). Add workspace
+Reuse the existing approval queue, chip, desktop surfaces and mobile sheet, including
+the [shared approval copy](../packages/shared/src/approvalCopy.ts) and existing actions. Add workspace
 attribution to those components; do not create a separate queue or approval page per workspace.
 The global entry shows the pending total and the list groups by workspace. A workspace heading
 shows only its own pending count. Counts exclude requests already answered on another device.
@@ -1116,6 +1178,17 @@ user-data preservation needs before a cutover; this plan change authorizes no de
 publication, deployment, or obsolete-state compatibility framework.
 
 ## 8. Verification and remaining concrete decisions
+
+Current completion gates are explicit:
+
+| Gate | Current state |
+| --- | --- |
+| Receiver authority contract | User choice pending between trusted reviewed exports and separate per-invocation isolation; public forwarding remains closed. |
+| Website → agent/tool effects | End-to-end authority propagation and acceptance remain incomplete. |
+| Desktop | Fresh native pairing and local ownership journeys pass; reconnect and open-approval membership revocation are under verification. |
+| Mobile | Focused Android journeys pass, but final retained-lease source still needs full unattended acceptance; iOS runtime acceptance needs an Apple environment. |
+| Native dependency | Repaired local Linux/Android artifacts are verified; production platform pins still select upstream 1.1.0 and need a coherent dependency release. |
+| Distribution | Clean source closures pass; exact Base/Personal/System publication receipts are required for packaged startup. Nothing has been published. |
 
 Record the smallest relevant product evidence alongside canonical platform acceptance.
 The following denials concern authenticated application paths; record native host access
