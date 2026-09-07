@@ -16,6 +16,8 @@
  *   rather than cast).
  * - Dotted method names (`"units.list"`) become nested objects
  *   (`client.units.list(...)`).
+ * - The supplied invoker selects the transport. A streaming invoker can return
+ *   a live Response validated by StreamResponseSchema without consuming its body.
  */
 
 import type { z } from "zod";

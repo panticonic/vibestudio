@@ -42,12 +42,11 @@
  * prefers it over hashing — no change needed here.
  */
 
-import { z } from "zod";
 import * as http from "node:http";
 import { Readable } from "node:stream";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { gatewayMethods, type GatewayFetchDescriptor } from "@vibestudio/service-schemas/gateway";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
 import { MOBILE_BOOTSTRAP_TRANSPORT_ENDPOINT_HEADER } from "../hostCore/auth/mobileBootstrapTransport.js";
@@ -56,35 +55,6 @@ import {
   RESUMABLE_GZIP_HEADER,
   hasRangeRequestHeader,
 } from "@vibestudio/shared/panel/assetHeaders";
-
-/** Loopback fetch request shape sent by the panel-asset façade. The request
- * body (if any) rides the request stream (`ctx.body`), never in here. */
-export interface GatewayFetchDescriptor {
-  /** Absolute request path (must start with "/"), e.g. `/apps/shell/?contextId=…`. */
-  path: string;
-  /** HTTP method (defaults to GET). */
-  method?: string;
-  /** Headers to forward to the loopback gateway (e.g. an `Authorization` bearer). */
-  headers?: Record<string, string>;
-  /** Gzip the response on the wire; the caller decompresses (see schema comment). */
-  gzip?: boolean;
-}
-
-// STRICT: a caller still sending the deleted base64/plain-string body fields
-// (`body`/`bodyBase64`) must fail loudly, not have its body silently stripped.
-const fetchDescriptorSchema = z
-  .object({
-    path: z.string(),
-    method: z.string().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
-    // Gzip the response on the wire. Mobile receives bounded QUIC chunks through
-    // receive (one message per round-trip), so a multi-MB asset streams too slowly
-    // over a relay; gzip (~4×) keeps it inside the pipe window. The caller is
-    // responsible for decompressing (the mobile native host does, before verifying
-    // the *uncompressed* integrity). Signaled back via `x-vibestudio-content-gzip`.
-    gzip: z.boolean().optional(),
-  })
-  .strict();
 
 const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
 const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
@@ -198,40 +168,6 @@ function requestHeader(
   return found?.[1];
 }
 
-const gatewayFetchMethods = defineServiceMethods({
-  fetch: {
-    capability: "workspace.gateway.access",
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "transport",
-      family: "gateway.control",
-      rationale:
-        "G1: external-system effect or listening surface; §2 default {code, session} family",
-    },
-    presentation: {
-      title: "Access a workspace gateway address",
-      action: "access a workspace gateway address",
-      description: "Allows {requesterKind} to access a workspace gateway address.",
-      group: "network",
-      authorityCategory: {
-        domain: "web",
-        verb: "see",
-      },
-    },
-    description:
-      "Loopback-fetch a panel asset from the server's own gateway and stream the " +
-      "Response back over a dedicated transport stream. A request " +
-      "body streams IN over the same channel (stream-open bodyStreamId → ctx.body).",
-    args: z.tuple([fetchDescriptorSchema]),
-    // Streaming method: the handler returns a Response whose body is chunked
-    // through the transport's streaming handler. Node callers use `.stream`
-    // (Response); RN callers use `.streamReadable` (the raw ReadableStream).
-    returns: z.instanceof(Response),
-    access: { sensitivity: "read" as const },
-  },
-});
-
 function trustedMobileBootstrapTarget(
   ctx: Parameters<NonNullable<ServiceDefinition["handler"]>>[0],
   descriptor: GatewayFetchDescriptor
@@ -266,8 +202,8 @@ export function createGatewayFetchService(deps: {
     // same gateway-relative assets. The only management-route exception is the
     // exact mobile native bootstrap POST, and only for trusted shell/app callers.
     authority: { principals: ["user", "code"] },
-    methods: gatewayFetchMethods,
-    handler: defineServiceHandler(serviceName, gatewayFetchMethods, {
+    methods: gatewayMethods,
+    handler: defineServiceHandler(serviceName, gatewayMethods, {
       fetch: async (ctx, [descriptor]) => {
         const trustedTarget = trustedMobileBootstrapTarget(ctx, descriptor);
         let forwardedDescriptor = descriptor;

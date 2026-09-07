@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createTypedServiceClient, maxArgsArity } from "@vibestudio/shared/typedServiceClient";
+import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import type { RuntimeSurfaceMethodDoc } from "@vibestudio/shared/runtimeSurface";
 import {
@@ -40,6 +41,7 @@ import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
+import { gatewayMethods } from "./gateway.js";
 import { gitInteropMethods } from "./gitInterop.js";
 import { hostLifecycleMethods } from "./hostLifecycle.js";
 import { hostPerformanceMethods } from "./hostPerformance.js";
@@ -89,6 +91,7 @@ type ServiceTable = {
 };
 
 const serviceTables: ServiceTable[] = [
+  { service: "gateway", file: "gateway.ts", methods: gatewayMethods },
   { service: "adblock", file: "adblock.ts", methods: adblockMethods },
   { service: "attachedHosts", file: "attachedHosts.ts", methods: attachedHostsMethods },
   { service: "account", file: "account.ts", methods: accountMethods },
@@ -274,6 +277,9 @@ function weakReturnRootPaths(
   path = "$",
   visited = new Set<z.ZodTypeAny>()
 ): string[] {
+  // A supported native resource has a concrete runtime validator, but no JSON
+  // structure. Keep arbitrary custom/refined unknown roots subject to the scan.
+  if (schema === StreamResponseSchema) return [];
   if (visited.has(schema)) return [];
   visited.add(schema);
   const def = schema._def as TraversableZodDef;
@@ -325,6 +331,15 @@ function weakReturnRootPaths(
 }
 
 describe("service schema contracts", () => {
+  it("distinguishes live Response contracts from weak custom return roots", () => {
+    expect(weakReturnRootPaths(StreamResponseSchema)).toEqual([]);
+    expect(weakReturnRootPaths(StreamResponseSchema.optional())).toEqual([]);
+    expect(weakReturnRootPaths(z.array(StreamResponseSchema))).toEqual([]);
+    expect(weakReturnRootPaths(z.union([StreamResponseSchema, z.unknown()]))).toEqual(["$|1"]);
+    expect(weakReturnRootPaths(z.custom<Response>())).toEqual(["$"]);
+    expect(weakReturnRootPaths(z.any().refine(() => true))).toEqual(["$"]);
+  });
+
   it("declares workspace presentation receiver effects explicitly", () => {
     for (const definition of Object.values(workspacePresentationMethods)) {
       expect(definition.directEffect).toEqual({ kind: "open" });

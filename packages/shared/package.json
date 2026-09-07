@@ -112,6 +112,7 @@
     "./tokenManager": "./src/tokenManager.ts",
     "./theme": "./src/theme.ts",
     "./typedServiceClient": "./src/typedServiceClient.ts",
+    "./streamResponse": "./src/streamResponse.ts",
     "./types": "./src/types.ts",
     "./unitManifest": "./src/unitManifest.ts",
     "./userNotifications": "./src/userNotifications.ts",
