@@ -122,12 +122,18 @@ async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = 
     "@workspace/mid": "workspace:*",
   });
   if (options.blockingAuthorityConsumer) {
-    const appManifestPath = path.join(workspaceRoot, "panels/app/package.json");
-    const appManifest = JSON.parse(fs.readFileSync(appManifestPath, "utf8"));
-    appManifest.vibestudio.authority = {
+    const libraryManifestPath = path.join(workspaceRoot, "packages/lib/package.json");
+    const libraryManifest = JSON.parse(fs.readFileSync(libraryManifestPath, "utf8"));
+    libraryManifest.vibestudio.authority = {
       serviceRequests: [{ protocol: "removed.notes.v1", availability: "required" }],
     };
-    fs.writeFileSync(appManifestPath, JSON.stringify(appManifest));
+    fs.writeFileSync(libraryManifestPath, JSON.stringify(libraryManifest));
+    const isolatedManifestPath = path.join(workspaceRoot, "packages/isolated/package.json");
+    const isolatedManifest = JSON.parse(fs.readFileSync(isolatedManifestPath, "utf8"));
+    isolatedManifest.vibestudio.authority = {
+      serviceRequests: [{ protocol: "removed.notes.v1", availability: "required" }],
+    };
+    fs.writeFileSync(isolatedManifestPath, JSON.stringify(isolatedManifest));
     writeUnit(workspaceRoot, "workers/removed-notes", "@workspace-workers/removed-notes");
   }
   writeUnit(workspaceRoot, "panels/solo", "@workspace-panels/solo");
@@ -433,6 +439,10 @@ describe("BuildSystemV2 — explicit build reports", () => {
 
     expect(forward).toContain("@workspace-panels/app");
     expect(reverse).toContain("@workspace-panels/app");
+    expect(forward).not.toContain("@workspace/lib");
+    expect(reverse).not.toContain("@workspace/lib");
+    expect(forward).not.toContain("@workspace/isolated");
+    expect(reverse).not.toContain("@workspace/isolated");
   });
 
   it("keeps an unrelated broken sibling outside the protected-publication closure", async () => {

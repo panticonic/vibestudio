@@ -62,7 +62,10 @@ import type {
   WorkspaceTestArtifactV1,
   WorkspaceTestPlan,
 } from "@vibestudio/service-schemas/build";
-import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import type {
+  UnitAuthorityManifest,
+  WorkspaceServiceProtocolRequest,
+} from "@vibestudio/shared/authorityManifest";
 import {
   createExactWorkspaceAuthorityEnvironment,
   resolveProviderCatalog,
@@ -672,7 +675,7 @@ export async function initBuildSystemV2(
       const environment = await authorityEnvironmentAt(stateHash, view.graph, view.evMap);
       const nodes = view.graph
         .allNodes()
-        .filter((candidate) => candidate.kind !== "template")
+        .filter((candidate) => isBuildableKind(candidate.kind))
         .sort((a, b) => a.name.localeCompare(b.name));
       const consumerIdentities = new Map<
         string,
@@ -1143,14 +1146,34 @@ export async function initBuildSystemV2(
     const environment = await authorityEnvironmentAt(stateHash, view.graph, view.evMap);
     const nodes = view.graph
       .allNodes()
-      .filter((candidate) => candidate.kind !== "template")
+      .filter((candidate) => isBuildableKind(candidate.kind))
       .sort((a, b) => a.name.localeCompare(b.name));
+    // Authority belongs to executable roots. A library's declarations still
+    // participate through every runtime root that can execute that library,
+    // matching the compiler-fact and build-validation boundaries below.
+    const serviceRequestsByConsumer = new Map(
+      nodes.map((node) => {
+        const requests = new Map<string, WorkspaceServiceProtocolRequest>();
+        for (const dependency of collectTransitiveInternalDeps(node, view.graph)) {
+          for (const request of dependency.manifest.authority?.serviceRequests ?? []) {
+            const existing = requests.get(request.protocol);
+            if (!existing || request.availability === "required") {
+              requests.set(request.protocol, request);
+            }
+          }
+        }
+        return [
+          node.name,
+          [...requests.values()].sort((a, b) => a.protocol.localeCompare(b.protocol)),
+        ] as const;
+      })
+    );
     const graphDigest = sha256Canonical({
       version: 3,
       nodes: nodes.map((node) => ({
         name: node.name,
         effectiveVersion: view.evMap[node.name] ?? "unknown",
-        serviceRequests: node.manifest.authority?.serviceRequests ?? [],
+        serviceRequests: serviceRequestsByConsumer.get(node.name) ?? [],
       })),
     });
     const identity: AuthorityIndexIdentity = {
@@ -1192,7 +1215,7 @@ export async function initBuildSystemV2(
           consumers: nodes.map((node) => ({
             unitName: node.name,
             effectiveVersion: view.evMap[node.name] ?? "unknown",
-            serviceRequests: node.manifest.authority?.serviceRequests ?? [],
+            serviceRequests: serviceRequestsByConsumer.get(node.name) ?? [],
           })),
           environment,
         });
