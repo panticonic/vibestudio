@@ -219,7 +219,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     ...internal("write"),
     description:
       "Initialize distribution panel reservations and slots once in the workspace transaction.",
-    args: z.tuple([WorkspaceConfigSchema.shape.initPanels.unwrap()]),
+    args: z.tuple([WorkspaceConfigSchema.shape.initPanels.unwrap(), z.string().min(1).optional()]),
     returns: z.array(RawPanelDetailSchema),
   },
   entityActivate: {

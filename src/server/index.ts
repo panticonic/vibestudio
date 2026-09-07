@@ -7004,6 +7004,7 @@ async function main() {
   // Distribution panel intent is a workspace fact, committed once together
   // with its reservations and slots. Native clients only observe that tree.
   const initialPanelDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+  const privateWorkspaceOwner = identityDb.getPrivateWorkspaceOwner(workspaceId);
   const initialPanels = (await initialPanelDispatch.dispatch(
     {
       source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
@@ -7011,7 +7012,8 @@ async function main() {
       objectKey: workspaceId,
     },
     "initializePanels",
-    workspaceConfig.initPanels ?? []
+    workspaceConfig.initPanels ?? [],
+    privateWorkspaceOwner?.userId
   )) as import("@vibestudio/shared/panel/workspaceStateSnapshot").WorkspacePanelDetail[];
   const initialPanelGraph = container
     .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")

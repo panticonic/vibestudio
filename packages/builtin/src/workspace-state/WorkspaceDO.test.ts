@@ -118,6 +118,56 @@ describe("workspace distribution panel initialization", () => {
     expect(restarted.instance.entityListPreparingByKind("panel")).toHaveLength(2);
   });
 
+  it("seeds and migrates a private workspace into one durable owner tree", async () => {
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    instance.slotCreate({ slotId: "seeded-root", parentSlotId: null });
+    instance.slotCreate({
+      slotId: "seeded-child",
+      parentSlotId: "seeded-root",
+    });
+    instance.slotCreate({
+      slotId: "human-root",
+      parentSlotId: null,
+      ownerUserId: "alice",
+    });
+
+    expect(instance.initializePanels([], "alice")).toEqual([]);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([
+      { ownerUserId: "alice", rootCount: 2 },
+    ]);
+    expect(
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: "alice" }, limit: 10 })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["human-root", "seeded-root"]);
+    expect(instance.slotGet("seeded-child")?.owner_user_id).toBe("alice");
+
+    // These roots came from different persisted owner groups. Once normalized,
+    // the same root placement grammar used by desktop drag-and-drop can reorder
+    // them with an exact sibling anchor.
+    expect(() =>
+      instance.slotMove("seeded-root", null, { afterSlotId: "human-root" }, "alice")
+    ).not.toThrow();
+    expect(
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: "alice" }, limit: 10 })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["seeded-root", "human-root"]);
+    const settledRevision = instance.panelTreeRootGroups({ limit: 10 }).revision;
+    expect(instance.initializePanels([], "alice")).toEqual([]);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).revision).toBe(settledRevision);
+  });
+
+  it("assigns private ownership while creating distribution roots", async () => {
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const initialized = instance.initializePanels(seeds, "alice");
+    expect(initialized).toHaveLength(2);
+    expect(initialized.every((detail) => detail.slot.owner_user_id === "alice")).toBe(true);
+    expect(instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([
+      { ownerUserId: "alice", rootCount: 2 },
+    ]);
+  });
+
   it("rolls reservations, slots, history and initialization back together on a partial failure", async () => {
     const { instance, sql } = await createTestDO(WorkspaceDOTestable);
     const create = instance.slotCreate.bind(instance);

@@ -2227,8 +2227,61 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  initializePanels(inputs: NonNullable<WorkspaceConfig["initPanels"]>): WorkspacePanelDetail[] {
+  initializePanels(
+    inputs: NonNullable<WorkspaceConfig["initPanels"]>,
+    privateOwnerUserId?: string
+  ): WorkspacePanelDetail[] {
     return this.ctx.storage.transactionSync(() => {
+      // A private workspace has one immutable human owner. Older distribution
+      // seeds predate authenticated panel creation and were stored ownerless;
+      // normalize the durable tree here, before any client can page or mutate
+      // it, so private workspaces have one real root group rather than a UI-only
+      // merge of incompatible placement groups.
+      if (privateOwnerUserId) {
+        const needsNormalization =
+          this.sql
+            .exec(
+              "SELECT 1 AS found FROM slots WHERE owner_user_id IS NOT ? LIMIT 1",
+              privateOwnerUserId
+            )
+            .toArray().length > 0;
+        if (needsNormalization)
+          this.sql.exec(
+            `WITH ranked_roots AS MATERIALIZED (
+             SELECT slot_id,
+                    ROW_NUMBER() OVER (
+                      ORDER BY CASE
+                                 WHEN owner_user_id IS ? THEN 0
+                                 WHEN owner_user_id IS NULL THEN 1
+                                 ELSE 2
+                               END,
+                               owner_user_id,
+                               sort_key, created_at DESC, slot_id
+                    ) * ? AS next_key
+               FROM slots
+              WHERE parent_slot_id IS NULL AND closed_at IS NULL
+           )
+           UPDATE slots
+              SET owner_user_id = ?,
+                  sort_key = COALESCE(
+                    (SELECT next_key FROM ranked_roots WHERE ranked_roots.slot_id = slots.slot_id),
+                    sort_key
+                  )
+            WHERE owner_user_id IS NOT ?
+               OR (parent_slot_id IS NULL AND closed_at IS NULL)`,
+            privateOwnerUserId,
+            PANEL_TREE_ORDER_STEP,
+            privateOwnerUserId,
+            privateOwnerUserId
+          );
+        if (needsNormalization) {
+          this.sql.exec(
+            "UPDATE panel_close_cleanup SET owner_user_id = ? WHERE owner_user_id IS NOT ?",
+            privateOwnerUserId,
+            privateOwnerUserId
+          );
+        }
+      }
       const markerKey = "initial-panels";
       const prior = this.sql
         .exec("SELECT value FROM workspace_meta WHERE key = ?", markerKey)
@@ -2259,6 +2312,7 @@ export class WorkspaceDO extends DurableObjectBase {
             this.slotCreate({
               slotId,
               parentSlotId: null,
+              ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
               ...(slotIds.length
                 ? { placement: { beforeSlotId: slotIds[slotIds.length - 1]! } }
                 : {}),
