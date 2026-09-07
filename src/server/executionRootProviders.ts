@@ -162,6 +162,14 @@ export function buildKeyRootProvider(input: {
             `${candidate.ownerId} references missing execution artifact ${candidate.buildKey}`
           );
         }
+        if (
+          artifact.buildKey !== candidate.buildKey ||
+          (candidate.executionDigest && artifact.executionDigest !== candidate.executionDigest)
+        ) {
+          throw new Error(
+            `${candidate.ownerId} resolved a different execution artifact for ${candidate.buildKey}`
+          );
+        }
         roots.push({
           owner: input.owner,
           ownerId: candidate.ownerId,

@@ -22,6 +22,15 @@ product services come from the generated builtin catalog. The UI-to-grant regres
 passes (18 tests), as does the subsequent candidate classification coverage (52).
 The atomic generated-app acceptance case remains required.
 
+Regression reviews must distinguish declarations, granted authority, and observed
+effects. The generated-app harness must inspect the actual installed version and
+structured saved grant before opening the panel, then write through its UI and read
+the same value after reload. An agent-authored receipt, source-code substring, or
+human-readable permission label cannot establish those facts. Keep negative cases
+for stale versions, same-named replacement services, denied/session-only grants and
+unexpected prompts. Existing app-building tests remain useful and are retained;
+this joint publication/installation/use scenario supplements them.
+
 The wider audit found two related update defects: previous/candidate authority hashes
 used different fields, and admission deduplication omitted exact service review facts.
 It also found that replacing grants by rescanning their code subject after minting
@@ -109,6 +118,45 @@ GC retention failures also lacked their already-captured provider identity/error
 logs; diagnostics must preserve that evidence without suppressing failure. The failed
 run's owned applications, hub and temporary state were cleaned up. No shared-member
 revocation acceptance is claimed yet.
+
+The subsequent replay on host `a27aa1530` reached the same approval failure and was
+interrupted after invalid setup was identified; it is not a pass. Its processes and
+owned temporary root have now been removed. The existing test API's default receiver
+is System: supplying a shared panel as parent does not retarget that receiver. Use
+its existing `forWorkspace(id)` binding for shared browser creation, while keeping
+the host-local membership operation in System. Preserve structured acquisition
+errors and separately observe challenge, queued request and visible card; a string
+containing `approval-required` is not evidence that the approval UI received a request.
+
+That distinction exposed a product defect, not only a harness defect: the Electron
+main dispatcher installs an authority resolver without an acquirer. Its fallback
+`EACQUIRE` explicitly carries `pending: false`, so no request exists for the shared
+queue to display. The real workspace-members UI uses this same local boundary.
+Repair acquisition through the existing coordinator and preserve hub-side enforcement;
+do not synthesize a test approval or add another grant store. Audit all gated methods
+at this dispatcher, and prove the request reaches the System review UI before approving
+and completing the original action. This fix and native acceptance remain outstanding.
+
+The improved GC diagnostics exposed another retained integrated-workspace assumption:
+every workspace's mandatory `development-run` root provider calls the optional
+`vibestudio.development.v1` service, now distributed only with System. The provider
+was introduced by the earlier userland-service cutover (`f59064794`); the workspace
+split exposed its assumption rather than creating the retention mechanism. Personal
+and ordinary workspaces consequently refuse collection. Collection remains fail-closed,
+so this evidence shows blocked reclamation, not deletion of retained data. The repair
+must derive emptiness from the actual run owner, including persisted runs after restart
+or service removal. Returning no roots merely because the current service declaration
+is absent would introduce a data-loss bug. Audit the other mandatory providers and
+optional-service startup bindings under the same ownership rule; this repair remains
+open pending a coherent retained-run ownership design.
+
+The sibling retention audit also found that runtime entities and panel history
+resolved only the current metadata for a build key, ignoring their recorded exact
+execution digest. Shared bytes do not imply shared execution/source identity. These
+owners now use the existing retained-execution lookup, and the common build-key
+provider rejects a resolver that substitutes another build or requested execution.
+The focused provider, retained-build/restart and GC tests pass together (35). This
+correction does not resolve the optional development-service dependency above.
 
 The broad sweep also exposed host rebuild cleanup deleting the Node executable and
 MXC launcher used by already-running instances. Host `7a5d36dc8` and `71a6d1fde`

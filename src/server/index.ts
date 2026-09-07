@@ -2614,7 +2614,9 @@ async function main() {
                     : []
                 ),
               resolve: ({ buildKey, executionDigest }) => {
-                const build = buildStoreForPublication.peekLocal(buildKey);
+                const build = executionDigest
+                  ? buildStoreForPublication.getByExecution(buildKey, executionDigest)
+                  : buildStoreForPublication.peekLocal(buildKey);
                 if (build) return executionArtifactRefFromBuild(workspaceId, build);
                 return executionDigest
                   ? (productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null)
@@ -2630,7 +2632,12 @@ async function main() {
                 return (await entityStoreInstance.listExecutionRoots())
                   .filter((entity) => entity.kind === "panel" && entity.activeBuildKey)
                   .map((entity) => {
-                    const build = buildStoreForPublication.peekLocal(entity.activeBuildKey!);
+                    const build = entity.activeExecutionDigest
+                      ? buildStoreForPublication.getByExecution(
+                          entity.activeBuildKey!,
+                          entity.activeExecutionDigest
+                        )
+                      : buildStoreForPublication.peekLocal(entity.activeBuildKey!);
                     if (!build) {
                       throw new Error(
                         `Panel history ${entity.id} references missing build ${entity.activeBuildKey}`
