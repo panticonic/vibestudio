@@ -361,7 +361,10 @@ async function linkBuildTree(sourceDir: string, targetDir: string): Promise<void
     if (!entry.isFile()) {
       throw new Error(`Unsupported build cache entry: ${sourcePath}`);
     }
-    if (process.platform === "win32") {
+    // Provenance is rebound by each workspace during hydration. It must own
+    // its inode before any write; linking it would also overwrite the shared
+    // cache and the original producer's sealed execution metadata.
+    if (entry.name === "metadata.json" || process.platform === "win32") {
       await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
       continue;
     }

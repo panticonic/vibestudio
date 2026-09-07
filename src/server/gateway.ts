@@ -20,7 +20,6 @@ import { connect as connectNet } from "net";
 import type { Duplex } from "stream";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
-import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { encodeUniversalKey } from "./doDispatch.js";
@@ -76,6 +75,10 @@ export interface PanelHttpHandler {
 
 /** Handler interface for RpcServer (in-process dispatch) */
 export interface RpcHandler {
+  /** Resolve runtime grants through the RPC server's live viewer/holder checks. */
+  authenticateConnectionGrant(
+    token: string
+  ): { caller: VerifiedCaller; authorizedBy: string } | null;
   /** Own the RPC WebSocket upgrade so its protocol budgets are enforced once. */
   handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
   /** Handle an HTTP RPC or WebSocket-admission request. */
@@ -167,8 +170,6 @@ export interface GatewayDeps {
   adminToken?: string;
   /** Caller token manager for route auth modes used by panels/workers/shell/server callers. */
   tokenManager: TokenManager;
-  /** Active panel connection grants that may also authenticate panel HTTP requests. */
-  connectionGrants?: Pick<ConnectionGrantService, "validate">;
   /** Principal metadata for authenticated caller tokens. */
   entityCache?: Pick<EntityCache, "resolve" | "resolveActive" | "resolveSource">;
   /** Route registry for `/_r/` dispatch (worker and service routes). Optional
@@ -379,14 +380,7 @@ export class Gateway {
       // through guarded `/_r/` routes or RpcServer; exposing raw `/_u/` here
       // would create an invocation path with no durable-identity readiness gate.
       if (url.startsWith("/_w/")) {
-        if (
-          !validateCallerBearer(
-            req,
-            tokenManager,
-            this.deps.connectionGrants,
-            this.deps.entityCache
-          )
-        ) {
+        if (!validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache)) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
           return;
@@ -424,12 +418,7 @@ export class Gateway {
           res.end("Extension route not found");
           return;
         }
-        const entry = validateCallerBearer(
-          req,
-          tokenManager,
-          this.deps.connectionGrants,
-          this.deps.entityCache
-        );
+        const entry = validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache);
         if (!entry) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
@@ -576,14 +565,7 @@ export class Gateway {
       // Host-bundle internal DO transport only; raw userland `/_u/` upgrades
       // are intentionally not a gateway surface (see HTTP path above).
       if (url.startsWith("/_w/")) {
-        if (
-          !validateCallerBearer(
-            req,
-            tokenManager,
-            this.deps.connectionGrants,
-            this.deps.entityCache
-          )
-        ) {
+        if (!validateCallerBearer(req, tokenManager, rpcHandler, this.deps.entityCache)) {
           socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
           socket.destroy();
           return;
@@ -906,20 +888,14 @@ function extractBearerToken(req: IncomingMessage): string | null {
 function validateCallerBearer(
   req: IncomingMessage,
   tokenManager: TokenManager,
-  connectionGrants?: Pick<ConnectionGrantService, "validate">,
+  rpcHandler?: RpcHandler | null,
   entityCache?: Pick<EntityCache, "resolveActive">
 ): VerifiedCaller | null {
   const token = extractBearerToken(req);
   if (!token) return null;
   const entry = tokenManager.validateToken(token);
   if (!entry) {
-    const grant = connectionGrants?.validate(token);
-    if (!grant) return null;
-    return createVerifiedCaller(
-      grant.principalId,
-      grant.principalKind,
-      entityCache ? (resolveCodeIdentity(entityCache, grant.principalId) ?? undefined) : undefined
-    );
+    return rpcHandler?.authenticateConnectionGrant(token)?.caller ?? null;
   }
   return createVerifiedCaller(
     entry.callerId,

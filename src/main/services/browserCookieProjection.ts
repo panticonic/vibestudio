@@ -23,6 +23,7 @@ import type { EventName } from "@vibestudio/shared/events";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { workspaceProviderExtensionPackageName } from "@vibestudio/workspace/configParser";
 import type { ServerClient } from "../serverClient.js";
+import { scopedNativePartition } from "../nativeStorageScope.js";
 import { ChromiumCookieJar, type BrowserCookieJar } from "./chromiumCookieJar.js";
 
 const log = createDevLogger("BrowserCookieProjection");
@@ -129,6 +130,7 @@ export interface BrowserCookieProjectionApi {
 }
 
 export function createBrowserCookieProjectionService(deps: {
+  nativeStorageScope: string;
   browserDataClient: BrowserDataClient;
   browserVault: BrowserVaultNativeClient;
   serverClient: ServerClient;
@@ -170,7 +172,10 @@ export function createBrowserCookieProjectionService(deps: {
       );
       if (signal.aborted) throw abortError(signal);
 
-      const partition = browserEnvironmentPartition(identity.environmentKey);
+      const partition = scopedNativePartition(
+        deps.nativeStorageScope,
+        browserEnvironmentPartition(identity.environmentKey)
+      );
       const cookieJar = deps.createCookieJar?.(partition) ?? new ChromiumCookieJar(partition);
       candidate = new BrowserCookieProjection({
         browserVault: deps.browserVault,
@@ -181,6 +186,7 @@ export function createBrowserCookieProjectionService(deps: {
         outboxPath: path.join(
           deps.outboxRoot,
           "browser-environments",
+          deps.nativeStorageScope,
           identity.environmentKey,
           "cookie-outbox.json"
         ),

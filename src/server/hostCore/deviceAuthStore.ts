@@ -64,8 +64,8 @@ export interface IssuedDeviceCredential {
 }
 
 export interface PairedDeviceCredential extends IssuedDeviceCredential {
-  /** Exact workspace suggested by the consumed invite. */
-  workspaceId: string;
+  /** Exact workspace suggested by the invite, or account-only pairing. */
+  workspaceId: string | null;
 }
 
 /** Presentable one-time pairing secret. */
@@ -110,7 +110,7 @@ export class DeviceAuthStore {
 
   createPairingInvite(
     ttlMs = DEFAULT_PAIRING_CODE_TTL_MS,
-    opts: { workspaceId: string; userId?: string; intent?: PairingCodeIntent }
+    opts: { workspaceId: string | null; userId?: string; intent?: PairingCodeIntent }
   ): PairingInvite {
     const code = randomBase64Url(24);
     const codeHash = hashSecret(code);

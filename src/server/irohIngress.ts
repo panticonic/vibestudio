@@ -75,6 +75,10 @@ export function startIrohIngress<
       } catch (error) {
         options.log?.(`Iroh peer admission failed: ${String(error)}`);
       }
+      if (stopped) {
+        connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
+        break;
+      }
       if (!admitted) {
         connection.close(ADMISSION_REJECTED, new TextEncoder().encode("peer not admitted"));
         continue;

@@ -6,21 +6,21 @@ describe("ordinaryQuitServerDecision", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeralWorkspace: true,
+        ephemeral: true,
         rememberedKeepServer: true,
       })
     ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeralWorkspace: true,
+        ephemeral: true,
         rememberedKeepServer: false,
       })
     ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeralWorkspace: true,
+        ephemeral: true,
         rememberedKeepServer: null,
       })
     ).toBe("stop");
@@ -30,14 +30,14 @@ describe("ordinaryQuitServerDecision", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeralWorkspace: false,
+        ephemeral: false,
         rememberedKeepServer: false,
       })
     ).toBe("stop");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeralWorkspace: false,
+        ephemeral: false,
         rememberedKeepServer: true,
       })
     ).toBe("keep");
@@ -47,14 +47,14 @@ describe("ordinaryQuitServerDecision", () => {
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: true,
-        ephemeralWorkspace: false,
+        ephemeral: false,
         rememberedKeepServer: null,
       })
     ).toBe("prompt");
     expect(
       ordinaryQuitServerDecision({
         ownsLocalHub: false,
-        ephemeralWorkspace: false,
+        ephemeral: false,
         rememberedKeepServer: null,
       })
     ).toBe("keep");

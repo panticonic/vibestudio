@@ -46,6 +46,63 @@ describe("Iroh RPC client over real local QUIC", () => {
     return endpoint;
   }
 
+  it("rejects session readiness when the pipe closes during credential refresh", async () => {
+    const serverEndpoint = await bind();
+    const clientEndpoint = await bind();
+    const incomingPromise = serverEndpoint.acceptNext();
+    const clientConnecting = clientEndpoint.connect(serverEndpoint.addr(), [
+      ...VIBESTUDIO_IROH_ALPN,
+    ]);
+    const incoming = await incomingPromise;
+    if (!incoming) throw new Error("server endpoint closed before connection");
+    const accepting = await incoming.accept();
+    const [serverNative, clientNative] = await Promise.all([accepting.connect(), clientConnecting]);
+    configureNodeConnection(serverNative);
+    configureNodeConnection(clientNative);
+    const server = new NodePhysicalConnection(serverNative);
+    const serverTask = (async () => {
+      const control = await server.acceptBi();
+      await readIrohStreamPreamble(control.recv);
+      await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES);
+      await writeFrame(
+        control.send,
+        encodeIrohSessionControlFrame({
+          t: IROH_SESSION_HELLO,
+          protocolVersion: IROH_WIRE_VERSION,
+          contractVersion: RPC_CONTRACT_VERSION,
+        }),
+        MAX_CONTROL_FRAME_BYTES
+      );
+    })();
+    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+    let releaseToken!: (value: string) => void;
+    let requestedToken!: () => void;
+    const tokenRequested = new Promise<void>((resolve) => {
+      requestedToken = resolve;
+    });
+    const token = new Promise<string>((resolve) => {
+      releaseToken = resolve;
+    });
+    const session = pipe.openSession({
+      getToken: () => {
+        requestedToken();
+        return token;
+      },
+    });
+    const rejected = expect(session.ready?.()).rejects.toThrow("Iroh pipe closed");
+    try {
+      await tokenRequested;
+      await pipe.close();
+      // Readiness settles even while token retrieval remains pending. Vitest
+      // also rejects any unhandled rejection from the pending open result.
+      await rejected;
+    } finally {
+      releaseToken("expired-credential");
+      await serverTask;
+      await pipe.close();
+    }
+  });
+
   it("exposes response-head timeouts as a structured transient transport error", () => {
     const error = new IrohResponseHeadTimeoutError(20_000);
     expect(error).toMatchObject({

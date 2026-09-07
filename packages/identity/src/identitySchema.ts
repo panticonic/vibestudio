@@ -2,10 +2,10 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 14 is the current schema. The explicitly enumerated final
+ * Version 15 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 14;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 15;
 
 const USER_WORKSPACES_SQL = `CREATE TABLE user_workspaces (
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -88,7 +88,7 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE TABLE pairing_codes (
         code TEXT PRIMARY KEY,
         user_id TEXT,
-        workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+        workspace_id TEXT REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
         intent TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
@@ -191,7 +191,8 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
 };
 
 /**
- * Version 13 is the immediate predecessor. Its single workspace cutover adds
+ * Version 14 already exists in installed developer profiles; its account-only
+ * pairing migration preserves those profiles. The earlier v13 workspace cutover adds
  * private designations and hard RPC policies, records legacy root access as
  * explicit membership, and seeds workspace roles from existing account roles.
  * Later account-role changes do not confer workspace membership or administration.
@@ -199,6 +200,25 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 14,
+    toVersion: 15,
+    migrate(db) {
+      // Account bootstrap has no workspace until the authenticated owner
+      // creates their private pair. Preserve all existing invitation rows.
+      db.exec(`ALTER TABLE pairing_codes RENAME TO pairing_codes_v14;
+        CREATE TABLE pairing_codes (
+          code TEXT PRIMARY KEY,
+          user_id TEXT,
+          workspace_id TEXT REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+          intent TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        INSERT INTO pairing_codes SELECT * FROM pairing_codes_v14;
+        DROP TABLE pairing_codes_v14`);
+    },
+  },
   {
     fromVersion: 13,
     toVersion: 14,

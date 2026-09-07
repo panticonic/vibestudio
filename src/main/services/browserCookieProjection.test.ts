@@ -1,3 +1,4 @@
+import { scopedNativePartition } from "../nativeStorageScope.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -148,6 +149,7 @@ describe("canonical browser cookie projection", () => {
     const onUnavailable = vi.fn();
     const onReady = vi.fn();
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
       serverClient: { stream: vi.fn(), call: vi.fn() } as never,
@@ -180,6 +182,7 @@ describe("canonical browser cookie projection", () => {
     };
     const onUnavailable = vi.fn();
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
       serverClient: { stream: vi.fn(), call: vi.fn() } as never,
@@ -194,53 +197,59 @@ describe("canonical browser cookie projection", () => {
     await service.stop?.(undefined);
   });
 
-  it("attaches later when the browser-data extension becomes ready", async () => {
-    vi.useFakeTimers();
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
-    const { jar } = fakeCookieJar();
-    const createCookieJar = vi.fn(() => jar);
-    const browserDataClient = {
-      getBrowserEnvironment: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("Extension failed to start: browser-data"))
-        .mockResolvedValue({
-          workspaceId: "workspace-test",
-          ownerUserId: "user-test",
-          environmentKey: "environment-test",
-        }),
-      applyCookieMutations: vi.fn().mockResolvedValue(undefined),
-      ...originScopedReads(1, []),
-    };
-    const onReady = vi.fn();
-    const onStopped = vi.fn();
-    const service = createBrowserCookieProjectionService({
-      browserDataClient: browserDataClient as never,
-      browserVault: browserDataClient as never,
-      serverClient: {
-        stream: vi.fn(),
-        call: vi.fn().mockResolvedValue(null),
-      } as never,
-      hostId: "desktop:test",
-      outboxRoot: tempRoot,
-      createCookieJar,
-      onReady,
-      onStopped,
-    });
+  it.each(["server-account-a", "server-account-b"])(
+    "attaches to authenticated %s storage when browser-data becomes ready",
+    async (nativeStorageScope) => {
+      vi.useFakeTimers();
+      const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+      const { jar } = fakeCookieJar();
+      const createCookieJar = vi.fn(() => jar);
+      const browserDataClient = {
+        getBrowserEnvironment: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("Extension failed to start: browser-data"))
+          .mockResolvedValue({
+            workspaceId: "workspace-test",
+            ownerUserId: "user-test",
+            environmentKey: "environment-test",
+          }),
+        applyCookieMutations: vi.fn().mockResolvedValue(undefined),
+        ...originScopedReads(1, []),
+      };
+      const onReady = vi.fn();
+      const onStopped = vi.fn();
+      const service = createBrowserCookieProjectionService({
+        nativeStorageScope,
+        browserDataClient: browserDataClient as never,
+        browserVault: browserDataClient as never,
+        serverClient: {
+          stream: vi.fn(),
+          call: vi.fn().mockResolvedValue(null),
+        } as never,
+        hostId: "desktop:test",
+        outboxRoot: tempRoot,
+        createCookieJar,
+        onReady,
+        onStopped,
+      });
 
-    try {
-      await service.start?.(() => undefined);
-      expect(onReady).not.toHaveBeenCalled();
+      try {
+        await service.start?.(() => undefined);
+        expect(onReady).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(3_000);
-      await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
-      expect(createCookieJar).toHaveBeenCalledWith("persist:browser-environment:environment-test");
+        await vi.advanceTimersByTimeAsync(3_000);
+        await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+        expect(createCookieJar).toHaveBeenCalledWith(
+          scopedNativePartition(nativeStorageScope, "persist:browser-environment:environment-test")
+        );
 
-      await service.stop?.(undefined);
-      expect(onStopped).toHaveBeenCalledTimes(1);
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
+        await service.stop?.(undefined);
+        expect(onStopped).toHaveBeenCalledTimes(1);
+      } finally {
+        await rm(tempRoot, { recursive: true, force: true });
+      }
     }
-  });
+  );
 
   it("removes a conflicting Secure cookie before projecting its insecure replacement", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
@@ -263,6 +272,7 @@ describe("canonical browser cookie projection", () => {
     };
     const onReady = vi.fn();
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
       serverClient: {
@@ -323,6 +333,7 @@ describe("canonical browser cookie projection", () => {
       ...originScopedReads(2, [first, second]),
     };
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: {
         getBrowserEnvironment: vi.fn().mockResolvedValue({
           workspaceId: "workspace-test",
@@ -379,6 +390,7 @@ describe("canonical browser cookie projection", () => {
     };
     const onReady = vi.fn();
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: browserDataClient as never,
       browserVault: browserDataClient as never,
       serverClient: {
@@ -425,6 +437,7 @@ describe("canonical browser cookie projection", () => {
       ...originScopedReads(0, []),
     };
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: {
         getBrowserEnvironment: vi.fn().mockResolvedValue({
           workspaceId: "workspace-test",
@@ -503,6 +516,7 @@ describe("canonical browser cookie projection", () => {
       ...reads,
     };
     const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "server-account-a",
       browserDataClient: {
         getBrowserEnvironment: vi.fn().mockResolvedValue({
           workspaceId: "workspace-test",

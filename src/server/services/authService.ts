@@ -223,7 +223,9 @@ export function createHubCredentialRedeemer(
           deviceId: credential.deviceId,
           refreshToken: credential.refreshToken,
         },
-        pairingContext: { workspaceId: credential.workspaceId },
+        ...(credential.workspaceId === null
+          ? {}
+          : { pairingContext: { workspaceId: credential.workspaceId } }),
         subject: { userId: user.id, handle: user.handle },
       };
     } catch (error) {

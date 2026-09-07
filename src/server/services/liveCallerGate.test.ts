@@ -18,7 +18,7 @@ describe("createLiveCallerGate", () => {
     requested: authority.requests,
   });
 
-  function fixture() {
+  function fixture(runtimeOwnerUserId = "usr_alice") {
     let userRevoked = false;
     let member = true;
     let deviceLive = true;
@@ -92,7 +92,7 @@ describe("createLiveCallerGate", () => {
                   source: { repoPath: "apps/shared", effectiveVersion: "ev-1" },
                   activeExecutionDigest: currentExecutionDigest,
                   activeAuthority: authority,
-                  ownerUserId: "usr_alice",
+                  ownerUserId: runtimeOwnerUserId,
                 } as never),
       },
       isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
@@ -178,6 +178,30 @@ describe("createLiveCallerGate", () => {
     expect(state.gate(app, "shell:dev_1")).toBe(true);
     state.revokeDevice();
     expect(state.gate(app, "shell:dev_1")).toBe(false);
+  });
+
+  it("uses the authenticated viewer for shared panels and creator lineage for workers", () => {
+    const state = fixture("usr_bob");
+    const subject = { userId: "usr_alice", handle: "alice" };
+    const panel = createVerifiedCaller(
+      "panel:shared",
+      "panel",
+      codeIdentity("panel:shared", "panel", "apps/shared"),
+      null,
+      subject
+    );
+    expect(state.gate(panel)).toBe(false);
+    expect(state.gate(panel, "shell:dev_1")).toBe(true);
+    const worker = createVerifiedCaller(
+      "worker:shared",
+      "worker",
+      codeIdentity("worker:shared", "worker", "apps/shared"),
+      null,
+      subject
+    );
+    expect(state.gate(worker, "shell:dev_1")).toBe(false);
+    state.removeMembership();
+    expect(state.gate(panel, "shell:dev_1")).toBe(false);
   });
 
   it("rejects an admitted code caller after its active incarnation changes", () => {

@@ -66,8 +66,8 @@ export interface PairingCodeRow {
   code: string;
   /** Bound user the redeemed device will belong to; absent for root bootstrap. */
   userId?: string;
-  /** Workspace suggested by the invitation; the hub owns the control route. */
-  workspaceId: string;
+  /** Optional workspace suggestion; account bootstrap needs no project. */
+  workspaceId: string | null;
   intent: PairingCodeIntent;
   createdAt: number;
   expiresAt: number;
@@ -321,7 +321,10 @@ export class IdentityDb {
   }
 
   getMembership(userId: string, workspaceId: string): WorkspaceMembership | null {
-    const row = this.stmt("SELECT * FROM membership WHERE user_id = ? AND workspace_id = ?").get(userId, workspaceId);
+    const row = this.stmt("SELECT * FROM membership WHERE user_id = ? AND workspace_id = ?").get(
+      userId,
+      workspaceId
+    );
     return row ? rowToMembership(row) : null;
   }
 
@@ -639,7 +642,7 @@ export class IdentityDb {
   }): {
     device: DeviceRow;
     refreshToken: string;
-    workspaceId: string;
+    workspaceId: string | null;
   } | null {
     this.assertWritable();
     return this.transaction(() => {
@@ -657,7 +660,7 @@ export class IdentityDb {
       if (!userId) {
         throw new Error("Pairing code is not bound to a user");
       }
-      if (record.intent === "root-bootstrap") {
+      if (record.intent === "root-bootstrap" && record.workspaceId !== null) {
         this.addMembership({
           userId,
           workspaceId: record.workspaceId,
@@ -852,7 +855,7 @@ function rowToAgentCredential(row: Row): AgentCredentialRow {
 function rowToPairingCode(row: Row): PairingCodeRow {
   return {
     code: row["code"] as string,
-    workspaceId: row["workspace_id"] as string,
+    workspaceId: row["workspace_id"] as string | null,
     intent: row["intent"] as PairingCodeIntent,
     createdAt: row["created_at"] as number,
     expiresAt: row["expires_at"] as number,

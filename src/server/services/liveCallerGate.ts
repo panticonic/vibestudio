@@ -109,18 +109,14 @@ export function createLiveCallerGate(deps: {
       return liveAgentOwner() === user.id;
     }
 
-    if (
-      caller.runtime.kind === "panel" ||
-      caller.runtime.kind === "worker" ||
-      caller.runtime.kind === "do"
-    ) {
+    if (caller.runtime.kind === "worker" || caller.runtime.kind === "do") {
       const entity = deps.entityCache.resolveActive(caller.runtime.id) as {
         ownerUserId?: string;
       } | null;
       return entity?.ownerUserId === user.id && exactActiveCodeIncarnation();
     }
 
-    if (caller.runtime.kind === "app") {
+    if (caller.runtime.kind === "app" || caller.runtime.kind === "panel") {
       return (
         typeof authorizedBy === "string" &&
         issuerOwnsUser(authorizedBy, user.id) &&

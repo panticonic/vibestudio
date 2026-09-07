@@ -69,7 +69,7 @@ function hubStartupFailureDetail(logPath: string): string | null {
 }
 
 export interface HubProcessManagerConfig {
-  workspaceName: string;
+  workspaceName: string | null;
   ephemeral: boolean;
   ephemeralLifecycle: "replace" | "resume" | null;
   appRoot: string;
@@ -388,8 +388,7 @@ export class HubProcessManager {
         bundlePath,
         "--ready-file",
         readyFile,
-        "--bootstrap-workspace",
-        this.config.workspaceName,
+        ...(this.config.workspaceName ? ["--bootstrap-workspace", this.config.workspaceName] : []),
         ...(this.config.ephemeral ? ["--ephemeral"] : []),
       ],
       { detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true, env }
@@ -510,7 +509,7 @@ export class HubProcessManager {
       hubControlMethods,
       (service, method, args) => rpc.call("main", `${service}.${method}`, args)
     );
-    let workspace: z.infer<typeof HubWorkspaceEntrySchema>;
+    let workspace: z.infer<typeof HubWorkspaceEntrySchema> | undefined;
     if (this.config.ephemeral) {
       if (target.attached && this.ephemeralReplacementPending) {
         const visible = await hubControl.listWorkspaces();
@@ -522,7 +521,7 @@ export class HubProcessManager {
         }
         if (previous) {
           const deleted = await hubControl.deleteWorkspace({
-            workspace: this.config.workspaceName,
+            workspace: previous.name,
           });
           if (!deleted.deleted || deleted.workspaceId !== previous.workspaceId) {
             throw new Error("Hub did not retire the previous ephemeral workspace lifecycle");
@@ -540,7 +539,7 @@ export class HubProcessManager {
       if (workspace.name !== this.config.workspaceName || workspace.ephemeral !== true) {
         throw new Error("Hub did not establish the requested ephemeral workspace lifecycle");
       }
-    } else {
+    } else if (this.config.workspaceName) {
       const visible = await hubControl.listWorkspaces();
       const selected = visible.find((entry) => entry.name === this.config.workspaceName);
       if (!selected) {
@@ -550,7 +549,8 @@ export class HubProcessManager {
     }
     // Native application source belongs to the user's designated System.
     // The requested project is a focus target, never a replacement client app.
-    const { system } = await hubControl.ensureUserWorkspaces();
+    const { personal, system } = await hubControl.ensureUserWorkspaces();
+    workspace ??= personal;
     const routed = await hubControl.routeWorkspace({ workspaceId: system.workspaceId });
     if (routed.workspaceId !== system.workspaceId || routed.workspace !== system.name) {
       throw new Error("Hub routed a different workspace than the designated System");

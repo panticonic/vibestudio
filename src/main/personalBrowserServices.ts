@@ -124,6 +124,7 @@ export async function registerPersonalBrowserServices(deps: {
       await import("./services/browserCookieProjection.js");
     container.registerManaged(
       createBrowserCookieProjectionService({
+        nativeStorageScope: conn.nativeStorageScope,
         browserDataClient,
         browserVault,
         serverClient: sc,

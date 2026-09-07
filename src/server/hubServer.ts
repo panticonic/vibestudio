@@ -184,7 +184,7 @@ export interface HubRuntimeState {
   appRoot: string;
   args: HubServerArgs;
   /** Startup preparation targets this source workspace, never every child. */
-  bootstrapWorkspaceId: string;
+  bootstrapWorkspaceId: string | null;
   centralData: CentralDataManager;
   deviceAuthStore: DeviceAuthStore;
   /** Hub-owned identity DB, opened READ-WRITE — the hub is the sole writer (WP0 §2). */
@@ -916,7 +916,7 @@ function normalizeWorkspaceName(raw: unknown): string {
 export function selectBootstrapWorkspace(
   args: Pick<HubServerArgs, "bootstrapWorkspace" | "ephemeral">,
   registered: readonly { name: string }[]
-): { name: string; lifecycle: "existing" | "register" | "ephemeral" } {
+): { name: string; lifecycle: "existing" | "register" | "ephemeral" } | null {
   if (args.ephemeral) {
     const name = normalizeWorkspaceName(args.bootstrapWorkspace ?? EPHEMERAL_DEV_WORKSPACE_NAME);
     if (name !== EPHEMERAL_DEV_WORKSPACE_NAME) {
@@ -931,11 +931,35 @@ export function selectBootstrapWorkspace(
       lifecycle: registered.some((entry) => entry.name === name) ? "existing" : "register",
     };
   }
-  const existing = registered[0];
-  if (existing) {
-    return { name: normalizeWorkspaceName(existing.name), lifecycle: "existing" };
-  }
-  return { name: "default", lifecycle: "register" };
+  return null;
+}
+
+/** One source checkout has one writeback owner, independent of which member connects next. */
+export function selectDevelopmentWritebackWorkspaceId(
+  state: Pick<HubRuntimeState, "bootstrapWorkspaceId" | "centralData" | "identityDb" | "userStore">
+): string | null {
+  if (state.bootstrapWorkspaceId) return state.bootstrapWorkspaceId;
+  const root = state.userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
+  if (!root) return null;
+  return (
+    state.centralData
+      .listWorkspaces()
+      .find(
+        (workspace) =>
+          workspace.privateRole === "system" &&
+          state.identityDb.getPrivateWorkspaceOwner(workspace.workspaceId)?.userId === root.id
+      )?.workspaceId ?? null
+  );
+}
+
+function bindDevelopmentWritebackWorkspace(
+  state: Pick<HubRuntimeState, "bootstrapWorkspaceId" | "centralData" | "identityDb" | "userStore">
+): void {
+  const owner = process.env[DEVELOPMENT_WRITEBACK_ENV]
+    ? selectDevelopmentWritebackWorkspaceId(state)
+    : null;
+  if (owner) process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV] = owner;
+  else delete process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV];
 }
 
 /**
@@ -1469,6 +1493,7 @@ export async function executeHubControl(
   if (method === "ensureUserWorkspaces") {
     const templates = readDefaultWorkspaceTemplates(state.appRoot);
     const pair = state.centralData.ensurePrivateWorkspaces(subject.userId, templates);
+    bindDevelopmentWritebackWorkspace(state);
     respond({
       personal: {
         ...pair.personal,
@@ -3147,32 +3172,30 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const userStore = new UserStore(identityDb);
   const membershipStore = new MembershipStore(identityDb, userStore);
   const bootstrap = selectBootstrapWorkspace(args, centralData.listWorkspaces());
-  const bootstrapWorkspace = bootstrap.name;
-  if (bootstrap.lifecycle === "ephemeral") {
+  const bootstrapWorkspace = bootstrap?.name ?? null;
+  if (bootstrap?.lifecycle === "ephemeral") {
     centralData.addEphemeralWorkspace(
-      bootstrapWorkspace,
+      bootstrap.name,
       serverBootId,
       selectWorkspaceCreationRootTemplate({ appRoot, initial: true })
     );
-  } else if (bootstrap.lifecycle === "register") {
+  } else if (bootstrap?.lifecycle === "register") {
     centralData.addWorkspaceCreation(
-      bootstrapWorkspace,
+      bootstrap.name,
       selectWorkspaceCreationRootTemplate({ appRoot, initial: true })
     );
   }
-  const bootstrapWorkspaceId = centralData.getWorkspaceIdByName(bootstrapWorkspace);
-  if (!bootstrapWorkspaceId) {
+  const bootstrapWorkspaceId = bootstrapWorkspace
+    ? (centralData.getWorkspaceIdByName(bootstrapWorkspace) ?? null)
+    : null;
+  if (bootstrapWorkspace && !bootstrapWorkspaceId) {
     throw new Error(`Bootstrap workspace "${bootstrapWorkspace}" is not registered`);
   }
-  if (bootstrap.lifecycle !== "existing") {
+  if (bootstrap && bootstrap.lifecycle !== "existing" && bootstrapWorkspaceId) {
     const creator = userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
     if (creator) membershipStore.add(creator.id, bootstrapWorkspaceId, creator.id);
   }
-  if (process.env[DEVELOPMENT_WRITEBACK_ENV]) {
-    process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV] = bootstrapWorkspaceId;
-  } else {
-    delete process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV];
-  }
+  bindDevelopmentWritebackWorkspace({ bootstrapWorkspaceId, centralData, identityDb, userStore });
   // Membership-governance records land in the host governance log (WP5 §5.1),
   // the same SQLite governance database that carries approval provenance.
   const governanceLog = new GovernanceLog();
@@ -3218,8 +3241,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   // A target-readiness flag is a hub-level contract, not merely a child
   // argument. Finish the bootstrap workspace's requested preparation before
   // publishing the ready file (and therefore before the wrapper reveals a
-  // pairing link). Other registered workspaces remain opportunistic prewarms.
-  if (args.requireMobileReady || args.requireElectronReady) {
+  // pairing link). Without an explicit project, native clients prepare their
+  // designated System workspace after account pairing and private-pair creation.
+  if (bootstrapWorkspace && (args.requireMobileReady || args.requireElectronReady)) {
     console.log(
       `[Hub] Preparing ${bootstrapWorkspace} for ${[
         args.requireElectronReady ? "desktop" : null,

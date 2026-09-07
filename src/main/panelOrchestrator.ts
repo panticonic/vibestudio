@@ -1031,32 +1031,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // Tree initialization
   // =========================================================================
 
-  async initializePanelTree(
-    options: { seedInitialPanels?: boolean } = {},
-    caller?: ScopedServerCaller
-  ): Promise<void> {
-    const clients = this.operationClients(caller);
-    if (options.seedInitialPanels !== false) {
-      const initialPanels = this.deps.workspaceConfig?.initPanels ?? [];
-      for (const [index, initial] of initialPanels.entries()) {
-        // The registry is only a bounded local mirror and is empty at the
-        // beginning of a warm launch. Ask durable query state before seeding;
-        // otherwise each process creates another copy of the manifest root.
-        const existing =
-          this.registry.getRootPanels().some((panel) => getPanelSource(panel) === initial.source) ||
-          (await this.shellCore.hasRootPanelSource(initial.source, clients));
-        if (existing) continue;
-        await this.createViaProductRuntime(
-          { surface: "code", source: initial.source },
-          {
-            stateArgs: initial.stateArgs,
-            initialLoad: "eager",
-            focus: index === 0,
-          },
-          caller
-        );
-      }
-    }
+  async initializePanelTree(): Promise<void> {
     await this.runtime.syncLeaseSnapshot().catch((error: unknown) => {
       log.warn(
         `[initializePanelTree] Failed to sync runtime leases: ${

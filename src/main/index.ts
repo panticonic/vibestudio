@@ -321,12 +321,13 @@ installEarlyOpenUrlBuffer();
 enqueueFirstArgvLink(process.argv);
 
 if (startupMode.kind === "local") {
-  workspaceId = startupMode.workspaceId;
+  if (startupMode.workspaceId) workspaceId = startupMode.workspaceId;
   app.setPath(
     "userData",
     localShellUserDataDir(startupMode, {
       pendingCreation:
         !startupMode.isEphemeral &&
+        startupMode.workspaceName !== null &&
         centralData.getWorkspaceCreationIntent(startupMode.workspaceName) !== null,
       headless: IS_HEADLESS_HOST,
     })
@@ -1225,10 +1226,7 @@ async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<
       // snapshot, so preparation may populate panels before or after that read
       // without losing state. Do not hold the entire desktop behind worker or
       // storage latency encountered while preparing panels.
-      const panelTreeInitialization = initializePanelTreeOnce("electron-host-ready", {
-        callerId: event.appId,
-        callerKind: "app",
-      });
+      const panelTreeInitialization = initializePanelTreeOnce("electron-host-ready");
       log.info(`[apps] Applying ready Electron host target: ${event.appId}`);
       await appOrchestrator.applyAppAvailable(event);
       appliedElectronHostTargetKey = launchKey;
@@ -1368,17 +1366,14 @@ async function drainPendingReadyElectronLaunch(): Promise<void> {
   pendingReadyElectronLaunch = null;
 }
 
-function initializePanelTreeOnce(
-  reason: string,
-  caller?: import("./serverClient.js").ScopedServerCaller
-): Promise<void> {
+function initializePanelTreeOnce(reason: string): Promise<void> {
   if (panelTreeInitializationPromise) return panelTreeInitializationPromise;
   const orchestrator = panelOrchestrator;
   if (!orchestrator) return Promise.resolve();
   clearPanelInitializationFailure();
   log.info(`[panels] Initializing panel tree after ${reason}`);
   panelTreeInitializationPromise = orchestrator
-    .initializePanelTree({ seedInitialPanels: !IS_HEADLESS_HOST }, caller)
+    .initializePanelTree()
     .then(() => clearPanelInitializationFailure())
     .catch((error) => {
       panelTreeInitializationPromise = null;
@@ -2077,7 +2072,7 @@ app.on("ready", async () => {
       retryWorkspaceIsEphemeral = choice.ephemeral;
       if (choice.ephemeral) {
         startupMode = resolveEphemeralDevStartupMode();
-        workspaceId = startupMode.workspaceId;
+        workspaceId = assertPresent(startupMode.workspaceId);
         log.info(`[bootstrap] Ephemeral workspace chosen: ${workspaceId}`);
       } else {
         try {
@@ -2093,7 +2088,7 @@ app.on("ready", async () => {
           pushBootstrapConnectionState();
           return;
         }
-        workspaceId = startupMode.workspaceId;
+        workspaceId = assertPresent(startupMode.workspaceId);
         log.info(`[bootstrap] Local workspace chosen: ${workspaceId} (${startupMode.wsDir})`);
       }
     } else {
@@ -2429,14 +2424,11 @@ app.on("ready", async () => {
               wc.send("vibestudio:rpc:recovery", kind);
             }
           }
-          // Iroh invokes this hook while the main logical session is still
-          // opening. Start replay without awaiting it here: replay itself uses
-          // that session, so awaiting would make session-open wait on an RPC
-          // that cannot be sent until session-open completes. The epoch keeps
-          // an older replay from declaring a newer, flapping connection ready.
+          // Replay uses the recovered logical session. The epoch prevents an
+          // older replay from marking a newer, flapping connection ready.
           if (workspaceConnection.snapshot().phase !== "reconnecting") return;
           const recoveryEpoch = ++semanticRecoveryEpoch;
-          void recoverShellStateFromServer(kind)
+          return recoverShellStateFromServer(kind)
             .then(() => {
               if (
                 recoveryEpoch !== semanticRecoveryEpoch ||
@@ -2663,9 +2655,7 @@ app.on("ready", async () => {
     // A workspace selected in-process cannot safely repoint Electron's userData
     // directory, so derive the pin path from the resolved workspace itself.
     const clientLocalStateDir =
-      startupMode.kind === "local"
-        ? path.join(startupMode.wsDir, "state")
-        : app.getPath("userData");
+      conn.connectionMode === "local" ? conn.statePath : app.getPath("userData");
     const panelPinStore = IS_HEADLESS_HOST
       ? undefined
       : new PanelPinStore(path.join(clientLocalStateDir, "panel-pins.json"));
@@ -2751,10 +2741,7 @@ app.on("ready", async () => {
     } else if (pendingReadyElectronLaunch) {
       await drainPendingReadyElectronLaunch();
     } else if (appliedElectronHostAppId) {
-      await initializePanelTreeOnce("panel-orchestrator-ready", {
-        callerId: appliedElectronHostAppId,
-        callerKind: "app",
-      });
+      await initializePanelTreeOnce("panel-orchestrator-ready");
     }
 
     // Batch panel warn/error + lifecycle diagnostics into `panelLog.append`
@@ -3433,7 +3420,7 @@ app.on("ready", async () => {
       writeHeadlessStartupError(
         error,
         bootstrapConnectionKind === "local" && startupMode.kind === "local"
-          ? startupMode.wsDir
+          ? (startupMode.wsDir ?? undefined)
           : undefined
       );
     }
@@ -3460,10 +3447,12 @@ app.on("before-quit", (event) => {
   if (quitIntent.serverDecision !== null || isCleaningUp) return;
   const conn = serverSession;
   const remembered = centralData.getKeepServerOnQuit();
-  const ephemeralLocalHub = startupMode.kind === "local" && startupMode.isEphemeral;
+  const ephemeralLocalHub =
+    startupMode.kind === "local" &&
+    (startupMode.isEphemeral || process.argv.includes("--ephemeral"));
   const decision = ordinaryQuitServerDecision({
     ownsLocalHub: conn?.serverOwnership === "desktop-local" && conn.hubProcessManager !== null,
-    ephemeralWorkspace: ephemeralLocalHub,
+    ephemeral: ephemeralLocalHub,
     rememberedKeepServer: remembered,
   });
   if (decision !== "prompt") {

@@ -2069,75 +2069,22 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
 });
 
 describe("PanelOrchestrator.initializePanelTree", () => {
-  it("seeds and eagerly materializes every configured initial root through the product runtime", async () => {
+  it("reads server-owned initial roots without creating another client seed", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
-    const { orchestrator, shellCore, panelView } = createOrchestrator(registry, vi.fn(), {
-      workspaceConfig: {
-        id: "test",
-        panelRestorePolicy: "none",
-        initPanels: [
-          { source: "panels/chat", stateArgs: { initialPrompt: "first" } },
-          { source: "panels/terminal", stateArgs: { initialPrompt: "second" } },
-        ],
-      } as never,
+    const { orchestrator, shellCore, serverClient } = createOrchestrator(registry, vi.fn(), {
+      workspaceConfig: { id: "test", initPanels: [{ source: "panels/chat" }] } as never,
     });
-
-    const shellApp = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
-    await orchestrator.initializePanelTree({}, shellApp);
-
-    expect(shellCore.createExecution).toHaveBeenNthCalledWith(
-      1,
-      { surface: "code", source: "panels/chat" },
-      expect.objectContaining({
-        isRoot: true,
-        addAsRoot: true,
-        stateArgs: { initialPrompt: "first" },
-      }),
-      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
-    );
-    expect(shellCore.createExecution).toHaveBeenNthCalledWith(
-      2,
-      { surface: "code", source: "panels/terminal" },
-      expect.objectContaining({
-        isRoot: true,
-        addAsRoot: true,
-        stateArgs: { initialPrompt: "second" },
-      }),
-      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
-    );
-    for (const panel of registry.getRootPanels()) {
-      await orchestrator.applyPanelExecutionActivated({
-        panelId: panel.id,
-        runtimeEntityId: panel.runtimeEntityId!,
-        effectiveVersion: "effective-ready",
-        buildKey: "b".repeat(64),
-        executionDigest: "e".repeat(64),
-        authorityRequests: [],
-      });
-    }
-    await vi.waitFor(() => {
-      expect(new Set(panelView.createViewForPanel.mock.calls.map(([panelId]) => panelId))).toEqual(
-        new Set(registry.getRootPanels().map((panel) => panel.id))
-      );
-    });
-    expect(shellCore.hasRootPanelSource).toHaveBeenCalledTimes(2);
-    expect(shellCore.hasRootPanelSource).toHaveBeenNthCalledWith(
-      1,
-      "panels/chat",
-      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
-    );
-    expect(shellCore.hasRootPanelSource).toHaveBeenNthCalledWith(
-      2,
-      "panels/terminal",
-      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
-    );
+    await orchestrator.initializePanelTree();
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
+    expect(shellCore.createExecution).not.toHaveBeenCalled();
+    expect(shellCore.hasRootPanelSource).not.toHaveBeenCalled();
   });
 
   it("keeps a headless renderer passive without hydrating the tree", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const { orchestrator, serverClient } = createOrchestrator(registry);
 
-    await orchestrator.initializePanelTree({ seedInitialPanels: false });
+    await orchestrator.initializePanelTree();
 
     expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
   });

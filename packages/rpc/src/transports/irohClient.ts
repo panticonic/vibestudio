@@ -386,19 +386,27 @@ class ClientSession implements IrohClientSession {
   private async open(): Promise<void> {
     await this.pipe.ready();
     const resultPromise = this.pipe.waitForOpen(this.sid);
-    await this.pipe.writeControl({
-      t: IROH_SESSION_OPEN,
-      sid: this.sid,
-      token: await this.options.getToken(),
-      ...(this.options.connectionId ? { connectionId: this.options.connectionId } : {}),
-      ...(this.options.clientSessionId ? { clientSessionId: this.options.clientSessionId } : {}),
-      ...(this.options.clientLabel ? { clientLabel: this.options.clientLabel } : {}),
-      ...(this.options.clientPlatform ? { clientPlatform: this.options.clientPlatform } : {}),
-      ...(this.options.oauthCallbackMode
-        ? { oauthCallbackMode: this.options.oauthCallbackMode }
-        : {}),
-    });
-    const result = await resultPromise;
+    // Observe the server result while credentials and the control write are
+    // pending: disconnect can reject it before either operation completes.
+    const [result] = await Promise.all([
+      resultPromise,
+      (async () => {
+        await this.pipe.writeControl({
+          t: IROH_SESSION_OPEN,
+          sid: this.sid,
+          token: await this.options.getToken(),
+          ...(this.options.connectionId ? { connectionId: this.options.connectionId } : {}),
+          ...(this.options.clientSessionId
+            ? { clientSessionId: this.options.clientSessionId }
+            : {}),
+          ...(this.options.clientLabel ? { clientLabel: this.options.clientLabel } : {}),
+          ...(this.options.clientPlatform ? { clientPlatform: this.options.clientPlatform } : {}),
+          ...(this.options.oauthCallbackMode
+            ? { oauthCallbackMode: this.options.oauthCallbackMode }
+            : {}),
+        });
+      })(),
+    ]);
     if (!result.success) {
       this.terminal = result.terminal ?? true;
       throw Object.assign(new Error(result.error ?? "Iroh session authentication failed"), {

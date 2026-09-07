@@ -114,6 +114,50 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("reconnecting Iroh client", () => {
+  it("allows awaited recovery replay to use the recovered logical session", async () => {
+    const first = new FakePipe();
+    const second = new FakePipe();
+    for (const [index, pipe] of [first, second].entries()) {
+      const open = pipe.openSession.bind(pipe);
+      vi.spyOn(pipe, "openSession").mockImplementation((options) => {
+        const inner = open(options);
+        let ready: Promise<void> | undefined;
+        inner.ready = () =>
+          (ready ??= Promise.resolve().then(async () => {
+            await options.onRecovery?.(index === 0 ? "resubscribe" : "cold-recover");
+          }));
+        return inner;
+      });
+    }
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: first.peerEndpointId,
+      dial: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second),
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const replayed: string[] = [];
+    const session = owner.openSession({
+      connectionId: "workspace-recovery",
+      getToken: () => "credential",
+      onRecovery: async (kind) => {
+        expect(session.callerId()).toBe("shell:device");
+        await session.send(eventEnvelope);
+        replayed.push(kind);
+      },
+    });
+    try {
+      await session.ready?.();
+      expect(first.sessions[0]?.sent).toEqual([eventEnvelope]);
+      first.disconnect();
+      await eventually(() => expect(replayed).toEqual(["resubscribe", "cold-recover"]));
+      expect(second.sessions[0]?.sent).toEqual([eventEnvelope]);
+    } finally {
+      await owner.close();
+    }
+  });
+
   it("opens on runtimes such as Hermes that do not implement crypto.randomUUID", async () => {
     const originalCrypto = globalThis.crypto;
     vi.stubGlobal("crypto", {

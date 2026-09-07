@@ -26,6 +26,80 @@ function connection(peerEndpointId: string) {
 }
 
 describe("Iroh server ingress", () => {
+  it("waits for asynchronous startup admission and checks current membership before attachment", async () => {
+    const peer = connection("a".repeat(64));
+    const startup = deferred<boolean>();
+    const waiting = deferred<IrohPhysicalConnection | null>();
+    let member = true;
+    const endpoint = {
+      endpointId: "c".repeat(64),
+      connect: vi.fn(),
+      accept: vi
+        .fn()
+        .mockResolvedValueOnce(peer)
+        .mockImplementation(() => waiting.promise),
+      close: vi.fn(async () => waiting.resolve(null)),
+    } satisfies IrohPhysicalEndpoint<IrohPhysicalConnection>;
+    const attach = vi.fn(async () => undefined);
+    const admitPeer = vi.fn(async () => (await startup.promise) && member);
+    const ingress = startIrohIngress({
+      binding: { bind: async () => endpoint },
+      admitPeer,
+      attach,
+    });
+    try {
+      await ingress.ready;
+      await vi.waitFor(() => expect(admitPeer).toHaveBeenCalledOnce());
+      expect(attach).not.toHaveBeenCalled();
+      member = false;
+      startup.resolve(true);
+      await vi.waitFor(() => expect(peer.close).toHaveBeenCalled());
+      expect(attach).not.toHaveBeenCalled();
+      expect(peer.close).toHaveBeenCalledWith(0x210n, expect.any(Uint8Array));
+    } finally {
+      startup.resolve(false);
+      await ingress.stop();
+    }
+  });
+
+  it.each([false, true])(
+    "does not attach a pending admission after stop even if it settles %s",
+    async (admitted) => {
+      const peer = connection("a".repeat(64));
+      const startup = deferred<boolean>();
+      const waiting = deferred<IrohPhysicalConnection | null>();
+      const endpoint = {
+        endpointId: "c".repeat(64),
+        connect: vi.fn(),
+        accept: vi
+          .fn()
+          .mockResolvedValueOnce(peer)
+          .mockImplementation(() => waiting.promise),
+        close: vi.fn(async () => waiting.resolve(null)),
+      } satisfies IrohPhysicalEndpoint<IrohPhysicalConnection>;
+      const attach = vi.fn(async () => undefined);
+      const admitPeer = vi.fn(() => startup.promise);
+      const ingress = startIrohIngress({
+        binding: { bind: async () => endpoint },
+        admitPeer,
+        attach,
+      });
+      try {
+        await ingress.ready;
+        await vi.waitFor(() => expect(admitPeer).toHaveBeenCalledOnce());
+        const stopping = ingress.stop();
+        startup.resolve(admitted);
+        await stopping;
+        expect(attach).not.toHaveBeenCalled();
+        expect(peer.close).toHaveBeenCalledWith(0x211n, expect.any(Uint8Array));
+        expect(endpoint.close).toHaveBeenCalledOnce();
+      } finally {
+        startup.resolve(false);
+        await ingress.stop();
+      }
+    }
+  );
+
   it("admits only after binding and rejects peers before attachment", async () => {
     const allowed = connection("a".repeat(64));
     const denied = connection("b".repeat(64));

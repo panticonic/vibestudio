@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../../tests/helpers/ledgerTest.js";
 import initSqlJs from "sql.js";
 
@@ -91,6 +91,75 @@ function activateAlarmKey(
     })
   );
 }
+
+describe("workspace distribution panel initialization", () => {
+  const seeds = [{ source: SOURCE, stateArgs: { mode: "initial" } }, { source: "panels/second" }];
+
+  it("commits one durable set of preparing roots and resumes after restart without duplicates", async () => {
+    const { instance, db } = await createTestDO(WorkspaceDOTestable);
+    const first = instance.initializePanels(seeds);
+    expect(first).toHaveLength(2);
+    expect(first.map((detail) => detail.entity.status)).toEqual(["preparing", "preparing"]);
+    expect(first[0]?.entity.stateArgs).toEqual({ mode: "initial" });
+    expect(
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: null }, limit: 10 })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(first.map((detail) => detail.slot.slot_id));
+    expect(
+      first.every(
+        (detail) => detail.slot.parent_slot_id === null && detail.slot.owner_user_id === null
+      )
+    ).toBe(true);
+    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db });
+    expect(restarted.instance.initializePanels([{ source: "panels/changed-template" }])).toEqual(
+      first
+    );
+    expect(restarted.instance.entityListPreparingByKind("panel")).toHaveLength(2);
+  });
+
+  it("rolls reservations, slots, history and initialization back together on a partial failure", async () => {
+    const { instance, sql } = await createTestDO(WorkspaceDOTestable);
+    const create = instance.slotCreate.bind(instance);
+    const failure = vi
+      .spyOn(instance, "slotCreate")
+      .mockImplementationOnce(create)
+      .mockImplementationOnce(() => {
+        throw new Error("injected seed failure");
+      });
+    expect(() => instance.initializePanels(seeds)).toThrow("injected seed failure");
+    failure.mockRestore();
+    for (const table of ["entities", "slots", "slot_history"]) {
+      expect(sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).one()).toEqual({ count: 0 });
+    }
+    expect(
+      sql.exec("SELECT value FROM workspace_meta WHERE key = 'initial-panels'").toArray()
+    ).toEqual([]);
+    expect(instance.initializePanels(seeds)).toHaveLength(2);
+  });
+
+  it("preserves seed deletions on retry and after restart", async () => {
+    const { instance, db } = await createTestDO(WorkspaceDOTestable);
+    for (const detail of instance.initializePanels(seeds)) instance.slotClose(detail.slot.slot_id);
+    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db });
+    expect(restarted.instance.initializePanels(seeds)).toEqual([]);
+    expect(restarted.instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([]);
+  });
+
+  it("adopts previous client initialization including closed roots", async () => {
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    instance.slotCreate({ slotId: "old-root", parentSlotId: null });
+    instance.slotClose("old-root");
+    expect(instance.initializePanels(seeds)).toEqual([]);
+    expect(instance.entityListPreparingByKind("panel")).toEqual([]);
+  });
+
+  it("records an empty distribution as initialized", async () => {
+    const { instance } = await createTestDO(WorkspaceDOTestable);
+    expect(instance.initializePanels([])).toEqual([]);
+    expect(instance.initializePanels(seeds)).toEqual([]);
+  });
+});
 
 describe("WorkspaceDO schema", () => {
   it("requires a fresh database for the current topology schema", async () => {

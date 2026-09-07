@@ -195,8 +195,14 @@ class ReconnectingSession implements IrohClientSession {
 
   private async openInner(pipe: IrohClientPipe, generation: number): Promise<IrohClientSession> {
     let terminalError: Error | null = null;
+    let recovery: Parameters<NonNullable<IrohClientSessionOptions["onRecovery"]>>[0] | undefined;
     const inner = pipe.openSession({
       ...this.options,
+      // Recovery replay can call this same logical session. Capture the
+      // authentication result until its validated inner session is installed.
+      onRecovery: (kind) => {
+        recovery = kind;
+      },
       onTerminalClose: (error) => {
         terminalError = error;
         this.terminal = true;
@@ -217,6 +223,7 @@ class ReconnectingSession implements IrohClientSession {
     this.inner = inner;
     this.authenticatedCallerId = inner.callerId();
     this.emitStatus("connected");
+    if (recovery !== undefined) await this.options.onRecovery?.(recovery);
     return inner;
   }
 

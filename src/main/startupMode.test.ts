@@ -89,20 +89,23 @@ describe("resolveStartupMode interactive desktop policy", () => {
     setArgv([]);
   });
 
-  it("launches the local default/last workspace by default", () => {
+  it("defers default workspace selection until the account is authenticated", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
       connectionIntent: "resume-saved-remote",
-      workspaceName: "test-workspace",
+      workspaceName: null,
+      workspaceId: null,
+      wsDir: null,
     });
+    expect(mockGetWorkspaceEntry).not.toHaveBeenCalled();
   });
 
   it("launches the local workspace non-interactively (headless) when none is explicitly selected", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
       connectionIntent: "local",
-      wsDir: "/tmp/workspaces/test-workspace",
-      workspaceId: "test-workspace",
+      wsDir: null,
+      workspaceId: null,
     });
   });
 
@@ -134,7 +137,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
-      wsDir: "/tmp/workspaces/test-workspace",
+      wsDir: null,
     });
   });
 

@@ -35,6 +35,7 @@ import {
   isHubControlHttpPath,
   selectWorkspaceCreationRootTemplate,
   selectBootstrapWorkspace,
+  selectDevelopmentWritebackWorkspaceId,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
   waitForWorkspaceReadyFile,
@@ -71,18 +72,56 @@ describe("hub internal runtime snapshot", () => {
 });
 
 describe("hub bootstrap workspace selection", () => {
-  it("uses the most recently opened registered workspace instead of assuming default", () => {
-    expect(selectBootstrapWorkspace({}, [{ name: "active" }, { name: "older" }])).toEqual({
-      name: "active",
-      lifecycle: "existing",
-    });
+  it("assigns source writeback to root System once available and never to another member's pair", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-writeback-owner-"));
+    const databasePath = path.join(directory, "identity.db");
+    const centralData = new CentralDataManager({ databasePath });
+    const identityDb = new IdentityDb({ path: databasePath, readOnly: false });
+    const userStore = new UserStore(identityDb);
+    const state = { bootstrapWorkspaceId: null, centralData, identityDb, userStore };
+    const pin = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/heads/main",
+      commit: "a".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+    };
+    const templates = { personal: pin, system: pin };
+    try {
+      expect(selectDevelopmentWritebackWorkspaceId(state)).toBeNull();
+      const root = userStore.createRoot({ handle: "root", displayName: "Root" });
+      identityDb.insertUser({
+        id: "usr_member",
+        handle: "member",
+        displayName: "Member",
+        role: "member",
+        createdAt: 1,
+      });
+      centralData.ensurePrivateWorkspaces("usr_member", templates);
+      expect(selectDevelopmentWritebackWorkspaceId(state)).toBeNull();
+      const rootPair = centralData.ensurePrivateWorkspaces(root.id, templates);
+      expect(selectDevelopmentWritebackWorkspaceId(state)).toBe(rootPair.system.workspaceId);
+      centralData.ensurePrivateWorkspaces("usr_member", templates);
+      expect(selectDevelopmentWritebackWorkspaceId(state)).toBe(rootPair.system.workspaceId);
+      const project = centralData.addWorkspace("explicit");
+      expect(
+        selectDevelopmentWritebackWorkspaceId({
+          ...state,
+          bootstrapWorkspaceId: project.workspaceId,
+        })
+      ).toBe(project.workspaceId);
+    } finally {
+      identityDb.close();
+      centralData.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
-  it("creates default only for an empty persistent catalog", () => {
-    expect(selectBootstrapWorkspace({}, [])).toEqual({
-      name: "default",
-      lifecycle: "register",
-    });
+  it("leaves workspace selection to the authenticated user when no project was requested", () => {
+    expect(selectBootstrapWorkspace({}, [{ name: "active" }, { name: "older" }])).toBeNull();
+  });
+
+  it("does not fabricate a project for an empty catalog", () => {
+    expect(selectBootstrapWorkspace({}, [])).toBeNull();
   });
 
   it("honors explicit persistent and canonical ephemeral bootstraps", () => {

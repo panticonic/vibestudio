@@ -221,68 +221,74 @@ describe("DeviceAuthStore", () => {
     ).toBe(userId);
   });
 
-  it("creates root only after consuming a live root-bootstrap code", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-root-pairing-"));
-    const databasePath = path.join(dir, "identity.db");
-    const central = new CentralDataManager({ databasePath });
-    const workspaceId = central.addWorkspace("test").workspaceId;
-    central.close();
-    const db = new IdentityDb({ path: databasePath, readOnly: false });
-    const users = new UserStore(db);
-    const store = new DeviceAuthStore({ db, serverIdPath: path.join(dir, "server-id.json") });
-    let createCalls = 0;
-    const createRootUser = () => {
-      createCalls += 1;
-      return users.createRoot({ handle: "root", displayName: "Root" }).id;
-    };
+  it.each([true, false])(
+    "creates root only after consuming a live root-bootstrap code (project requested: %s)",
+    (projectRequested) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-root-pairing-"));
+      const databasePath = path.join(dir, "identity.db");
+      const central = new CentralDataManager({ databasePath });
+      const workspaceId = projectRequested ? central.addWorkspace("test").workspaceId : null;
+      expect(central.listWorkspaces()).toHaveLength(projectRequested ? 1 : 0);
+      central.close();
+      const db = new IdentityDb({ path: databasePath, readOnly: false });
+      const users = new UserStore(db);
+      const store = new DeviceAuthStore({ db, serverIdPath: path.join(dir, "server-id.json") });
+      let createCalls = 0;
+      const createRootUser = () => {
+        createCalls += 1;
+        return users.createRoot({ handle: "root", displayName: "Root" }).id;
+      };
 
-    expect(() =>
-      store.completePairing({ transport: { kind: "local" }, code: "not-a-code", createRootUser })
-    ).toThrow(/invalid or expired/i);
-    expect(createCalls).toBe(0);
-    expect(db.hasUsers()).toBe(false);
+      expect(() =>
+        store.completePairing({ transport: { kind: "local" }, code: "not-a-code", createRootUser })
+      ).toThrow(/invalid or expired/i);
+      expect(createCalls).toBe(0);
+      expect(db.hasUsers()).toBe(false);
 
-    const wrongIntent = store.createPairingInvite(60_000, {
-      workspaceId,
-      intent: "pair-device",
-    });
-    expect(() =>
-      store.completePairing({
-        transport: { kind: "local" },
-        code: wrongIntent.code,
-        createRootUser,
-      })
-    ).toThrow(/not bound/i);
-    expect(createCalls).toBe(0);
-    expect(db.hasUsers()).toBe(false);
+      const wrongIntent = store.createPairingInvite(60_000, {
+        workspaceId,
+        intent: "pair-device",
+      });
+      expect(() =>
+        store.completePairing({
+          transport: { kind: "local" },
+          code: wrongIntent.code,
+          createRootUser,
+        })
+      ).toThrow(/not bound/i);
+      expect(createCalls).toBe(0);
+      expect(db.hasUsers()).toBe(false);
 
-    const invite = store.createPairingInvite(60_000, {
-      workspaceId,
-      intent: "root-bootstrap",
-    });
-    expect(() =>
-      store.completePairing({
+      const invite = store.createPairingInvite(60_000, {
+        workspaceId,
+        intent: "root-bootstrap",
+      });
+      expect(() =>
+        store.completePairing({
+          transport: { kind: "local" },
+          code: invite.code,
+          createRootUser: () => {
+            users.createRoot({ handle: "root", displayName: "Root" });
+            throw new Error("injected device-issuance boundary failure");
+          },
+        })
+      ).toThrow("injected device-issuance boundary failure");
+      expect(db.hasUsers()).toBe(false);
+      expect(db.listPairingCodes()).toHaveLength(2);
+
+      const credential = store.completePairing({
         transport: { kind: "local" },
         code: invite.code,
-        createRootUser: () => {
-          users.createRoot({ handle: "root", displayName: "Root" });
-          throw new Error("injected device-issuance boundary failure");
-        },
-      })
-    ).toThrow("injected device-issuance boundary failure");
-    expect(db.hasUsers()).toBe(false);
-    expect(db.listPairingCodes()).toHaveLength(2);
-
-    const credential = store.completePairing({
-      transport: { kind: "local" },
-      code: invite.code,
-      createRootUser,
-    });
-    expect(createCalls).toBe(1);
-    expect(users.getUser(credential.userId)?.role).toBe("root");
-    expect(db.listWorkspacesForUser(credential.userId)).toEqual([workspaceId]);
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+        createRootUser,
+      });
+      expect(createCalls).toBe(1);
+      expect(users.getUser(credential.userId)?.role).toBe("root");
+      expect(credential.workspaceId).toBe(workspaceId);
+      expect(db.listWorkspacesForUser(credential.userId)).toEqual(workspaceId ? [workspaceId] : []);
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  );
 
   it("cancels an unreturned code and rolls back its unactivated invited user", () => {
     const { store, db, userId, workspaceId } = makeStore(() => 1000);

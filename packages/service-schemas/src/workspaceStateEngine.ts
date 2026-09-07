@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { DURABLE_WORK_QUEUES } from "@vibestudio/shared/durableWork";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
@@ -214,6 +215,13 @@ const childEdgeSchema = z
   .strict();
 
 const rawWorkspaceStateEngineMethods = defineServiceMethods({
+  initializePanels: {
+    ...internal("write"),
+    description:
+      "Initialize distribution panel reservations and slots once in the workspace transaction.",
+    args: z.tuple([WorkspaceConfigSchema.shape.initPanels.unwrap()]),
+    returns: z.array(RawPanelDetailSchema),
+  },
   entityActivate: {
     ...internal("write"),
     args: z.tuple([entityActivationSchema]),

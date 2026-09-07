@@ -1680,6 +1680,39 @@ export class RpcServer {
     });
   }
 
+  /** Authenticate a runtime bearer using the same live identity on RPC and HTTP. */
+  authenticateConnectionGrant(
+    token: string,
+    remoteEndpointId?: string
+  ): { caller: VerifiedCaller; authorizedBy: string } | null {
+    const grant = this.deps.connectionGrants?.validate(token, remoteEndpointId);
+    if (!grant) return null;
+    try {
+      const kind = this.callerKindForRuntimePrincipal(grant.principalId);
+      // Hosted panels act for their current viewer, including unowned seeded
+      // panels. Their persistent creator remains background-runtime lineage.
+      if (kind === "panel" && (!grant.subject || grant.subject.userId === "system")) return null;
+      const caller = this.verifiedCallerFor(
+        grant.principalId,
+        kind,
+        undefined,
+        kind === "panel" || kind === "app" ? grant.subject : undefined
+      );
+      if (
+        kind === "panel" &&
+        this.deps.runtimeCoordinator?.resolvePresentationCallerForRuntime(grant.principalId) !==
+          grant.issuedBy
+      )
+        return null;
+      if (this.deps.membershipGate && !this.deps.membershipGate(caller.subject)) return null;
+      if (this.deps.liveCallerGate && !this.deps.liveCallerGate(caller, grant.issuedBy))
+        return null;
+      return { caller, authorizedBy: grant.issuedBy };
+    } catch {
+      return null;
+    }
+  }
+
   private resolveRpcCredential(
     token: unknown,
     clientLabel?: string,
@@ -1715,8 +1748,10 @@ export class RpcServer {
         : this.deps.tokenManager.validateToken(token);
       resolvedFromTokenManager = !connectionGrant && entry !== null;
       if (entry?.agentBinding) agentBinding = entry.agentBinding;
-      if (connectionGrant && entry?.callerKind === "app") {
-        subject = connectionGrant.subject;
+      if (connectionGrant) {
+        const authenticated = this.authenticateConnectionGrant(token, remoteEndpointId);
+        if (!authenticated) return rejectedCredential();
+        subject = authenticated.caller.subject;
       }
     } catch {
       entry = null;
@@ -1734,10 +1769,10 @@ export class RpcServer {
       const resolvedEntry = entry;
       const isValidAtUpgrade = (): boolean => {
         if (connectionGrant) {
-          const current = this.deps.connectionGrants?.validate(token, remoteEndpointId);
+          const current = this.authenticateConnectionGrant(token, remoteEndpointId);
           return (
-            current?.principalId === resolvedEntry.callerId &&
-            current.principalKind === resolvedEntry.callerKind
+            current?.caller.runtime.id === resolvedEntry.callerId &&
+            current.caller.runtime.kind === resolvedEntry.callerKind
           );
         }
         if (resolvedFromTokenManager) {
@@ -2306,6 +2341,21 @@ export class RpcServer {
       if ((this.activeInboundRequests.get(client.ws) ?? 0) === 0) {
         client.ws.close(4001, "Token revoked");
       }
+      return;
+    }
+    if (
+      msg.type !== "ws:auth" &&
+      client.caller.runtime.kind === "panel" &&
+      client.authorizedBy &&
+      (!this.deps.runtimeCoordinator?.authorizePanelConnection(
+        client.caller.runtime.id,
+        client.connectionId
+      ).ok ||
+        this.deps.runtimeCoordinator.resolvePresentationCallerForRuntime(
+          client.caller.runtime.id
+        ) !== client.authorizedBy)
+    ) {
+      client.ws.close(4090, "Panel runtime lease denied");
       return;
     }
     if (

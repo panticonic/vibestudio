@@ -28,7 +28,8 @@ import {
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
-import { SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
+import { computePanelId, SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   DURABLE_WORK_QUEUES,
@@ -2222,6 +2223,68 @@ export class WorkspaceDO extends DurableObjectBase {
       excludeSlotId ?? "",
       parentSlotId === null ? ownerUserId : parentSlotId
     );
+  }
+
+  @schemaRpc()
+  initializePanels(inputs: NonNullable<WorkspaceConfig["initPanels"]>): WorkspacePanelDetail[] {
+    return this.ctx.storage.transactionSync(() => {
+      const markerKey = "initial-panels";
+      const prior = this.sql
+        .exec("SELECT value FROM workspace_meta WHERE key = ?", markerKey)
+        .toArray()[0];
+      let slotIds: string[];
+      if (prior) {
+        slotIds = JSON.parse(String(prior["value"])) as string[];
+      } else {
+        slotIds = [];
+        // Earlier clients owned distribution seeding. Any durable tree use,
+        // including closed slots, means that presentation is already adopted.
+        // An empty live tree is never permission to recreate deleted panels.
+        if (
+          this.panelTreeRevision() === 0 &&
+          !this.sql.exec("SELECT 1 FROM slots LIMIT 1").toArray().length
+        ) {
+          for (const input of inputs) {
+            const slotId = computePanelId({ relativePath: input.source, isRoot: true });
+            const key = globalThis.crypto.randomUUID();
+            const entity = this.entityReserve({
+              kind: "panel",
+              source: { repoPath: input.source, effectiveVersion: "" },
+              key,
+              contextId: globalThis.crypto.randomUUID(),
+              stateArgs: input.stateArgs ?? {},
+              parentId: "server",
+            });
+            this.slotCreate({
+              slotId,
+              parentSlotId: null,
+              ...(slotIds.length
+                ? { placement: { beforeSlotId: slotIds[slotIds.length - 1]! } }
+                : {}),
+              initialEntry: {
+                entryKey: key,
+                entityId: entity.id,
+                source: input.source,
+                contextId: entity.contextId,
+                stateArgs: input.stateArgs ?? {},
+              },
+            });
+            slotIds.push(slotId);
+          }
+        }
+        this.sql.exec(
+          "INSERT INTO workspace_meta (key, value) VALUES (?, ?)",
+          markerKey,
+          JSON.stringify(slotIds)
+        );
+      }
+      // Return live seed slots on retries too: derived presentation binding can
+      // then recover a crash after this commit without recreating any slot.
+      return slotIds.flatMap((slotId) => {
+        const detail = this.panelTreeDetail(slotId);
+        return detail ? [detail] : [];
+      });
+    });
   }
 
   @schemaRpc()

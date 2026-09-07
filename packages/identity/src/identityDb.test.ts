@@ -28,6 +28,81 @@ describe("identity package schema cut", () => {
     }
   });
 
+  it("upgrades v14 pairing suggestions without changing accounts, devices, memberships, or live invites", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-v14-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const central = new CentralDataManager({ databasePath });
+    const workspace = central.addWorkspace("kept", "ws_kept");
+    central.close();
+    const identity = new IdentityDb({ path: databasePath, readOnly: false, now: () => 10 });
+    identity.insertUser({
+      id: "usr_kept",
+      handle: "kept",
+      displayName: "Kept",
+      role: "root",
+      createdAt: 1,
+    });
+    identity.addMembership({
+      userId: "usr_kept",
+      workspaceId: workspace.workspaceId,
+      addedBy: "usr_kept",
+      addedAt: 1,
+      role: "admin",
+    });
+    identity.upsertDevice({
+      deviceId: "dev_kept",
+      userId: "usr_kept",
+      refreshTokenHash: "token-hash",
+      transport: { kind: "local" },
+      label: "Kept",
+      createdAt: 1,
+    });
+    const invite = {
+      code: "kept-invite",
+      userId: "usr_kept",
+      workspaceId: workspace.workspaceId,
+      intent: "pair-device" as const,
+      createdAt: 1,
+      expiresAt: 1000,
+    };
+    identity.insertPairingInvite(invite);
+    identity.close();
+    const old = new DatabaseSync(databasePath);
+    old.exec(`ALTER TABLE pairing_codes RENAME TO pairing_codes_current;
+      CREATE TABLE pairing_codes (
+        code TEXT PRIMARY KEY, user_id TEXT,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+        intent TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+      );
+      INSERT INTO pairing_codes SELECT * FROM pairing_codes_current;
+      DROP TABLE pairing_codes_current;
+      PRAGMA user_version = 14`);
+    const tables = ["users", "devices", "workspaces", "membership", "pairing_codes"];
+    const before = tables.map((table) => old.prepare(`SELECT * FROM ${table}`).all());
+    old.close();
+
+    const migrated = new IdentityDb({ path: databasePath, readOnly: false, now: () => 10 });
+    expect(migrated.listPairingCodes()).toEqual([invite]);
+    const verified = new DatabaseSync(databasePath);
+    expect(tables.map((table) => verified.prepare(`SELECT * FROM ${table}`).all())).toEqual(before);
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+    verified.close();
+    migrated.insertPairingInvite({
+      code: "account-only",
+      workspaceId: null,
+      intent: "root-bootstrap",
+      createdAt: 10,
+      expiresAt: 1000,
+    });
+    migrated.close();
+    const reader = new IdentityDb({ path: databasePath, readOnly: true, now: () => 10 });
+    expect(
+      reader.listPairingCodes().find((entry) => entry.code === "account-only")?.workspaceId
+    ).toBeNull();
+    reader.close();
+  });
+
   it("rejects unexpected legacy tables instead of retaining them", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-schema-"));
     roots.push(root);
@@ -56,11 +131,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 14/
+      /schema version is 0, expected 15/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 14/
+      /schema version is 0, expected 15/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 
@@ -142,7 +217,7 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
@@ -197,7 +272,7 @@ describe("identity package schema cut", () => {
     reopened.close();
 
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
     expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
     expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
     verified.close();

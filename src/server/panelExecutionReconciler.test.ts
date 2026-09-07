@@ -1,8 +1,59 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspacePanelDetail } from "@vibestudio/shared/panel/workspaceStateSnapshot";
-import type { EntityRecord, RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
+import type {
+  EntityRecord,
+  RuntimeEntityHandle,
+  RuntimeCodePanelEntityCreateSpec,
+} from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { PanelExecutionReconciler } from "./panelExecutionReconciler.js";
+import { createTestDO } from "@vibestudio/durable/test-utils";
+import { WorkspaceDOTestable } from "../../packages/builtin/src/workspace-state/testFixture.js";
+
+it("activates durable distribution seeds through ordinary preparing-panel recovery", async () => {
+  const { instance } = await createTestDO(WorkspaceDOTestable);
+  const [seed] = instance.initializePanels([{ source: "about/new", stateArgs: { welcome: true } }]);
+  const activate = vi.fn(async (spec: RuntimeCodePanelEntityCreateSpec) => {
+    const active = instance.entityAdvanceExecution({
+      kind: "panel",
+      source: { repoPath: spec.execution.source, effectiveVersion: "seed-ev" },
+      key: spec.key!,
+      contextId: spec.contextId!,
+      stateArgs: spec.stateArgs,
+      parentId: "server",
+      activeBuildKey: "a".repeat(64),
+      activeExecutionDigest: "b".repeat(64),
+      activeAuthority: { requests: [], provides: [] },
+    });
+    return {
+      id: active.id,
+      kind: "panel" as const,
+      source: active.source,
+      contextId: active.contextId,
+      targetId: active.id,
+    };
+  });
+  const onError = vi.fn();
+  const reconciler = new PanelExecutionReconciler({
+    getDetail: async (slotId) => instance.panelTreeDetail(slotId),
+    resolveSlotByEntity: async (id) => instance.slotResolveByEntity(id),
+    listPreparingPanels: async () => instance.entityListPreparingByKind("panel"),
+    activate,
+    onError,
+  });
+  await reconciler.recoverPreparingPanels();
+  expect(onError).not.toHaveBeenCalled();
+  expect(activate).toHaveBeenCalledWith({
+    kind: "panel",
+    execution: { surface: "code", source: "about/new" },
+    key: seed!.entity.key,
+    contextId: seed!.entity.contextId,
+    stateArgs: { welcome: true },
+  });
+  expect(instance.panelTreeDetail(seed!.slot.slot_id)?.entity.status).toBe("active");
+  await reconciler.recoverPreparingPanels();
+  expect(activate).toHaveBeenCalledOnce();
+});
 
 const entity = {
   id: "panel:nav-entry-1",

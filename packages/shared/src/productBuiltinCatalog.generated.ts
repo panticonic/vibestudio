@@ -1161,6 +1161,21 @@ export const PRODUCT_BUILTIN_CATALOG = [
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
     directMethods: {
+      initializePanels: {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       entityActivate: {
         capability: "workspace.runtime-state.manage",
         tier: "gated",

@@ -8,11 +8,11 @@ export type OrdinaryQuitServerDecision = "keep" | "stop" | "prompt";
  */
 export function ordinaryQuitServerDecision(options: {
   ownsLocalHub: boolean;
-  ephemeralWorkspace: boolean;
+  ephemeral: boolean;
   rememberedKeepServer: boolean | null;
 }): OrdinaryQuitServerDecision {
   if (!options.ownsLocalHub) return "keep";
-  if (options.ephemeralWorkspace) return "stop";
+  if (options.ephemeral) return "stop";
   if (options.rememberedKeepServer === null) return "prompt";
   return options.rememberedKeepServer ? "keep" : "stop";
 }

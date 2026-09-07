@@ -872,7 +872,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("reuses complete immutable builds across workspace stores", async () => {
+  it("reuses artifact bytes without changing either workspace's persisted execution identity", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
     try {
@@ -922,6 +922,35 @@ describe("build artifact helpers", () => {
       });
       expect(reused?.artifacts[0]?.content).toBe("export default {};");
       expect(fs.existsSync(path.join(stateB, "builds", "same-build-key"))).toBe(false);
+
+      // A fresh lookup of A must still reproduce its sealed execution after B
+      // hydrates the shared bytes. put() did not populate A's verified read
+      // cache, so this exercises the disk verification used after a restart.
+      setUserDataPath(stateA);
+      setBuildExecutionIdentityContext({
+        workspaceId: "workspace:test",
+        executionStateForContent: (stateHash) => ({
+          kind: "event",
+          eventId: `event:${stateHash}`,
+        }),
+      });
+      expect(
+        getByExecution(buildKey, original.metadata.execution!.executionDigest)?.metadata.execution
+      ).toEqual(original.metadata.execution);
+      for (const metadataDir of [original.dir, path.join(sharedCache, buildKey)]) {
+        expect(
+          JSON.parse(fs.readFileSync(path.join(metadataDir, "metadata.json"), "utf8"))
+        ).toEqual(original.metadata);
+      }
+      if (process.platform !== "win32") {
+        const metadataInodes = [original.dir, path.join(sharedCache, buildKey), reused!.dir].map(
+          (dir) => fs.statSync(path.join(dir, "metadata.json")).ino
+        );
+        expect(new Set(metadataInodes).size).toBe(3);
+        expect(fs.statSync(path.join(original.dir, "worker.js")).ino).toBe(
+          fs.statSync(path.join(reused!.dir, "worker.js")).ino
+        );
+      }
     } finally {
       if (previousSharedCache === undefined) {
         delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:0a6bdaa0553265c8bb9ec06750769defd82f93819ddf260347bcd5ffeb5f1fba",
+  "censusDigest": "sha256:d91f12b16121746f3ab60482b9593358beb2d6aa0412b343ab6791b0f3177eb3",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -757,6 +757,10 @@
     "host:vcs.mainState": {
       "review": "workspace-main-metadata-read",
       "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels": {
+      "review": "host-owned-once-only-distribution-panel-initialization",
+      "change": "Adds a host-only workspace.runtime-state.manage write that reserves distribution initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
     }
   }
 }

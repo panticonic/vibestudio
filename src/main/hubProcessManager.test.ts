@@ -117,12 +117,12 @@ function manager(
   options: {
     ephemeral?: boolean;
     ephemeralLifecycle?: "replace" | "resume";
-    workspaceName?: string;
+    workspaceName?: string | null;
   } = {}
 ) {
   const ephemeral = options.ephemeral ?? false;
   return new HubProcessManager({
-    workspaceName: options.workspaceName ?? "alpha",
+    workspaceName: options.workspaceName === undefined ? "alpha" : options.workspaceName,
     ephemeral,
     ephemeralLifecycle: ephemeral ? (options.ephemeralLifecycle ?? "replace") : null,
     appRoot: "/tmp/app",
@@ -239,78 +239,81 @@ describe("HubProcessManager", () => {
     ).toThrow(/canonical contract/);
   });
 
-  it("loads the designated System client and preserves the requested workspace as its focus", async () => {
-    const lifecycle: string[] = [];
-    credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
-      serverId: RECORD.serverId,
-      transport: "loopback",
-      deviceId: "dev-1",
-      refreshToken: "refresh-1",
-      pairedAt: 1,
-    });
-    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith("/healthz")) {
-        return Response.json({
-          ok: true,
-          mode: "hub",
-          serverId: RECORD.serverId,
-          serverBootId: SERVER_BOOT_ID,
-          gatewayPort: RECORD.gatewayPort,
-          pid: RECORD.pid,
-          version: RECORD.version,
-          buildId: RECORD.buildId,
-        });
-      }
-      if (url.endsWith("/_r/s/auth/refresh-shell")) {
-        expect(JSON.parse(String(init?.body))).toEqual({
-          deviceId: "dev-1",
-          refreshToken: "refresh-1",
-        });
-        return Response.json({ shellToken: "shell-session" });
-      }
-      expect(url).toBe("http://127.0.0.1:5000/rpc");
-      expect(init?.headers).toMatchObject({ Authorization: "Bearer shell-session" });
-      const request = rpcCall(init);
-      if (request.method === "hubControl.ensureUserWorkspaces")
-        return rpcResult(request.body, PRIVATE_WORKSPACES);
-      if (request.method === "hubControl.listWorkspaces") {
-        expect(request.args).toEqual([]);
-        return rpcResult(request.body, [
-          {
-            workspaceId: "ws_alpha",
-            name: "alpha",
-            lastOpened: 1,
-            pendingApprovalCount: 0,
-            running: true,
-          },
-        ]);
-      }
-      expect(request).toMatchObject({
-        method: "hubControl.routeWorkspace",
-        args: [{ workspaceId: "ws_system" }],
+  it.each(["alpha", null])(
+    "loads designated System and focuses the requested project or Personal (%s)",
+    async (workspaceName) => {
+      const lifecycle: string[] = [];
+      credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
+        serverId: RECORD.serverId,
+        transport: "loopback",
+        deviceId: "dev-1",
+        refreshToken: "refresh-1",
+        pairedAt: 1,
       });
-      lifecycle.push("route-workspace");
-      return rpcResult(request.body, workspaceRoute("system", "ws_system"));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const centralData = makeCentralData();
+      const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/healthz")) {
+          return Response.json({
+            ok: true,
+            mode: "hub",
+            serverId: RECORD.serverId,
+            serverBootId: SERVER_BOOT_ID,
+            gatewayPort: RECORD.gatewayPort,
+            pid: RECORD.pid,
+            version: RECORD.version,
+            buildId: RECORD.buildId,
+          });
+        }
+        if (url.endsWith("/_r/s/auth/refresh-shell")) {
+          expect(JSON.parse(String(init?.body))).toEqual({
+            deviceId: "dev-1",
+            refreshToken: "refresh-1",
+          });
+          return Response.json({ shellToken: "shell-session" });
+        }
+        expect(url).toBe("http://127.0.0.1:5000/rpc");
+        expect(init?.headers).toMatchObject({ Authorization: "Bearer shell-session" });
+        const request = rpcCall(init);
+        if (request.method === "hubControl.ensureUserWorkspaces")
+          return rpcResult(request.body, PRIVATE_WORKSPACES);
+        if (request.method === "hubControl.listWorkspaces") {
+          expect(request.args).toEqual([]);
+          return rpcResult(request.body, [
+            {
+              workspaceId: "ws_alpha",
+              name: "alpha",
+              lastOpened: 1,
+              pendingApprovalCount: 0,
+              running: true,
+            },
+          ]);
+        }
+        expect(request).toMatchObject({
+          method: "hubControl.routeWorkspace",
+          args: [{ workspaceId: "ws_system" }],
+        });
+        lifecycle.push("route-workspace");
+        return rpcResult(request.body, workspaceRoute("system", "ws_system"));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const centralData = makeCentralData();
 
-    const target = await manager(centralData).attachOrSpawn({
-      onHubReady: () => lifecycle.push("hub-ready"),
-    });
+      const target = await manager(centralData, { workspaceName }).attachOrSpawn({
+        onHubReady: () => lifecycle.push("hub-ready"),
+      });
 
-    expect(target).toMatchObject({
-      attached: true,
-      workspaceId: "ws_system",
-      workspaceName: "system",
-      initialFocusedWorkspaceId: "ws_alpha",
-      authToken: "refresh:dev-1:refresh-1",
-      wsUrl: "ws://127.0.0.1:5000/_r/ws/system/rpc",
-    });
-    expect(spawnMock).not.toHaveBeenCalled();
-    expect(lifecycle).toEqual(["hub-ready", "route-workspace"]);
-  });
+      expect(target).toMatchObject({
+        attached: true,
+        workspaceId: "ws_system",
+        workspaceName: "system",
+        initialFocusedWorkspaceId: workspaceName ? "ws_alpha" : "ws_personal",
+        authToken: "refresh:dev-1:refresh-1",
+        wsUrl: "ws://127.0.0.1:5000/_r/ws/system/rpc",
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(lifecycle).toEqual(["hub-ready", "route-workspace"]);
+    }
+  );
 
   it("replaces a live hub built from a different server artifact", async () => {
     let incumbentAlive = true;

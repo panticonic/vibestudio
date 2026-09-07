@@ -11,6 +11,10 @@
  * (which conflicts with bundled CJS __dirname references in Node ≥25).
  */
 
+import {
+  createOpenUnitReviewLookup,
+  unitReviewCodeKey as codeIdentityKey,
+} from "./openUnitReviewLookup.js";
 import * as path from "path";
 import * as fs from "fs";
 import { resolveRequiredAppRoot } from "./appRoot.js";
@@ -2325,8 +2329,6 @@ async function main() {
    * completed without inferring that fact from an empty queue or elapsed time.
    */
   let workspaceCreationReviewState: WorkspaceCreationReviewState = { status: "preparing" };
-  const codeIdentityKey = (code: { repoPath: string; effectiveVersion: string }): string =>
-    `${code.repoPath}@${code.effectiveVersion}`;
   /**
    * Client apps and the extensions a host target requires are decided at the
    * launch gate, in a host-owned window, before the workspace UI exists (§7.6).
@@ -2344,45 +2346,16 @@ async function main() {
     }
     return false;
   };
-  // U6 — while a review covering a unit is unresolved, that unit's calls get one
-  // recoverable `review-pending` error instead of one acquisition entry per
-  // method. Two things count as an open review: a review sitting in the queue
-  // that names this exact version, and the creation review a fresh workspace
-  // owes for the parts its ungated publication landed.
-  dispatcher.setOpenReviewLookup((code) => {
-    // A launch-gate unit is never told to wait, by any review, ever.
-    //
-    // The gate is answered in a host-owned window before the workspace UI
-    // exists (§7.6), and `apps/shell` is the surface every OTHER review renders
-    // in. If it is running at all, the gate that admitted it was already
-    // answered — so a later review naming it can only be one it cannot reach,
-    // and reporting that produced `Waiting for you to finish reviewing Start
-    // this workspace?` in the shell's own notification bar, with the workspace
-    // wedged behind it. Whatever a second gate is waiting for, the answer is
-    // never "make the shell stop working".
-    if (isLaunchGateRepoPath(code.repoPath)) return null;
-    for (const pending of approvalQueue.listPending()) {
-      if (pending.kind !== "unit-install-review") continue;
-      const covered = pending.parts.some(
-        (part) => part.repoPath === code.repoPath && part.effectiveVersion === code.effectiveVersion
-      );
-      if (covered) return { approvalId: pending.approvalId, title: pending.title };
-    }
-    // The creation review covers exactly the units it is going to ask about,
-    // and never one more. Deriving the answer from "is anything unadmitted"
-    // instead is the other half of the same deadlock.
-    if (!creationReviewOwed) return null;
-    if (creationReviewUnits) {
-      return creationReviewUnits.has(codeIdentityKey(code))
-        ? { approvalId: "workspace-creation-review", title: "what's in your workspace" }
-        : null;
-    }
-    // The owed set is not computed until startup reconcile has finished.
-    if (!unitAdmissionStore.hasVersion(code.repoPath, code.effectiveVersion)) {
-      return { approvalId: "workspace-creation-review", title: "what's in your workspace" };
-    }
-    return null;
+  const unitReviewLookup = createOpenUnitReviewLookup({
+    listPendingReviews: () =>
+      approvalQueue.listPending().filter((pending) => pending.kind === "unit-install-review"),
+    isLaunchGateRepoPath,
+    creationReviewOwed: () => creationReviewOwed,
+    creationReviewUnits: () => creationReviewUnits,
+    hasVersion: (repoPath, effectiveVersion) =>
+      unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
   });
+  dispatcher.setOpenReviewLookup(unitReviewLookup.forRunningCode);
   const container = new ServiceContainer(dispatcher);
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
@@ -4658,6 +4631,12 @@ async function main() {
   // hub-owned reach tree, outside resettable semantic/runtime state.
   let irohReach: import("@vibestudio/iroh-transport").IrohReach | null = null;
   let irohIngress: import("./irohIngress.js").IrohIngress | null = null;
+  // Persisted peers can reconnect as soon as the endpoint binds. Their RPC
+  // admission must wait for the same completed startup reported to new peers.
+  let settleWorkspaceReadyForPeers!: (ready: boolean) => void;
+  const workspaceReadyForPeers = new Promise<boolean>((resolve) => {
+    settleWorkspaceReadyForPeers = resolve;
+  });
   function getResolvedGatewayPort(context: string): number {
     if (!gatewayPortResolved) {
       throw new Error(`Gateway port not finalized before ${context}`);
@@ -5228,7 +5207,8 @@ async function main() {
         const secretKey = loadOrCreateNodeEndpointSecret(workspaceIrohIdentityFile);
         const ingress = startIrohIngress({
           binding: createNodeEndpointBinding({ secretKey, relayUrls }),
-          admitPeer: (endpointId) => {
+          admitPeer: async (endpointId) => {
+            if (!(await workspaceReadyForPeers)) return false;
             const device = identityDb.getDeviceForEndpoint(endpointId);
             return !!device && membershipStore.has(device.userId, entryWorkspaceId);
           },
@@ -5253,6 +5233,7 @@ async function main() {
       }
     },
     async stop(ingress: import("./irohIngress.js").IrohIngress) {
+      settleWorkspaceReadyForPeers(false);
       await ingress.stop();
       if (irohIngress === ingress) {
         irohIngress = null;
@@ -5757,6 +5738,7 @@ async function main() {
         tokenManager: tokenManagerInst,
         eventService,
         approvalQueue,
+        openUnitReviewFor: unitReviewLookup.forUnavailableCode,
         approvalCoordinator: unitInstallReviewCoordinator,
         approvalBatchKeyFor: (entry) => launchGateBatchKeyFor(workspaceConfig, entry),
         // The gate asks whose code this is, so it is answered from workspace
@@ -6887,7 +6869,6 @@ async function main() {
     workerdGatewayToken,
     getWorkerdDispatchSecret: () => workerdManagerForGateway?.getDispatchSecret() ?? null,
     tokenManager,
-    connectionGrants,
     entityCache,
     routeRegistry,
     healthProvider: (detailed) => {
@@ -7022,6 +7003,36 @@ async function main() {
   console.log(
     `[Perf] workspace service container started at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
+  // Distribution panel intent is a workspace fact, committed once together
+  // with its reservations and slots. Native clients only observe that tree.
+  const initialPanelDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+  const initialPanels = (await initialPanelDispatch.dispatch(
+    {
+      source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
+      className: "WorkspaceDO",
+      objectKey: workspaceId,
+    },
+    "initializePanels",
+    workspaceConfig.initPanels ?? []
+  )) as import("@vibestudio/shared/panel/workspaceStateSnapshot").WorkspacePanelDetail[];
+  const initialPanelGraph = container
+    .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+    .getGraph();
+  for (const detail of initialPanels) {
+    const source = detail.currentHistory.source;
+    const manifest = initialPanelGraph
+      .allNodes()
+      .find((unit) => unit.relativePath === source)?.manifest;
+    await assertPresent<
+      | import("./services/workspaceStateService.js").WorkspaceStateServiceDeps["presentationDispatch"]
+      | null
+    >(presentationDispatch)("bindSlot", [
+      detail.slot.slot_id,
+      detail.entity.id,
+      source,
+      manifest?.title ?? source,
+    ]);
+  }
   await panelExecutionReconciler.recoverPreparingPanels();
 
   // The webhook + credential services are built now, so their refs are set:
@@ -7487,6 +7498,8 @@ async function main() {
   // ===========================================================================
   // Report ready
   // ===========================================================================
+
+  settleWorkspaceReadyForPeers(true);
 
   const workerdMgr = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
 

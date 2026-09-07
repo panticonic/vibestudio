@@ -13,6 +13,8 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { awaitRpcAdmissionResolution, RpcServer } from "./rpcServer.js";
+import { Gateway } from "./gateway.js";
+import { createLiveCallerGate } from "./services/liveCallerGate.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer/connectionRegistry.js";
 import { encodeWebSocketStreamFrame, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
@@ -23,7 +25,11 @@ import {
   type ServiceContext,
   type ServiceDispatcher,
 } from "@vibestudio/shared/serviceDispatcher";
-import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { invocationFromServiceContext } from "../../packages/extension-host/src/types.js";
+import {
+  createTestServiceContext,
+  createTestExecutionSession,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
@@ -58,6 +64,7 @@ import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import { bytesToBase64 } from "@vibestudio/rpc";
 import type { StreamFrame } from "./services/egressProxy.js";
 
+const fetchHttp = globalThis.fetch;
 const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
 const testProductAppRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rpc-product-root-"));
 
@@ -331,6 +338,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
   const runtimeCoordinator = new PanelRuntimeCoordinator();
   runtimeCoordinator.registerClient({
     clientSessionId: "test-desktop",
+    ownerCallerId: "shell:test",
     label: "Desktop",
     platform: "desktop",
   });
@@ -345,7 +353,10 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
     entityCache,
     connectionGrants,
     runtimeCoordinator,
-    grantPanel: (panelId: string) => connectionGrants.grant(panelId, "shell:test").token,
+    grantPanel: (panelId: string) =>
+      connectionGrants.grant(panelId, "shell:test", {
+        subject: { userId: "user-1", handle: "user1" },
+      }).token,
     server: new RpcServer({
       tokenManager,
       dispatcher,
@@ -4037,6 +4048,138 @@ describe("RpcServer live caller gate", () => {
 });
 
 describe("RpcServer caller identity", () => {
+  it("requires a viewer for an unowned seeded panel without changing worker lineage", () => {
+    const { server, entityCache, connectionGrants, grantPanel } = createServer({
+      userSubjectSource: { resolve: () => ({ userId: "creator", handle: "creator" }) },
+    });
+    const unowned = makeRecord("panel:nav-a", "panel");
+    expect(unowned.ownerUserId).toBeUndefined();
+    entityCache._onActivate(unowned);
+    expect(
+      server.authenticateConnectionGrant(connectionGrants.grant(unowned.id, "shell:test").token)
+    ).toBeNull();
+    expect(server.authenticateConnectionGrant(grantPanel(unowned.id))?.caller.subject?.userId).toBe(
+      "user-1"
+    );
+    const worker = { ...makeRecord("worker:background", "worker"), ownerUserId: "creator" };
+    entityCache._onActivate(worker);
+    const workerToken = connectionGrants.grant(worker.id, "shell:test", {
+      subject: { userId: "user-1", handle: "user1" },
+    }).token;
+    expect(server.authenticateConnectionGrant(workerToken)?.caller.subject?.userId).toBe("creator");
+  });
+
+  it("binds shared panel RPC and extension HTTP to the current authenticated viewer", async () => {
+    let member = true;
+    let deviceLive = true;
+    let gate: ReturnType<typeof createLiveCallerGate>;
+    const setup = createServer({
+      membershipGate: (subject) => member && !!subject,
+      liveCallerGate: (caller, issuer) => gate(caller, issuer),
+    });
+    const { server, entityCache, connectionGrants, runtimeCoordinator, grantPanel } = setup;
+    // Persistent creation attribution is Alice's; the second viewer is Bob.
+    entityCache._onActivate({ ...makeRecord("panel:nav-a", "panel"), ownerUserId: "user-1" });
+    gate = createLiveCallerGate({
+      workspaceId: "test-workspace",
+      userStore: {
+        getUser: (id) => ({ id, handle: id, displayName: id, role: "member", createdAt: 1 }),
+      },
+      membershipStore: { has: () => member },
+      deviceAuthStore: {
+        userFor: (id) => (deviceLive ? (id === "test" ? "user-1" : "user-2") : null),
+        getAgentCredential: () => null,
+      },
+      entityCache,
+      isLiveExtension: () => false,
+    });
+    const alice = grantPanel("panel:nav-a");
+    const bob = connectionGrants.grant("panel:nav-a", "shell:bob", {
+      subject: { userId: "user-2", handle: "bob" },
+    }).token;
+    const missingSubject = connectionGrants.grant("panel:nav-a", "shell:test").token;
+    expect(server.authenticateConnectionGrant(missingSubject)).toBeNull();
+    expect(server.authenticateConnectionGrant(bob)).toBeNull();
+    const first = createTestWs();
+    await testServer(server).handleAuth(first, alice, "conn-1");
+    expect(
+      testServer(server).connections.getCallerConnections("panel:nav-a")[0]?.caller.subject?.userId
+    ).toBe("user-1");
+
+    runtimeCoordinator.registerClient({
+      clientSessionId: "bob",
+      ownerCallerId: "shell:bob",
+      label: "Bob",
+      platform: "desktop",
+    });
+    runtimeCoordinator.takeOver("panel:nav-a", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "bob",
+      connectionId: "conn-bob",
+    });
+    expect(server.authenticateConnectionGrant(alice)).toBeNull();
+    const staleConnection = createTestWs();
+    await testServer(server).handleAuth(staleConnection, bob, "conn-1");
+    expect(staleConnection.close).toHaveBeenCalledWith(4090, "Panel runtime lease denied");
+    const second = createTestWs();
+    await testServer(server).handleAuth(second, bob, "conn-bob");
+    const current = testServer(server)
+      .connections.getCallerConnections("panel:nav-a")
+      .find((client) => client.connectionId === "conn-bob")!;
+    expect(current.caller.subject).toEqual({ userId: "user-2", handle: "bob" });
+    expect(
+      invocationFromServiceContext(
+        createTestServiceContext(current.caller),
+        "browser-data",
+        "listHistory",
+        "viewer-history",
+        undefined,
+        "test-workspace"
+      ).caller
+    ).toMatchObject({ userId: "user-2", workspaceId: "test-workspace" });
+    const gateway = new Gateway({
+      tokenManager: setup.tokenManager,
+      externalHost: "localhost",
+      getRpcHandler: () => server,
+      getExtensionHttpHandler: () => ({
+        handleExtensionHttpRequest: (_req, res, _name, _path, caller) => {
+          res.end(JSON.stringify({ userId: caller.subject?.userId }));
+        },
+      }),
+    });
+    try {
+      const port = await gateway.start(0);
+      const read = () =>
+        fetchHttp(`http://127.0.0.1:${port}/_r/ext/browser-data/history`, {
+          headers: { Authorization: `Bearer ${bob}` },
+        });
+      expect(await (await read()).json()).toEqual({ userId: "user-2" });
+      deviceLive = false;
+      expect((await read()).status).toBe(401);
+      deviceLive = true;
+      member = false;
+      expect((await read()).status).toBe(401);
+      expect(server.authenticateConnectionGrant(bob)).toBeNull();
+      member = true;
+      runtimeCoordinator.release("panel:nav-a", "conn-bob");
+      expect((await read()).status).toBe(401);
+      testServer(server).handleMessage(current, {
+        type: "ws:rpc",
+        envelope: clientEnvelope(current, "main", {
+          type: "request",
+          requestId: "after-release",
+          fromId: current.caller.runtime.id,
+          method: "extension.invoke",
+          args: ["browser-data", "listHistory", []],
+        }),
+      });
+      expect(second.close).toHaveBeenLastCalledWith(4090, "Panel runtime lease denied");
+    } finally {
+      await gateway.stop();
+      await server.stop();
+    }
+  });
+
   it("retains sealed code attribution without granting an unapproved exact version", () => {
     const isCodeApproved = vi.fn(() => false);
     const { server, entityCache } = createServer({ isCodeApproved });

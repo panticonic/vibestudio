@@ -15,7 +15,7 @@
     "build:infrastructure": "node scripts/build-infrastructure-packages.mjs",
     "bootstrap": "pnpm install",
     "bootstrap:frozen": "pnpm install --frozen-lockfile",
-    "dev": "tsx src/dev/runInstance.ts desktop --ephemeral-workspace",
+    "dev": "tsx src/dev/runInstance.ts desktop --ephemeral",
     "dev:production": "tsx src/dev/runInstance.ts desktop --production-base --ephemeral",
     "dev:base": "tsx scripts/dev-base.ts",
     "dev:iroh": "NODE_ENV=development tsx src/dev/runInstance.ts desktop --dev-iroh-remote --ephemeral",

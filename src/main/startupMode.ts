@@ -43,9 +43,10 @@ export type StartupMode =
        * launch. Only the latter may be replaced by a saved remote connection.
        */
       connectionIntent: "local" | "resume-saved-remote";
-      wsDir: string;
-      workspaceName: string;
-      workspaceId: string;
+      /** Null until authentication selects the user's Personal workspace. */
+      wsDir: string | null;
+      workspaceName: string | null;
+      workspaceId: string | null;
       isEphemeral: boolean;
       /**
        * A new development session replaces any prior hub-owned `dev`
@@ -94,15 +95,17 @@ export function localShellUserDataDir(
   mode: LocalStartupMode,
   options: { pendingCreation: boolean; headless: boolean }
 ): string {
+  if (!mode.workspaceName)
+    return path.join(getPendingUserDataDir(), options.headless ? "headless" : "desktop");
   if (mode.isEphemeral || options.pendingCreation) {
     return path.join(
       getPendingUserDataDir(),
       "workspace-creation",
-      mode.workspaceId,
+      mode.workspaceId!,
       options.headless ? "headless" : "desktop"
     );
   }
-  return path.join(mode.wsDir, options.headless ? "state-headless-host" : "state");
+  return path.join(mode.wsDir!, options.headless ? "state-headless-host" : "state");
 }
 
 /**
@@ -144,13 +147,8 @@ export function resolveStartupMode(
     return { kind: "pending" };
   }
 
-  // Pre-session startup has no authenticated user. Use the catalog's machine
-  // MRU as the local fallback in every build. Development and packaged desktop
-  // launches deliberately share this policy so the ordinary developer loop
-  // exercises the real persistent-workspace experience. Only an explicitly
-  // requested ephemeral lifecycle may select the disposable dev workspace.
-  // Ordinary interactive launches may resume a saved remote connection;
-  // headless hosts always own a local workspace.
+  // Authenticate before selecting the user's private workspace. A machine-wide
+  // MRU cannot choose an account's Personal workspace or create one on its behalf.
   return resolveLocalStartupMode(
     centralData,
     undefined,
@@ -245,7 +243,17 @@ export function resolveLocalStartupMode(
   createIfMissing = false
 ): LocalStartupMode {
   const explicitlyNamed = resolveWorkspaceName() ?? preferredName;
-  const name = explicitlyNamed ?? centralData.getLastOpenedWorkspace()?.name ?? "default";
+  if (!explicitlyNamed)
+    return {
+      kind: "local",
+      connectionIntent,
+      wsDir: null,
+      workspaceName: null,
+      workspaceId: null,
+      isEphemeral: false,
+      ephemeralLifecycle: null,
+    };
+  const name = explicitlyNamed;
   let entry = centralData.getWorkspaceEntry(name);
   if (!entry) {
     const mayCreate =
