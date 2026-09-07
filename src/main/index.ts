@@ -1,3 +1,4 @@
+import { parseWorkspaceNativeViewId, WorkspaceNativeViews } from "./workspaceNativeViews.js";
 import {
   app,
   dialog,
@@ -39,11 +40,7 @@ import {
   parseConnectLink,
   type ConnectPairing,
 } from "@vibestudio/iroh-transport";
-import {
-  createPanelDeepLink,
-  validatePanelLocation,
-  type PanelLocation,
-} from "@vibestudio/shared/panelLocation";
+import { validatePanelLocation, type PanelLocation } from "@vibestudio/shared/panelLocation";
 import {
   enqueueFirstArgvLink,
   getPendingConnectLink,
@@ -173,7 +170,7 @@ import type { PanelView } from "./panelView.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { resolveElectronViewCaller } from "./callerResolution.js";
-import { setMenuPanelLifecycle, setMenuPanelRegistry, setMenuEventService } from "./menu.js";
+import { setMenuWorkspaceResolver, setMenuEventService } from "./menu.js";
 import { getAppRoot } from "./paths.js";
 import { loadCentralEnv } from "@vibestudio/workspace/loader";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -199,7 +196,6 @@ import { getLocalHubLogPath } from "./hubProcessManager.js";
 import {
   loadStoredRemotePairing,
   clearStoredRemotePairing,
-  persistStoredRemoteWorkspaceRoute,
   readPendingPairLabel,
 } from "./services/remoteCredService.js";
 import type { ServerClient } from "./serverClient.js";
@@ -231,7 +227,6 @@ import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
-import { createAutofillService } from "./services/autofillService.js";
 import { assertPresent } from "../lintHelpers";
 import { ApplicationWindowController } from "./applicationWindowController.js";
 import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
@@ -406,13 +401,22 @@ let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
 let activeIpcDispatcher: import("./ipcDispatcher.js").IpcDispatcher | null = null;
-let serverSession: SessionConnection | null = null;
-let activeBrowserSessionPartition: string | null = null;
-const browserEnvironmentReadiness = new BrowserEnvironmentReadiness();
-const getBrowserSessionPartition = (): string => {
-  return browserEnvironmentReadiness.requireReady();
+type DesktopUiWorkspaceRuntime = import("./ipcDispatcher.js").WorkspaceIpcRuntime & {
+  orchestrator: PanelOrchestrator;
+  registry: PanelRegistry;
+  core: ReturnType<
+    typeof import("./desktopWorkspaceController.js").createDesktopWorkspaceController
+  >["core"];
+  eventService: EventService;
+  browserPermissions?: import("./services/browserPermissionController.js").BrowserPermissionController;
+  close(): Promise<void>;
 };
-let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
+const desktopWorkspaceRuntimes = new Map<string, Promise<DesktopUiWorkspaceRuntime>>();
+const openNativeControllers = new Map<string, DesktopUiWorkspaceRuntime>();
+const adBlockManager = new AdBlockManager();
+
+let serverSession: SessionConnection | null = null;
+const browserEnvironmentReadiness = new BrowserEnvironmentReadiness();
 let approvalAttention: ApprovalAttention | null = null;
 let currentHostDevelopmentExecutor:
   | import("./currentHostDevelopmentClientExecutor.js").CurrentHostDevelopmentClientExecutor
@@ -492,6 +496,10 @@ installProcessSignalShutdown(process, () => {
 });
 
 const applicationWindow = new ApplicationWindowController({
+  getSystemWorkspaceId: () => serverSession?.workspaceId ?? null,
+  onCodeIdentityChanged: (nativeId) => {
+    void activeIpcDispatcher?.revokeWorkspaceUiCaller(nativeId).catch(console.error);
+  },
   eventService,
   isHeadlessHost: IS_HEADLESS_HOST,
   getWindowTitle: () =>
@@ -538,33 +546,13 @@ const workspaceConnection = new WorkspaceConnectionStateController(
 app.on("second-instance", () => {
   applicationWindow.showAndFocus();
 });
-let formFillManager: import("./autofill/formFillManager.js").FormFillManager | null = null;
+let personalBrowserServices: import("./personalBrowserServices.js").PersonalBrowserServices | null =
+  null;
+let personalWorkspaceId: string | null = null;
 const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
-let browserDataStoreForCredentialCapture:
-  | import("./services/browserVaultNativeClient.js").BrowserVaultNativeClient
-  | null = null;
-let browserCookieProjection:
-  | import("./services/browserCookieProjection.js").BrowserCookieProjectionApi
-  | null = null;
-let browserFaviconObserver:
-  | import("./services/browserFaviconObserver.js").BrowserFaviconObserver
-  | null = null;
-let browserDownloadManager:
-  | import("./services/browserDownloadManager.js").BrowserDownloadManager
-  | null = null;
 let browserPermissionController:
   | import("./services/browserPermissionController.js").BrowserPermissionController
-  | null = null;
-let releaseBrowserAdBlocking: (() => void) | null = null;
-let websiteNotificationBridge:
-  | import("./services/websiteNotificationBridge.js").WebsiteNotificationBridge
-  | null = null;
-let browserImportHostProvider:
-  | import("./services/browserImportHostProvider.js").BrowserImportHostProvider
-  | null = null;
-let browserPrivacyManager:
-  | import("./services/browserPrivacyManager.js").BrowserPrivacyManager
   | null = null;
 
 type AppCapability = import("@vibestudio/shared/unitManifest").AppCapability;
@@ -711,23 +699,31 @@ function canAccessIncomingPanelLocations(webContentsId: number): boolean {
  * `vibestudio://ask|about|command|surface` deep links, menu items — converges here.
  */
 function dispatchShellSurface(target: ShellSurfaceDescriptor): void {
+  const focusedId = applicationWindow.focusedWorkspace;
+  const focusedEvents = focusedId ? openNativeControllers.get(focusedId)?.eventService : undefined;
   switch (target.kind) {
     case "settings":
-      eventService.emit("open-settings", { section: target.section ?? "connection" });
+      eventService.emit("open-settings", {
+        section: target.section ?? "connection",
+        ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
+      });
       return;
     case "workspace-chooser":
-      eventService.emit("open-workspace-switcher", undefined);
+      eventService.emit(
+        "open-workspace-switcher",
+        target.template ? { template: target.template } : undefined
+      );
       return;
     case "about":
-      eventService.emit("navigate-about", { page: target.page });
+      focusedEvents?.emit("navigate-about", { page: target.page });
       return;
     case "command-agent": {
       const { kind: _kind, ...request } = target;
-      eventService.emit("open-command-agent", request);
+      focusedEvents?.emit("open-command-agent", request);
       return;
     }
     case "panel-command":
-      eventService.emit("run-panel-command", {
+      focusedEvents?.emit("run-panel-command", {
         panelId: target.panelId,
         commandId: target.commandId,
       });
@@ -933,7 +929,9 @@ async function authorizeCorsResponseAccess(
 
   let pending = pendingCorsApprovals.get(cacheKey);
   if (!pending) {
-    const client = serverSession.serverClient;
+    const identity = applicationWindow.viewManager?.getViewInfo(callerId)?.workspaceIdentity;
+    const client = identity ? openNativeControllers.get(identity.workspaceId)?.serverClient : null;
+    if (!client) return { allowed: false, requestOrigin };
     pending = createTypedServiceClient("corsApproval", corsApprovalMethods, (svc, m, a) =>
       client.call(svc, m, a)
     )
@@ -988,6 +986,11 @@ async function handleCredentialSessionCaptureRequest(
   msg: CredentialSessionCaptureRequest
 ): Promise<Record<string, unknown>> {
   try {
+    const personal = personalWorkspaceId ? openNativeControllers.get(personalWorkspaceId) : null;
+    const browser = personalBrowserServices;
+    if (!personal || !browser) return { error: "Personal browser is unavailable" };
+    const panelOrchestrator = personal.orchestrator;
+    const personalPanelView = applicationWindow.getWorkspacePanelView(personal.workspaceId);
     if (msg.kind !== "cookies" && msg.kind !== "saml") {
       return { error: "unsupported session capture kind" };
     }
@@ -1008,10 +1011,10 @@ async function handleCredentialSessionCaptureRequest(
       return { error: "raw SAML assertion capture is not supported by this host adapter" };
     }
     if (msg.browser === "external") {
-      if (!browserDataStoreForCredentialCapture) {
+      if (!browser.browserVault) {
         return { error: "external browser cookie import is unavailable" };
       }
-      const browserDataStore = browserDataStoreForCredentialCapture;
+      const browserDataStore = browser.browserVault;
       const imported = (
         await Promise.all(origins.map((origin) => browserDataStore.getCookiesForOrigin(origin)))
       ).flat();
@@ -1043,13 +1046,17 @@ async function handleCredentialSessionCaptureRequest(
       return { error: "internal browser is unavailable" };
     }
 
+    applicationWindow.focusWorkspace(personal.workspaceId);
+    activeIpcDispatcher?.sendEventToShell("workspace-focused", {
+      workspaceId: personal.workspaceId,
+    });
     const panel = await panelOrchestrator.createBrowserUrlPanel("shell", signInUrl.href, {
       title: "Credential sign-in",
       focus: true,
     });
 
     try {
-      const webContents = viewManager.getWebContents(panel.id);
+      const webContents = personalPanelView?.getWebContents(panel.id);
       if (!webContents || webContents.isDestroyed()) {
         return { error: "failed to create browser panel" };
       }
@@ -1060,11 +1067,11 @@ async function handleCredentialSessionCaptureRequest(
 
       // Helper to check if cookies are captured
       const tryCaptureCredentials = async (): Promise<Record<string, unknown> | null> => {
-        if (!browserCookieProjection || !browserDataStoreForCredentialCapture) {
+        if (!browser.cookieProjection || !browser.browserVault) {
           return null;
         }
-        const projection = browserCookieProjection;
-        const browserDataStore = browserDataStoreForCredentialCapture;
+        const projection = browser.cookieProjection;
+        const browserDataStore = browser.browserVault;
         await projection.flush(origins);
         const captured = (
           await Promise.all(origins.map((origin) => browserDataStore.getCookiesForOrigin(origin)))
@@ -1114,9 +1121,7 @@ async function handleCredentialSessionCaptureRequest(
 
         const cleanup = () => {
           clearTimeout(timeoutId);
-          session
-            .fromPartition(getBrowserSessionPartition())
-            .cookies.off("changed", onCookiesChanged);
+          webContents.session.cookies.off("changed", onCookiesChanged);
           webContents.off("did-navigate", onNavigate);
           webContents.off("did-navigate-in-page", onNavigate);
           webContents.off("did-redirect-navigation", onRedirect);
@@ -1167,7 +1172,7 @@ async function handleCredentialSessionCaptureRequest(
         const onDestroyed = () => finish({ error: "user closed sign-in window" });
         const timeoutId = setTimeout(() => finish({ error: "session capture timed out" }), timeout);
 
-        session.fromPartition(getBrowserSessionPartition()).cookies.on("changed", onCookiesChanged);
+        webContents.session.cookies.on("changed", onCookiesChanged);
         webContents.on("did-navigate", onNavigate);
         webContents.on("did-navigate-in-page", onNavigate);
         webContents.on("did-redirect-navigation", onRedirect);
@@ -1744,16 +1749,12 @@ app.on("ready", async () => {
     }
     return getPendingPanelLocation();
   });
-  ipcMain.handle("vibestudio:prepare-panel-location-relaunch", (event, location: unknown) => {
+  ipcMain.handle("vibestudio:open-panel-location", (event, location: unknown) => {
     if (!canAccessIncomingPanelLocations(event.sender.id)) {
-      throw new Error("Panel-location relaunch requires the trusted host-chrome surface");
-    }
-    if (location === null) {
-      panelLocationForWorkspaceRelaunch = null;
-      return;
+      throw new Error("Panel-location navigation requires the trusted host-chrome surface");
     }
     validatePanelLocation(location as PanelLocation);
-    panelLocationForWorkspaceRelaunch = location as PanelLocation;
+    sendIncomingPanelLocation(location);
   });
   onConnectLink((link) => {
     if (IS_HEADLESS_HOST) return;
@@ -1933,8 +1934,7 @@ app.on("ready", async () => {
     if (
       permission === "fullscreen" &&
       viewId &&
-      activeBrowserSessionPartition &&
-      viewManager.getViewPartition(viewId) === activeBrowserSessionPartition
+      viewManager.getViewInfo(viewId)?.type === "browser"
     ) {
       return true;
     }
@@ -1943,16 +1943,23 @@ app.on("ready", async () => {
 
   const installPermissionHandlers = (targetSession: Session): void => {
     targetSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      const nativeId = contents
+        ? applicationWindow.viewManager?.findViewIdByWebContentsId(contents.id)
+        : null;
+      const ownerId = nativeId
+        ? applicationWindow.viewManager?.getViewInfo(nativeId)?.workspaceIdentity?.workspaceId
+        : null;
+      const permissions = ownerId ? openNativeControllers.get(ownerId)?.browserPermissions : null;
       if (SENSITIVE_PERMISSIONS.has(permission)) {
         if (
-          browserPermissionController &&
+          permissions &&
           (permission === "media" ||
             permission === "geolocation" ||
             permission === "notifications" ||
             permission === "clipboard-read" ||
             permission === "clipboard-sanitized-write")
         ) {
-          browserPermissionController.requestPermission(contents, permission, callback, details);
+          permissions.requestPermission(contents, permission, callback, details);
           return;
         }
         const viewManager = applicationWindow.viewManager;
@@ -1980,21 +1987,23 @@ app.on("ready", async () => {
       callback(true);
     });
     targetSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+      const nativeId = contents
+        ? applicationWindow.viewManager?.findViewIdByWebContentsId(contents.id)
+        : null;
+      const ownerId = nativeId
+        ? applicationWindow.viewManager?.getViewInfo(nativeId)?.workspaceIdentity?.workspaceId
+        : null;
+      const permissions = ownerId ? openNativeControllers.get(ownerId)?.browserPermissions : null;
       if (SENSITIVE_PERMISSIONS.has(permission)) {
         if (
-          browserPermissionController &&
+          permissions &&
           (permission === "media" ||
             permission === "geolocation" ||
             permission === "notifications" ||
             permission === "clipboard-read" ||
             permission === "clipboard-sanitized-write")
         ) {
-          return browserPermissionController.checkPermission(
-            contents,
-            permission,
-            requestingOrigin,
-            details
-          );
+          return permissions.checkPermission(contents, permission, requestingOrigin, details);
         }
         return webContentsMayUseSensitivePermission(contents, permission);
       }
@@ -2190,32 +2199,65 @@ app.on("ready", async () => {
       nativeNotification.show();
     }
   };
-  const handleWorkspaceRoute = (
+  const ensureDesktopWorkspace = (id: string): Promise<DesktopUiWorkspaceRuntime> => {
+    const existing = desktopWorkspaceRuntimes.get(id);
+    if (existing) return existing;
+    const opening = (async () => {
+      const session = assertPresent(serverSession);
+      const members = (await session.hubControlClient.call(
+        "hubControl",
+        "listWorkspaces",
+        []
+      )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+      const membership = members.find((entry) => entry.workspaceId === id);
+      if (!membership) throw new Error("Workspace access was removed");
+      const connection = await session.workspaceSessions.get(id);
+      const { openDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
+      const runtime = await openDesktopWorkspaceRuntime({
+        connection,
+        personal: membership.privateRole === "personal",
+        adBlockManager,
+        ...(membership.privateRole === "personal"
+          ? {
+              onCredentialCaptureRequest: (payload: Record<string, unknown>) =>
+                handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
+            }
+          : {}),
+        window: applicationWindow,
+        openExternal: (url) => shell.openExternal(url),
+        authorize: ({ caller, capability, resourceKey, tier }) =>
+          authorizeVerifiedCaller(caller, {
+            workspaceId: id,
+            workspaceMember: true,
+            sessionId: `electron-main:${id}`,
+            audience: "electron-main-services",
+            capability,
+            resourceKey,
+            tier,
+          }),
+      });
+      openNativeControllers.set(id, runtime);
+      if (membership.privateRole === "personal") {
+        personalWorkspaceId = id;
+        personalBrowserServices = runtime.personalBrowser;
+      }
+      return runtime;
+    })();
+    desktopWorkspaceRuntimes.set(id, opening);
+    void opening.catch(() => {
+      if (desktopWorkspaceRuntimes.get(id) === opening) desktopWorkspaceRuntimes.delete(id);
+    });
+    return opening;
+  };
+  let routeGeneration = 0;
+  const handleWorkspaceRoute = async (
     route: import("@vibestudio/service-schemas/hubControl").HubWorkspaceRoute
   ) => {
-    const name = route.workspace;
-    try {
-      persistStoredRemoteWorkspaceRoute(route);
-      log.info(`[App] Relaunching into workspace "${name}"`);
-      const args = workspaceRelaunchArgs(name);
-      const location = panelLocationForWorkspaceRelaunch;
-      panelLocationForWorkspaceRelaunch = null;
-      if (location?.workspace === name) {
-        args.push(createPanelDeepLink(location));
-      } else if (location) {
-        log.warn(
-          `[App] Dropping stale panel-location relaunch for "${location.workspace ?? "unknown"}" while switching to "${name}"`
-        );
-      }
-      relaunchWithIntent({ args });
-    } catch (error) {
-      panelLocationForWorkspaceRelaunch = null;
-      log.error(
-        `[App] Refusing workspace relaunch before its route is durable: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
+    const generation = ++routeGeneration;
+    await ensureDesktopWorkspace(route.workspaceId);
+    if (generation !== routeGeneration) return;
+    applicationWindow.focusWorkspace(route.workspaceId);
+    activeIpcDispatcher?.sendEventToShell("workspace-focused", { workspaceId: route.workspaceId });
   };
   const handleServerEvent = createServerEventBridge({
     eventService,
@@ -2243,10 +2285,8 @@ app.on("ready", async () => {
       approvalAttention?.handlePendingChanged(pending);
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
-    onCredentialCaptureRequest: (payload) =>
-      handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
     onNotificationAction: async (_id, actionId) => {
-      websiteNotificationBridge?.handleAction(_id, actionId);
+      personalBrowserServices?.onNotificationAction(_id, actionId);
       if (actionId === "desktop-npm-update-install") {
         if (!npmUpdateController) throw new Error("The npm updater is unavailable");
         await npmUpdateController.requestInstall().catch((error: unknown) => {
@@ -2474,7 +2514,6 @@ app.on("ready", async () => {
       "panel-presentation-changed",
       "panel:runtimeLeaseChanged",
       "shell-approval:pending-changed",
-      "credential:capture-request",
       "notification:action",
       "development:client-launch-request",
       "development:client-stop-request",
@@ -2509,25 +2548,6 @@ app.on("ready", async () => {
     let forwardPanelProjectionChange = (
       _payload: import("@vibestudio/shared/events").EventPayloads["panel-presentation-changed"]
     ): void => {};
-    panelRegistry = new PanelRegistry({
-      onPresentationUpdated: (update) => forwardPanelProjectionChange(update),
-    });
-
-    const { createElectronShellCore } = await import("./shellCore/createElectronShellCore.js");
-    shellCore = createElectronShellCore({
-      workspaceId: serverSession.workspaceId,
-      workspacePath: serverSession.workspacePath,
-      // A LOCAL server owns the workspace tree on this host (manifests present, so
-      // fail loud on a genuinely-missing one). A REMOTE server owns the tree on the
-      // other host, so the local manifest resolve misses at bootstrap — tolerate
-      // that rather than hard-failing the whole startup.
-      allowMissingManifests: remotePairedAtLaunch || pendingRemotePairing !== null,
-      registry: panelRegistry,
-      serverClient: serverSession.serverClient,
-      gatewayConfig: serverSession.gatewayConfig,
-      workspaceConfig: serverSession.workspaceConfig,
-    });
-
     // PanelHttpServer is created by serverSession (RPC-backed proxy)
     const conn = assertPresent(serverSession);
 
@@ -2536,6 +2556,52 @@ app.on("ready", async () => {
     // services to the local dispatcher.
     const { IpcDispatcher } = await import("./ipcDispatcher.js");
     const ipcDispatcher = new IpcDispatcher({
+      workspaceId: conn.workspaceId,
+      resolveWorkspaceRuntime: ensureDesktopWorkspace,
+      resolveWorkspaceUiRuntime: async (caller, targetWorkspaceId) => {
+        const vm = applicationWindow.viewManager;
+        const view = vm?.getViewInfo(caller.callerId);
+        if (caller.callerKind !== "app" || !view?.hostChrome) return null;
+        const identity = view.workspaceIdentity;
+        const code = view.codeIdentity;
+        if (!identity || !code?.executionDigest || !code.effectiveVersion || !code.source) {
+          throw new Error("Desktop UI execution identity is unavailable");
+        }
+        const workspaces = (await conn.hubControlClient.call(
+          "hubControl",
+          "listWorkspaces",
+          []
+        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+        const system = workspaces.find((entry) => entry.privateRole === "system");
+        if (
+          system?.workspaceId !== identity.workspaceId ||
+          identity.workspaceId !== conn.workspaceId
+        ) {
+          throw new Error("Only your System workspace may host desktop UI");
+        }
+        if (!workspaces.some((entry) => entry.workspaceId === targetWorkspaceId)) {
+          throw new Error("You no longer have access to this workspace");
+        }
+        const target = await ensureDesktopWorkspace(targetWorkspaceId);
+        const current = vm?.getViewInfo(caller.callerId);
+        if (
+          !current?.hostChrome ||
+          current.workspaceIdentity?.workspaceId !== identity.workspaceId ||
+          current.workspaceIdentity.runtimeId !== identity.runtimeId ||
+          current.codeIdentity?.executionDigest !== code.executionDigest ||
+          current.codeIdentity.effectiveVersion !== code.effectiveVersion
+        ) {
+          throw new Error("Desktop UI execution changed while opening the workspace");
+        }
+        const currentMembers = (await conn.hubControlClient.call(
+          "hubControl",
+          "listWorkspaces",
+          []
+        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+        if (!currentMembers.some((entry) => entry.workspaceId === targetWorkspaceId))
+          throw new Error("Workspace access was removed during startup");
+        return target;
+      },
       dispatcher,
       serverClient: conn.serverClient,
       getShellWebContents: () => {
@@ -2554,12 +2620,24 @@ app.on("ready", async () => {
         const callerId = viewManager.findViewIdByWebContentsId(webContentsId);
         if (!callerId) return null;
         const viewInfo = viewManager.getViewInfo(callerId);
-        return resolveElectronViewCaller(callerId, viewInfo);
+        const caller = resolveElectronViewCaller(callerId, viewInfo);
+        const identity = viewInfo?.workspaceIdentity;
+        return caller && identity
+          ? { ...caller, runtimeId: identity.runtimeId, workspaceId: identity.workspaceId }
+          : null;
       },
       getCodeIdentityForCaller: codeIdentityForView,
       getWebContentsForCaller: (callerId) =>
         applicationWindow.viewManager?.getWebContents(callerId) ?? null,
-      getPanelRuntimeConnection: (panelId) => panelOrchestrator?.getPanelRuntimeConnection(panelId),
+      getPanelRuntimeConnection: (nativeId) => {
+        const identity = applicationWindow.viewManager?.getViewInfo(nativeId)?.workspaceIdentity;
+        if (!identity) return undefined;
+        if (identity.workspaceId === conn.workspaceId)
+          return workspaceController.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
+        return openNativeControllers
+          .get(identity.workspaceId)
+          ?.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
+      },
       authorizeAppServerCall,
     });
     activeIpcDispatcher = ipcDispatcher;
@@ -2582,11 +2660,6 @@ app.on("ready", async () => {
     }
     log.info(`[PanelHTTP] Using server's panel HTTP via gateway port ${conn.gatewayPort}`);
 
-    const gatewayBasePath = (() => {
-      const pathname = new URL(conn.gatewayConfig.serverUrl).pathname.replace(/\/+$/, "");
-      return pathname === "/" ? "" : pathname;
-    })();
-
     // A workspace selected in-process cannot safely repoint Electron's userData
     // directory, so derive the pin path from the resolved workspace itself.
     const clientLocalStateDir =
@@ -2597,55 +2670,80 @@ app.on("ready", async () => {
       ? undefined
       : new PanelPinStore(path.join(clientLocalStateDir, "panel-pins.json"));
 
-    // Create PanelOrchestrator
-    panelOrchestrator = new PanelOrchestrator({
-      registry: panelRegistry,
+    const { createDesktopWorkspaceController } = await import("./desktopWorkspaceController.js");
+    const workspaceController = createDesktopWorkspaceController({
+      connection: conn,
       eventService,
-      serverClient: conn.serverClient,
-      shellCore: shellCore.panelManager,
-      cdpHost: createCdpRegistrationAdapter(),
-      getPanelView: () => applicationWindow.panelView,
-      panelHttpServer: conn.panelHttpServer,
-      externalHost: conn.externalHost,
-      protocol: conn.protocol,
-      gatewayPort: conn.gatewayPort,
-      gatewayBasePath,
-      waitForBrowserSessionPartition: () => browserEnvironmentReadiness.wait(),
-      sendPanelEvent: (panelId, event, payload) => {
-        const wc = applicationWindow.viewManager?.getWebContents(panelId);
-        if (wc && !wc.isDestroyed()) {
-          wc.send("vibestudio:event", event, payload);
-        }
-      },
-      workspaceConfig: conn.workspaceConfig,
-      pinStore: panelPinStore,
-      // Resident-set GC protection (§5.3) follows shell-declared presentation
-      // demand, including the interval before native attachment commits.
-      getResidentPanelIds: () => applicationWindow.viewManager?.getDeclaredPanelSlotIds() ?? [],
-      getNativeBinding: (panelId) =>
-        applicationWindow.viewManager?.getNativePanelSlotBinding(panelId) ?? null,
-      attachNativeBinding: (panelId) =>
-        applicationWindow.viewManager?.attachDeclaredPanelSlot(panelId) ?? null,
-      publishPresentation: (snapshot) => {
-        ipcDispatcher.sendEventToShell("panel-local-presentation-changed", snapshot);
-      },
-      runtimeClient: IS_HEADLESS_HOST
-        ? {
-            label: "Headless",
-            platform: "headless",
-            supportsCdp: true,
-            loadOnLeaseAssignment: true,
-            restorePolicy: "none",
+      onPresentationUpdated: (update) => forwardPanelProjectionChange(update),
+      presentation: {
+        cdpHost: createCdpRegistrationAdapter(),
+        getPanelView: () => applicationWindow.getWorkspacePanelView(conn.workspaceId),
+        waitForBrowserSessionPartition: () => browserEnvironmentReadiness.wait(),
+        sendPanelEvent: (panelId, event, payload) => {
+          const wc = applicationWindow
+            .getWorkspacePanelView(conn.workspaceId)
+            ?.getWebContents(panelId);
+          if (wc && !wc.isDestroyed()) {
+            wc.send("vibestudio:event", event, payload);
           }
-        : {
-            label: "Desktop",
-            platform: "desktop",
-            supportsCdp: true,
-            loadOnLeaseAssignment: true,
-            maxAssignedPanelViews: PANEL_UI_MAX_LOADED_DESKTOP,
-            uiIdleUnloadMs: PANEL_UI_IDLE_UNLOAD_MS,
-          },
+        },
+        pinStore: panelPinStore,
+        // Resident-set GC protection (§5.3) follows shell-declared presentation
+        // demand, including the interval before native attachment commits.
+        getResidentPanelIds: () =>
+          applicationWindow
+            .getWorkspacePanelView(conn.workspaceId)
+            ?.getViewManager()
+            .getDeclaredPanelSlotIds() ?? [],
+        getNativeBinding: (panelId) =>
+          applicationWindow
+            .getWorkspacePanelView(conn.workspaceId)
+            ?.getViewManager()
+            .getNativePanelSlotBinding(panelId) ?? null,
+        attachNativeBinding: (panelId) =>
+          applicationWindow
+            .getWorkspacePanelView(conn.workspaceId)
+            ?.getViewManager()
+            .attachDeclaredPanelSlot(panelId) ?? null,
+        publishPresentation: (snapshot) => {
+          ipcDispatcher.sendEventToShell("panel-local-presentation-changed", snapshot);
+        },
+        runtimeClient: IS_HEADLESS_HOST
+          ? {
+              label: "Headless",
+              platform: "headless",
+              supportsCdp: true,
+              loadOnLeaseAssignment: true,
+              restorePolicy: "none",
+            }
+          : {
+              label: "Desktop",
+              platform: "desktop",
+              supportsCdp: true,
+              loadOnLeaseAssignment: true,
+              maxAssignedPanelViews: PANEL_UI_MAX_LOADED_DESKTOP,
+              uiIdleUnloadMs: PANEL_UI_IDLE_UNLOAD_MS,
+            },
+      },
     });
+    panelRegistry = workspaceController.registry;
+    shellCore = workspaceController.core;
+    panelOrchestrator = workspaceController.orchestrator;
+    const initialRuntime: DesktopUiWorkspaceRuntime = {
+      workspaceId: conn.workspaceId,
+      serverClient: conn.serverClient,
+      dispatcher,
+      orchestrator: workspaceController.orchestrator,
+      registry: workspaceController.registry,
+      core: workspaceController.core,
+      eventService,
+      close: async () => {
+        await serverEventSubscriptions.close();
+        await workspaceController.orchestrator.unregisterRuntimeClient();
+      },
+    };
+    desktopWorkspaceRuntimes.set(conn.workspaceId, Promise.resolve(initialRuntime));
+    openNativeControllers.set(conn.workspaceId, initialRuntime);
 
     await panelOrchestrator.registerRuntimeClient();
     if (IS_HEADLESS_HOST) {
@@ -2726,7 +2824,8 @@ app.on("ready", async () => {
               authToken: () => conn.getCdpAuthToken(),
             },
       hostConnectionId: cdpHostConnectionId,
-      getViewManager: () => applicationWindow.viewManager,
+      getViewManager: () =>
+        applicationWindow.getWorkspacePanelView(conn.workspaceId)?.getViewManager() ?? null,
       diagnosticsStore: new RuntimeDiagnosticsStore({
         statePath: serverSession.statePath,
       }),
@@ -2762,11 +2861,12 @@ app.on("ready", async () => {
 
     // Set up test API for E2E testing (only when VIBESTUDIO_TEST_MODE=1)
     setupTestApi(panelOrchestrator, panelRegistry, null);
-    setMenuPanelLifecycle(panelOrchestrator);
-    setMenuPanelRegistry(panelRegistry);
+    setMenuWorkspaceResolver(() => {
+      const id = applicationWindow.focusedWorkspace;
+      return id ? (openNativeControllers.get(id) ?? null) : null;
+    });
     setMenuEventService(eventService);
 
-    const adBlockManager = new AdBlockManager();
     deferredStartupWork = () => {
       npmUpdateController?.start();
       if (!npmUpdateResultConsumed) {
@@ -2786,9 +2886,6 @@ app.on("ready", async () => {
       }, 100);
     };
 
-    // Autofill manager — password auto-fill for browser panels
-    const { FormFillManager } = await import("./autofill/formFillManager.js");
-
     // Register all Electron-main RPC services via ServiceContainer. Window-owned
     // hosts are resolved from their lifecycle owner when an RPC is invoked.
     const getPanelView = (): PanelView => {
@@ -2804,35 +2901,53 @@ app.on("ready", async () => {
     const { createAdblockService } = await import("./services/adblockService.js");
     const { createDesktopEventsService } = await import("./services/desktopEventsService.js");
     // FS and git-local services removed — server owns these via panel service
-    const { createBrowserDataClient } = await import("@vibestudio/browser-data");
 
     const electronContainer = new ServiceContainer(dispatcher);
 
     const { serverClient: sc } = conn;
-    const browserDataClient = createBrowserDataClient({
-      callService: (service, method, args) => sc.call(service, method, args),
-    });
     const { createBrowserVaultNativeClient } =
       await import("./services/browserVaultNativeClient.js");
     const browserVault = createBrowserVaultNativeClient(sc);
     const { BrowserPermissionController } =
       await import("./services/browserPermissionController.js");
+    let systemDownloads:
+      | import("./services/browserDownloadManager.js").BrowserDownloadManager
+      | null = null;
     const workspacePermissionController = new BrowserPermissionController({
+      nativeStorageScope: conn.nativeStorageScope,
       serverClient: sc,
       eventService,
-      getViewManager: () => applicationWindow.viewManager,
+      getViewManager: () =>
+        applicationWindow.viewManager
+          ? new WorkspaceNativeViews(conn.workspaceId, applicationWindow.viewManager)
+          : null,
       isTargetUnderAutomation: (targetId) =>
         cdpHostProvider?.isTargetUnderAutomation(targetId) ?? false,
     });
     browserPermissionController?.stop();
     browserPermissionController = workspacePermissionController;
+    initialRuntime.browserPermissions = workspacePermissionController;
     electronContainer.registerManaged({
       name: "browser-permissions-host",
       async start() {
         try {
           const partition = await workspacePermissionController.attachBrowserEnvironment();
-          activeBrowserSessionPartition = partition;
           browserEnvironmentReadiness.ready(partition);
+          const { BrowserDownloadManager } = await import("./services/browserDownloadManager.js");
+          systemDownloads = new BrowserDownloadManager({
+            browserSession: session.fromPartition(partition),
+            environmentKey: workspacePermissionController.getEnvironmentKey(),
+            hostId: `desktop:${conn.workspaceId}`,
+            downloadsDirectory: app.getPath("downloads"),
+            eventService,
+            getViewManager: () =>
+              applicationWindow.viewManager
+                ? new WorkspaceNativeViews(conn.workspaceId, applicationWindow.viewManager)
+                : null,
+            requestSiteCapability: (contents, capability) =>
+              workspacePermissionController.requestSiteCapability(contents, capability),
+          });
+          await systemDownloads.start();
         } catch (error) {
           browserEnvironmentReadiness.unavailable(error);
           throw error;
@@ -2843,13 +2958,24 @@ app.on("ready", async () => {
         browserEnvironmentReadiness.stopped(
           new Error("Browser environment stopped with the workspace")
         );
-        activeBrowserSessionPartition = null;
+        await systemDownloads?.stop();
+        systemDownloads = null;
         workspacePermissionController.stop();
         if (browserPermissionController === workspacePermissionController) {
           browserPermissionController = null;
         }
       },
     });
+
+    const { createBrowserEnvironmentService, localBrowserEnvironmentImportRouter } =
+      await import("./services/browserEnvironmentService.js");
+    electronContainer.registerRpc(
+      createBrowserEnvironmentService({
+        getDownloads: () => systemDownloads,
+        importRouter: localBrowserEnvironmentImportRouter(() => null),
+        browserDataBrokerRepoPath: null,
+      })
+    );
 
     // Shell-only services
     electronContainer.registerRpc(
@@ -2859,6 +2985,7 @@ app.on("ready", async () => {
         getViewManager,
         getAppOrchestrator: () => applicationWindow.appOrchestrator,
         connectionMode: conn.connectionMode,
+        initialFocusedWorkspaceId: conn.initialFocusedWorkspaceId,
         remoteHost: undefined,
         shellSurfaces: () => (IS_HEADLESS_HOST ? [] : SHELL_SURFACE_KINDS),
         onOpenShellSurface: dispatchShellSurface,
@@ -2870,10 +2997,26 @@ app.on("ready", async () => {
         client: conn.hubControlClient,
         getViewManager,
         onWorkspaceRoute: handleWorkspaceRoute,
+        onWorkspaceCatalog: async (entries) => {
+          const members = new Set(entries.map((entry) => entry.workspaceId));
+          for (const [id, opening] of desktopWorkspaceRuntimes) {
+            if (id === conn.workspaceId || members.has(id)) continue;
+            const runtime = await opening;
+            await runtime.close();
+            await conn.workspaceSessions.release(id);
+            desktopWorkspaceRuntimes.delete(id);
+            openNativeControllers.delete(id);
+            if (personalWorkspaceId === id) {
+              personalWorkspaceId = null;
+              personalBrowserServices = null;
+            }
+          }
+        },
       })
     );
     electronContainer.registerRpc(
       createViewService({
+        workspaceId: conn.workspaceId,
         panelOrchestrator,
         panelRegistry,
         get panelView(): PanelView {
@@ -2881,10 +3024,28 @@ app.on("ready", async () => {
         },
         browserVault,
         getViewManager,
+        authorizeWorkspaceMaterialization: async (workspaceId) => {
+          const members = await conn.hubControlClient.call("hubControl", "listWorkspaces", []);
+          if (
+            !(members as Array<{ workspaceId: string }>).some(
+              (entry) => entry.workspaceId === workspaceId
+            )
+          )
+            throw new Error("Workspace access was removed");
+          await ensureDesktopWorkspace(workspaceId);
+        },
+        onNativeSlotChanged: (nativeId, declared) => {
+          const identity = parseWorkspaceNativeViewId(nativeId);
+          if (!identity) throw new Error("Native panel lacks workspace ownership");
+          const runtime = openNativeControllers.get(identity.workspaceId);
+          if (declared) runtime?.orchestrator.onNativeSlotDeclared(identity.runtimeId);
+          else runtime?.orchestrator.onNativeSlotCleared(identity.runtimeId);
+        },
       })
     );
     electronContainer.registerRpc(
       createMenuService({
+        getPanelWebContents: (id) => getPanelView().getWebContents(id),
         panelOrchestrator,
         panelRegistry,
         getViewManager,
@@ -2914,176 +3075,6 @@ app.on("ready", async () => {
     });
     electronContainer.registerRpc(desktopPhoneProvider);
     electronContainer.registerRpc(createAdblockService({ adBlockManager }));
-    // Browser-data persistence lives on the server; Electron keeps only the
-    // host-bound autofill adapter.
-    {
-      electronContainer.registerManaged({
-        name: "browser-data-host",
-        async start() {
-          const { BrowserImportHostProvider } =
-            await import("./services/browserImportHostProvider.js");
-          const { SensitiveBrowserImportLedger } =
-            await import("./services/sensitiveBrowserImportLedger.js");
-          const { BrowserPrivacyManager } = await import("./services/browserPrivacyManager.js");
-          browserPrivacyManager = new BrowserPrivacyManager({
-            vault: browserVault,
-            getProjection: () => browserCookieProjection,
-            preloadPath: path.join(__dirname, "browserPrivacyPreload.cjs"),
-            htmlPath: path.join(__dirname, "browserPrivacy.html"),
-          });
-          browserImportHostProvider = new BrowserImportHostProvider(
-            {
-              hostId: `desktop:${cdpHostConnectionId}`,
-              displayName: "This device",
-            },
-            {
-              browserVault,
-              sensitiveImportLedger: new SensitiveBrowserImportLedger(
-                path.join(
-                  app.getPath("userData"),
-                  "browser-import",
-                  "sensitive-operation-ledger.json"
-                )
-              ),
-            }
-          );
-          browserDataStoreForCredentialCapture = browserVault;
-          formFillManager = new FormFillManager({
-            formFillStore: browserVault,
-            eventService,
-            getViewManager,
-            autofillOverlayPreloadPath: path.join(__dirname, "autofillOverlayPreload.cjs"),
-            requestSiteCapability: (contents, capability) =>
-              browserPermissionController?.requestSiteCapability(contents, capability) ??
-              Promise.resolve(false),
-          });
-          const { CanonicalBrowserFaviconObserver } =
-            await import("./services/browserFaviconObserver.js");
-          browserFaviconObserver = new CanonicalBrowserFaviconObserver(browserDataClient);
-          return browserDataClient;
-        },
-        async stop() {
-          browserImportHostProvider?.stop();
-          browserImportHostProvider = null;
-          browserPrivacyManager?.destroy();
-          browserPrivacyManager = null;
-          browserDataStoreForCredentialCapture = null;
-          if (formFillManager) {
-            formFillManager.destroy();
-            formFillManager = null;
-          }
-          browserFaviconObserver = null;
-        },
-      });
-      const { createBrowserCookieProjectionService } =
-        await import("./services/browserCookieProjection.js");
-      electronContainer.registerManaged(
-        createBrowserCookieProjectionService({
-          browserDataClient,
-          browserVault,
-          serverClient: sc,
-          hostId: `desktop:${conn.workspaceId}`,
-          outboxRoot: app.getPath("userData"),
-          async onReady(api) {
-            if (api.partition !== activeBrowserSessionPartition) {
-              throw new Error("Browser cookie projection resolved a different environment");
-            }
-            browserCookieProjection = api;
-            const browserSession = session.fromPartition(api.partition);
-            releaseBrowserAdBlocking?.();
-            releaseBrowserAdBlocking = adBlockManager.attachToSession(browserSession);
-
-            // Browser views need the session partition and nothing else. The
-            // subsystems below enrich the environment — site permissions, web
-            // notifications, download tracking — and each can fail on its own
-            // without making the browser unusable. Letting one rejection escape
-            // marked the whole environment unavailable, which left every
-            // browser panel with no view at all and an empty pane.
-            const attach = async (label: string, start: () => Promise<void> | void) => {
-              try {
-                await start();
-              } catch (error) {
-                log.error(
-                  `Browser environment: ${label} unavailable; continuing without it: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`
-                );
-              }
-            };
-
-            await attach("site permissions", async () => {
-              // The notification bridge routes through permission decisions, so
-              // it only exists when those are available.
-              const { WebsiteNotificationBridge } =
-                await import("./services/websiteNotificationBridge.js");
-              websiteNotificationBridge = new WebsiteNotificationBridge({
-                permissions: workspacePermissionController,
-                eventService,
-                getViewManager: () => applicationWindow.viewManager,
-              });
-              websiteNotificationBridge.start();
-            });
-
-            await attach("downloads", async () => {
-              const { BrowserDownloadManager } =
-                await import("./services/browserDownloadManager.js");
-              const manager = new BrowserDownloadManager({
-                browserSession,
-                environmentKey: api.identity.environmentKey,
-                hostId: `desktop:${cdpHostConnectionId}`,
-                downloadsDirectory: app.getPath("downloads"),
-                browserData: browserDataClient,
-                eventService,
-                getViewManager: () => applicationWindow.viewManager,
-                requestSiteCapability: (contents, capability) =>
-                  browserPermissionController?.requestSiteCapability(contents, capability) ??
-                  Promise.resolve(false),
-              });
-              await manager.start();
-              browserDownloadManager = manager;
-            });
-          },
-          async onStopped() {
-            websiteNotificationBridge?.stop();
-            websiteNotificationBridge = null;
-            await browserDownloadManager?.stop();
-            browserDownloadManager = null;
-            releaseBrowserAdBlocking?.();
-            releaseBrowserAdBlocking = null;
-            browserCookieProjection = null;
-          },
-        })
-      );
-    }
-
-    // Register autofill service (uses lazy resolution since formFillManager is created in browser-data start)
-    electronContainer.registerRpc(
-      createAutofillService({
-        invoke: (ctx, method, args) => {
-          if (!formFillManager) throw new Error("Autofill not initialized");
-          return formFillManager.getServiceDefinition().handler(ctx, method, args);
-        },
-      })
-    );
-    const { createBrowserEnvironmentService, localBrowserEnvironmentImportRouter } =
-      await import("./services/browserEnvironmentService.js");
-    const { workspaceProviderExtensionRepoPath } =
-      await import("@vibestudio/workspace/configParser");
-    const desktopBrowserEnvironment = createBrowserEnvironmentService({
-      getDownloads: () => browserDownloadManager,
-      importRouter: localBrowserEnvironmentImportRouter(() => browserImportHostProvider),
-      browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
-        conn.workspaceConfig,
-        "browserData"
-      ),
-    });
-    electronContainer.registerRpc(desktopBrowserEnvironment);
-    const { createDesktopBrowserPrivacyPresentation } =
-      await import("./services/desktopBrowserPrivacyPresentation.js");
-    const desktopBrowserPrivacyPresentation = createDesktopBrowserPrivacyPresentation({
-      getPrivacyManager: () => browserPrivacyManager,
-    });
-    electronContainer.registerRpc(desktopBrowserPrivacyPresentation);
     // Each local watch retains its server topics for exactly the lifetime of
     // its response. The bridge folds all retained topics into one server watch.
     {
@@ -3118,8 +3109,6 @@ app.on("ready", async () => {
     dispatcher.markInitialized();
     const { publishHostService } = await import("./hostServicePublisher.js");
     publishHostService(sc, dispatcher, desktopPhoneProvider);
-    publishHostService(sc, dispatcher, desktopBrowserPrivacyPresentation);
-    publishHostService(sc, dispatcher, desktopBrowserEnvironment);
 
     // =========================================================================
     // Register ipcMain.handle handlers for __vibestudioShell (panel preload)
@@ -3192,10 +3181,19 @@ app.on("ready", async () => {
       throw new Error(`Channel '${channel}' requires app capability '${capability}'`);
     };
 
+    const owningRuntime = (nativeId: string) => {
+      const identity = getViewManager().getViewInfo(nativeId)?.workspaceIdentity;
+      if (!identity) throw new Error("Native caller has no workspace ownership");
+      const runtime = openNativeControllers.get(identity.workspaceId);
+      if (!runtime) throw new Error("Workspace runtime is unavailable");
+      return { runtime, runtimeId: identity.runtimeId };
+    };
+
     ipcMain.handle("vibestudio:getPanelInit", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
-      return panelOrchestrator?.getBootstrapConfig(callerId);
+      const owner = owningRuntime(callerId);
+      return owner.runtime.orchestrator.getBootstrapConfig(owner.runtimeId);
     });
 
     ipcMain.on("vibestudio:panel-boot", (event, observation: unknown) => {
@@ -3236,7 +3234,9 @@ app.on("ready", async () => {
           : undefined,
         updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : undefined,
       };
-      panelOrchestrator?.onPanelBoot(panelId, event.sender.id, normalized);
+      const owner = owningRuntime(panelId);
+      if (candidate.runtimeEntityId !== owner.runtimeId) return;
+      owner.runtime.orchestrator.onPanelBoot(owner.runtimeId, event.sender.id, normalized);
     });
 
     ipcMain.handle(
@@ -3249,8 +3249,9 @@ app.on("ready", async () => {
           placement?: import("@vibestudio/shared/types").PanelPlacementHint;
         }
       ) => {
-        requireAppCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
-        const result = await assertPresent(panelOrchestrator).focusPanel(panelId, {
+        const caller = requireAppCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
+        const owner = owningRuntime(caller.callerId);
+        const result = await owner.runtime.orchestrator.focusPanel(panelId, {
           loadIfNeeded: true,
           ...options,
         });
@@ -3264,7 +3265,8 @@ app.on("ready", async () => {
     );
     ipcMain.handle("vibestudio:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
-      return shellCore?.panelManager.getInfo(asPanelSlotId(callerId));
+      const owner = owningRuntime(callerId);
+      return owner.runtime.core.panelManager.getInfo(asPanelSlotId(owner.runtimeId));
     });
     ipcMain.handle("vibestudio:performance.snapshot", (event) => {
       resolveCaller(event);
@@ -3276,7 +3278,8 @@ app.on("ready", async () => {
     ipcMain.handle("vibestudio:getBootstrapConfig", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
-      return panelOrchestrator?.getBootstrapConfig(callerId);
+      const owner = owningRuntime(callerId);
+      return owner.runtime.orchestrator.getBootstrapConfig(owner.runtimeId);
     });
 
     // Electron-native
@@ -3332,22 +3335,31 @@ app.on("ready", async () => {
       // panel), and ServiceDispatcher.dispatch now enforces the per-service
       // policy at the choke point — see audit findings #3 / #18 / #19.
       const { callerId, callerKind } = resolveCaller(event);
+      const owner = owningRuntime(callerId);
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}". Expected "service.method"`);
       if (callerKind === "app" && parsed.service === "fs") {
         authorizeAppServerCall(callerId, parsed.service, parsed.method, args);
-        return sc.callAs({ callerId, callerKind }, parsed.service, parsed.method, args);
+        return owner.runtime.serverClient.callAs(
+          { callerId: owner.runtimeId, callerKind },
+          parsed.service,
+          parsed.method,
+          args
+        );
       }
       const caller =
         callerKind === "shell"
           ? createHostCaller(callerId, "shell")
           : createVerifiedCaller(callerId, callerKind, codeIdentityForView(callerId));
-      return dispatcher.dispatch({ caller }, parsed.service, parsed.method, args);
+      return owner.runtime.dispatcher.dispatch({ caller }, parsed.service, parsed.method, args);
     });
     ipcMain.handle("vibestudio:isLocalService", (event, service: unknown) => {
-      const { callerKind } = resolveCaller(event);
+      const { callerId, callerKind } = resolveCaller(event);
       if (callerKind !== "shell" && callerKind !== "app" && callerKind !== "panel") return false;
-      return typeof service === "string" && dispatcher.hasService(service);
+      return (
+        typeof service === "string" &&
+        owningRuntime(callerId).runtime.dispatcher.hasService(service)
+      );
     });
 
     // Workspace RPC is now registered; the bootstrap shell may leave its
@@ -3355,12 +3367,13 @@ app.on("ready", async () => {
     bootstrapWorkspaceRpcReady = true;
     pushBootstrapConnectionState();
     applicationWindow.attachWorkspaceServices({
+      eventService,
       panelRegistry,
       panelOrchestrator,
       serverSession: conn,
       cdpHost: createCdpRegistrationAdapter(),
-      formFillManager,
-      browserFaviconObserver,
+      formFillManager: null,
+      browserFaviconObserver: null,
       getBrowserPermissionController: () => browserPermissionController,
     });
     if (IS_HEADLESS_HOST) {
@@ -3548,7 +3561,10 @@ app.on("will-quit", (event) => {
       // teardown and reports a misleading connection failure.
       await developmentExecutorClose;
 
-      const unregister = panelOrchestrator?.unregisterRuntimeClient();
+      const runtimes = [...desktopWorkspaceRuntimes.values()];
+      desktopWorkspaceRuntimes.clear();
+      openNativeControllers.clear();
+      const unregister = Promise.all(runtimes.map(async (runtime) => (await runtime).close()));
 
       let unregisterFailure: unknown = null;
       try {

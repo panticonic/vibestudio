@@ -25,6 +25,7 @@ export function createAppService(deps: {
   getViewManager: () => ViewManager;
   getAppOrchestrator?: () => AppOrchestrator | null;
   connectionMode: "local" | "remote";
+  initialFocusedWorkspaceId?: string;
   remoteHost?: string;
   /** Surfaces this host's shell can open; absent on hosts without shell chrome. */
   shellSurfaces?: () => readonly ShellSurfaceKind[];
@@ -48,6 +49,7 @@ export function createAppService(deps: {
     handler: defineServiceHandler("app", appMethods, {
       getInfo: () => ({
         version: app.getVersion(),
+        initialFocusedWorkspaceId: deps.initialFocusedWorkspaceId,
         connectionMode: deps.connectionMode,
         remoteHost: deps.remoteHost,
         connectionStatus: deps.serverClient?.getConnectionStatus?.() ?? "connected",

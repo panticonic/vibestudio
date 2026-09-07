@@ -14,6 +14,9 @@ import { sanitizeFilenamePart } from "../safeFilename.js";
 
 const log = createDevLogger("BrowserDownloads");
 
+// All workspace sessions write into the same native filesystem namespace.
+const reservedDownloadPaths = new Set<string>();
+
 interface LiveDownload {
   item: DownloadItem;
   record: BrowserDownloadRecord;
@@ -22,9 +25,13 @@ interface LiveDownload {
 /** Owns one environment's Electron downloads and persists metadata, never file contents. */
 export class BrowserDownloadManager {
   private readonly records = new Map<string, BrowserDownloadRecord>();
+  private readonly pendingApproval = new Set<DownloadItem>();
   private readonly live = new Map<string, LiveDownload>();
-  private readonly reservedPaths = new Set<string>();
   private persistOperation: Promise<void> = Promise.resolve();
+  private history:
+    | Pick<BrowserDataClient, "listDownloadRecords" | "upsertDownloadRecord">
+    | undefined;
+  private stopped = false;
 
   constructor(
     private readonly deps: {
@@ -32,20 +39,39 @@ export class BrowserDownloadManager {
       environmentKey: string;
       hostId: string;
       downloadsDirectory: string;
-      browserData: Pick<BrowserDataClient, "listDownloadRecords" | "upsertDownloadRecord">;
+      browserData?: Pick<BrowserDataClient, "listDownloadRecords" | "upsertDownloadRecord">;
       eventService: EventService;
-      getViewManager(): ViewManager | null;
+      getViewManager(): Pick<ViewManager, "findViewIdByWebContentsId"> | null;
       requestSiteCapability(contents: WebContents, capability: "downloads"): Promise<boolean>;
     }
-  ) {}
+  ) {
+    this.history = deps.browserData;
+  }
+
+  async attachHistory(
+    store: Pick<BrowserDataClient, "listDownloadRecords" | "upsertDownloadRecord">
+  ): Promise<void> {
+    if (this.stopped) return;
+    this.history = store;
+    await this.load();
+  }
 
   async start(): Promise<void> {
-    await this.load();
     this.deps.browserSession.on("will-download", this.onWillDownload);
+    try {
+      await this.load();
+    } catch (error) {
+      log.warn(`Download history unavailable: ${String(error)}`);
+    }
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     this.deps.browserSession.off("will-download", this.onWillDownload);
+    for (const item of this.pendingApproval) item.cancel();
+    this.pendingApproval.clear();
+    for (const download of this.live.values()) download.item.cancel();
+    this.live.clear();
     await this.persistOperation;
   }
 
@@ -91,21 +117,30 @@ export class BrowserDownloadManager {
     contents: WebContents
   ): void => {
     item.pause();
+    if (this.stopped) {
+      item.cancel();
+      return;
+    }
+    this.pendingApproval.add(item);
     // Electron reads the destination when will-download returns, before an
     // asynchronous site approval can settle. Reserve it for the item's entire
     // lifetime, including approval, when no file may exist on disk yet.
     const savePath = availableDownloadPath(
       this.deps.downloadsDirectory,
       safeFilename(item.getFilename()),
-      this.reservedPaths
+      reservedDownloadPaths
     );
     item.setSavePath(savePath);
-    this.reservedPaths.add(savePath);
-    item.once("done", () => this.reservedPaths.delete(savePath));
+    reservedDownloadPaths.add(savePath);
+    item.once("done", () => {
+      reservedDownloadPaths.delete(savePath);
+      this.pendingApproval.delete(item);
+    });
     void this.deps
       .requestSiteCapability(contents, "downloads")
       .then((granted) => {
-        if (!granted || contents.isDestroyed() || !item.canResume()) {
+        this.pendingApproval.delete(item);
+        if (this.stopped || !granted || contents.isDestroyed() || !item.canResume()) {
           item.cancel();
           return;
         }
@@ -198,8 +233,10 @@ export class BrowserDownloadManager {
   }
 
   private persist(record: BrowserDownloadRecord): void {
+    const store = this.history;
+    if (!store) return;
     const snapshot = { ...record };
-    const write = () => this.deps.browserData.upsertDownloadRecord(snapshot);
+    const write = () => store.upsertDownloadRecord(snapshot);
     this.persistOperation = this.persistOperation.then(write, write).catch((error: unknown) => {
       log.warn(
         `Could not persist download metadata: ${
@@ -210,8 +247,10 @@ export class BrowserDownloadManager {
   }
 
   private async load(): Promise<void> {
-    const records = await this.deps.browserData.listDownloadRecords(this.deps.hostId);
+    const records = (await this.history?.listDownloadRecords(this.deps.hostId)) ?? [];
+    if (this.stopped) return;
     for (const record of records.slice(0, 500)) {
+      if ((this.records.get(record.id)?.updatedAt ?? 0) > record.updatedAt) continue;
       if (record.environmentKey !== this.deps.environmentKey) continue;
       if (record.state === "progressing" || record.state === "paused") {
         record.state = "interrupted";

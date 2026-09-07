@@ -39,6 +39,17 @@ import {
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
+import {
+  WorkspaceUiSessions,
+  type NativeIpcCaller,
+  type WorkspaceIpcRuntime,
+  type ResolveWorkspaceUiRuntime,
+} from "./workspaceUiSessions.js";
+export type {
+  NativeIpcCaller,
+  WorkspaceIpcRuntime,
+  ResolveWorkspaceUiRuntime,
+} from "./workspaceUiSessions.js";
 import type { PanelSession, ServerClient } from "./serverClient.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { createIpcResponsivenessReporter } from "./ipcResponsiveness.js";
@@ -89,9 +100,12 @@ function envelopeFor(target: string, from: string, message: RpcMessage): RpcEnve
 
 function callOptionsFromEnvelope(envelope: RpcEnvelope): RpcCallOptions | undefined {
   const options: RpcCallOptions = {};
+  if (envelope.targetWorkspaceId) options.targetWorkspaceId = envelope.targetWorkspaceId;
   if (envelope.delivery.idempotencyKey) options.idempotencyKey = envelope.delivery.idempotencyKey;
   if (envelope.delivery.readOnly === true) options.readOnly = true;
-  return options.idempotencyKey || options.readOnly ? options : undefined;
+  return options.targetWorkspaceId || options.idempotencyKey || options.readOnly
+    ? options
+    : undefined;
 }
 
 function callServer(
@@ -120,14 +134,18 @@ function callServerAs(
 }
 
 export interface IpcDispatcherDeps {
+  /** Authenticated workspace owning this IPC runtime; never inferred from a renderer envelope. */
+  workspaceId: string;
   /** Electron-local service dispatcher */
   dispatcher: ServiceDispatcher;
   /** Server client for forwarding server-service calls */
   serverClient: ServerClient;
   getShellWebContents: () => WebContents | null;
-  resolveCallerForWebContents: (
-    webContentsId: number
-  ) => { callerId: string; callerKind: "shell" | "panel" | "app" } | null;
+  resolveCallerForWebContents: (webContentsId: number) => NativeIpcCaller | null;
+  resolveWorkspaceRuntime?: (
+    workspaceId: string
+  ) => WorkspaceIpcRuntime | Promise<WorkspaceIpcRuntime>;
+  resolveWorkspaceUiRuntime?: ResolveWorkspaceUiRuntime;
   getCodeIdentityForCaller?: (callerId: string) => VerifiedCodeIdentity | null;
   getWebContentsForCaller: (callerId: string) => WebContents | null;
   /**
@@ -154,6 +172,9 @@ export interface IpcDispatcherDeps {
 export class IpcDispatcher {
   private deps: IpcDispatcherDeps;
   private shuttingDown = false;
+  private readonly workspaceUi: WorkspaceUiSessions;
+  private readonly uiStreamRelays = new Map<string, BridgeStreamRelay>();
+  private readonly uiDestroyHooked = new Set<number>();
   private readonly appMessageBridges = new Map<string, () => void>();
   /** One relay session per panel principal (callerId = panel view id). */
   private readonly panelSessions = new Map<string, Promise<PanelSessionEntry>>();
@@ -179,6 +200,13 @@ export class IpcDispatcher {
 
   constructor(deps: IpcDispatcherDeps) {
     this.deps = deps;
+    this.workspaceUi = new WorkspaceUiSessions(
+      deps.resolveWorkspaceUiRuntime ?? (async () => null),
+      (caller, envelope) => {
+        const sender = deps.getWebContentsForCaller(caller.callerId);
+        if (sender && !sender.isDestroyed()) sender.send("vibestudio:rpc:message", envelope);
+      }
+    );
 
     ipcMain.on("vibestudio:rpc:send", (event, envelope: RpcEnvelope) => {
       // Window teardown removes view ownership before Chromium has destroyed
@@ -200,55 +228,19 @@ export class IpcDispatcher {
         );
         return;
       }
-      if (caller.callerKind === "panel") {
-        // A panel's FULL RPC surface (requests, routed DO calls, events, streams)
-        // rides a dedicated panel-principal session — handleEnvelope's request→main
-        // path is shell/app only. Desktop analogue of the mobile bridge relay.
-        this.relayPanelEnvelope(event.sender, caller.callerId, envelope);
-        return;
-      }
-      if (caller.callerKind !== "shell" && caller.callerKind !== "app") {
-        console.warn(
-          `[IpcDispatcher] Rejecting vibestudio:rpc:send from unauthorized sender ` +
-            `(webContentsId=${event.sender.id}, kind=${caller.callerKind})`
-        );
+      void this.routeEnvelope(event.sender, caller, envelope).catch((error: unknown) => {
+        const attested = stampEnvelopeCaller(envelope, {
+          callerId: caller.runtimeId ?? caller.callerId,
+          callerKind: caller.callerKind,
+          workspaceId: caller.workspaceId ?? this.deps.workspaceId,
+        });
         this.rejectRequestEnvelope(
           event.sender,
-          envelope,
-          "This sender is not authorized for RPC."
+          attested,
+          error instanceof Error ? error.message : String(error),
+          envelope.targetWorkspaceId ?? caller.workspaceId ?? this.deps.workspaceId
         );
-        return;
-      }
-      if (caller.callerKind === "app") {
-        this.ensureAppMessageBridge(caller.callerId);
-      }
-      if (envelope.target !== "main") {
-        if (caller.callerKind !== "app") {
-          this.rejectRequestEnvelope(
-            event.sender,
-            envelope,
-            "Only a hosted workspace app can address workspace runtime targets."
-          );
-          return;
-        }
-        void this.deps.serverClient
-          .sendAs(
-            { callerId: caller.callerId, callerKind: caller.callerKind },
-            stampEnvelopeCaller(envelope, {
-              callerId: caller.callerId,
-              callerKind: caller.callerKind,
-            })
-          )
-          .catch((error: unknown) => {
-            this.rejectRequestEnvelope(
-              event.sender,
-              envelope,
-              error instanceof Error ? error.message : String(error)
-            );
-          });
-        return;
-      }
-      this.handleEnvelope(event.sender, caller.callerId, caller.callerKind, envelope);
+      });
     });
 
     // §1.6 upload hop: a panel's streaming REQUEST body crosses the bridge as
@@ -257,10 +249,29 @@ export class IpcDispatcher {
     // streamReadable(). invoke()-backed channels reject loudly on bad callers /
     // malformed messages — a body is never silently dropped.
     ipcMain.handle("vibestudio:rpc:stream-open", (event, msg: BridgeStreamOpen) => {
+      const owner = this.deps.resolveCallerForWebContents(event.sender.id);
+      if (owner?.callerKind === "app") {
+        return this.workspaceUi
+          .require(
+            owner,
+            msg.envelope.targetWorkspaceId ?? owner.workspaceId ?? this.deps.workspaceId
+          )
+          .then(() => {
+            this.hookUiTeardown(event.sender, owner);
+            this.ensureUiStreamRelay(event.sender, owner).open(msg);
+          });
+      }
       const caller = this.requirePanelCaller(event.sender.id, "stream-open");
       this.ensurePanelStreamRelay(event.sender, caller.callerId).open(msg);
+      return undefined;
     });
     ipcMain.handle("vibestudio:rpc:stream-body-chunk", (event, msg: BridgeBodyChunk) => {
+      const owner = this.deps.resolveCallerForWebContents(event.sender.id);
+      if (owner?.callerKind === "app") {
+        const relay = this.uiStreamRelays.get(owner.callerId);
+        if (!relay) throw new Error("No admitted workspace UI upload stream");
+        return relay.pushBodyChunk(msg);
+      }
       const caller = this.requirePanelCaller(event.sender.id, "stream-body-chunk");
       const relay = this.panelStreamRelays.get(caller.callerId);
       if (!relay) {
@@ -273,14 +284,186 @@ export class IpcDispatcher {
     ipcMain.on("vibestudio:rpc:stream-abort", (event, opId: unknown) => {
       if (this.shuttingDown) return;
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
-      if (!caller || caller.callerKind !== "panel") return;
-      this.panelStreamRelays.get(caller.callerId)?.abort(String(opId));
+      if (!caller) return;
+      (caller.callerKind === "panel" ? this.panelStreamRelays : this.uiStreamRelays)
+        .get(caller.callerId)
+        ?.abort(String(opId));
     });
     ipcMain.on("vibestudio:rpc:stream-ack", (event, payload: { opId?: unknown; seq?: unknown }) => {
       if (this.shuttingDown) return;
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
-      if (!caller || caller.callerKind !== "panel") return;
-      this.panelStreamRelays.get(caller.callerId)?.ack(String(payload?.opId), Number(payload?.seq));
+      if (!caller) return;
+      (caller.callerKind === "panel" ? this.panelStreamRelays : this.uiStreamRelays)
+        .get(caller.callerId)
+        ?.ack(String(payload?.opId), Number(payload?.seq));
+    });
+  }
+
+  private async sourceRuntime(caller: NativeIpcCaller): Promise<WorkspaceIpcRuntime> {
+    const workspaceId = caller.workspaceId ?? this.deps.workspaceId;
+    if (workspaceId === this.deps.workspaceId) return this.deps;
+    const runtime = await this.deps.resolveWorkspaceRuntime?.(workspaceId);
+    if (!runtime || runtime.workspaceId !== workspaceId)
+      throw new Error("Native sender workspace is unavailable");
+    return runtime;
+  }
+
+  private async routeEnvelope(
+    sender: WebContents,
+    caller: NativeIpcCaller,
+    envelope: RpcEnvelope
+  ): Promise<void> {
+    if (envelope.targetWorkspaceId)
+      envelope = stampEnvelopeCaller(envelope, {
+        callerId: caller.runtimeId ?? caller.callerId,
+        callerKind: caller.callerKind,
+        workspaceId: caller.workspaceId ?? this.deps.workspaceId,
+      });
+    {
+      const uiRuntime = await this.workspaceUi.admit(
+        caller,
+        envelope.targetWorkspaceId ?? caller.workspaceId ?? this.deps.workspaceId
+      );
+      if (uiRuntime) {
+        if (sender.isDestroyed() || this.shuttingDown) return;
+        this.hookUiTeardown(sender, caller);
+        const message = envelope.message;
+        const method = "method" in message ? message.method : "";
+        const local =
+          envelope.target === "main" && uiRuntime.dispatcher.hasService(method.split(".")[0] ?? "");
+        if (
+          local ||
+          (message.type === "stream-cancel" &&
+            this.activeIpcStreams.has(
+              this.ipcStreamKey(sender.id, message.requestId, uiRuntime.workspaceId)
+            ))
+        ) {
+          await this.handleEnvelope(
+            sender,
+            caller.callerId,
+            "shell",
+            envelope,
+            uiRuntime,
+            caller.runtimeId ?? caller.callerId
+          );
+        } else {
+          const session = await this.workspaceUi.session(caller, uiRuntime);
+          await session.send(this.workspaceUi.envelope(caller, uiRuntime, envelope));
+        }
+        return;
+      }
+    }
+    const runtime = await this.sourceRuntime(caller);
+    if (envelope.targetWorkspaceId) {
+      envelope = stampEnvelopeCaller(envelope, {
+        callerId: caller.runtimeId ?? caller.callerId,
+        callerKind: caller.callerKind,
+        workspaceId: runtime.workspaceId,
+      });
+    }
+    if (caller.callerKind === "panel") {
+      // A panel's FULL RPC surface (requests, routed DO calls, events, streams)
+      // rides a dedicated panel-principal session — handleEnvelope's request→main
+      // path is shell/app only. Desktop analogue of the mobile bridge relay.
+      this.relayPanelEnvelope(sender, caller.callerId, envelope, runtime);
+      return;
+    }
+    if (caller.callerKind !== "shell" && caller.callerKind !== "app") {
+      console.warn(
+        `[IpcDispatcher] Rejecting vibestudio:rpc:send from unauthorized sender ` +
+          `(webContentsId=${sender.id}, kind=${caller.callerKind})`
+      );
+      this.rejectRequestEnvelope(sender, envelope, "This sender is not authorized for RPC.");
+      return;
+    }
+    if (caller.callerKind === "app") {
+      this.ensureAppMessageBridge(caller.callerId, runtime, caller.runtimeId ?? caller.callerId);
+    }
+    if (envelope.target !== "main") {
+      if (caller.callerKind !== "app") {
+        this.rejectRequestEnvelope(
+          sender,
+          envelope,
+          "Only a hosted workspace app can address workspace runtime targets."
+        );
+        return;
+      }
+      void runtime.serverClient
+        .sendAs(
+          { callerId: caller.runtimeId ?? caller.callerId, callerKind: caller.callerKind },
+          stampEnvelopeCaller(envelope, {
+            callerId: caller.runtimeId ?? caller.callerId,
+            callerKind: caller.callerKind,
+          })
+        )
+        .catch((error: unknown) => {
+          this.rejectRequestEnvelope(
+            sender,
+            envelope,
+            error instanceof Error ? error.message : String(error)
+          );
+        });
+      return;
+    }
+    void this.handleEnvelope(
+      sender,
+      caller.callerId,
+      caller.callerKind,
+      envelope,
+      runtime,
+      caller.runtimeId ?? caller.callerId
+    );
+  }
+
+  private ensureUiStreamRelay(sender: WebContents, caller: NativeIpcCaller): BridgeStreamRelay {
+    const existing = this.uiStreamRelays.get(caller.callerId);
+    if (existing) return existing;
+    const relay = createBridgeStreamRelay({
+      chunkFormat: "binary",
+      openStream: async (envelope, signal, body) => {
+        const runtime = await this.workspaceUi.require(
+          caller,
+          envelope.targetWorkspaceId ?? caller.workspaceId ?? this.deps.workspaceId
+        );
+        const session = await this.workspaceUi.session(caller, runtime);
+        if (!session.streamReadable) throw new Error("Workspace UI upload transport unavailable");
+        return session.streamReadable(
+          this.workspaceUi.envelope(caller, runtime, envelope),
+          signal,
+          body
+        );
+      },
+      sendToPanel: (message) => {
+        if (!sender.isDestroyed()) sender.send("vibestudio:rpc:stream-message", message);
+      },
+    });
+    this.uiStreamRelays.set(caller.callerId, relay);
+    return relay;
+  }
+
+  /** Identity replacement/revocation must release sessions before reusing a native view. */
+  async revokeWorkspaceUiCaller(callerId: string): Promise<void> {
+    const sender = this.deps.getWebContentsForCaller(callerId);
+    if (sender) {
+      const prefix = `${sender.id}\u0000`;
+      for (const [key, active] of this.activeIpcStreams) {
+        if (!key.startsWith(prefix)) continue;
+        active.abort.abort();
+        void active.reader?.cancel().catch(() => undefined);
+        this.activeIpcStreams.delete(key);
+      }
+    }
+    this.uiStreamRelays.get(callerId)?.destroy("Workspace UI admission revoked");
+    this.uiStreamRelays.delete(callerId);
+    await this.workspaceUi.closeCaller(callerId);
+  }
+
+  private hookUiTeardown(sender: WebContents, caller: NativeIpcCaller): void {
+    if (this.uiDestroyHooked.has(sender.id)) return;
+    this.uiDestroyHooked.add(sender.id);
+    sender.once("destroyed", () => {
+      this.uiDestroyHooked.delete(sender.id);
+      void this.revokeWorkspaceUiCaller(caller.callerId);
     });
   }
 
@@ -293,6 +476,9 @@ export class IpcDispatcher {
   async shutdown(): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    for (const relay of this.uiStreamRelays.values()) relay.destroy("Desktop app shutting down");
+    this.uiStreamRelays.clear();
+    await this.workspaceUi.close();
 
     for (const unsubscribe of this.appMessageBridges.values()) unsubscribe();
     this.appMessageBridges.clear();
@@ -393,16 +579,26 @@ export class IpcDispatcher {
     sender: WebContents,
     callerId: string,
     callerKind: CallerKind,
-    envelope: RpcEnvelope
+    envelope: RpcEnvelope,
+    runtime: WorkspaceIpcRuntime = this.deps,
+    runtimeId = callerId
   ): Promise<void> {
     const message = envelope.message;
     const targetId = envelope.target;
     if (message.type === "stream-cancel") {
-      this.cancelIpcStream(sender.id, message);
+      this.cancelIpcStream(sender.id, message, runtime.workspaceId);
       return;
     }
     if (message.type === "stream-request" && targetId === "main") {
-      await this.handleStreamRequest(sender, callerId, callerKind, envelope, message);
+      await this.handleStreamRequest(
+        sender,
+        callerId,
+        callerKind,
+        envelope,
+        message,
+        runtime,
+        runtimeId
+      );
       return;
     }
     if (message.type === "request" && targetId === "main") {
@@ -410,12 +606,17 @@ export class IpcDispatcher {
       const callOptions = callOptionsFromEnvelope(envelope);
       const dotIndex = req.method.indexOf(".");
       if (dotIndex === -1) {
-        this.sendResponse(sender, envelope, {
-          type: "response",
-          requestId: req.requestId,
-          error: `Invalid method format: ${req.method}`,
-          errorKind: "protocol",
-        });
+        this.sendResponse(
+          sender,
+          envelope,
+          {
+            type: "response",
+            requestId: req.requestId,
+            error: `Invalid method format: ${req.method}`,
+            errorKind: "protocol",
+          },
+          runtime.workspaceId
+        );
         return;
       }
       const service = req.method.slice(0, dotIndex);
@@ -425,7 +626,13 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
-        if (this.deps.dispatcher.hasService(service)) {
+        if (runtime.dispatcher.hasService(service)) {
+          if (envelope.targetWorkspaceId && envelope.targetWorkspaceId !== runtime.workspaceId) {
+            throw new RpcBoundaryError(
+              "Native services require the destination workspace's admitted UI host",
+              "access"
+            );
+          }
           // A registered Electron endpoint has one explicit local owner. All
           // other names belong to the authenticated workspace session.
           const ctx = {
@@ -438,7 +645,7 @@ export class IpcDispatcher {
             ...(callOptions?.idempotencyKey ? { idempotencyKey: callOptions.idempotencyKey } : {}),
             ...(callOptions?.readOnly ? { readOnly: true } : {}),
           };
-          result = await this.deps.dispatcher.dispatch(ctx, service, method, req.args);
+          result = await runtime.dispatcher.dispatch(ctx, service, method, req.args);
         } else {
           // Server is the default owner so newly registered userland/workerd
           // services are reachable without a shared routing-list update.
@@ -447,13 +654,7 @@ export class IpcDispatcher {
             // principals — they reach the server on the admin connection.
             // Hosted workspace chrome is an `app` and takes the app branch
             // below; there is no longer a shell→app panelTree proxy.
-            result = await callServer(
-              this.deps.serverClient,
-              service,
-              method,
-              req.args,
-              callOptions
-            );
+            result = await callServer(runtime.serverClient, service, method, req.args, callOptions);
           } else if (callerKind === "app") {
             try {
               this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
@@ -468,8 +669,8 @@ export class IpcDispatcher {
               );
             }
             result = await callServerAs(
-              this.deps.serverClient,
-              { callerId, callerKind },
+              runtime.serverClient,
+              { callerId: runtimeId, callerKind },
               service,
               method,
               req.args,
@@ -487,23 +688,33 @@ export class IpcDispatcher {
           args: req.args,
           result,
         });
-        this.sendResponse(sender, envelope, {
-          type: "response",
-          requestId: req.requestId,
-          result,
-        });
+        this.sendResponse(
+          sender,
+          envelope,
+          {
+            type: "response",
+            requestId: req.requestId,
+            result,
+          },
+          runtime.workspaceId
+        );
       } catch (err) {
         outcome = "error";
         const error = err instanceof Error ? err.message : String(err);
         const errorCode = (err as { code?: string })?.code;
-        this.sendResponse(sender, envelope, {
-          type: "response",
-          requestId: req.requestId,
-          error,
-          errorKind: rpcErrorKindOf(err, "internal"),
-          ...(errorCode ? { errorCode } : {}),
-          ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-        });
+        this.sendResponse(
+          sender,
+          envelope,
+          {
+            type: "response",
+            requestId: req.requestId,
+            error,
+            errorKind: rpcErrorKindOf(err, "internal"),
+            ...(errorCode ? { errorCode } : {}),
+            ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+          },
+          runtime.workspaceId
+        );
       } finally {
         const elapsedMs = performance.now() - startedAt;
         this.responsiveness.observe({
@@ -517,12 +728,20 @@ export class IpcDispatcher {
     }
   }
 
-  private ipcStreamKey(webContentsId: number, requestId: string): string {
-    return `${webContentsId}\u0000${requestId}`;
+  private ipcStreamKey(
+    webContentsId: number,
+    requestId: string,
+    workspaceId = this.deps.workspaceId
+  ): string {
+    return `${webContentsId}\u0000${workspaceId}\u0000${requestId}`;
   }
 
-  private cancelIpcStream(webContentsId: number, message: RpcStreamCancel): void {
-    const key = this.ipcStreamKey(webContentsId, message.requestId);
+  private cancelIpcStream(
+    webContentsId: number,
+    message: RpcStreamCancel,
+    workspaceId: string
+  ): void {
+    const key = this.ipcStreamKey(webContentsId, message.requestId, workspaceId);
     const active = this.activeIpcStreams.get(key);
     if (!active) return;
     active.abort.abort();
@@ -549,7 +768,8 @@ export class IpcDispatcher {
     requestEnvelope: RpcEnvelope,
     requestId: string,
     frameType: number,
-    payload: string
+    payload: string,
+    responderWorkspaceId = this.deps.workspaceId
   ): void {
     if (sender.isDestroyed()) throw new Error("RPC stream renderer was destroyed");
     const frame: RpcStreamFrameMessage = {
@@ -559,7 +779,14 @@ export class IpcDispatcher {
       frameType,
       payload,
     };
-    sender.send("vibestudio:rpc:message", responseEnvelopeFor(requestEnvelope, MAIN_CALLER, frame));
+    sender.send(
+      "vibestudio:rpc:message",
+      responseEnvelopeFor(
+        this.workspaceReplyEnvelope(requestEnvelope),
+        { ...MAIN_CALLER, workspaceId: responderWorkspaceId },
+        frame
+      )
+    );
   }
 
   private async handleStreamRequest(
@@ -567,9 +794,11 @@ export class IpcDispatcher {
     callerId: string,
     callerKind: CallerKind,
     envelope: RpcEnvelope,
-    request: RpcStreamRequest
+    request: RpcStreamRequest,
+    runtime: WorkspaceIpcRuntime = this.deps,
+    runtimeId = callerId
   ): Promise<void> {
-    const key = this.ipcStreamKey(sender.id, request.requestId);
+    const key = this.ipcStreamKey(sender.id, request.requestId, runtime.workspaceId);
     if (this.activeIpcStreams.has(key)) {
       this.sendStreamFrame(
         sender,
@@ -580,7 +809,8 @@ export class IpcDispatcher {
           status: 409,
           message: `Duplicate streaming request id: ${request.requestId}`,
           errorKind: "protocol",
-        })
+        }),
+        runtime.workspaceId
       );
       return;
     }
@@ -596,7 +826,8 @@ export class IpcDispatcher {
           status: 400,
           message: `Invalid method format: ${request.method}`,
           errorKind: "protocol",
-        })
+        }),
+        runtime.workspaceId
       );
       return;
     }
@@ -610,8 +841,14 @@ export class IpcDispatcher {
 
     try {
       let response: Response;
-      if (this.deps.dispatcher.hasService(service)) {
-        const result = await this.deps.dispatcher.dispatch(
+      if (runtime.dispatcher.hasService(service)) {
+        if (envelope.targetWorkspaceId && envelope.targetWorkspaceId !== runtime.workspaceId) {
+          throw new RpcBoundaryError(
+            "Native services require the destination workspace's admitted UI host",
+            "access"
+          );
+        }
+        const result = await runtime.dispatcher.dispatch(
           {
             caller: localVerifiedCaller(
               callerId,
@@ -633,8 +870,9 @@ export class IpcDispatcher {
         }
         response = result;
       } else if (callerKind === "shell") {
-        response = await this.deps.serverClient.stream(service, method, request.args, {
+        response = await runtime.serverClient.stream(service, method, request.args, {
           signal: abort.signal,
+          ...(envelope.targetWorkspaceId ? { targetWorkspaceId: envelope.targetWorkspaceId } : {}),
           ...(envelope.delivery.idempotencyKey
             ? { idempotencyKey: envelope.delivery.idempotencyKey }
             : {}),
@@ -642,13 +880,16 @@ export class IpcDispatcher {
         });
       } else if (callerKind === "app") {
         this.deps.authorizeAppServerCall?.(callerId, service, method, request.args);
-        response = await this.deps.serverClient.streamAs(
-          { callerId, callerKind },
+        response = await runtime.serverClient.streamAs(
+          { callerId: runtimeId, callerKind },
           service,
           method,
           request.args,
           {
             signal: abort.signal,
+            ...(envelope.targetWorkspaceId
+              ? { targetWorkspaceId: envelope.targetWorkspaceId }
+              : {}),
             ...(envelope.delivery.idempotencyKey
               ? { idempotencyKey: envelope.delivery.idempotencyKey }
               : {}),
@@ -674,7 +915,8 @@ export class IpcDispatcher {
           statusText: response.statusText,
           headerPairs: Array.from(response.headers.entries()),
           finalUrl: response.url,
-        })
+        }),
+        runtime.workspaceId
       );
 
       let bytesIn = 0;
@@ -691,7 +933,8 @@ export class IpcDispatcher {
             envelope,
             request.requestId,
             FRAME_DATA,
-            bytesToBase64(next.value)
+            bytesToBase64(next.value),
+            runtime.workspaceId
           );
         }
       }
@@ -701,7 +944,8 @@ export class IpcDispatcher {
           envelope,
           request.requestId,
           FRAME_END,
-          JSON.stringify({ bytesIn })
+          JSON.stringify({ bytesIn }),
+          runtime.workspaceId
         );
       }
     } catch (error) {
@@ -717,7 +961,8 @@ export class IpcDispatcher {
             code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
             errorKind: rpcErrorKindOf(error, "transport"),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          })
+          }),
+          runtime.workspaceId
         );
       }
     } finally {
@@ -726,20 +971,45 @@ export class IpcDispatcher {
     }
   }
 
+  private workspaceReplyEnvelope(envelope: RpcEnvelope): RpcEnvelope {
+    return envelope.targetWorkspaceId
+      ? {
+          ...envelope,
+          delivery: {
+            ...envelope.delivery,
+            caller: {
+              ...envelope.delivery.caller,
+              workspaceId: envelope.delivery.caller.workspaceId ?? this.deps.workspaceId,
+            },
+          },
+        }
+      : envelope;
+  }
+
   private sendResponse(
     sender: WebContents,
     requestEnvelope: RpcEnvelope,
-    response: RpcResponse
+    response: RpcResponse,
+    responderWorkspaceId = this.deps.workspaceId
   ): void {
     if (!sender.isDestroyed()) {
       sender.send(
         "vibestudio:rpc:message",
-        responseEnvelopeFor(requestEnvelope, MAIN_CALLER, response)
+        responseEnvelopeFor(
+          this.workspaceReplyEnvelope(requestEnvelope),
+          { ...MAIN_CALLER, workspaceId: responderWorkspaceId },
+          response
+        )
       );
     }
   }
 
-  private rejectRequestEnvelope(sender: WebContents, envelope: RpcEnvelope, error: string): void {
+  private rejectRequestEnvelope(
+    sender: WebContents,
+    envelope: RpcEnvelope,
+    error: string,
+    responderWorkspaceId = this.deps.workspaceId
+  ): void {
     const message = envelope.message;
     if (message?.type === "stream-request") {
       // A stream has no response envelope, so silence here would strand the
@@ -751,17 +1021,23 @@ export class IpcDispatcher {
         envelope,
         (message as RpcStreamRequest).requestId,
         FRAME_ERROR,
-        JSON.stringify({ status: 403, message: error, errorKind: "access" })
+        JSON.stringify({ status: 403, message: error, errorKind: "access" }),
+        responderWorkspaceId
       );
       return;
     }
     if (message?.type !== "request") return;
-    this.sendResponse(sender, envelope, {
-      type: "response",
-      requestId: (message as RpcRequest).requestId,
-      error,
-      errorKind: "access",
-    });
+    this.sendResponse(
+      sender,
+      envelope,
+      {
+        type: "response",
+        requestId: (message as RpcRequest).requestId,
+        error,
+        errorKind: "access",
+      },
+      responderWorkspaceId
+    );
   }
 
   /**
@@ -771,11 +1047,19 @@ export class IpcDispatcher {
    * {@link ensurePanelSession}). A relay failure surfaces as an error response so
    * the panel's pending request rejects rather than hanging.
    */
-  private relayPanelEnvelope(sender: WebContents, callerId: string, envelope: RpcEnvelope): void {
+  private relayPanelEnvelope(
+    sender: WebContents,
+    callerId: string,
+    envelope: RpcEnvelope,
+    runtime: WorkspaceIpcRuntime
+  ): void {
     // `shell` names the panel's local owning host, never a server target. Keep
     // this decision independent of the event name so new shell capabilities
     // cannot accidentally acquire a second, remote route.
-    if (envelope.target === "shell") {
+    if (
+      envelope.target === "shell" &&
+      (!envelope.targetWorkspaceId || envelope.targetWorkspaceId === runtime.workspaceId)
+    ) {
       if (envelope.message.type !== "event") {
         this.rejectRequestEnvelope(sender, envelope, "The local shell accepts events only");
         log.warn(`Rejected non-event envelope addressed to local shell from ${callerId}`);
@@ -872,8 +1156,12 @@ export class IpcDispatcher {
         if (pending) void pending.then((entry) => entry.session.close()).catch(() => undefined);
       });
     }
-    const opening: Promise<PanelSessionEntry> = this.deps.serverClient
-      .openPanelSession(conn.runtimeEntityId, conn.connectionId)
+    const opening: Promise<PanelSessionEntry> = this.sourceRuntime(
+      this.deps.resolveCallerForWebContents(sender.id) ?? { callerId, callerKind: "panel" }
+    )
+      .then((runtime) =>
+        runtime.serverClient.openPanelSession(conn.runtimeEntityId, conn.connectionId)
+      )
       .then((session) => {
         // Deliver server→panel messages (responses, events, stream frames) to the
         // panel's current webContents.
@@ -891,10 +1179,14 @@ export class IpcDispatcher {
     return opening.then((entry) => entry.session);
   }
 
-  private ensureAppMessageBridge(callerId: string): void {
+  private ensureAppMessageBridge(
+    callerId: string,
+    runtime: WorkspaceIpcRuntime,
+    runtimeId: string
+  ): void {
     if (this.appMessageBridges.has(callerId)) return;
-    const unsubscribe = this.deps.serverClient.addMessageListener(
-      { callerId, callerKind: "app" },
+    const unsubscribe = runtime.serverClient.addMessageListener(
+      { callerId: runtimeId, callerKind: "app" },
       (envelope) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
         if (!wc || wc.isDestroyed()) return;

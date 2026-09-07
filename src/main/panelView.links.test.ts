@@ -76,6 +76,7 @@ function createHarness(
     ),
   };
   const panelRegistry = {
+    workspaceId: "workspace-test",
     findParentId: vi.fn(() => null),
     getPanel: vi.fn((id: string) => (id === panelId && options.viewType !== "app" ? panel : null)),
     notifyPanelTreeUpdate: vi.fn(),
@@ -91,6 +92,7 @@ function createHarness(
   const sendPanelEvent = vi.fn();
   const openExternal = vi.fn(async () => undefined);
   const panelView = new PanelView({
+    nativeStorageScope: "test-host-device",
     viewManager,
     panelRegistry,
     serverInfo: {

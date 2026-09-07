@@ -291,7 +291,7 @@ function createOrchestrator(
 
 describe("PanelOrchestrator.closePanel", () => {
   it("registers the runtime host before CDP provider startup can claim its host id", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
       runtimeClient: {
         clientSessionId: "host-session",
@@ -319,7 +319,7 @@ describe("PanelOrchestrator.closePanel", () => {
   });
 
   it("unregisters the runtime host once during shutdown", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
       runtimeClient: {
         clientSessionId: "host-session",
@@ -345,7 +345,7 @@ describe("PanelOrchestrator.closePanel", () => {
   });
 
   it("navigates away when closing a root that contains the focused panel", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const closingRoot = makePanel("panel:tree/closing-root");
     const nextRoot = makePanel("panel:tree/next-root");
     registry.addPanel(nextRoot, null, { addAsRoot: true });
@@ -363,7 +363,7 @@ describe("PanelOrchestrator.closePanel", () => {
   });
 
   it("does not navigate when closing a sibling outside the focused subtree", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root");
     registry.addPanel(root, null, { addAsRoot: true });
     const sibling = makePanel("panel:tree/sibling");
@@ -380,7 +380,7 @@ describe("PanelOrchestrator.closePanel", () => {
   });
 
   it("routes close through the server authority (reactive prune handles teardown)", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root");
     registry.addPanel(root, null, { addAsRoot: true });
     const { orchestrator, serverClient } = createOrchestrator(registry);
@@ -396,7 +396,7 @@ describe("PanelOrchestrator.closePanel", () => {
 
 describe("PanelOrchestrator.updatePanelTitle", () => {
   it("routes native page titles through workspace-state so every tree projection is invalidated", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/chat", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-chat"),
     });
@@ -416,7 +416,7 @@ describe("PanelOrchestrator.updatePanelTitle", () => {
 
 describe("PanelOrchestrator.ensureLoaded", () => {
   it("loads a panel without selecting or focusing it", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/target");
     registry.addPanel(panel, null, { addAsRoot: true });
 
@@ -442,7 +442,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("hydrates a query-first panel before creating its native view", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/query-first");
     const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
     shellCore.getPanel.mockImplementationOnce(async () => {
@@ -466,7 +466,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("does not create a renderer for a preparing, non-executable principal", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/preparing", [], {
       buildKey: null,
       executionDigest: null,
@@ -489,7 +489,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("repairs a missing runtime lease for an existing native view and registers CDP", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1", [], {
       runtimeEntityId: "panel:nav-panel:tree/panel-1",
       artifacts: {
@@ -539,7 +539,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("creates the sole renderer when a preparing entity becomes executable", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/prepared-after-lease", [], {
       runtimeEntityId: "panel:nav-panel:tree/prepared-after-lease",
       buildKey: null,
@@ -582,7 +582,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("rehydrates executable state after lease acquisition without an activation event", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/activated-before-host-connected", [], {
       runtimeEntityId: "panel:nav-panel:tree/activated-before-host-connected",
       buildKey: null,
@@ -618,7 +618,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("drops a retained renderer when durable refresh says its principal is not executable", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/stale-retained-principal", [], {
       runtimeEntityId: "panel:nav-stale-retained-principal",
       effectiveVersion: "stale-effective-version",
@@ -635,7 +635,9 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     const { orchestrator, panelView, shellCore, cdpHost } = createOrchestrator(registry);
     let retained = true;
     panelView.hasView.mockImplementation(() => retained);
-    panelView.getViewPartition.mockReturnValue(contextIdToPartition(panel.snapshot.contextId));
+    panelView.getViewPartition.mockReturnValue(
+      contextIdToPartition(registry.workspaceId, panel.snapshot.contextId)
+    );
     panelView.destroyView.mockImplementation(() => {
       retained = false;
     });
@@ -670,7 +672,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("rejoins durable state when activation beats the local slot projection", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/activation-before-create-response", [], {
       runtimeEntityId: "panel:nav-activation-before-create-response",
       effectiveVersion: "effective-ready",
@@ -705,7 +707,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("hydrates a presented durable panel before persisting shell layout focus", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presented-before-query");
     const { orchestrator, shellCore } = createOrchestrator(registry);
     shellCore.getPanel.mockImplementationOnce(async () => {
@@ -720,7 +722,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   });
 
   it("refreshes an already-presented native view identity without navigating", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/already-presented", [], {
       runtimeEntityId: "panel:nav-already-presented",
       artifacts: {
@@ -757,7 +759,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
 
 describe("PanelOrchestrator local presentation", () => {
   it("publishes loading and ready only after the native slot is attached", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-ready");
     registry.addPanel(panel, null, { addAsRoot: true });
     const published: Array<{ presentation: { state: string } }> = [];
@@ -789,7 +791,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("keeps code panels booting until the exact renderer entity reports ready", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-boot");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
@@ -834,7 +836,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("acknowledges reload navigation without waiting on unbounded renderer boot", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/reload-booting");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
@@ -871,7 +873,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("reattaches an already-ready view without reacquiring or navigating", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-reattach");
     registry.addPanel(panel, null, { addAsRoot: true });
     const attachNativeBinding = vi.fn(() => ({ nativeSlotId: "pane:primary" }));
@@ -912,7 +914,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("hydrates a query-first panel when its native slot is declared", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/native-slot-before-projection");
     const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
     shellCore.getPanel.mockImplementationOnce(async () => {
@@ -933,7 +935,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("represents normal lease contention as unavailable with takeover identity", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-contended", [], {
       runtimeEntityId: "panel:nav-presentation-contended",
     });
@@ -967,7 +969,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("installs a fresh attempt when an explicit retry follows failure", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-retry");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView } = createOrchestrator(registry);
@@ -998,7 +1000,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("revokes ready immediately when the native slot is cleared", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-detached");
     registry.addPanel(panel, null, { addAsRoot: true });
     let attached = true;
@@ -1030,7 +1032,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("revokes external readiness until the committed document is durable", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-browser", [], {
       snapshot: {
         source: "browser:https://example.com/",
@@ -1076,7 +1078,7 @@ describe("PanelOrchestrator local presentation", () => {
   });
 
   it("publishes an active preparation failure to the canonical snapshot", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-build-failure", [], {
       buildKey: null,
       executionDigest: null,
@@ -1105,7 +1107,7 @@ describe("PanelOrchestrator local presentation", () => {
 
 describe("PanelOrchestrator.focusPanel", () => {
   it("shows an existing native panel view from main when focusing", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
 
@@ -1120,7 +1122,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("does not show a retained view after lease repair discarded it", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-repaired");
     registry.addPanel(panel, null, { addAsRoot: true });
 
@@ -1138,7 +1140,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("keeps ordinary focus separate from creation placement", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/parent/child", [], {
       snapshot: {
         source: "panels/child",
@@ -1160,7 +1162,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("loads a missing native view during focus even when build is already ready", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1", [], {
       artifacts: { buildState: "ready" },
     });
@@ -1184,7 +1186,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("keeps a focused panel preparing while native presentation is still in progress", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-preparing", [], {
       artifacts: { buildState: "ready" },
     });
@@ -1203,7 +1205,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("creates from the sealed panel record installed during lease acquisition", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-activating", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-panel-activating"),
       buildKey: null,
@@ -1241,7 +1243,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("acquires and releases runtime leases for browser panels", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/browser-1", [], {
       snapshot: {
         source: "browser:https://example.com",
@@ -1281,7 +1283,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("retries a browser panel whose previous native navigation failed", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/browser-retry", [], {
       snapshot: {
         source: "browser:https://example.com",
@@ -1328,7 +1330,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("retries a workspace panel after host navigation fails without rebuilding it", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/workspace-retry", [], {
       artifacts: {
         buildState: "ready",
@@ -1363,7 +1365,7 @@ describe("PanelOrchestrator.focusPanel", () => {
   });
 
   it("returns a structured leased_elsewhere result when focus cannot acquire runtime", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1", [], {
       artifacts: { buildState: "pending" },
     });
@@ -1405,7 +1407,7 @@ describe("PanelOrchestrator.focusPanel", () => {
 
 describe("PanelOrchestrator.createPanel", () => {
   it("creates unscoped child panels as the trusted host (shell authority)", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient, shellCore } = createOrchestrator(registry);
@@ -1426,7 +1428,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("publishes and returns a code panel without starting host-owned activation", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
     const { orchestrator, panelView, emit } = createOrchestrator(registry);
@@ -1444,7 +1446,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("projects a server-owned activation failure for only the current entity", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
     const { orchestrator, panelView, emit } = createOrchestrator(registry);
@@ -1477,7 +1479,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("materializes a focused created panel without a second placement event", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
 
@@ -1533,7 +1535,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("keeps a created workspace panel visible with an error when reactive native view creation fails", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
 
@@ -1593,7 +1595,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("acquires a runtime lease before creating browser panel views", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
 
@@ -1656,7 +1658,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("returns the browser slot before environment readiness and delays only view attachment", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
     let resolvePartition!: (partition: string) => void;
@@ -1701,7 +1703,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("commits deferred browser children without acquiring a lease or creating a view", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient, shellCore } = createOrchestrator(registry);
@@ -1739,7 +1741,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("creates unscoped browser child panels as the trusted host (shell authority)", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient, shellCore } = createOrchestrator(registry);
@@ -1760,7 +1762,7 @@ describe("PanelOrchestrator.createPanel", () => {
   });
 
   it("keeps a created browser panel visible with an error when native browser view creation fails", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
 
@@ -1814,7 +1816,7 @@ describe("PanelOrchestrator.createPanel", () => {
 
 describe("PanelOrchestrator.navigatePanel", () => {
   it("commits replacement through the shell connection and presents the committed entity", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/current", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-current"),
     });
@@ -1843,7 +1845,7 @@ describe("PanelOrchestrator.navigatePanel", () => {
 
 describe("PanelOrchestrator.applyBuildComplete", () => {
   it("records source completion without pretending any slot selected or loaded that build", () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const first = makePanel("panel:tree/slot-a", [], {
       snapshot: {
         source: "panels/chat",
@@ -1886,7 +1888,7 @@ describe("PanelOrchestrator.applyBuildComplete", () => {
   });
 
   it("does not derive a panel URL when the slot has not received its immutable build key", () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/slot-a", [], {
       buildKey: null,
       executionDigest: null,
@@ -1912,7 +1914,7 @@ describe("PanelOrchestrator.applyBuildComplete", () => {
 
 describe("PanelOrchestrator.rebuildPanel", () => {
   ledgerTest("execution.panel", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/child", [], {
       snapshot: {
         source: "panels/child",
@@ -1978,7 +1980,7 @@ describe("PanelOrchestrator.rebuildPanel", () => {
 
 describe("PanelOrchestrator.recoverShellSnapshot", () => {
   it("re-registers the surviving runtime client before repairing views after recovery", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root");
     registry.addPanel(root, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
@@ -1998,7 +2000,7 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
   });
 
   it("syncs tree and leases, resolves focus, and publishes one normalized snapshot", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root");
     registry.addPanel(root, null, { addAsRoot: true });
     const emit = vi.fn();
@@ -2025,7 +2027,7 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
   });
 
   it("loads the focused view by default restore policy", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root", [], { artifacts: { buildState: "pending" } });
     registry.addPanel(root, null, { addAsRoot: true });
     registry.updateSelectedPath(root.id);
@@ -2047,7 +2049,7 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
   });
 
   it("can restore only tree state when policy is none", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root", [], { artifacts: { buildState: "pending" } });
     registry.addPanel(root, null, { addAsRoot: true });
     registry.updateSelectedPath(root.id);
@@ -2064,7 +2066,7 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
 
 describe("PanelOrchestrator.initializePanelTree", () => {
   it("seeds and eagerly materializes every configured initial root through the product runtime", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const { orchestrator, shellCore, panelView } = createOrchestrator(registry, vi.fn(), {
       workspaceConfig: {
         id: "test",
@@ -2128,7 +2130,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
   });
 
   it("keeps a headless renderer passive without hydrating the tree", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const { orchestrator, serverClient } = createOrchestrator(registry);
 
     await orchestrator.initializePanelTree({ seedInitialPanels: false });
@@ -2137,7 +2139,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
   });
 
   it("does not duplicate an existing initial root", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const seeded = makePanel("panel:tree/seeded", [], {
       snapshot: {
         source: "panels/chat",
@@ -2163,7 +2165,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
   });
 
   it("does not regress a panel that became hosted while the tree initialized", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const seeded = makePanel("panel:tree/seeded", [], {
       artifacts: {
         buildState: "ready",
@@ -2185,7 +2187,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
 
 describe("PanelOrchestrator.readPanelProjection", () => {
   it("returns immediately and shares one exact-state icon decoration lookup", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/decorated", [], {
       snapshot: {
         source: "panels/chat",
@@ -2222,7 +2224,7 @@ describe("PanelOrchestrator.readPanelProjection", () => {
   });
 
   it("returns an existing hosted projection without refreshing or converging it", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/ready", [], {
       runtimeEntityId: "panel:nav-ready",
       artifacts: {
@@ -2245,7 +2247,7 @@ describe("PanelOrchestrator.readPanelProjection", () => {
   });
 
   it("hydrates a missing projection once before returning it", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/late");
     const { orchestrator, shellCore } = createOrchestrator(registry);
     shellCore.getPanel.mockImplementationOnce(async () => {
@@ -2262,7 +2264,7 @@ describe("PanelOrchestrator.readPanelProjection", () => {
 
 describe("PanelOrchestrator.getBootstrapConfig", () => {
   it("returns the leased runtime connection id string", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, shellCore, panelView } = createOrchestrator(registry);
@@ -2289,7 +2291,7 @@ describe("PanelOrchestrator.getBootstrapConfig", () => {
 
 describe("PanelOrchestrator.getPanelHostObservation", () => {
   it("reports typed view failures as retryable navigation failures", () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/navigation-failure", [], {
       artifacts: {
         buildState: "ready",
@@ -2316,7 +2318,7 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
   });
 
   it("never infers navigation failure from build-error wording", () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/build-failure", [], {
       artifacts: {
         buildState: "error",
@@ -2334,7 +2336,7 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
   });
 
   it("keeps renderer boot failures in the renderer-owned boot record", () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/boot-failure");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator } = createOrchestrator(registry);
@@ -2354,7 +2356,7 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
 
 describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   it("preserves a lease transferred by its direct event before acquire returns", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/promoted-chat", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-promoted-chat"),
       snapshot: { source: "panels/chat", contextId: "ctx-promoted", options: {} },
@@ -2423,7 +2425,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("transfers an in-flight acquire to a superseding activation attempt", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/activation-during-acquire", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-activation-during-acquire"),
       effectiveVersion: "effective-before",
@@ -2485,7 +2487,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("replaces an existing slot view when its lease moves to a new runtime entity", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/new-news", [], {
       runtimeEntityId: "panel:nav-news",
       snapshot: {
@@ -2538,7 +2540,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("coalesces repeated assignment delivery for the same runtime connection", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/new-news", [], {
       runtimeEntityId: "panel:nav-news",
       snapshot: { source: "panels/news", contextId: "ctx-news", options: {} },
@@ -2582,7 +2584,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("publishes a terminal view failure when same-slot replacement cannot load", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/new-news", [], {
       runtimeEntityId: "panel:nav-news",
       snapshot: { source: "panels/news", contextId: "ctx-news", options: {} },
@@ -2649,7 +2651,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("unloads local panel resources when the local runtime lease is released", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1", [], {
       artifacts: {
         htmlPath: "http://localhost:1234/panels/panel:tree/panel-1/",
@@ -2692,7 +2694,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("recovers a shell-declared resident panel when its lease is released before attachment", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/resident-lease-recovery", [], {
       runtimeEntityId: "panel:nav-resident-lease-recovery",
     });
@@ -2740,7 +2742,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("ignores an old lease release after the slot has navigated to a new entity", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
@@ -2786,7 +2788,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("loads panels assigned to a load-on-assignment host without reacquiring the lease", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
@@ -2834,7 +2836,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("hydrates a server-created panel when its lease arrives before the local tree projection", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/server-created");
     const { orchestrator, panelView, shellCore } = createOrchestrator(registry, vi.fn(), {
       runtimeClient: {
@@ -2881,7 +2883,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("creates a renderer when an assigned preparing runtime becomes ready", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/preparation-placeholder", [], {
       buildKey: null,
       executionDigest: null,
@@ -2931,7 +2933,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("materializes load-on-assignment leases recovered from the initialization snapshot", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
@@ -2976,7 +2978,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("does not turn an intentionally unloaded in-flight view into a durable load error", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
@@ -3040,7 +3042,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   it("idle-sweeps panels assigned to a load-on-assignment host (unified sweep, no per-panel timers)", async () => {
     vi.useFakeTimers();
     try {
-      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
       const panel = makePanel("panel:tree/panel-1");
       registry.addPanel(panel, null, { addAsRoot: true });
       const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
@@ -3093,7 +3095,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("caps load-on-assignment host resources by unloading the oldest assigned panel", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const first = makePanel("panel:tree/panel-1");
     const second = makePanel("panel:tree/panel-2");
     registry.addPanel(first, null, { addAsRoot: true });
@@ -3162,7 +3164,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("evicts only the selected view when the resource-cap victim has loaded children", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/parent/child");
     const parent = makePanel("panel:tree/parent");
     registry.addPanel(parent, null, { addAsRoot: true });
@@ -3220,7 +3222,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   });
 
   it("reads panel snapshots from the shell projection without loading local views", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);

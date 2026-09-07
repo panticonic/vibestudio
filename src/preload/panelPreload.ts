@@ -6,13 +6,9 @@
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import type {
-  BridgeBodyChunk,
-  BridgeStreamMessage,
-  BridgeStreamOpen,
-  RpcEnvelope,
-} from "@vibestudio/rpc";
+import type { RpcEnvelope } from "@vibestudio/rpc";
 import { createIpcTransport } from "./ipcTransport.js";
+import { createIpcStreamBridge } from "./ipcStreamBridge.js";
 import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
 type RecoveryKind = "resubscribe" | "cold-recover";
@@ -43,23 +39,7 @@ const vibestudioShell = {
     return () => ipcRenderer.off("vibestudio:rpc:recovery", listener);
   },
 
-  // §1.6 upload hop (see @vibestudio/rpc bridgeStream.ts): streaming REQUEST bodies
-  // cross the bridge as sequenced chunk messages; ipcDispatcher reassembles them
-  // and feeds the panel's Iroh session. Electron structured-clones Uint8Array,
-  // so chunks ride binary (no base64). `streamBodyChunk` is invoke()d so the
-  // host's resolution is the pump's backpressure.
-  streamChunkFormat: "binary" as const,
-  streamOpen: (msg: BridgeStreamOpen) => ipcRenderer.invoke("vibestudio:rpc:stream-open", msg),
-  streamBodyChunk: (msg: BridgeBodyChunk) =>
-    ipcRenderer.invoke("vibestudio:rpc:stream-body-chunk", msg),
-  streamAbort: (opId: string) => ipcRenderer.send("vibestudio:rpc:stream-abort", opId),
-  streamAck: (opId: string, seq: number) =>
-    ipcRenderer.send("vibestudio:rpc:stream-ack", { opId, seq }),
-  onStreamMessage: (handler: (msg: BridgeStreamMessage) => void) => {
-    const listener = (_e: IpcRendererEvent, msg: BridgeStreamMessage) => handler(msg);
-    ipcRenderer.on("vibestudio:rpc:stream-message", listener);
-    return () => ipcRenderer.off("vibestudio:rpc:stream-message", listener);
-  },
+  ...createIpcStreamBridge(),
 
   getPanelInit: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),

@@ -56,4 +56,35 @@ describe("hubControlHostService", () => {
     expect(call).toHaveBeenNthCalledWith(2, "hubControl", "listDevices", []);
     expect(call).toHaveBeenNthCalledWith(3, "hubControl", "revokeDevice", ["device-1"]);
   });
+  it("does not let a slower earlier workspace switch steal focus back", async () => {
+    const completions = new Map<string, (route: unknown) => void>();
+    const route = (workspaceId: string) => ({
+      workspaceId,
+      workspace: workspaceId,
+      running: true,
+      serverUrl: "http://localhost:1",
+      workspaceReach: { endpointId: "aa".repeat(32), relays: ["https://relay.example/"], v: 4 },
+      serverId: `srv_${"s".repeat(24)}`,
+      serverBootId: `boot_${"b".repeat(24)}`,
+    });
+    const onWorkspaceRoute = vi.fn();
+    const service = createHubControlHostService({
+      client: {
+        call: (_service: string, _method: string, args: [{ workspaceId: string }]) =>
+          new Promise((resolve) => completions.set(args[0].workspaceId, resolve)),
+      } as never,
+      getViewManager: () => ({}) as never,
+      onWorkspaceRoute,
+    });
+    const first = service.handler(shellCtx, "routeWorkspace", [{ workspaceId: "first" }]);
+    const second = service.handler(shellCtx, "routeWorkspace", [{ workspaceId: "second" }]);
+    completions.get("second")!(route("second"));
+    await second;
+    completions.get("first")!(route("first"));
+    await first;
+    expect(onWorkspaceRoute).toHaveBeenCalledTimes(1);
+    expect(onWorkspaceRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "second" })
+    );
+  });
 });

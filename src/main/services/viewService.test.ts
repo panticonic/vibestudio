@@ -24,6 +24,7 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
       id === appId
         ? {
             type: "app",
+            workspaceIdentity: { workspaceId: "workspace-test", runtimeId: appId },
             visible: true,
             bounds: { x: 0, y: 0, width: 800, height: 600 },
             capabilities,
@@ -65,7 +66,13 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
 describe("view service", () => {
   it("rejects ordinary apps for host-wide view controls", async () => {
     const vm = makeViewManager([]);
-    const service = createViewService({ getViewManager: () => vm as never });
+    const service = createViewService({
+      workspaceId: "workspace-test",
+      getViewManager: () => vm as never,
+      authorizeWorkspaceMaterialization: async (id) => {
+        if (id !== "workspace-test") throw new Error("Workspace access was removed");
+      },
+    });
 
     await expect(
       service.handler(
@@ -80,7 +87,13 @@ describe("view service", () => {
 
   it("allows a panel-hosting workspace app to converge one desired snapshot", async () => {
     const vm = makeViewManager(["panel-hosting"]);
-    const service = createViewService({ getViewManager: () => vm as never });
+    const service = createViewService({
+      workspaceId: "workspace-test",
+      getViewManager: () => vm as never,
+      authorizeWorkspaceMaterialization: async (id) => {
+        if (id !== "workspace-test") throw new Error("Workspace access was removed");
+      },
+    });
     const request = {
       protocolVersion: 1 as const,
       hostGeneration: "host-1",
@@ -89,7 +102,11 @@ describe("view service", () => {
       surfaces: [
         {
           surfaceId: "panel-stack:primary",
-          materialization: { runtimeEntityId: "panel-1", leaseConnectionId: "binding-test" },
+          materialization: {
+            workspaceId: "workspace-test",
+            runtimeEntityId: "panel-1",
+            leaseConnectionId: "binding-test",
+          },
           visible: true,
           bounds: { x: 10, y: 20, width: 300, height: 200 },
           focused: true,
@@ -114,7 +131,13 @@ describe("view service", () => {
       id: callerId,
       source: "apps/field-mobile",
     });
-    const service = createViewService({ getViewManager: () => vm as never });
+    const service = createViewService({
+      workspaceId: "workspace-test",
+      getViewManager: () => vm as never,
+      authorizeWorkspaceMaterialization: async (id) => {
+        if (id !== "workspace-test") throw new Error("Workspace access was removed");
+      },
+    });
 
     await expect(
       service.handler(
@@ -140,6 +163,7 @@ describe("view service", () => {
     vm.applyNativePanelSurfaces.mockResolvedValue({ accepted: false, reason: "stale-revision" });
     const onNativeSlotCleared = vi.fn();
     const service = createViewService({
+      workspaceId: "workspace-test",
       getViewManager: () => vm as never,
       panelOrchestrator: { onNativeSlotCleared } as never,
     });
@@ -163,7 +187,13 @@ describe("view service", () => {
 
   it("rejects bootstrap shell callers for native panel slots", async () => {
     const vm = makeViewManager(["panel-hosting"]);
-    const service = createViewService({ getViewManager: () => vm as never });
+    const service = createViewService({
+      workspaceId: "workspace-test",
+      getViewManager: () => vm as never,
+      authorizeWorkspaceMaterialization: async (id) => {
+        if (id !== "workspace-test") throw new Error("Workspace access was removed");
+      },
+    });
 
     await expect(
       service.handler(

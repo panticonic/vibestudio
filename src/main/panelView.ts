@@ -1,3 +1,4 @@
+import { scopedNativePartition } from "./nativeStorageScope.js";
 /**
  * PanelView — Electron-only view management service.
  *
@@ -7,7 +8,7 @@
  */
 
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { ViewManager } from "./viewManager.js";
+import type { WorkspaceNativeViews } from "./workspaceNativeViews.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelViewLike, ServerInfoLike } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
@@ -105,7 +106,8 @@ interface BrowserFaviconObserverLike {
 }
 
 export class PanelView implements PanelViewLike {
-  private viewManager: ViewManager;
+  private viewManager: WorkspaceNativeViews;
+  private readonly nativeStorageScope: string;
   private readonly panelRegistry: PanelRegistry;
   private readonly cdpHost: CdpHostLike;
   private readonly panelOrchestrator: PanelOrchestratorLike;
@@ -150,7 +152,8 @@ export class PanelView implements PanelViewLike {
   private disposed = false;
 
   constructor(deps: {
-    viewManager: ViewManager;
+    nativeStorageScope: string;
+    viewManager: WorkspaceNativeViews;
     panelRegistry: PanelRegistry;
     serverInfo: ServerInfoLike;
     cdpHost: CdpHostLike;
@@ -171,6 +174,7 @@ export class PanelView implements PanelViewLike {
     browserHistoryRecorder?: BrowserHistoryRecorder;
   }) {
     this.viewManager = deps.viewManager;
+    this.nativeStorageScope = deps.nativeStorageScope;
     this.panelRegistry = deps.panelRegistry;
     this.cdpHost = deps.cdpHost;
     this.panelOrchestrator = deps.panelOrchestrator;
@@ -348,7 +352,10 @@ export class PanelView implements PanelViewLike {
       type: "panel",
       preload: this.panelPreloadPath ?? null,
       parentId: parentId ?? undefined,
-      partition: contextId ? contextIdToPartition(contextId) : undefined,
+      partition: scopedNativePartition(
+        this.nativeStorageScope,
+        contextIdToPartition(this.panelRegistry.workspaceId, contextId ?? "main")
+      ),
       injectHostThemeVariables: true,
       codeIdentity: identity,
     });
@@ -429,7 +436,10 @@ export class PanelView implements PanelViewLike {
       id: appId,
       type: "app",
       preload: this.appPreloadPath,
-      partition: contextId ? contextIdToPartition(contextId) : undefined,
+      partition: scopedNativePartition(
+        this.nativeStorageScope,
+        contextIdToPartition(this.panelRegistry.workspaceId, contextId ?? "main")
+      ),
       injectHostThemeVariables: true,
       appCapabilities: capabilities,
       hostChrome: capabilities?.includes("panel-hosting") ?? false,
@@ -586,7 +596,7 @@ export class PanelView implements PanelViewLike {
   getViewPartition(panelId: string): string | undefined | null {
     return this.viewManager.getViewPartition(panelId);
   }
-  getViewManager(): ViewManager {
+  getViewManager(): WorkspaceNativeViews {
     return this.viewManager;
   }
   markBrowserNavigationIntent(panelId: string, intent: BrowserNavigationIntent): void {

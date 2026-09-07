@@ -167,7 +167,10 @@ export class FormFillManager {
   private pendingFormFills = new Map<string, PendingFormFillSnapshot>();
   private formFillStore: FormFillStoreLike;
   private eventService: EventService;
-  private getViewManager: () => ViewManager;
+  private getViewManager: () => Pick<
+    ViewManager,
+    "findViewIdByWebContentsId" | "getViewInfo" | "getWebContents"
+  >;
   private requestSiteCapability: (
     contents: WebContents,
     capability: "autofill"
@@ -183,7 +186,10 @@ export class FormFillManager {
   constructor(deps: {
     formFillStore: FormFillStoreLike;
     eventService: EventService;
-    getViewManager: () => ViewManager;
+    getViewManager: () => Pick<
+      ViewManager,
+      "findViewIdByWebContentsId" | "getViewInfo" | "getWebContents"
+    >;
     autofillOverlayPreloadPath: string;
     requestSiteCapability(contents: WebContents, capability: "autofill"): Promise<boolean>;
   }) {

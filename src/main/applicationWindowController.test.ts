@@ -123,6 +123,7 @@ function createHarness() {
   const stopElectronHostTargetLaunchLoop = vi.fn();
   const onWindowClosed = vi.fn(() => mocks.lifecycleEvents.push("controller:closed"));
   const deps: ApplicationWindowControllerDeps = {
+    getSystemWorkspaceId: () => "system",
     eventService: { emit: vi.fn() } as never,
     isHeadlessHost: false,
     getWindowTitle: () => "Vibestudio test",
@@ -255,10 +256,10 @@ describe("ApplicationWindowController window lifetime", () => {
       dispose: vi.fn(() => mocks.lifecycleEvents.push("panel:dispose")),
     };
     const internal = harness.controller as unknown as {
-      currentLifetime: { panelView: typeof panelView } | null;
+      currentLifetime: { panelViews: Map<string, typeof panelView> } | null;
     };
     expect(internal.currentLifetime).not.toBeNull();
-    internal.currentLifetime!.panelView = panelView;
+    internal.currentLifetime!.panelViews.set("system", panelView);
     mocks.lifecycleEvents.length = 0;
 
     window.emit("close");

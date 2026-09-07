@@ -1,3 +1,4 @@
+import { scopedNativePartition } from "../nativeStorageScope";
 import { describe, expect, it } from "vitest";
 import {
   BrowserPermissionController,
@@ -66,6 +67,7 @@ function controllerHarness(options: { contentOverlay?: boolean } = {}) {
     off: () => undefined,
   } as unknown as Electron.WebContents;
   const controller = new BrowserPermissionController({
+    nativeStorageScope: "test-host-device",
     serverClient: serverClient as never,
     eventService: { emit: () => undefined } as never,
     getViewManager: () => manager as never,
@@ -127,7 +129,7 @@ describe("browser permission capability mapping", () => {
 
     expect(controller.isGranted(url, "notifications")).toBe(false);
     await expect(controller.attachBrowserEnvironment()).resolves.toBe(
-      "persist:browser-environment:browser_test"
+      scopedNativePartition("test-host-device", "persist:browser-environment:browser_test")
     );
     expect(controller.isGranted(url, "notifications")).toBe(true);
 

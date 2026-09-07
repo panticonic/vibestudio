@@ -1405,7 +1405,7 @@ export class PanelPresentationController {
     const target = snapshot.source.startsWith("browser:")
       ? assertPresent(browserPartition)
       : snapshot.contextId
-        ? contextIdToPartition(snapshot.contextId)
+        ? contextIdToPartition(this.deps.registry.workspaceId, snapshot.contextId)
         : undefined;
     if (view.getViewPartition(panelId) === target) return;
     view.destroyView(panelId);

@@ -1,3 +1,4 @@
+import { readWorkspaceTransportIdentity } from "./workspaceTransportIdentity.js";
 /**
  * App preload — privileged workspace-app bridge.
  *
@@ -7,6 +8,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import { createIpcTransport } from "./ipcTransport.js";
+import { createIpcStreamBridge } from "./ipcStreamBridge.js";
 import type { WorkspaceConnectionState } from "@vibestudio/shared/workspaceConnection";
 
 let nextListenerId = 1;
@@ -14,7 +16,11 @@ const activeListeners = new Map<
   number,
   (event: IpcRendererEvent, eventName: string, payload: unknown) => void
 >();
-const appTransport = createIpcTransport();
+const appTransport = {
+  ...createIpcTransport(),
+  ...createIpcStreamBridge(),
+  identity: readWorkspaceTransportIdentity(process.argv),
+};
 
 const serviceCall = (method: string, ...args: unknown[]) =>
   ipcRenderer.invoke("vibestudio:serviceCall", method, args);
@@ -124,10 +130,7 @@ contextBridge.exposeInMainWorld("__vibestudioIncomingPanelLocation", {
     ipcRenderer.on("vibestudio:incoming-panel-location", listener);
     return () => ipcRenderer.off("vibestudio:incoming-panel-location", listener);
   },
-  prepareWorkspaceRelaunch(location: unknown) {
-    return ipcRenderer.invoke(
-      "vibestudio:prepare-panel-location-relaunch",
-      location
-    ) as Promise<void>;
+  openLocation(location: unknown) {
+    return ipcRenderer.invoke("vibestudio:open-panel-location", location) as Promise<void>;
   },
 });

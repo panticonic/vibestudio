@@ -94,6 +94,8 @@ export interface HubWorkspaceTarget {
   /** Stable machine-hub process identity, never the routed child's boot id. */
   hubServerBootId: string;
   workspaceId: string;
+  workspaceName: string;
+  initialFocusedWorkspaceId: string;
   attached: boolean;
 }
 
@@ -546,16 +548,19 @@ export class HubProcessManager {
       }
       workspace = selected;
     }
-    const routed = await hubControl.routeWorkspace({ workspaceId: workspace.workspaceId });
-    if (routed.workspaceId !== workspace.workspaceId || routed.workspace !== workspace.name) {
-      throw new Error("Hub routed a different workspace than the one requested");
+    // Native application source belongs to the user's designated System.
+    // The requested project is a focus target, never a replacement client app.
+    const { system } = await hubControl.ensureUserWorkspaces();
+    const routed = await hubControl.routeWorkspace({ workspaceId: system.workspaceId });
+    if (routed.workspaceId !== system.workspaceId || routed.workspace !== system.name) {
+      throw new Error("Hub routed a different workspace than the designated System");
     }
     if (process.env["VIBESTUDIO_INSTANCE_ROOT"]?.trim()) {
       await bootstrapInstanceCliFromDevice({
         gatewayUrl: baseUrl,
         serverId: target.record.serverId,
-        workspaceId: routed.workspaceId,
-        workspaceName: routed.workspace,
+        workspaceId: workspace.workspaceId,
+        workspaceName: workspace.name,
         deviceId: credential.deviceId,
         refreshToken: credential.refreshToken,
       });
@@ -570,6 +575,8 @@ export class HubProcessManager {
       serverId: target.record.serverId,
       hubServerBootId: target.record.serverBootId,
       workspaceId: routed.workspaceId,
+      workspaceName: routed.workspace,
+      initialFocusedWorkspaceId: workspace.workspaceId,
       attached: target.attached,
     };
   }

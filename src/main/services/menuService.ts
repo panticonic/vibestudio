@@ -24,6 +24,7 @@ export function createMenuService(deps: {
   panelRegistry: PanelRegistry;
   getViewManager: () => ViewManager;
   serverClient: ServerClient | null;
+  getPanelWebContents: (panelId: string) => Electron.WebContents | null;
 }): ServiceDefinition {
   const serverClient = deps.serverClient;
   const buildClient = serverClient
@@ -63,7 +64,7 @@ export function createMenuService(deps: {
             const panelId = registry.getFocusedPanelId();
             const panel = panelId ? registry.getPanel(panelId) : null;
             if (!panelId || !panel) return;
-            const contents = vm.getWebContents(panelId);
+            const contents = deps.getPanelWebContents(panelId);
             if (
               getPanelSource(panel).startsWith("browser:") &&
               contents?.navigationHistory.canGoBack()
@@ -78,7 +79,7 @@ export function createMenuService(deps: {
             const panelId = registry.getFocusedPanelId();
             const panel = panelId ? registry.getPanel(panelId) : null;
             if (!panelId || !panel) return;
-            const contents = vm.getWebContents(panelId);
+            const contents = deps.getPanelWebContents(panelId);
             if (
               getPanelSource(panel).startsWith("browser:") &&
               contents?.navigationHistory.canGoForward()

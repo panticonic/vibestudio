@@ -1,3 +1,4 @@
+import { workspaceNativeViewId } from "../workspaceNativeViews.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { coreViewMethods, viewMethods } from "@vibestudio/service-schemas/view";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
@@ -7,7 +8,12 @@ import { callerHasPlatformCapability, viewHasAppCapability } from "./appCapabili
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { buildPanelViewHandler, type PanelViewMethodDeps } from "./panelShellService.js";
 export function createViewService(
-  deps: { getViewManager: () => ViewManager } & Partial<Omit<PanelViewMethodDeps, "getViewManager">>
+  deps: {
+    workspaceId: string;
+    getViewManager: () => ViewManager;
+    authorizeWorkspaceMaterialization?(workspaceId: string): Promise<void>;
+    onNativeSlotChanged?(nativeId: string, declared: boolean): void;
+  } & Partial<Omit<PanelViewMethodDeps, "getViewManager">>
 ): ServiceDefinition {
   const hasViewHostAuthority = (vm: ViewManager, callerId: string, callerKind: string): boolean => {
     if (callerHasPlatformCapability(callerId, callerKind, "panel-hosting")) return true;
@@ -30,8 +36,7 @@ export function createViewService(
     callerKind: string,
     method: string
   ): void => {
-    const viewInfo = vm.getViewInfo(callerId);
-    if (callerKind === "app" && viewHasAppCapability(callerId, viewInfo, "panel-hosting")) {
+    if (hasViewHostAuthority(vm, callerId, callerKind)) {
       return;
     }
     throw new Error(`view.${method}: caller '${callerId}' cannot place native panel slots`);
@@ -49,14 +54,18 @@ export function createViewService(
     throw new Error(`view.${method}: caller '${callerId}' does not own target view '${targetId}'`);
   };
 
+  const nativeId = (runtimeId: string) =>
+    workspaceNativeViewId({ workspaceId: deps.workspaceId, runtimeId });
   const coreHandler = defineServiceHandler("view", coreViewMethods, {
-    setBounds: (ctx, [viewId, bounds]) => {
+    setBounds: (ctx, [runtimeId, bounds]) => {
+      const viewId = nativeId(runtimeId);
       const vm = deps.getViewManager();
       assertOwnsOrViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, viewId, "setBounds");
       vm.setViewBounds(viewId, bounds);
       return;
     },
-    setVisible: (ctx, [viewId, visible]) => {
+    setVisible: (ctx, [runtimeId, visible]) => {
+      const viewId = nativeId(runtimeId);
       const vm = deps.getViewManager();
       const targetInfo = vm.getViewInfo(viewId);
       if (
@@ -81,7 +90,7 @@ export function createViewService(
     forwardMouseClick: (ctx, [viewId, point]) => {
       const vm = deps.getViewManager();
       assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "forwardMouseClick");
-      return vm.forwardMouseClick(viewId, point);
+      return vm.forwardMouseClick(nativeId(viewId), point);
     },
     setThemeCss: (ctx, [css]) => {
       const vm = deps.getViewManager();
@@ -107,15 +116,24 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "applyNativePanelSurfaces"
       );
+      const workspaceIds = new Set(
+        snapshot.surfaces.map((surface) => surface.materialization.workspaceId)
+      );
+      for (const workspaceId of workspaceIds) {
+        if (deps.authorizeWorkspaceMaterialization)
+          await deps.authorizeWorkspaceMaterialization(workspaceId);
+        else if (workspaceId !== deps.workspaceId)
+          throw new Error("Workspace materialization is not admitted");
+      }
       const previousPanelIds = new Set(vm.getDeclaredPanelSlotIds());
       const result = await vm.applyNativePanelSurfaces(ctx.caller.runtime.id, snapshot);
       if (result.accepted) {
         const currentPanelIds = new Set(vm.getDeclaredPanelSlotIds());
         for (const panelId of previousPanelIds) {
-          if (!currentPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotCleared(panelId);
+          if (!currentPanelIds.has(panelId)) deps.onNativeSlotChanged?.(panelId, false);
         }
         for (const panelId of currentPanelIds) {
-          if (!previousPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotDeclared(panelId);
+          if (!previousPanelIds.has(panelId)) deps.onNativeSlotChanged?.(panelId, true);
         }
       }
       return result;
@@ -250,7 +268,7 @@ export function createViewService(
   return {
     name: "view",
     description: "Electron-native view, panel presentation, and browser operations",
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: viewMethods,
     handler: (ctx, method, args) =>
       method in panelMethods ? panelHandler(ctx, method, args) : coreHandler(ctx, method, args),

@@ -67,6 +67,7 @@ function createServiceHarness(
   );
   const getViewInfo = vi.fn(() => ({
     type: "app",
+    workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
     visible: true,
     bounds: { x: 0, y: 0, width: 100, height: 100 },
     capabilities: appCapabilities,
@@ -125,6 +126,8 @@ function createServiceHarness(
       getRootPanels: vi.fn(() => []),
     } as never,
     panelView: {
+      getViewManager: () => ({ getWebContents }),
+      getWebContents,
       markBrowserNavigationIntent,
     } as never,
     browserVault: { getCookieSiteSummary } as never,

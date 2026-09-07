@@ -33,8 +33,7 @@ import {
 } from "./automationContext.js";
 import { registerRunCleanupPath, releaseRunCleanupPath } from "./e2eCleanupLedger.js";
 import {
-  DEV_ROOT_TEMPLATE_CHECKOUT_ENV,
-  DEV_ROOT_TEMPLATE_ENV,
+  DEV_TEMPLATE_SOURCES_ENV,
   deriveE2eRootTemplate,
   requireE2eRootTemplate,
 } from "./e2eRootTemplate.js";
@@ -102,7 +101,7 @@ export function hasElectronDisplay(): boolean {
   if (process.platform !== "linux") {
     return true;
   }
-  return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  return Boolean(process.env["DISPLAY"] || process.env["WAYLAND_DISPLAY"]);
 }
 
 export interface LaunchOptions {
@@ -140,8 +139,9 @@ function readCaseRootTemplateEnv(testRoot: string): Record<string, string> {
     checkout: string;
   };
   return {
-    [DEV_ROOT_TEMPLATE_ENV]: JSON.stringify(selection.pin),
-    [DEV_ROOT_TEMPLATE_CHECKOUT_ENV]: selection.checkout,
+    [DEV_TEMPLATE_SOURCES_ENV]: JSON.stringify([
+      { pin: selection.pin, checkout: selection.checkout },
+    ]),
   };
 }
 
@@ -178,11 +178,11 @@ function getTestEnv(testRoot: string): Record<string, string> {
 function getCentralDataDirFromEnv(env: Record<string, string>): string {
   switch (process.platform) {
     case "win32":
-      return path.join(env.APPDATA!, "vibestudio");
+      return path.join(env["APPDATA"]!, "vibestudio");
     case "darwin":
-      return path.join(env.HOME!, "Library", "Application Support", "vibestudio");
+      return path.join(env["HOME"]!, "Library", "Application Support", "vibestudio");
     default:
-      return path.join(env.XDG_CONFIG_HOME!, "vibestudio");
+      return path.join(env["XDG_CONFIG_HOME"]!, "vibestudio");
   }
 }
 

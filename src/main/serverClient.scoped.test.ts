@@ -176,7 +176,11 @@ async function startRpcHarness() {
             })
           );
         };
-        if (callerKind === "app" && envelope.target.startsWith("do:") && method === "direct.echo") {
+        if (
+          (callerKind === "app" || callerKind === "shell") &&
+          envelope.target.startsWith("do:") &&
+          method === "direct.echo"
+        ) {
           ws.send(
             JSON.stringify({
               type: "ws:routed",
@@ -283,6 +287,49 @@ async function startRpcHarness() {
 }
 
 describe("ServerClient scoped runtime callers", () => {
+  it("keeps trusted workspace UI on its own device-authenticated raw session", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token", {
+      clientPlatform: "desktop",
+    });
+    cleanup.push(() => client.close());
+    const ui = await client.openHostUiSession();
+    const received: RpcEnvelope[] = [];
+    const unsubscribe = ui.onMessage((envelope) => received.push(envelope));
+    cleanup.push(unsubscribe);
+    await ui.send(
+      envelopeFromMessage({
+        selfId: "desktop-ui",
+        from: "desktop-ui",
+        callerKind: "shell",
+        target: "do:workspace-presentation",
+        message: {
+          type: "request",
+          requestId: "ui-request",
+          fromId: "desktop-ui",
+          method: "direct.echo",
+          args: ["panel"],
+        },
+      })
+    );
+    await expect
+      .poll(() => received)
+      .toContainEqual(
+        expect.objectContaining({
+          message: {
+            type: "response",
+            requestId: "ui-request",
+            result: { args: ["panel"], target: "do:workspace-presentation" },
+          },
+        })
+      );
+    expect(harness.grantRequests).toEqual([]);
+    expect(harness.admissionPlatforms).toEqual(["desktop", "desktop"]);
+    await client.close();
+    expect(ui.isClosed?.()).toBe(true);
+    await expect(client.openHostUiSession()).rejects.toThrow("closing");
+  });
+
   it("binds desktop host metadata into local WebSocket admission", async () => {
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token", {

@@ -186,6 +186,7 @@ describe("ViewManager", () => {
 
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -609,6 +610,7 @@ describe("ViewManager", () => {
       });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -639,6 +641,7 @@ describe("ViewManager", () => {
       vm.onHostedShellReady(ready);
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -686,6 +689,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -776,6 +780,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -833,6 +838,7 @@ describe("ViewManager", () => {
       expect(vm.getHostedShellWebContents()).toBeNull();
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -846,6 +852,7 @@ describe("ViewManager", () => {
     it("converges complete desired snapshots and rejects stale revisions", () => {
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -891,11 +898,16 @@ describe("ViewManager", () => {
     it("implements the generation-fenced panel-host protocol at the Electron boundary", async () => {
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
       });
-      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const panelView = vm.createView({
+        id: 'workspace:["workspace-test","panel-1"]',
+        type: "panel",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "panel-1" },
+      });
       const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
         sealedLaunchIdentity: "@workspace-apps/shell",
         supportedProtocolVersions: [1],
@@ -911,6 +923,7 @@ describe("ViewManager", () => {
           {
             surfaceId: "slot-1",
             materialization: {
+              workspaceId: "workspace-test",
               runtimeEntityId: "panel-1",
               leaseConnectionId: "lease-1",
             },
@@ -956,6 +969,7 @@ describe("ViewManager", () => {
     it("accepts a desired surface before materialization without a missing-view warning", async () => {
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -977,6 +991,7 @@ describe("ViewManager", () => {
             {
               surfaceId: "slot-new",
               materialization: {
+                workspaceId: "workspace-test",
                 runtimeEntityId: "panel:not-materialized-yet",
                 leaseConnectionId: "lease-new",
               },
@@ -997,6 +1012,7 @@ describe("ViewManager", () => {
       vm.setViewVisible("panel-1", true);
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1031,6 +1047,7 @@ describe("ViewManager", () => {
     it("binds a panel slot with measured bounds and focus", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1062,6 +1079,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1086,6 +1104,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1122,6 +1141,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1182,6 +1202,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1224,6 +1245,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1257,6 +1279,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1277,6 +1300,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-b", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1312,6 +1336,7 @@ describe("ViewManager", () => {
       const previousView = vm.createView({ id: "panel-old", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1359,6 +1384,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-new", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1402,6 +1428,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-b", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1439,6 +1466,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1480,6 +1508,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1515,6 +1544,7 @@ describe("ViewManager", () => {
       const transitioningPanelView = vm.createView({ id: "panel-transitioning", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1547,6 +1577,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1575,6 +1606,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1599,6 +1631,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1623,6 +1656,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1654,6 +1688,7 @@ describe("ViewManager", () => {
         const panelView = localVm.createView({ id: "panel-1", type: "panel" });
         const hostView = localVm.createView({
           id: "@workspace-apps/shell",
+          workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
           type: "app",
           hostChrome: true,
           appCapabilities: ["panel-hosting"],
@@ -1685,6 +1720,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1730,6 +1766,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1760,6 +1797,7 @@ describe("ViewManager", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -1787,6 +1825,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -2027,6 +2066,7 @@ describe("ViewManager", () => {
     it("keeps host chrome app views full-window and out of panel layout", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -2092,6 +2132,7 @@ describe("ViewManager", () => {
 
       gatedVm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
@@ -2128,6 +2169,7 @@ describe("ViewManager", () => {
     it("opens devtools on the visible host chrome app instead of the bootstrap shell", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
+        workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],

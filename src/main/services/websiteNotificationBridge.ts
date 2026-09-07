@@ -35,7 +35,7 @@ export class WebsiteNotificationBridge {
     private readonly deps: {
       permissions: BrowserPermissionController;
       eventService: EventService;
-      getViewManager(): ViewManager | null;
+      getViewManager(): Pick<ViewManager, "findViewIdByWebContentsId"> | null;
     }
   ) {}
 

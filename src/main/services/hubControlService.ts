@@ -4,6 +4,7 @@ import {
   HubWorkspaceRouteSchema,
   hubControlMethods,
   type HubWorkspaceRoute,
+  type HubWorkspaceEntry,
 } from "@vibestudio/service-schemas/hubControl";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
@@ -17,8 +18,10 @@ import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
 export function createHubControlHostService(deps: {
   client: ServerClient;
   getViewManager: () => ViewManager;
-  onWorkspaceRoute: (route: HubWorkspaceRoute) => void;
+  onWorkspaceRoute: (route: HubWorkspaceRoute) => void | Promise<void>;
+  onWorkspaceCatalog?(entries: HubWorkspaceEntry[]): void | Promise<void>;
 }): ServiceDefinition {
+  let routeGeneration = 0;
   return {
     name: "hubControl",
     description: "Stable server-wide account and workspace control",
@@ -29,9 +32,12 @@ export function createHubControlHostService(deps: {
       hubControlMethods,
       mapServiceHandlers(hubControlMethods, async (method, ctx, args) => {
         requireChromeAppCallerOrHost(ctx, deps.getViewManager(), `hubControl.${method}`);
+        const generation = method === "routeWorkspace" ? ++routeGeneration : null;
         const result = await deps.client.call("hubControl", method, args);
-        if (method === "routeWorkspace") {
-          deps.onWorkspaceRoute(HubWorkspaceRouteSchema.parse(result));
+        if (method === "listWorkspaces")
+          await deps.onWorkspaceCatalog?.(hubControlMethods.listWorkspaces.returns.parse(result));
+        if (method === "routeWorkspace" && generation === routeGeneration) {
+          await deps.onWorkspaceRoute(HubWorkspaceRouteSchema.parse(result));
         }
         return result;
       })

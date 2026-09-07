@@ -2175,7 +2175,7 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "admin"
+          "sensitivity": "write"
         },
         "tier": {
           "tier": "gated",
@@ -2227,7 +2227,7 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "destructive"
+          "sensitivity": "write"
         },
         "tier": {
           "tier": "critical",
@@ -2274,6 +2274,32 @@
           }
         }
       },
+      "ensureUserWorkspaces": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.create",
+          "rationale": "Idempotently ensure the authenticated account's own Personal and System workspaces."
+        },
+        "capability": "workspaces.create",
+        "presentation": {
+          "title": "Prepare your workspaces",
+          "action": "prepare your Personal and System workspaces",
+          "description": "Create either private workspace if it does not exist yet.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
+        }
+      },
       "getProfile": {
         "authority": {
           "inherits": true
@@ -2296,6 +2322,32 @@
           "group": "accounts",
           "authorityCategory": {
             "domain": "accounts",
+            "verb": "see"
+          }
+        }
+      },
+      "getWorkspaceRpcPolicy": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "Read host-owned workspace integration settings as an authorized manager."
+        },
+        "capability": "workspaces.rpcPolicy.read",
+        "presentation": {
+          "title": "View workspace connections",
+          "action": "view workspace connections",
+          "description": "See which incoming and outgoing operations can request access.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "sharing",
             "verb": "see"
           }
         }
@@ -2461,7 +2513,7 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "destructive"
+          "sensitivity": "write"
         },
         "tier": {
           "tier": "critical",
@@ -2583,6 +2635,32 @@
           "authorityCategory": {
             "domain": "people",
             "verb": "manage"
+          }
+        }
+      },
+      "setWorkspaceRpcPolicy": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.integration",
+          "rationale": "Change a workspace's hard integration ceilings through authenticated host management."
+        },
+        "capability": "workspaces.rpcPolicy.write",
+        "presentation": {
+          "title": "Change workspace connections",
+          "action": "change workspace connections",
+          "description": "Choose which operations may request access across this workspace boundary.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "sharing",
+            "verb": "act"
           }
         }
       },
@@ -2819,6 +2897,7 @@
     "service": {
       "principals": [
         "user",
+        "host",
         "code"
       ]
     },

@@ -6,7 +6,7 @@ import type { ViewManager } from "../viewManager.js";
 type AppViewInfo = NonNullable<ReturnType<ViewManager["getViewInfo"]>>;
 
 const mainPlatformCapabilities: Readonly<Record<string, readonly AppCapability[]>> = {
-  shell: ["panel-hosting"],
+  shell: ["native-menus"],
 };
 
 export function callerHasPlatformCapability(
@@ -19,13 +19,16 @@ export function callerHasPlatformCapability(
 }
 
 export function viewHasAppCapability(
-  callerId: string,
+  _callerId: string,
   viewInfo: AppViewInfo | null,
   capability: AppCapability
 ): boolean {
   if (viewInfo?.type !== "app" || !viewInfo.capabilities.includes(capability)) return false;
   if (capability !== "panel-hosting") return true;
-  return isAuthorizedChromeAppCaller(callerId, viewInfo.codeIdentity?.source);
+  return isAuthorizedChromeAppCaller(
+    viewInfo.workspaceIdentity?.runtimeId ?? "",
+    viewInfo.codeIdentity?.source
+  );
 }
 
 export function requireAppCapability(
@@ -34,10 +37,20 @@ export function requireAppCapability(
   capability: AppCapability,
   surface: string
 ): void {
+  if (callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, capability))
+    return;
+  // Workspace UI admission keeps the real native resource id when executing
+  // through the destination's host session. Reuse that sealed chrome identity.
+  const viewInfo = viewManager.getViewInfo(ctx.caller.runtime.id);
+  if (
+    ctx.caller.runtime.kind === "shell" &&
+    viewInfo?.hostChrome &&
+    viewHasAppCapability(ctx.caller.runtime.id, viewInfo, capability)
+  )
+    return;
   if (ctx.caller.runtime.kind !== "app") {
     throw accessError(`${surface} is restricted to app callers`);
   }
-  const viewInfo = viewManager.getViewInfo(ctx.caller.runtime.id);
   if (viewHasAppCapability(ctx.caller.runtime.id, viewInfo, capability)) return;
   throw accessError(
     `${surface} requires app capability '${capability}' for ${ctx.caller.runtime.id}`

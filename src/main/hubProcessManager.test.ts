@@ -41,6 +41,24 @@ const CHILD_SERVER_ID = `srv_${"C".repeat(24)}`;
 const CHILD_SERVER_BOOT_ID = `boot_${"C".repeat(24)}`;
 const ISSUED_DEVICE_ID = `dev_${"D".repeat(24)}`;
 const ISSUED_REFRESH_TOKEN = "R".repeat(43);
+const PRIVATE_WORKSPACES = {
+  personal: {
+    workspaceId: "ws_personal",
+    name: "personal",
+    privateRole: "personal",
+    lastOpened: 1,
+    pendingApprovalCount: 0,
+    running: false,
+  },
+  system: {
+    workspaceId: "ws_system",
+    name: "system",
+    privateRole: "system",
+    lastOpened: 1,
+    pendingApprovalCount: 0,
+    running: false,
+  },
+};
 const BUILD_ID = "a".repeat(64);
 const RECORD = {
   gatewayPort: 5000,
@@ -221,7 +239,7 @@ describe("HubProcessManager", () => {
     ).toThrow(/canonical contract/);
   });
 
-  it("attaches to the hub and routes the global device into the selected child", async () => {
+  it("loads the designated System client and preserves the requested workspace as its focus", async () => {
     const lifecycle: string[] = [];
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
       serverId: RECORD.serverId,
@@ -254,6 +272,8 @@ describe("HubProcessManager", () => {
       expect(url).toBe("http://127.0.0.1:5000/rpc");
       expect(init?.headers).toMatchObject({ Authorization: "Bearer shell-session" });
       const request = rpcCall(init);
+      if (request.method === "hubControl.ensureUserWorkspaces")
+        return rpcResult(request.body, PRIVATE_WORKSPACES);
       if (request.method === "hubControl.listWorkspaces") {
         expect(request.args).toEqual([]);
         return rpcResult(request.body, [
@@ -261,16 +281,17 @@ describe("HubProcessManager", () => {
             workspaceId: "ws_alpha",
             name: "alpha",
             lastOpened: 1,
+            pendingApprovalCount: 0,
             running: true,
           },
         ]);
       }
       expect(request).toMatchObject({
         method: "hubControl.routeWorkspace",
-        args: [{ workspaceId: "ws_alpha" }],
+        args: [{ workspaceId: "ws_system" }],
       });
       lifecycle.push("route-workspace");
-      return rpcResult(request.body, workspaceRoute("alpha", "ws_alpha"));
+      return rpcResult(request.body, workspaceRoute("system", "ws_system"));
     });
     vi.stubGlobal("fetch", fetchMock);
     const centralData = makeCentralData();
@@ -281,9 +302,11 @@ describe("HubProcessManager", () => {
 
     expect(target).toMatchObject({
       attached: true,
-      workspaceId: "ws_alpha",
+      workspaceId: "ws_system",
+      workspaceName: "system",
+      initialFocusedWorkspaceId: "ws_alpha",
       authToken: "refresh:dev-1:refresh-1",
-      wsUrl: "ws://127.0.0.1:5000/_r/ws/alpha/rpc",
+      wsUrl: "ws://127.0.0.1:5000/_r/ws/system/rpc",
     });
     expect(spawnMock).not.toHaveBeenCalled();
     expect(lifecycle).toEqual(["hub-ready", "route-workspace"]);
@@ -365,16 +388,19 @@ describe("HubProcessManager", () => {
         }
         const request = rpcCall(init);
         rpcCalls.push({ method: request.method, args: request.args });
+        if (request.method === "hubControl.ensureUserWorkspaces")
+          return rpcResult(request.body, PRIVATE_WORKSPACES);
         if (request.method === "hubControl.ensureEphemeralWorkspace") {
           return rpcResult(request.body, {
             workspaceId: "ws_dev",
             name: "dev",
             lastOpened: 1,
+            pendingApprovalCount: 0,
             running: true,
             ephemeral: true,
           });
         }
-        return rpcResult(request.body, workspaceRoute("dev", "ws_dev"));
+        return rpcResult(request.body, workspaceRoute("system", "ws_system"));
       })
     );
 
@@ -386,9 +412,14 @@ describe("HubProcessManager", () => {
 
     expect(rpcCalls).toEqual([
       { method: "hubControl.ensureEphemeralWorkspace", args: [] },
-      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_dev" }] },
+      { method: "hubControl.ensureUserWorkspaces", args: [] },
+      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_system" }] },
     ]);
-    expect(target).toMatchObject({ attached: true, workspaceId: "ws_dev" });
+    expect(target).toMatchObject({
+      attached: true,
+      workspaceId: "ws_system",
+      initialFocusedWorkspaceId: "ws_dev",
+    });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -424,12 +455,15 @@ describe("HubProcessManager", () => {
         }
         const request = rpcCall(init);
         rpcCalls.push({ method: request.method, args: request.args });
+        if (request.method === "hubControl.ensureUserWorkspaces")
+          return rpcResult(request.body, PRIVATE_WORKSPACES);
         if (request.method === "hubControl.listWorkspaces") {
           return rpcResult(request.body, [
             {
               workspaceId: "ws_dev_previous",
               name: "dev",
               lastOpened: 1,
+              pendingApprovalCount: 0,
               running: true,
               ephemeral: true,
             },
@@ -446,11 +480,12 @@ describe("HubProcessManager", () => {
             workspaceId: "ws_dev_fresh",
             name: "dev",
             lastOpened: 2,
+            pendingApprovalCount: 0,
             running: false,
             ephemeral: true,
           });
         }
-        return rpcResult(request.body, workspaceRoute("dev", "ws_dev_fresh"));
+        return rpcResult(request.body, workspaceRoute("system", "ws_system"));
       })
     );
 
@@ -465,11 +500,13 @@ describe("HubProcessManager", () => {
       { method: "hubControl.listWorkspaces", args: [] },
       { method: "hubControl.deleteWorkspace", args: [{ workspace: "dev" }] },
       { method: "hubControl.ensureEphemeralWorkspace", args: [] },
-      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_dev_fresh" }] },
+      { method: "hubControl.ensureUserWorkspaces", args: [] },
+      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_system" }] },
     ]);
     expect(target).toMatchObject({
       attached: true,
-      workspaceId: "ws_dev_fresh",
+      workspaceId: "ws_system",
+      initialFocusedWorkspaceId: "ws_dev_fresh",
       hubServerBootId: SERVER_BOOT_ID,
     });
     expect(spawnMock).not.toHaveBeenCalled();
@@ -484,7 +521,8 @@ describe("HubProcessManager", () => {
       { method: "hubControl.listWorkspaces", args: [] },
       { method: "hubControl.deleteWorkspace", args: [{ workspace: "dev" }] },
       { method: "hubControl.ensureEphemeralWorkspace", args: [] },
-      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_dev_fresh" }] },
+      { method: "hubControl.ensureUserWorkspaces", args: [] },
+      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_system" }] },
     ]);
   });
 

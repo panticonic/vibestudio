@@ -27,19 +27,28 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(requestSiteCapability = vi.fn(async () => true)) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "browser-downloads-"));
-  cleanups.push(() => rm(directory, { recursive: true, force: true }));
+async function setup(
+  requestSiteCapability = vi.fn(async () => true),
+  persistHistory = true,
+  sharedDirectory?: string
+) {
+  const directory =
+    sharedDirectory ?? (await mkdtemp(path.join(os.tmpdir(), "browser-downloads-")));
+  if (!sharedDirectory) cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const session = new EventEmitter();
   const manager = new BrowserDownloadManager({
     browserSession: session as Session,
     environmentKey: "test",
     hostId: "desktop",
     downloadsDirectory: directory,
-    browserData: {
-      listDownloadRecords: vi.fn(async () => []),
-      upsertDownloadRecord: vi.fn(async () => {}),
-    },
+    ...(persistHistory
+      ? {
+          browserData: {
+            listDownloadRecords: vi.fn(async () => []),
+            upsertDownloadRecord: vi.fn(async () => {}),
+          },
+        }
+      : {}),
     eventService: { emit: vi.fn() } as unknown as EventService,
     getViewManager: () => null,
     requestSiteCapability,
@@ -86,6 +95,25 @@ describe("browser download destinations", () => {
     expect(first.setSavePath).toHaveBeenCalledOnce();
   });
 
+  it("reserves destinations across workspace managers before either approval settles", async () => {
+    const pending = vi.fn(() => new Promise<boolean>(() => {}));
+    const firstWorkspace = await setup(pending);
+    const secondWorkspace = await setup(pending, false, firstWorkspace.directory);
+    const first = firstWorkspace.start();
+    const second = secondWorkspace.start();
+    expect(first.setSavePath).toHaveBeenCalledWith(
+      path.join(firstWorkspace.directory, "report.pdf")
+    );
+    expect(second.setSavePath).toHaveBeenCalledWith(
+      path.join(firstWorkspace.directory, "report (1).pdf")
+    );
+    await firstWorkspace.manager.stop();
+    const third = secondWorkspace.start();
+    expect(third.setSavePath).toHaveBeenCalledWith(
+      path.join(firstWorkspace.directory, "report.pdf")
+    );
+  });
+
   it("keeps active destinations reserved and skips files already on disk", async () => {
     const { directory, start } = await setup();
     await writeFile(path.join(directory, "report.pdf"), "existing file");
@@ -105,5 +133,33 @@ describe("browser download destinations", () => {
     const second = start();
     expect(second.setSavePath).toHaveBeenCalledWith(path.join(directory, "report.pdf"));
     await Promise.resolve();
+  });
+  it("gates workspace downloads without any personal history provider", async () => {
+    const permission = vi.fn(async () => false);
+    const { manager, start } = await setup(permission, false);
+    const item = start();
+    expect(item.pause).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(permission).toHaveBeenCalled();
+    expect(item.resume).not.toHaveBeenCalled();
+    expect(item.cancel).toHaveBeenCalledOnce();
+    expect(manager.list()).toEqual([]);
+  });
+
+  it("cannot resume an approved download after its workspace closes", async () => {
+    let resolve!: (allowed: boolean) => void;
+    const decision = new Promise<boolean>((done) => {
+      resolve = done;
+    });
+    const { manager, start } = await setup(
+      vi.fn(() => decision),
+      false
+    );
+    const item = start();
+    await manager.stop();
+    resolve(true);
+    await decision;
+    expect(item.resume).not.toHaveBeenCalled();
+    expect(manager.list()).toEqual([]);
   });
 });

@@ -208,7 +208,12 @@ export async function createIrohServerClient(
   await mainSession.ready?.();
   const effectiveConnectionStatus = (): ConnectionStatus =>
     mainSessionTerminalError ? "disconnected" : transport.status();
-  transport.onStatusChange(() => args.onConnectionStatusChanged?.(effectiveConnectionStatus()));
+  const statusListeners = new Set<(status: ConnectionStatus) => void>();
+  transport.onStatusChange(() => {
+    const status = effectiveConnectionStatus();
+    args.onConnectionStatusChanged?.(status);
+    for (const listener of statusListeners) listener(status);
+  });
   transport.onDiagnosticsChange((diagnostics) =>
     args.onTransportDiagnosticsChanged?.(remoteDiagnosticsOf(diagnostics))
   );
@@ -235,6 +240,7 @@ export async function createIrohServerClient(
     close(): Promise<void>;
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
+  const hostUiSessions = new Set<import("./serverClient.js").HostUiSession>();
   const materializedScopedClients = new Set<ScopedClient>();
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
   const scopedKey = (caller: ScopedServerCaller): string =>
@@ -346,6 +352,53 @@ export async function createIrohServerClient(
   };
 
   return {
+    onRecovery(listener) {
+      recoveryHandlers.add(listener);
+      return () => {
+        recoveryHandlers.delete(listener);
+      };
+    },
+    onConnectionStatusChange(listener) {
+      statusListeners.add(listener);
+      return () => {
+        statusListeners.delete(listener);
+      };
+    },
+    async openHostUiSession() {
+      if (closing) throw new Error("Iroh server client is closing");
+      const session = transport.openSession({
+        connectionId: randomUUID(),
+        clientPlatform: "desktop",
+        oauthCallbackMode: "client-loopback",
+        getToken: args.getShellToken,
+      });
+      let closePromise: Promise<void> | null = null;
+      const ui: import("./serverClient.js").HostUiSession = {
+        send: (envelope) => session.send(envelope),
+        onMessage: (listener) => session.onMessage(listener),
+        status: () => session.status?.() ?? transport.status(),
+        isClosed: () => closePromise !== null,
+        streamReadable: (envelope, signal, body) => {
+          if (!session.streamReadable) throw new Error("Workspace UI stream transport unavailable");
+          return session.streamReadable(envelope, signal, body);
+        },
+        close: () => {
+          closePromise ??= session.close().then(() => {
+            hostUiSessions.delete(ui);
+          });
+          return closePromise;
+        },
+      };
+      hostUiSessions.add(ui);
+      try {
+        await session.ready?.();
+        if (closing) throw new Error("Iroh server client is closing");
+        return ui;
+      } catch (error) {
+        await ui.close();
+        throw error;
+      }
+    },
     invalidateEndpointGeneration(generation, reason): void {
       lifecycleTransport?.invalidateEndpointGeneration(generation, reason);
     },
@@ -410,11 +463,19 @@ export async function createIrohServerClient(
     },
     async close(): Promise<void> {
       closing = true;
+      const uiCleanup = await Promise.allSettled(
+        [...hostUiSessions].map((session) => session.close())
+      );
       const scoped = [...materializedScopedClients];
       scopedClients.clear();
       await Promise.allSettled([mainSession.close(), ...scoped.map((client) => client.close())]);
       materializedScopedClients.clear();
       await transport.close();
+      const failures = uiCleanup.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length)
+        throw new AggregateError(failures, "Workspace UI sessions failed to close");
     },
   };
 }

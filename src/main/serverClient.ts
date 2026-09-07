@@ -3,6 +3,7 @@
  */
 
 import { WebSocket } from "ws";
+import { randomUUID } from "node:crypto";
 import {
   createRpcClient,
   type DecodedFramedStream,
@@ -86,7 +87,19 @@ export interface PanelSession {
   close(): void;
 }
 
+/**
+ * An independent device/user session for admitted System chrome. The native IPC
+ * owner authorizes admission; workspace application principals never receive it.
+ * Its raw protocol keeps routed calls, callbacks, events and streams intact.
+ */
+export interface HostUiSession extends Omit<PanelSession, "close"> {
+  close(): Promise<void>;
+}
+
 export interface ServerClient {
+  onRecovery(listener: (kind: "resubscribe" | "cold-recover") => void | Promise<void>): () => void;
+  onConnectionStatusChange(listener: (status: ConnectionStatus) => void): () => void;
+  openHostUiSession(): Promise<HostUiSession>;
   /**
    * Publish one Electron-owned host method to the authenticated server.
    * Direct routed calls from workspace principals are rejected at this client
@@ -214,6 +227,10 @@ export async function createServerClient(
   const shouldReconnect = options?.reconnect ?? !!options?.getWsUrl;
   const refreshAuthToken = options?.refreshAuthToken;
 
+  const recoveryListeners = new Set<
+    (kind: "resubscribe" | "cold-recover") => void | Promise<void>
+  >();
+  const statusListeners = new Set<(status: ConnectionStatus) => void>();
   const transport = wsClientTransport({
     selfId: "admin",
     getWsUrl,
@@ -224,7 +241,10 @@ export async function createServerClient(
       ...(options?.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),
       ...(options?.oauthCallbackMode ? { oauthCallbackMode: options.oauthCallbackMode } : {}),
     }),
-    onRecovery: options?.onRecovery,
+    onRecovery: async (kind) => {
+      await options?.onRecovery?.(kind);
+      for (const listener of recoveryListeners) await listener(kind);
+    },
     onAuthResult: (msg) => {
       if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential, msg.pairingContext);
     },
@@ -242,6 +262,7 @@ export async function createServerClient(
   });
   transport.onStatusChange?.((status) => {
     options?.onConnectionStatusChanged?.(status);
+    for (const listener of statusListeners) listener(status);
     if (status === "disconnected") options?.onDisconnect?.();
   });
 
@@ -261,6 +282,8 @@ export async function createServerClient(
     close(): Promise<void>;
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
+  const hostUiSessions = new Set<HostUiSession>();
+  let closing = false;
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
   const scopedKey = (caller: ScopedServerCaller): string =>
     `${caller.callerKind}\x00${caller.callerId}`;
@@ -345,6 +368,69 @@ export async function createServerClient(
   };
 
   return {
+    onRecovery(listener) {
+      recoveryListeners.add(listener);
+      return () => {
+        recoveryListeners.delete(listener);
+      };
+    },
+    onConnectionStatusChange(listener) {
+      statusListeners.add(listener);
+      return () => {
+        statusListeners.delete(listener);
+      };
+    },
+    async openHostUiSession(): Promise<HostUiSession> {
+      if (closing) throw new Error("Desktop server client is closing");
+      const uiTransport = wsClientTransport({
+        selfId: `desktop-ui:${randomUUID()}`,
+        getWsUrl,
+        reconnect: shouldReconnect,
+        logPrefix: "DesktopWorkspaceUi",
+        getAuthMessageFields: () => ({
+          clientPlatform: "desktop",
+          oauthCallbackMode: "client-loopback",
+        }),
+        adapter: {
+          now: () => Date.now(),
+          getAuthToken: async () => activeAuthToken,
+          refreshAuthToken: refreshAuthToken
+            ? async () => {
+                activeAuthToken = await refreshAuthToken();
+                return activeAuthToken;
+              }
+            : undefined,
+          createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
+        },
+      });
+      let closePromise: Promise<void> | null = null;
+      const ui: HostUiSession = {
+        send: (envelope) => uiTransport.send(envelope),
+        onMessage: (listener) => uiTransport.onMessage(listener),
+        status: () => uiTransport.status?.() ?? "disconnected",
+        isClosed: () => closePromise !== null,
+        streamReadable: (envelope, signal, body) => {
+          if (!uiTransport.streamReadable)
+            throw new Error("Workspace UI stream transport unavailable");
+          return uiTransport.streamReadable(envelope, signal, body);
+        },
+        close: () => {
+          closePromise ??= uiTransport.close().then(() => {
+            hostUiSessions.delete(ui);
+          });
+          return closePromise;
+        },
+      };
+      hostUiSessions.add(ui);
+      try {
+        await uiTransport.connectAndWait();
+        if (closing) throw new Error("Desktop server client is closing");
+        return ui;
+      } catch (error) {
+        await ui.close();
+        throw error;
+      }
+    },
     exposeHostMethod(method, handler): void {
       exposeServerOriginatedHostMethod(rpc, method, handler);
     },
@@ -464,11 +550,20 @@ export async function createServerClient(
       return null;
     },
     async close(): Promise<void> {
+      closing = true;
+      const uiCleanup = await Promise.allSettled(
+        [...hostUiSessions].map((session) => session.close())
+      );
       await Promise.allSettled(
         [...scopedClients.values()].map(async (client) => (await client).close())
       );
       scopedClients.clear();
-      return transport.close();
+      await transport.close();
+      const failures = uiCleanup.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length)
+        throw new AggregateError(failures, "Workspace UI sessions failed to close");
     },
   };
 }

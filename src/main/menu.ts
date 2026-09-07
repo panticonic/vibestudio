@@ -2,6 +2,7 @@ import { app, dialog, Menu, MenuItemConstructorOptions, type WebContents } from 
 import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
+import { workspaceNativeViewId } from "./workspaceNativeViews.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { PANEL_KEYBOARD_ACCELERATORS } from "@vibestudio/shared/panelCommands";
 import { assertPresent } from "../lintHelpers";
@@ -11,8 +12,16 @@ import { assertPresent } from "../lintHelpers";
 import { ABOUT_PAGES } from "@vibestudio/workspace-contracts/aboutNamespace";
 
 // Set during initialization — always non-null after startup
-let _menuPanelLifecycle: BridgePanelLifecycle | null = null;
-let _menuPanelRegistry: PanelRegistry | null = null;
+export interface MenuWorkspace {
+  workspaceId: string;
+  registry: PanelRegistry;
+  orchestrator: BridgePanelLifecycle;
+  eventService: EventService;
+}
+let resolveMenuWorkspace: () => MenuWorkspace | null = () => null;
+export function setMenuWorkspaceResolver(resolve: () => MenuWorkspace | null): void {
+  resolveMenuWorkspace = resolve;
+}
 let _menuViewManager: ViewManager | null = null;
 let _menuEventService: EventService | null = null;
 const panelDevToolsShortcutInterceptors = new WeakSet<WebContents>();
@@ -24,11 +33,15 @@ export function setMenuEventService(es: EventService): void {
 }
 
 function emitMenuEvent<E extends EventName>(event: E, payload?: EventPayloads[E]): boolean {
-  if (!_menuEventService) {
+  const target =
+    event === "open-settings" || event === "open-workspace-switcher"
+      ? _menuEventService
+      : resolveMenuWorkspace()?.eventService;
+  if (!target) {
     console.warn(`[Menu] event service is not ready for "${event}"`);
     return false;
   }
-  _menuEventService.emit(event, payload);
+  target.emit(event, payload);
   return true;
 }
 
@@ -37,21 +50,12 @@ export function setMenuViewManager(vm: ViewManager | null): void {
   _menuViewManager = vm;
 }
 
-/** Set the panel lifecycle for menu operations. Called from index.ts. */
-export function setMenuPanelLifecycle(lc: BridgePanelLifecycle): void {
-  _menuPanelLifecycle = lc;
-}
-
-/** Set the panel registry for menu operations. Called from index.ts. */
-export function setMenuPanelRegistry(reg: PanelRegistry): void {
-  _menuPanelRegistry = reg;
-}
-
 /** Close the currently focused panel. Falls back to window close if no panel is focused. */
 async function archiveFocusedPanel(mainWindow: Electron.BaseWindow | null): Promise<void> {
-  const focusedId = _menuPanelRegistry?.getFocusedPanelId();
-  if (focusedId && _menuPanelLifecycle) {
-    const panel = _menuPanelRegistry?.getPanel(focusedId);
+  const workspace = resolveMenuWorkspace();
+  const focusedId = workspace?.registry.getFocusedPanelId();
+  if (focusedId && workspace) {
+    const panel = workspace.registry.getPanel(focusedId);
     const descendantCount = panel ? countPanelDescendants(panel) : 0;
     if (descendantCount > 0) {
       const result = await dialog.showMessageBox({
@@ -66,7 +70,7 @@ async function archiveFocusedPanel(mainWindow: Electron.BaseWindow | null): Prom
       });
       if (result.response !== 1) return;
     }
-    await _menuPanelLifecycle.closePanel(focusedId);
+    await workspace.orchestrator.closePanel(focusedId);
   } else {
     // No focused panel: the app-menu entry falls back to closing the window.
     // The hamburger has no window handle and simply does nothing.
@@ -82,10 +86,15 @@ function countPanelDescendants(panel: { children: Array<{ children: unknown[] }>
 }
 
 function reloadFocusedPanel(force = false): void {
-  const focusedId = _menuPanelRegistry?.getFocusedPanelId();
-  if (!focusedId || !_menuViewManager) return;
-  if (force) _menuViewManager.forceReload(focusedId);
-  else _menuViewManager.reload(focusedId);
+  const workspace = resolveMenuWorkspace();
+  const focusedId = workspace?.registry.getFocusedPanelId();
+  if (!focusedId || !workspace || !_menuViewManager) return;
+  const nativeId = workspaceNativeViewId({
+    workspaceId: workspace.workspaceId,
+    runtimeId: focusedId,
+  });
+  if (force) _menuViewManager.forceReload(nativeId);
+  else _menuViewManager.reload(nativeId);
 }
 
 function dispatchChromeCommand(command: "reload-panel" | "force-reload-view" | "stop"): void {
@@ -97,17 +106,28 @@ function dispatchChromeCommand(command: "reload-panel" | "force-reload-view" | "
 }
 
 function stopFocusedPanel(): void {
-  const focusedId = _menuPanelRegistry?.getFocusedPanelId();
-  if (!focusedId || !_menuViewManager) return;
-  _menuViewManager.stop(focusedId);
+  const workspace = resolveMenuWorkspace();
+  const focusedId = workspace?.registry.getFocusedPanelId();
+  if (!focusedId || !workspace || !_menuViewManager) return;
+  const nativeId = workspaceNativeViewId({
+    workspaceId: workspace.workspaceId,
+    runtimeId: focusedId,
+  });
+  _menuViewManager.stop(nativeId);
 }
 
 function openFocusedPanelDevTools(): boolean {
-  const focusedId = _menuPanelRegistry?.getFocusedPanelId();
-  if (!focusedId || !_menuViewManager?.hasView(focusedId)) {
+  const workspace = resolveMenuWorkspace();
+  const focusedId = workspace?.registry.getFocusedPanelId();
+  if (!focusedId || !workspace) return false;
+  const nativeId = workspaceNativeViewId({
+    workspaceId: workspace.workspaceId,
+    runtimeId: focusedId,
+  });
+  if (!_menuViewManager?.hasView(nativeId)) {
     return false;
   }
-  _menuViewManager.openDevTools(focusedId);
+  _menuViewManager.openDevTools(nativeId);
   return true;
 }
 

@@ -4,13 +4,14 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { ViewManager } from "./viewManager.js";
+import { WorkspaceNativeViews } from "./workspaceNativeViews.js";
 import { PanelView } from "./panelView.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { FormFillManager } from "./autofill/formFillManager.js";
 import type { BrowserFaviconObserver } from "./services/browserFaviconObserver.js";
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import type { ApprovalAttention } from "./approvalAttention.js";
-import type { SessionConnection } from "./serverSession.js";
+import type { SessionConnection, WorkspaceSessionConnection } from "./serverSession.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
 import { AppOrchestrator } from "./appOrchestrator.js";
 import {
@@ -35,15 +36,18 @@ interface CdpRegistrationAdapter {
 export interface WorkspaceWindowServices {
   panelRegistry: PanelRegistry;
   panelOrchestrator: PanelOrchestrator;
-  serverSession: SessionConnection;
+  serverSession: WorkspaceSessionConnection;
+  eventService: EventService;
   cdpHost: CdpRegistrationAdapter;
   formFillManager: FormFillManager | null;
+  recordBrowserHistory?: boolean;
   browserFaviconObserver: BrowserFaviconObserver | null;
   getBrowserPermissionController(): BrowserPermissionController | null;
 }
 
 export interface ApplicationWindowControllerDeps {
   eventService: EventService;
+  getSystemWorkspaceId(): string | null;
   isHeadlessHost: boolean;
   getWindowTitle: () => string;
   getApprovalAttention: () => ApprovalAttention | null;
@@ -52,13 +56,14 @@ export interface ApplicationWindowControllerDeps {
   drainPendingReadyElectronLaunch: () => Promise<void>;
   initializePanelTreeOnce: (reason: string) => void;
   onHostedShellReady?: () => void;
+  onCodeIdentityChanged?: (nativeId: string) => void;
   onWindowClosed: () => void;
 }
 
 interface ApplicationWindowLifetime {
   window: BaseWindow;
   viewManager: ViewManager;
-  panelView: PanelView | null;
+  panelViews: Map<string, PanelView>;
   appOrchestrator: AppOrchestrator | null;
   closed: boolean;
 }
@@ -72,9 +77,15 @@ export function chromeWindowColors(dark: boolean): { background: string; symbol:
 /** Owns the Electron window and every renderer-host object whose lifetime is the window. */
 export class ApplicationWindowController {
   private currentLifetime: ApplicationWindowLifetime | null = null;
-  private workspaceServices: WorkspaceWindowServices | null = null;
+  private readonly workspaceServices = new Map<string, WorkspaceWindowServices>();
+  private readonly workspaceViewReleases = new Map<string, Array<() => void>>();
+  private focusedWorkspaceId: string | null = null;
 
   constructor(private readonly deps: ApplicationWindowControllerDeps) {}
+
+  get focusedWorkspace(): string | null {
+    return this.focusedWorkspaceId;
+  }
 
   get window(): BaseWindow | null {
     return this.currentLifetime?.window ?? null;
@@ -85,7 +96,37 @@ export class ApplicationWindowController {
   }
 
   get panelView(): PanelView | null {
-    return this.currentLifetime?.panelView ?? null;
+    const id = this.deps.getSystemWorkspaceId();
+    return id ? this.getWorkspacePanelView(id) : null;
+  }
+
+  getWorkspacePanelView(workspaceId: string): PanelView | null {
+    return this.currentLifetime?.panelViews.get(workspaceId) ?? null;
+  }
+
+  focusWorkspace(workspaceId: string): void {
+    if (!this.workspaceServices.has(workspaceId))
+      throw new Error(`Workspace is not open: ${workspaceId}`);
+    this.focusedWorkspaceId = workspaceId;
+  }
+
+  detachWorkspace(workspaceId: string): void {
+    if (workspaceId === this.deps.getSystemWorkspaceId())
+      throw new Error("The System presentation host owns the desktop window");
+    const lifetime = this.currentLifetime;
+    for (const release of this.workspaceViewReleases.get(workspaceId) ?? []) release();
+    this.workspaceViewReleases.delete(workspaceId);
+    lifetime?.panelViews.get(workspaceId)?.dispose();
+    lifetime?.panelViews.delete(workspaceId);
+    this.workspaceServices.delete(workspaceId);
+    if (lifetime) {
+      for (const id of lifetime.viewManager.getViewIds()) {
+        if (lifetime.viewManager.getViewInfo(id)?.workspaceIdentity?.workspaceId === workspaceId)
+          lifetime.viewManager.destroyView(id);
+      }
+      lifetime.viewManager.setWorkspaceProtectedViews(workspaceId, new Set());
+    }
+    if (this.focusedWorkspaceId === workspaceId) this.focusedWorkspaceId = null;
   }
 
   get appOrchestrator(): AppOrchestrator | null {
@@ -159,10 +200,12 @@ export class ApplicationWindowController {
       showWindowOnShellLoad: !this.deps.isHeadlessHost,
       hidePanelViewsUntilHostedShellReady: true,
     });
+    if (this.deps.onCodeIdentityChanged)
+      viewManager.onCodeIdentityChanged(this.deps.onCodeIdentityChanged);
     const lifetime: ApplicationWindowLifetime = {
       window,
       viewManager,
-      panelView: null,
+      panelViews: new Map(),
       appOrchestrator: null,
       closed: false,
     };
@@ -200,7 +243,11 @@ export class ApplicationWindowController {
   }
 
   attachWorkspaceServices(services: WorkspaceWindowServices): void {
-    this.workspaceServices = services;
+    const id = services.serverSession.workspaceId;
+    const existing = this.workspaceServices.get(id);
+    if (existing && existing !== services)
+      throw new Error(`Workspace window services already attached: ${id}`);
+    this.workspaceServices.set(id, services);
     this.attachWorkspaceWindowServices();
   }
 
@@ -221,92 +268,110 @@ export class ApplicationWindowController {
   private attachWorkspaceWindowServices(
     lifetime: ApplicationWindowLifetime | null = this.currentLifetime
   ): void {
-    const services = this.workspaceServices;
-    if (
-      !services ||
-      !lifetime ||
-      lifetime.closed ||
-      this.currentLifetime !== lifetime ||
-      lifetime.panelView
-    ) {
-      return;
-    }
+    if (!lifetime || lifetime.closed || this.currentLifetime !== lifetime) return;
     const { window, viewManager } = lifetime;
 
-    const browserHistoryRecorder = new BrowserHistoryRecorder(services.serverSession.serverClient);
-    const panelView = new PanelView({
-      viewManager,
-      panelRegistry: services.panelRegistry,
-      serverInfo: services.serverSession.serverInfo,
-      cdpHost: services.cdpHost,
-      panelOrchestrator: services.panelOrchestrator,
-      sendPanelEvent: (panelId, event, payload) => {
-        const contents = viewManager.getWebContents(panelId);
-        if (contents && !contents.isDestroyed()) {
-          contents.send("vibestudio:event", event, payload);
-        }
-      },
-      onPanelLinkError: (_panelId, url, message) => {
-        this.deps.eventService.emit("notification:show", {
-          id: `panel-link-error:${Date.now()}`,
-          type: "error",
-          title: "Couldn't open link",
-          message: `${message} (${url})`,
-          ttl: 10_000,
-        });
-      },
-      openExternal: async (url) => {
-        const result = await dialog.showMessageBox(window, {
-          type: "question",
-          title: "Open external application?",
-          message: "This link opens outside Vibestudio.",
-          detail: url,
-          buttons: ["Open", "Cancel"],
-          defaultId: 1,
-          cancelId: 1,
-          noLink: true,
-        });
-        if (result.response === 0) await shell.openExternal(url);
-      },
-      requestSiteCapability: (contents, capability) =>
-        services.getBrowserPermissionController()?.requestSiteCapability(contents, capability) ??
-        Promise.resolve(false),
-      onPanelResponsivenessChanged: (panelId, responsive) => {
-        this.deps.eventService.emit("panel-responsiveness-changed", { panelId, responsive });
-      },
-      onPanelViewTransition: (panelId) => {
-        void services.panelOrchestrator.reportPanelViewTransition(panelId).catch((error) => {
-          log.warn("Failed to publish panel view transition", {
-            panelId,
-            error: error instanceof Error ? error.message : String(error),
+    for (const services of this.workspaceServices.values()) {
+      if (lifetime.panelViews.has(services.serverSession.workspaceId)) continue;
+      const browserHistoryRecorder = services.recordBrowserHistory
+        ? new BrowserHistoryRecorder(services.serverSession.serverClient)
+        : undefined;
+      const nativeViews = new WorkspaceNativeViews(services.serverSession.workspaceId, viewManager);
+      const panelView = new PanelView({
+        nativeStorageScope: services.serverSession.nativeStorageScope,
+        viewManager: nativeViews,
+        panelRegistry: services.panelRegistry,
+        serverInfo: services.serverSession.serverInfo,
+        cdpHost: services.cdpHost,
+        panelOrchestrator: services.panelOrchestrator,
+        sendPanelEvent: (panelId, event, payload) => {
+          const contents = nativeViews.getWebContents(panelId);
+          if (contents && !contents.isDestroyed()) {
+            contents.send("vibestudio:event", event, payload);
+          }
+        },
+        onPanelLinkError: (_panelId, url, message) => {
+          this.deps.eventService.emit("notification:show", {
+            id: `panel-link-error:${Date.now()}`,
+            type: "error",
+            title: "Couldn't open link",
+            message: `${message} (${url})`,
+            ttl: 10_000,
           });
-        });
-      },
-      onPanelDocumentCommitted: (panelId, url) => {
-        services.panelOrchestrator.onExternalDocumentCommitted(panelId, url);
-      },
-      ...(services.formFillManager ? { formFillManager: services.formFillManager } : {}),
-      ...(services.browserFaviconObserver
-        ? { browserFaviconObserver: services.browserFaviconObserver }
-        : {}),
-      autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
-      panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
-      appPreloadPath: path.join(__dirname, "appPreload.cjs"),
-      browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
-      browserHistoryRecorder,
-    });
-    lifetime.panelView = panelView;
+        },
+        openExternal: async (url) => {
+          const result = await dialog.showMessageBox(window, {
+            type: "question",
+            title: "Open external application?",
+            message: "This link opens outside Vibestudio.",
+            detail: url,
+            buttons: ["Open", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+            noLink: true,
+          });
+          if (result.response === 0) await shell.openExternal(url);
+        },
+        requestSiteCapability: (contents, capability) =>
+          services.getBrowserPermissionController()?.requestSiteCapability(contents, capability) ??
+          Promise.resolve(false),
+        onPanelResponsivenessChanged: (panelId, responsive) => {
+          services.eventService.emit("panel-responsiveness-changed", { panelId, responsive });
+        },
+        onPanelViewTransition: (panelId) => {
+          void services.panelOrchestrator.reportPanelViewTransition(panelId).catch((error) => {
+            log.warn("Failed to publish panel view transition", {
+              panelId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        },
+        onPanelDocumentCommitted: (panelId, url) => {
+          services.panelOrchestrator.onExternalDocumentCommitted(panelId, url);
+        },
+        ...(services.formFillManager ? { formFillManager: services.formFillManager } : {}),
+        ...(services.browserFaviconObserver
+          ? { browserFaviconObserver: services.browserFaviconObserver }
+          : {}),
+        autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
+        panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
+        appPreloadPath: path.join(__dirname, "appPreload.cjs"),
+        browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
+        browserHistoryRecorder,
+      });
+      lifetime.panelViews.set(services.serverSession.workspaceId, panelView);
+      const formFillManager = services.formFillManager;
+      if (formFillManager) {
+        formFillManager.setWindow(window);
+        this.workspaceViewReleases.set(services.serverSession.workspaceId, [
+          viewManager.onViewOrderChanged(() => formFillManager.onViewOrderChanged()),
+          viewManager.onViewHidden((viewId) => {
+            const identity = viewManager.getViewInfo(viewId)?.workspaceIdentity;
+            if (identity?.workspaceId === services.serverSession.workspaceId)
+              formFillManager.onPanelHidden(identity.runtimeId);
+          }),
+        ]);
+      }
+    }
+    const systemId = this.deps.getSystemWorkspaceId();
+    const services = systemId ? this.workspaceServices.get(systemId) : undefined;
+    if (!services || lifetime.appOrchestrator) return;
     // Native→shell focus feedback (§5.2): surface native view focus
     // transitions so the shell's layout focus follows every route, not just
     // shell-initiated clicks. Cleared with the viewManager on window teardown.
     viewManager.onNativeSlotFocused((payload) => {
-      this.deps.eventService.emit("native-slot-focused", payload);
+      const identity = viewManager.getViewInfo(payload.panelId)?.workspaceIdentity;
+      if (!identity) return;
+      this.focusedWorkspaceId = identity.workspaceId;
+      this.workspaceServices
+        .get(identity.workspaceId)
+        ?.eventService.emit("native-slot-focused", { ...payload, panelId: identity.runtimeId });
     });
     if (this.deps.onHostedShellReady) {
       viewManager.onHostedShellReady(this.deps.onHostedShellReady);
     }
     const appOrchestrator = new AppOrchestrator({
-      getPanelView: () => lifetime.panelView,
+      getPanelView: () => lifetime.panelViews.get(services.serverSession.workspaceId) ?? null,
       statePath: services.serverSession.statePath,
     });
     lifetime.appOrchestrator = appOrchestrator;
@@ -334,22 +399,26 @@ export class ApplicationWindowController {
         );
       });
 
-    const formFillManager = services.formFillManager;
-    if (formFillManager) {
-      formFillManager.setWindow(window);
-      viewManager.onViewOrderChanged(() => formFillManager.onViewOrderChanged());
-      viewManager.onViewHidden((viewId) => formFillManager.onPanelHidden(viewId));
-    }
     viewManager.onViewCrashed((viewId, reason) => {
-      void services.panelOrchestrator.handlePanelViewCrash(viewId, reason).catch((error) => {
-        log.warn("Failed to recover crashed panel presentation", {
-          panelId: viewId,
-          reason,
-          error: error instanceof Error ? error.message : String(error),
+      const identity = viewManager.getViewInfo(viewId)?.workspaceIdentity;
+      if (!identity) return;
+      const owner = this.workspaceServices.get(identity.workspaceId);
+      if (!owner) return;
+      void owner.panelOrchestrator
+        .handlePanelViewCrash(identity.runtimeId, reason)
+        .catch((error) => {
+          log.warn("Failed to recover crashed panel presentation", {
+            panelId: viewId,
+            reason,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
     });
-    setupTestApi(services.panelOrchestrator, services.panelRegistry, panelView);
+    setupTestApi(
+      services.panelOrchestrator,
+      services.panelRegistry,
+      lifetime.panelViews.get(services.serverSession.workspaceId) ?? null
+    );
   }
 
   private setupApplicationMenu(window: BaseWindow, viewManager: ViewManager): void {
@@ -357,9 +426,14 @@ export class ApplicationWindowController {
       onHistoryBack: () => {
         const currentViewManager = this.currentLifetime?.viewManager;
         if (!currentViewManager) return;
-        const panelId = this.workspaceServices?.panelRegistry.getFocusedPanelId();
+        const ownerId = this.focusedWorkspaceId ?? this.deps.getSystemWorkspaceId();
+        const panelId = ownerId
+          ? this.workspaceServices.get(ownerId)?.panelRegistry.getFocusedPanelId()
+          : null;
         if (!panelId) return;
-        const contents = currentViewManager.getWebContents(panelId);
+        const contents = ownerId
+          ? new WorkspaceNativeViews(ownerId, currentViewManager).getWebContents(panelId)
+          : null;
         if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoBack()) {
           contents.navigationHistory.goBack();
         }
@@ -367,9 +441,14 @@ export class ApplicationWindowController {
       onHistoryForward: () => {
         const currentViewManager = this.currentLifetime?.viewManager;
         if (!currentViewManager) return;
-        const panelId = this.workspaceServices?.panelRegistry.getFocusedPanelId();
+        const ownerId = this.focusedWorkspaceId ?? this.deps.getSystemWorkspaceId();
+        const panelId = ownerId
+          ? this.workspaceServices.get(ownerId)?.panelRegistry.getFocusedPanelId()
+          : null;
         if (!panelId) return;
-        const contents = currentViewManager.getWebContents(panelId);
+        const contents = ownerId
+          ? new WorkspaceNativeViews(ownerId, currentViewManager).getWebContents(panelId)
+          : null;
         if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoForward()) {
           contents.navigationHistory.goForward();
         }
@@ -380,13 +459,16 @@ export class ApplicationWindowController {
   private teardownLifetime(lifetime: ApplicationWindowLifetime): void {
     if (lifetime.closed) return;
     lifetime.closed = true;
+    for (const releases of this.workspaceViewReleases.values())
+      for (const release of releases) release();
+    this.workspaceViewReleases.clear();
 
     // PanelView owns the meaning of child WebContents destruction. Disarm its
     // per-view observers before ViewManager performs host-owned native teardown
     // so closing a desktop window cannot masquerade as a panel calling
     // window.close() and issue durable close RPCs during session shutdown.
     try {
-      lifetime.panelView?.dispose();
+      for (const panelView of lifetime.panelViews.values()) panelView.dispose();
     } catch (error) {
       log.error(
         `[window] Failed to dispose PanelView: ${
@@ -415,7 +497,7 @@ export class ApplicationWindowController {
     this.deps.stopElectronHostTargetLaunchLoop();
     setMenuViewManager(null);
     setMemoryMonitorViewManager(null);
-    lifetime.panelView = null;
+    lifetime.panelViews.clear();
     lifetime.appOrchestrator = null;
     this.currentLifetime = null;
     this.deps.onWindowClosed();

@@ -9,7 +9,7 @@ import type {
   IrohClientSessionOptions,
 } from "@vibestudio/rpc/transports/irohClient";
 import type { RpcConnectionStatus, RpcEnvelope } from "@vibestudio/rpc";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createIrohServerClient } from "./irohServerClient.js";
 
 const reach: IrohReach = {
@@ -143,5 +143,44 @@ describe("Iroh server client lifecycle", () => {
 
     await client.close();
     expect(closeOrder).toEqual(["session", "pipe"]);
+  });
+});
+
+describe("Iroh trusted workspace UI transport", () => {
+  it("opens a separate device-authenticated session and closes it before the shared pipe", async () => {
+    const closeOrder: string[] = [];
+    const pipe = new FakePipe(closeOrder);
+    const options: IrohClientSessionOptions[] = [];
+    const sessions: FakeSession[] = [];
+    vi.spyOn(pipe, "openSession").mockImplementation((entry) => {
+      options.push(entry);
+      const session = new FakeSession(closeOrder);
+      sessions.push(session);
+      return session;
+    });
+    const client = await createIrohServerClient({
+      reach,
+      callerId: "shell:device",
+      getShellToken: () => "user-device-token",
+      pipe,
+    });
+    const ui = await client.openHostUiSession();
+    expect(options).toHaveLength(2);
+    expect(await options[1]!.getToken()).toBe("user-device-token");
+    expect(options[1]!.connectionId).not.toBe(options[0]!.connectionId);
+    const send = vi.spyOn(sessions[1]!, "send");
+    const envelope: RpcEnvelope = {
+      from: "ui",
+      target: "runtime-entity",
+      delivery: { caller: { callerId: "ui", callerKind: "shell" } },
+      provenance: [],
+      message: { type: "event", fromId: "ui", event: "channel:send", payload: { text: "hello" } },
+    };
+    await ui.send(envelope);
+    expect(send).toHaveBeenCalledWith(envelope);
+    await client.close();
+    expect(ui.isClosed?.()).toBe(true);
+    expect(closeOrder).toEqual(["session", "session", "pipe"]);
+    await expect(client.openHostUiSession()).rejects.toThrow("closing");
   });
 });

@@ -1,3 +1,4 @@
+import { scopedNativePartition } from "../nativeStorageScope.js";
 import { randomUUID } from "node:crypto";
 import {
   systemPreferences,
@@ -66,9 +67,16 @@ export class BrowserPermissionController {
 
   constructor(
     private readonly deps: {
+      nativeStorageScope: string;
       serverClient: ServerClient;
       eventService: EventService;
-      getViewManager(): ViewManager | null;
+      getViewManager(): Pick<
+        ViewManager,
+        | "findViewIdByWebContentsId"
+        | "isContentOverlayWebContentsId"
+        | "getViewPartition"
+        | "getViewInfo"
+      > | null;
       isTargetUnderAutomation(targetId: string): boolean;
     }
   ) {
@@ -90,7 +98,10 @@ export class BrowserPermissionController {
     this.detachBrowserEnvironment();
     try {
       const snapshot = await this.client.snapshot({ sessionEpoch: this.sessionEpoch });
-      const partition = browserEnvironmentPartition(snapshot.environmentKey);
+      const partition = scopedNativePartition(
+        this.deps.nativeStorageScope,
+        browserEnvironmentPartition(snapshot.environmentKey)
+      );
       this.browserPartition = partition;
       this.environmentKey = snapshot.environmentKey;
       this.replaceProjection(snapshot.grants);
@@ -120,6 +131,11 @@ export class BrowserPermissionController {
     this.stopped = true;
     this.detachBrowserEnvironment();
     this.automationTaint.clear();
+  }
+
+  getEnvironmentKey(): string {
+    if (!this.environmentKey || this.stopped) throw new Error("Browser environment is unavailable");
+    return this.environmentKey;
   }
 
   async refresh(): Promise<void> {

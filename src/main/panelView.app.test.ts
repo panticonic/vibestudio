@@ -4,6 +4,7 @@ import { PanelView } from "./panelView.js";
 
 function makePanelView(appPreloadPath?: string): PanelView {
   return new PanelView({
+    nativeStorageScope: "test-host-device",
     viewManager: {
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
@@ -13,7 +14,7 @@ function makePanelView(appPreloadPath?: string): PanelView {
         throw new Error("createView should not be called");
       }),
     },
-    panelRegistry: { findParentId: vi.fn(() => null) },
+    panelRegistry: { workspaceId: "workspace-test", findParentId: vi.fn(() => null) },
     serverInfo: { gatewayPort: 1234, externalHost: "127.0.0.1" },
     cdpServer: {
       registerBrowser: vi.fn(),
@@ -51,8 +52,9 @@ describe("PanelView app views", () => {
       })),
     };
     const panelView = new PanelView({
+      nativeStorageScope: "test-host-device",
       viewManager,
-      panelRegistry: { findParentId: vi.fn(() => null) },
+      panelRegistry: { workspaceId: "workspace-test", findParentId: vi.fn(() => null) },
       serverInfo: { gatewayPort: 1234, externalHost: "127.0.0.1" },
       cdpServer: {
         registerBrowser: vi.fn(),
@@ -88,8 +90,9 @@ describe("PanelView app views", () => {
       createView: vi.fn(),
     };
     const panelView = new PanelView({
+      nativeStorageScope: "test-host-device",
       viewManager,
-      panelRegistry: { findParentId: vi.fn(() => null) },
+      panelRegistry: { workspaceId: "workspace-test", findParentId: vi.fn(() => null) },
       serverInfo: { gatewayPort: 1234, externalHost: "127.0.0.1" },
       cdpServer: {
         registerBrowser: vi.fn(),
@@ -140,8 +143,10 @@ describe("PanelView app views", () => {
       getWebContents: vi.fn(() => webContents),
     };
     const panelView = new PanelView({
+      nativeStorageScope: "test-host-device",
       viewManager,
       panelRegistry: {
+        workspaceId: "workspace-test",
         findParentId: vi.fn(() => null),
         getPanel: vi.fn(() => null),
       },

@@ -103,7 +103,7 @@ export interface CdpHostProviderOptions {
         createSocket: (url: string) => CdpHostProviderSocket;
       };
   hostConnectionId: string;
-  getViewManager: () => ViewManager | null;
+  getViewManager: () => Pick<ViewManager, "captureView" | "openDevTools" | "getWebContents"> | null;
   reconnectDelayMs?: number;
   diagnosticsStore?: RuntimeDiagnosticsStore;
   onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;

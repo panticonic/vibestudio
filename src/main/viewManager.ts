@@ -1,3 +1,4 @@
+import { workspaceTransportArgument } from "../preload/workspaceTransportIdentity.js";
 /**
  * ViewManager - Centralized WebContentsView management for panels and browsers.
  *
@@ -67,7 +68,11 @@ export interface ViewBounds {
   height: number;
 }
 
+import { workspaceNativeViewId, type WorkspaceViewIdentity } from "./workspaceNativeViews.js";
+
 export interface ViewConfig {
+  /** Immutable workspace/runtime identity supplied by the native workspace owner. */
+  workspaceIdentity?: WorkspaceViewIdentity;
   /** Unique view ID (typically panel ID) */
   id: string;
   /** View type for tracking */
@@ -158,6 +163,7 @@ export interface ElectronProcessPerformanceSnapshot {
 }
 
 interface ManagedView {
+  workspaceIdentity?: WorkspaceViewIdentity;
   id: string;
   view: WebContentsView;
   type: "shell" | "panel" | "app";
@@ -319,6 +325,7 @@ export class ViewManager {
 
   // View protection state
   private protectedViewIds = new Set<string>();
+  private readonly workspaceProtectedViews = new Map<string, ReadonlySet<string>>();
   private crashCallbacks: Array<(viewId: string, reason: string) => void> = [];
   private windowVisible = true;
   /** Reverse index for O(1) IPC sender webContents lookup */
@@ -326,6 +333,7 @@ export class ViewManager {
   /** Callbacks invoked after view z-order changes */
   private viewOrderChangedCallbacks: Array<() => void> = [];
   /** Callbacks invoked when a panel view is hidden */
+  private codeIdentityChangedCallbacks: Array<(viewId: string) => void> = [];
   private viewHiddenCallbacks: Array<(viewId: string) => void> = [];
   /** Callbacks invoked when a slot-bound panel view's WebContents gains focus */
   private nativeSlotFocusedCallbacks: Array<
@@ -658,7 +666,10 @@ export class ViewManager {
     const hostChrome =
       config.type === "app" &&
       (config.hostChrome ?? false) &&
-      isAuthorizedChromeAppCaller(config.id, config.codeIdentity?.source);
+      isAuthorizedChromeAppCaller(
+        config.workspaceIdentity?.runtimeId ?? "",
+        config.codeIdentity?.source
+      );
 
     // All panels run in safe sandboxed mode
     const runtimeMustRemainSchedulable = hostChrome || config.type === "panel";
@@ -667,6 +678,9 @@ export class ViewManager {
       contextIsolation: true,
       sandbox: true,
       session: ses,
+      ...(config.workspaceIdentity
+        ? { additionalArguments: [workspaceTransportArgument(config.workspaceIdentity)] }
+        : {}),
       webviewTag: false,
       // Host chrome owns native panel residency, and an unbound panel must boot
       // while it is still hidden. Both control plane and loaded panel runtimes
@@ -698,6 +712,7 @@ export class ViewManager {
     // Track the managed view
     const managed: ManagedView = {
       id: config.id,
+      workspaceIdentity: config.workspaceIdentity,
       view,
       type: config.type,
       parentId: config.parentId,
@@ -1040,7 +1055,7 @@ export class ViewManager {
     if (!owner || owner.type !== "app" || !owner.hostChrome) {
       throw new Error(`Panel host owner is not an active panel-hosting app: ${ownerViewId}`);
     }
-    if (hello.sealedLaunchIdentity !== ownerViewId) {
+    if (hello.sealedLaunchIdentity !== owner.workspaceIdentity?.runtimeId) {
       throw new Error("Panel host launch identity does not match the authenticated caller");
     }
     if (!hello.supportedProtocolVersions.includes(NATIVE_PANEL_SURFACE_PROTOCOL_VERSION)) {
@@ -1057,7 +1072,7 @@ export class ViewManager {
         protocolVersion: NATIVE_PANEL_SURFACE_PROTOCOL_VERSION,
         hostGeneration: this.nativePanelSlots.hostGeneration,
         shellGeneration,
-        sealedLaunchIdentity: ownerViewId,
+        sealedLaunchIdentity: owner.workspaceIdentity.runtimeId,
       },
     };
   }
@@ -1107,13 +1122,19 @@ export class ViewManager {
         nativeSlotId: surface.surfaceId,
         bindingId: surface.materialization!.leaseConnectionId,
         bindingSequence: snapshot.revision,
-        panelId: surface.materialization!.runtimeEntityId,
+        panelId: workspaceNativeViewId({
+          workspaceId: surface.materialization!.workspaceId,
+          runtimeId: surface.materialization!.runtimeEntityId,
+        }),
         bounds: surface.bounds!,
         focused: surface.focused,
       })),
     });
     for (const surface of normalized) {
-      const panelId = surface.materialization!.runtimeEntityId;
+      const panelId = workspaceNativeViewId({
+        workspaceId: surface.materialization!.workspaceId,
+        runtimeId: surface.materialization!.runtimeEntityId,
+      });
       // A desired native surface is allowed to precede its WebContents. The
       // slot declaration above carries geometry/focus until materialization;
       // visibility is applied by attachDeclaredPanelSlot when the view exists.
@@ -1133,14 +1154,20 @@ export class ViewManager {
     const surfaces = [...this.nativePanelSlots.activeSlots.values()]
       .map((slot) => {
         const managed = this.views.get(slot.panelId);
-        if (!managed || managed.type !== "panel" || managed.view.webContents.isDestroyed()) {
+        if (
+          !managed ||
+          !managed.workspaceIdentity ||
+          managed.type !== "panel" ||
+          managed.view.webContents.isDestroyed()
+        ) {
           return null;
         }
         return {
           surfaceId: slot.nativeSlotId,
           nativeSurfaceId: `webContents:${managed.view.webContents.id}`,
           materialization: {
-            runtimeEntityId: slot.panelId,
+            workspaceId: managed.workspaceIdentity.workspaceId,
+            runtimeEntityId: managed.workspaceIdentity.runtimeId,
             leaseConnectionId: slot.bindingId,
           },
           visible: managed.visible,
@@ -2167,6 +2194,14 @@ export class ViewManager {
    * Register a callback invoked when a panel view is hidden.
    * Used by FormFillManager to dismiss overlays on panel switch.
    */
+  onCodeIdentityChanged(callback: (viewId: string) => void): () => void {
+    this.codeIdentityChangedCallbacks.push(callback);
+    return () => {
+      const index = this.codeIdentityChangedCallbacks.indexOf(callback);
+      if (index !== -1) this.codeIdentityChangedCallbacks.splice(index, 1);
+    };
+  }
+
   onViewHidden(callback: (viewId: string) => void): () => void {
     this.viewHiddenCallbacks.push(callback);
     return () => {
@@ -2678,6 +2713,7 @@ export class ViewManager {
   }
 
   getViewInfo(id: string): {
+    workspaceIdentity?: WorkspaceViewIdentity;
     type: string;
     visible: boolean;
     hostChrome: boolean;
@@ -2692,6 +2728,7 @@ export class ViewManager {
 
     return {
       type: managed.type,
+      workspaceIdentity: managed.workspaceIdentity,
       visible: managed.visible,
       hostChrome: managed.hostChrome,
       bounds: managed.bounds,
@@ -2920,7 +2957,7 @@ export class ViewManager {
     const nextIdentity = identity;
     managed.hostChrome =
       capabilities?.includes("panel-hosting") === true &&
-      isAuthorizedChromeAppCaller(id, nextIdentity?.source);
+      isAuthorizedChromeAppCaller(managed.workspaceIdentity?.runtimeId ?? "", nextIdentity?.source);
     if (!managed.hostChrome && this.nativePanelSlots.activeHostedShellViewId === id) {
       this.nativePanelSlots.hostedShellReady = false;
       this.clearAllPanelSlots();
@@ -2930,6 +2967,7 @@ export class ViewManager {
       this.reconcileNativeLayerOrder();
     }
     managed.codeIdentity = nextIdentity;
+    for (const changed of this.codeIdentityChangedCallbacks) changed(id);
     managed.desiredUrl = url;
     managed.desiredDocumentId = undefined;
     await this.loadManagedViewUrl(managed, url);
@@ -2944,6 +2982,7 @@ export class ViewManager {
       throw new Error(`View is not a code view: ${id}`);
     }
     managed.codeIdentity = identity;
+    for (const changed of this.codeIdentityChangedCallbacks) changed(id);
   }
 
   /**
@@ -3039,6 +3078,7 @@ export class ViewManager {
     // Clear all callbacks
     this.viewOrderChangedCallbacks.length = 0;
     this.viewHiddenCallbacks.length = 0;
+    this.codeIdentityChangedCallbacks.length = 0;
     this.nativeSlotFocusedCallbacks.length = 0;
     this.hostedShellReadyCallbacks.length = 0;
     this.crashCallbacks.length = 0;
@@ -3082,7 +3122,14 @@ export class ViewManager {
    * ViewManager handles all the mechanics internally (background throttling,
    * visibility state when window is hidden).
    */
-  setProtectedViews(viewIds: Set<string>): void {
+  setWorkspaceProtectedViews(workspaceId: string, viewIds: ReadonlySet<string>): void {
+    this.workspaceProtectedViews.set(workspaceId, viewIds);
+    const combined = new Set<string>();
+    for (const ids of this.workspaceProtectedViews.values()) for (const id of ids) combined.add(id);
+    this.setProtectedViews(combined);
+  }
+
+  private setProtectedViews(viewIds: Set<string>): void {
     const previousIds = this.protectedViewIds;
     this.protectedViewIds = viewIds;
 
