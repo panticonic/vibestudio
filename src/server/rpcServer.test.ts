@@ -4881,7 +4881,10 @@ describe("RpcServer caller identity", () => {
 
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toMatchObject({
-      caller: { runtime: { id: "@workspace-extensions/tools", kind: "extension" } },
+      caller: {
+        runtime: { id: "@workspace-extensions/tools", kind: "extension" },
+        subject: { userId: "usr_alice", handle: "alice" },
+      },
       chainCaller: {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
@@ -4899,15 +4902,19 @@ describe("RpcServer caller identity", () => {
       handle: "alice",
     });
     const { server } = createServer({
-      resolveExtensionInvocation: vi.fn(() => ({
-        caller: {
-          callerId: "shell:dev_alice",
-          callerKind: "shell" as const,
-          userId: "usr_alice",
-        },
-        authorizingCaller,
-        causalParent: null,
-      })),
+      resolveExtensionInvocation: vi.fn((_extension, requestId) =>
+        requestId === "request:shell-browser-data"
+          ? {
+              caller: {
+                callerId: "shell:dev_alice",
+                callerKind: "shell" as const,
+                userId: "usr_alice",
+              },
+              authorizingCaller,
+              causalParent: null,
+            }
+          : null
+      ),
     });
     const client = createClient("@workspace-extensions/browser-data");
     registerClient(server, client);
@@ -4929,6 +4936,7 @@ describe("RpcServer caller identity", () => {
     expect(dispatched[0]).toMatchObject({
       caller: {
         runtime: { id: "@workspace-extensions/browser-data", kind: "extension" },
+        subject: { userId: "usr_alice", handle: "alice" },
       },
       authorizingCaller: {
         runtime: { id: "shell:dev_alice", kind: "shell" },
@@ -4936,6 +4944,19 @@ describe("RpcServer caller identity", () => {
       },
     });
     expect(dispatched[0]).not.toHaveProperty("chainCaller");
+
+    await handleRpc(server, client, {
+      ...rpcRequest("req-browser-data-stale", "workers.resolveDurableObject"),
+      parentRequestId: "request:no-longer-active",
+    });
+    expect(dispatched).toHaveLength(2);
+    expect(dispatched[1]).toMatchObject({
+      caller: {
+        runtime: { id: "@workspace-extensions/browser-data", kind: "extension" },
+      },
+    });
+    expect((dispatched[1] as ServiceContext).caller.subject).toBeUndefined();
+    expect(dispatched[1]).not.toHaveProperty("authorizingCaller");
   });
 
   it.each(

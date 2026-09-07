@@ -1390,6 +1390,13 @@ export class RpcServer {
   ): VerifiedCaller {
     const parent = this.resolveExtensionParentCaller(caller, message);
     caller = this.callerWithParentTask(caller, parent?.authorizingCaller);
+    // An extension remains the executing/code principal, while the active
+    // host-retained invocation supplies the human on whose behalf its nested
+    // service effects run. This is the direct-service counterpart of the
+    // existing attributed caller used for extension -> DO relay authority.
+    if (parent?.authorizingCaller.subject) {
+      caller = { ...caller, subject: parent.authorizingCaller.subject };
+    }
     if (!causal) return caller;
     const taskAuthority = caller.executionSession?.taskAuthority ?? caller.taskAuthority;
     return {
