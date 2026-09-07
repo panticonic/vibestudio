@@ -312,7 +312,7 @@ function waitForSpawn(child, command, args, timeoutMs = 1_000) {
 }
 
 function waitForChildExit(child, timeoutMs = 5 * 60_000) {
-  if (!child || child.exitCode != null) return Promise.resolve();
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, timeoutMs);
     child.once("exit", () => {
@@ -694,7 +694,7 @@ async function clickDesktopButton(app, label) {
               `(() => {
               const label = new RegExp(${JSON.stringify(labelSource)}, "i");
               const button = Array.from(document.querySelectorAll("button"))
-                .find((item) => label.test(
+                .find((item) => item.getClientRects().length > 0 && !item.closest('[hidden]') && label.test(
                   item.getAttribute("aria-label")?.trim()
                     || item.textContent?.trim()
                     || ""
@@ -741,7 +741,7 @@ async function waitAndClickHostedShellButton(app, label, timeoutMs) {
               `(() => {
                   const label = new RegExp(${JSON.stringify(input.labelSource)}, "i");
                   const button = Array.from(document.querySelectorAll("button"))
-                    .find((item) => label.test(
+                    .find((item) => item.getClientRects().length > 0 && !item.closest('[hidden]') && label.test(
                       item.getAttribute("aria-label")?.trim()
                         || item.textContent?.trim()
                         || ""
@@ -1212,45 +1212,47 @@ async function main() {
 
   const children = [];
   let electronApp = null;
-  let cleanedUp = false;
+  let cleanupPromise;
   let tempRoot = "";
   let desktopEnvironment;
   const deadlineMs = Date.now() + options.timeoutMs;
 
-  const cleanup = async () => {
-    if (cleanedUp) return;
-    cleanedUp = true;
-    // closeElectron is crash-proof, but wrap anyway so a throw can never strand
-    // the child server killed below.
-    try {
-      await closeElectron(electronApp);
-    } catch {
-      // ignore — children are still killed below.
-    }
-    // Processes are registered in dependency order (session bus, keyring,
-    // server). Stop and await them in reverse order so a dependent
-    // can finish its own shutdown before its backing service disappears.
-    for (const child of children.reverse()) {
+  const cleanup = () => {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      // closeElectron is crash-proof, but wrap anyway so a throw can never strand
+      // the child server killed below.
       try {
-        if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
+        await closeElectron(electronApp);
       } catch {
-        // Already gone.
+        // ignore — children are still killed below.
       }
-      await waitForChildExit(child);
+      // Processes are registered in dependency order (session bus, keyring,
+      // server). Stop and await them in reverse order so a dependent
+      // can finish its own shutdown before its backing service disappears.
+      for (const child of children.reverse()) {
+        try {
+          if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
+        } catch {
+          // Already gone.
+        }
+        await waitForChildExit(child);
+        try {
+          if (child.exitCode == null) child.kill("SIGKILL");
+        } catch {
+          // Already gone.
+        }
+        await waitForChildExit(child, 30_000);
+      }
       try {
-        if (child.exitCode == null) child.kill("SIGKILL");
-      } catch {
-        // Already gone.
+        await fsp.unlink(options.readyFile);
+      } catch {}
+      desktopEnvironment?.dispose?.();
+      if (tempRoot) {
+        await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
       }
-      await waitForChildExit(child, 30_000);
-    }
-    try {
-      await fsp.unlink(options.readyFile);
-    } catch {}
-    desktopEnvironment?.dispose?.();
-    if (tempRoot) {
-      await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
-    }
+    })();
+    return cleanupPromise;
   };
 
   process.on("SIGINT", () => {
@@ -1374,10 +1376,72 @@ async function main() {
         result.snapshots.find((snapshot) => snapshot.title === HOSTED_SHELL_APP)?.url ??
         ""
     );
+    // Native testApi intentionally captures the immutable System controller.
+    // Select that same workspace visibly before asserting its panel tree/readiness.
+    const selectedSystem = await waitAndClickHostedShellButton(
+      electronApp,
+      /^Open System$/i,
+      Math.max(1_000, deadlineMs - Date.now())
+    );
+    if (!selectedSystem) throw new Error("Could not select the System workspace");
+    const focusedSystem = await evaluateElectron(
+      electronApp,
+      async ({ webContents }, timeoutMs) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const url = globalThis.__testApi?.getHostViewDebugInfo?.().hostedShellUrl;
+          const chrome = webContents
+            .getAllWebContents()
+            .find((entry) => !entry.isDestroyed() && entry.getURL() === url);
+          const focused =
+            chrome &&
+            (await chrome
+              .executeJavaScript(
+                `document.querySelector('[aria-label="Open System"]')?.getAttribute('aria-current') === 'location'`
+              )
+              .catch(() => false));
+          if (focused) return true;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return false;
+      },
+      Math.min(30000, Math.max(1000, deadlineMs - Date.now())),
+      "waiting for the selected System workspace presentation",
+      35000
+    );
+    if (!focusedSystem) throw new Error("System workspace selection did not finish");
+    console.log("[desktop-smoke] Selected System workspace for native controller assertions");
     const renderedPanel = await waitForRenderedPanel(
       electronApp,
       Math.max(1_000, deadlineMs - Date.now())
     );
+    const workspaceIconLoaded = await evaluateElectron(
+      electronApp,
+      async ({ webContents }) => {
+        const url = globalThis.__testApi?.getHostViewDebugInfo?.().hostedShellUrl;
+        const chrome = webContents
+          .getAllWebContents()
+          .find((entry) => !entry.isDestroyed() && entry.getURL() === url);
+        if (!chrome) return false;
+        return chrome.executeJavaScript(`new Promise((resolve) => {
+          const deadline = Date.now() + 10000;
+          const check = () => {
+            const image = Array.from(document.querySelectorAll('section[aria-label="System workspace"] img'))
+              .find((entry) => entry.src.startsWith('data:image/') && entry.complete && entry.naturalWidth > 0);
+            if (image) return resolve(true);
+            if (Date.now() >= deadline) return resolve(false);
+            setTimeout(check, 100);
+          };
+          check();
+        })`);
+      },
+      undefined,
+      "checking workspace-owned chrome icon bytes",
+      15000
+    );
+    if (!workspaceIconLoaded)
+      throw new Error("System workspace icon bytes did not render in chrome");
+    console.log("[desktop-smoke] Workspace-owned icon bytes rendered in native chrome");
     const chatExperience = await waitForChatExperienceReady(
       electronApp,
       renderedPanel.panel.id,
