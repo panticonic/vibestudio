@@ -194,6 +194,52 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     }
   });
 
+  it("uses the unit's declared runtime library when checking exact build source", async () => {
+    const unitDir = path.join(sourceRoot, "apps/mobile-runtime");
+    await fsp.mkdir(unitDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(unitDir, "package.json"),
+      JSON.stringify({ name: "@workspace-apps/mobile-runtime", type: "module" })
+    );
+    const configPath = path.join(unitDir, "tsconfig.json");
+    await fsp.writeFile(
+      configPath,
+      JSON.stringify({ compilerOptions: { target: "ES2022", lib: ["ES2022"] } })
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "index.ts"),
+      [
+        `export const last = ["mobile"].at(-1);`,
+        `export const failure = new Error("mobile", { cause: last });`,
+      ].join("\n")
+    );
+    try {
+      const configured = await typecheckUnit(
+        "apps/mobile-runtime",
+        sourceRoot,
+        [{ name: "@workspace-apps/mobile-runtime", relativePath: "apps/mobile-runtime" }],
+        []
+      );
+      expect(configured.filter((diagnostic) => diagnostic.file.endsWith("index.ts"))).toEqual([]);
+
+      await fsp.writeFile(
+        configPath,
+        JSON.stringify({ compilerOptions: { target: "ES2020", lib: ["ES2020"] } })
+      );
+      const staleEnvironment = await typecheckUnit(
+        "apps/mobile-runtime",
+        sourceRoot,
+        [{ name: "@workspace-apps/mobile-runtime", relativePath: "apps/mobile-runtime" }],
+        []
+      );
+      expect(staleEnvironment.map((diagnostic) => diagnostic.message).join("\n")).toMatch(
+        /Property 'at' does not exist|Expected 0-1 arguments/
+      );
+    } finally {
+      await fsp.rm(unitDir, { recursive: true, force: true });
+    }
+  });
+
   it("checks executable source even when a repository config omits it", async () => {
     const unitDir = path.join(sourceRoot, "panels/executable-root");
     await fsp.mkdir(unitDir, { recursive: true });

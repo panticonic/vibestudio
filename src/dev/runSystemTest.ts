@@ -141,7 +141,7 @@ async function main(): Promise<void> {
   process.env["VIBESTUDIO_INSTANCE"] = ensured.instance.id;
   console.error(
     `[system-test] ${ensured.created ? "created" : "using"} instance ${ensured.instance.id}; ` +
-      `workspace=${ensured.ready.workspaceName}`
+      `workspace=${pairedWorkspaceId(ensured.instance.root)}`
   );
   // The ready record means the host is addressable, not that asynchronous
   // workspace installation/admission has settled. A server provisioned for
