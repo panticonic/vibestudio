@@ -1,3 +1,5 @@
+import type { RpcDestination } from "../types.js";
+import { workspaceRpcDestination } from "../destination.js";
 import {
   decodeJsonFrame,
   IROH_WIRE_VERSION,
@@ -162,7 +164,7 @@ interface InboundRequest {
 
 interface OutboundRequest {
   cancel(reason?: unknown, code?: bigint): Promise<void>;
-  targetWorkspaceId?: string;
+  destination?: RpcDestination;
 }
 
 class ClientSession implements IrohClientSession {
@@ -218,6 +220,7 @@ class ClientSession implements IrohClientSession {
   }
 
   async send(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
+    workspaceRpcDestination(envelope.destination);
     await this.ready();
     if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
     const requestId = requestIdOf(envelope);
@@ -266,7 +269,7 @@ class ClientSession implements IrohClientSession {
     ) {
       this.outboundRequests.set(requestId, {
         cancel,
-        ...(envelope.targetWorkspaceId ? { targetWorkspaceId: envelope.targetWorkspaceId } : {}),
+        ...(envelope.destination ? { destination: envelope.destination } : {}),
       });
       this.pipe.diagnosticsChanged();
     }
@@ -458,6 +461,7 @@ class ClientSession implements IrohClientSession {
     body?: ReadableStream<Uint8Array> | null,
     headTimeoutMs = 20_000
   ): Promise<DecodedFramedStream> {
+    workspaceRpcDestination(envelope.destination);
     await this.ready();
     if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
     const request = envelope.message;
@@ -494,7 +498,7 @@ class ClientSession implements IrohClientSession {
     };
     this.outboundRequests.set(request.requestId, {
       cancel,
-      ...(envelope.targetWorkspaceId ? { targetWorkspaceId: envelope.targetWorkspaceId } : {}),
+      ...(envelope.destination ? { destination: envelope.destination } : {}),
     });
     this.pipe.diagnosticsChanged();
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -638,7 +642,7 @@ class ClientSession implements IrohClientSession {
   }
 
   private emitTransportFailure(requestId: string, error: Error): void {
-    const targetWorkspaceId = this.outboundRequests.get(requestId)?.targetWorkspaceId;
+    const destination = this.outboundRequests.get(requestId)?.destination;
     const response: RpcResponse = {
       type: "response",
       requestId,
@@ -653,7 +657,7 @@ class ClientSession implements IrohClientSession {
         caller: {
           callerId: "main",
           callerKind: "unknown",
-          ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
+          ...(destination?.kind === "workspace" ? { workspaceId: destination.workspaceId } : {}),
         },
       },
       provenance: [],

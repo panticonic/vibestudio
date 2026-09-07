@@ -193,7 +193,7 @@ describe("HttpRpcHandler", () => {
         request({
           body: JSON.stringify({
             ...rpcEnvelope(),
-            targetWorkspaceId: "destination",
+            destination: { kind: "workspace", workspaceId: "destination" },
             message,
           }),
         }),
@@ -210,13 +210,13 @@ describe("HttpRpcHandler", () => {
     const handler = new HttpRpcHandler(configured);
     const { res, captured } = response();
     const envelope = rpcEnvelope();
-    envelope.targetWorkspaceId = "source";
+    envelope.destination = { kind: "workspace", workspaceId: "source" };
     envelope.delivery.caller.workspaceId = "forged-workspace";
     await handler.handle(request({ body: JSON.stringify(envelope) }), res);
     expect(captured.status).toBe(200);
     expect(JSON.parse(captured.body)).toMatchObject({
       target: "worker:trusted",
-      targetWorkspaceId: "source",
+      destination: { kind: "workspace", workspaceId: "source" },
       delivery: { caller: { callerId: "main", workspaceId: "source" } },
       provenance: [{ callerId: "worker:trusted", workspaceId: "source" }],
     });

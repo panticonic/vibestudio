@@ -60,7 +60,7 @@ export async function nativeRpc(page, workspaceId, method, args, timeoutMs = 30_
           .send({
             from: caller.callerId,
             target: "main",
-            targetWorkspaceId: workspaceId ?? caller.workspaceId,
+            destination: { kind: "workspace", workspaceId: workspaceId ?? caller.workspaceId },
             delivery: { caller },
             provenance: [caller],
             message: { type: "request", requestId, fromId: caller.callerId, method, args },

@@ -683,6 +683,30 @@ Implementation is recorded in targeted local commits; nothing has been published
 | Examples / Google | `662dc22` / `30e8d16` | Complete standalone source snapshots. |
 | News / Spectrolite | `74200f3` / `2b48cc2` | Complete standalone source snapshots; unrelated local edits preserved. |
 
+### RPC owner routing verification follow-up (2026-09-07)
+
+The pending routing migration uses a typed destination instead of a workspace ID
+for every transport owner. A hub destination cannot be confused with a workspace
+named `hub`. The RPC contract version advances to 4 so mixed-version endpoints
+reject admission instead of silently ignoring an address. The retained desktop
+copy E2E now sends the typed destination and checks the responding workspace.
+This is address and presentation plumbing, not a change to grant semantics.
+
+Host/workerd and all three userland type projections pass. Focused routing and
+transport/server checks passed 258 tests; subsequent IPC rejection coverage passes
+39 tests, including a real client settling both unary and streaming hub rejections.
+The shell acquisition repair has focused scoped-client and real extension-child
+coverage; actual browser-import approval presentation and resumed import remain
+native acceptance work.
+
+The production Iroh check passed 39 of 40 tests but timed out in the streaming
+upload/cancellation case and reported an unhandled connection-close rejection.
+The same four-test client suite passes with the reproducibly rebuilt local native
+binding. That experiment does not establish production Iroh acceptance: the
+production dependency still needs the native repair. Hub approval presentation,
+remaining agentic cases, and the other outstanding acceptance requirements above
+are not complete.
+
 ## 1. The five rules
 
 ### 1. A workspace is a complete working environment

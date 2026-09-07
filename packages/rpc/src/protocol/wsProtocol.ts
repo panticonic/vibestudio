@@ -1,3 +1,4 @@
+import type { RpcDestination } from "../types.js";
 import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
@@ -125,7 +126,7 @@ export interface WsRoutedMessage {
 export interface WsRoutedEventErrorMessage {
   type: "ws:routed-event-error";
   targetId: string;
-  targetWorkspaceId?: string;
+  destination?: RpcDestination;
   event: string;
   error: string;
   errorKind: RpcErrorKind;
@@ -135,7 +136,7 @@ export interface WsRoutedEventErrorMessage {
 export interface WsRoutedResponseErrorMessage {
   type: "ws:routed-response-error";
   targetId: string;
-  targetWorkspaceId?: string;
+  destination?: RpcDestination;
   requestId: string;
   error: string;
   errorKind: RpcErrorKind;

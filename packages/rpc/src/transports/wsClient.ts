@@ -1,3 +1,4 @@
+import { workspaceRpcDestination } from "../destination.js";
 import type {
   EnvelopeRpcTransport,
   RpcConnectionStatus,
@@ -136,6 +137,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   };
 
   const sendEnvelope = async (envelope: RpcEnvelope, streamBody = false): Promise<void> => {
+    workspaceRpcDestination(envelope.destination);
     const target = config.routeTarget?.(envelope.target) ?? envelope.target;
     const routedEnvelope = target === envelope.target ? envelope : { ...envelope, target };
     if (streamBody && target !== "main" && target !== "server") {
@@ -422,14 +424,18 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
             caller: {
               callerId: msg.targetId,
               callerKind: "unknown",
-              ...(msg.targetWorkspaceId ? { workspaceId: msg.targetWorkspaceId } : {}),
+              ...(msg.destination?.kind === "workspace"
+                ? { workspaceId: msg.destination.workspaceId }
+                : {}),
             },
           },
           provenance: [
             {
               callerId: msg.targetId,
               callerKind: "unknown",
-              ...(msg.targetWorkspaceId ? { workspaceId: msg.targetWorkspaceId } : {}),
+              ...(msg.destination?.kind === "workspace"
+                ? { workspaceId: msg.destination.workspaceId }
+                : {}),
             },
           ],
           message: errorMessage,
@@ -679,6 +685,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         void sendEnvelope({
           from: envelope.from,
           target: envelope.target,
+          ...(envelope.destination ? { destination: envelope.destination } : {}),
           delivery: envelope.delivery,
           provenance: envelope.provenance,
           message: {

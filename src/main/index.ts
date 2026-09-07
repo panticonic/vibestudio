@@ -2465,7 +2465,7 @@ app.on("ready", async () => {
     const ipcDispatcher = new IpcDispatcher({
       workspaceId: conn.workspaceId,
       resolveWorkspaceRuntime: ensureDesktopWorkspace,
-      resolveWorkspaceUiRuntime: async (caller, targetWorkspaceId) => {
+      resolveWorkspaceUiRuntime: async (caller, destination) => {
         const vm = applicationWindow.viewManager;
         const view = vm?.getViewInfo(caller.callerId);
         if (caller.callerKind !== "app" || !view?.hostChrome) return null;
@@ -2486,10 +2486,10 @@ app.on("ready", async () => {
         ) {
           throw new Error("Only your System workspace may host desktop UI");
         }
-        if (!workspaces.some((entry) => entry.workspaceId === targetWorkspaceId)) {
+        if (!workspaces.some((entry) => entry.workspaceId === destination)) {
           throw new Error("You no longer have access to this workspace");
         }
-        const target = await ensureDesktopWorkspace(targetWorkspaceId);
+        const target = await ensureDesktopWorkspace(destination);
         const current = vm?.getViewInfo(caller.callerId);
         if (
           !current?.hostChrome ||
@@ -2505,7 +2505,7 @@ app.on("ready", async () => {
           "listWorkspaces",
           []
         )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
-        if (!currentMembers.some((entry) => entry.workspaceId === targetWorkspaceId))
+        if (!currentMembers.some((entry) => entry.workspaceId === destination))
           throw new Error("Workspace access was removed during startup");
         return target;
       },

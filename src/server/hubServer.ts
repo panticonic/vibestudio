@@ -1,3 +1,4 @@
+import { workspaceRpcDestination } from "@vibestudio/rpc";
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -1251,7 +1252,7 @@ async function handleInternalRoute(
         },
         assertAccess(invocation) {
           const access = {
-            destinationWorkspaceId: invocation.envelope.targetWorkspaceId!,
+            destinationWorkspaceId: workspaceRpcDestination(invocation.envelope.destination)!,
             target: invocation.envelope.target,
             operation: invocation.operation,
             purpose: invocation.purpose,

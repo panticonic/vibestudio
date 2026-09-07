@@ -1,3 +1,4 @@
+import { workspaceRpcDestination } from "@vibestudio/rpc";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WorkspaceRpcInvocation } from "./workspaceRpcTransport.js";
 import { forwardWorkspaceRpcHttp, receiveWorkspaceRpcHttp } from "./workspaceRpcTransport.js";
@@ -29,7 +30,7 @@ export async function receiveHubWorkspaceRpcHttp(
     assertLive(invocation) {
       if (
         invocation.caller.workspaceId !== sourceWorkspaceId ||
-        invocation.envelope.targetWorkspaceId === sourceWorkspaceId
+        workspaceRpcDestination(invocation.envelope.destination) === sourceWorkspaceId
       ) {
         throw Object.assign(new Error("Workspace caller does not match its host"), {
           code: "EACCES",
@@ -39,7 +40,7 @@ export async function receiveHubWorkspaceRpcHttp(
     },
     async dispatch(delivery) {
       const destination = await options.resolveDestination(
-        delivery.invocation.envelope.targetWorkspaceId!
+        workspaceRpcDestination(delivery.invocation.envelope.destination)!
       );
       await forwardWorkspaceRpcHttp({
         url: destination.url,

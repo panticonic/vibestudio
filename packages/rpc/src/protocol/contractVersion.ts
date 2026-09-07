@@ -12,4 +12,4 @@
  * must not interoperate, even if the transport frame shapes themselves remain
  * valid. Persistent peers must present this exact version during admission.
  */
-export const RPC_CONTRACT_VERSION = 3 as const;
+export const RPC_CONTRACT_VERSION = 4 as const;

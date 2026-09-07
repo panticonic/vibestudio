@@ -90,7 +90,9 @@ export class WorkspaceUiSessions {
             this.deliver(caller, {
               ...envelope,
               target: caller.runtimeId ?? caller.callerId,
-              targetWorkspaceId: caller.workspaceId,
+              destination: caller.workspaceId
+                ? { kind: "workspace", workspaceId: caller.workspaceId }
+                : undefined,
               delivery: {
                 ...envelope.delivery,
                 caller: { ...envelope.delivery.caller, workspaceId: runtime.workspaceId },
@@ -116,7 +118,7 @@ export class WorkspaceUiSessions {
     envelope: RpcEnvelope
   ): RpcEnvelope {
     return stampEnvelopeCaller(
-      { ...envelope, targetWorkspaceId: runtime.workspaceId },
+      { ...envelope, destination: { kind: "workspace", workspaceId: runtime.workspaceId } },
       {
         callerId: caller.runtimeId ?? caller.callerId,
         callerKind: "shell",

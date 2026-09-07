@@ -12,7 +12,7 @@ const caller = {
 const request: RpcEnvelope = {
   from: "shell-app",
   target: "worker:context:branch",
-  targetWorkspaceId: "project",
+  destination: { kind: "workspace", workspaceId: "project" },
   delivery: { caller: { callerId: "forged", callerKind: "server" } },
   provenance: [],
   message: { type: "request", requestId: "r1", fromId: "shell-app", method: "read", args: [] },
@@ -51,7 +51,7 @@ describe("WorkspaceUiSessions", () => {
     expect(await directory.session(caller, runtime)).toBe(session);
     const sent = directory.envelope(caller, runtime, request);
     expect(sent.target).toBe("worker:context:branch");
-    expect(sent.targetWorkspaceId).toBe("project");
+    expect(sent.destination).toEqual({ kind: "workspace", workspaceId: "project" });
     expect(sent.delivery.caller).toEqual({
       callerId: "shell-app",
       callerKind: "shell",
@@ -67,7 +67,7 @@ describe("WorkspaceUiSessions", () => {
     await vi.waitFor(() => expect(deliver).toHaveBeenCalled());
     expect(deliver.mock.calls[0]?.[1]).toMatchObject({
       target: "shell-app",
-      targetWorkspaceId: "system",
+      destination: { kind: "workspace", workspaceId: "system" },
       delivery: { caller: { workspaceId: "project" } },
       message: request.message,
     });

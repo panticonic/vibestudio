@@ -236,10 +236,14 @@ async function nativeWorkspaceRead<T>(
           off();
           reject(new Error(`Timed out reading ${method}`));
         }, 30_000);
-        const off = bridge.onMessage(({ message }) => {
+        const off = bridge.onMessage(({ message, delivery }) => {
           if (message.type !== "response" || message.requestId !== requestId) return;
           clearTimeout(timer);
           off();
+          if (delivery.caller.workspaceId !== (workspaceId ?? bridge.identity.workspaceId)) {
+            reject(new Error(`Received ${method} from a different workspace`));
+            return;
+          }
           if ("error" in message) reject(new Error(message.error));
           else resolve(message.result as T);
         });
@@ -252,7 +256,7 @@ async function nativeWorkspaceRead<T>(
           .send({
             from: caller.callerId,
             target: "main",
-            targetWorkspaceId: workspaceId ?? caller.workspaceId,
+            destination: { kind: "workspace", workspaceId: workspaceId ?? caller.workspaceId },
             delivery: { caller },
             provenance: [caller],
             message: { type: "request", requestId, fromId: caller.callerId, method, args },

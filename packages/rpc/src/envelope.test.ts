@@ -103,7 +103,7 @@ describe("envelope helpers", () => {
       selfId: "worker:forged",
       from: "worker:forged",
       target: "worker:receiver",
-      targetWorkspaceId: "workspace:destination",
+      destination: { kind: "workspace", workspaceId: "workspace:destination" },
       caller: authenticatedCaller("worker:forged", "worker", "workspace:claimed-origin"),
       message: {
         type: "event",
@@ -118,7 +118,10 @@ describe("envelope helpers", () => {
       authenticatedCaller("worker:actual", "worker", "workspace:verified-origin")
     );
 
-    expect(stamped.targetWorkspaceId).toBe("workspace:destination");
+    expect(stamped.destination).toEqual({
+      kind: "workspace",
+      workspaceId: "workspace:destination",
+    });
     expect(stamped.delivery.caller.workspaceId).toBe("workspace:verified-origin");
     expect(stamped.provenance).toEqual([
       {
@@ -135,7 +138,7 @@ describe("envelope helpers", () => {
       selfId: "worker:sender",
       from: "worker:sender",
       target: "worker:receiver",
-      targetWorkspaceId: "workspace:destination",
+      destination: { kind: "workspace", workspaceId: "workspace:destination" },
       caller: authenticatedCaller("worker:sender", "worker", "workspace:origin"),
       message: {
         type: "request",
@@ -153,7 +156,7 @@ describe("envelope helpers", () => {
     );
 
     expect(response.target).toBe("worker:sender");
-    expect(response.targetWorkspaceId).toBe("workspace:origin");
+    expect(response.destination).toEqual({ kind: "workspace", workspaceId: "workspace:origin" });
     expect(response.delivery.caller.workspaceId).toBe("workspace:destination");
   });
 
@@ -162,7 +165,7 @@ describe("envelope helpers", () => {
       selfId: "worker:sender",
       from: "worker:sender",
       target: "worker:receiver",
-      targetWorkspaceId: "workspace:destination",
+      destination: { kind: "workspace", workspaceId: "workspace:destination" },
       message: {
         type: "request",
         requestId: "r-unattributed",

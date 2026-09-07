@@ -2,14 +2,15 @@ import type { RpcEnvelope } from "@vibestudio/rpc";
 
 /** Omitted addressing is local. An explicit foreign address must enter the boundary router. */
 export function isLocalWorkspaceTarget(
-  envelope: Pick<RpcEnvelope, "targetWorkspaceId">,
+  envelope: Pick<RpcEnvelope, "destination">,
   workspaceId: string | undefined
 ): boolean {
   return (
-    envelope.targetWorkspaceId === undefined ||
+    envelope.destination === undefined ||
     (typeof workspaceId === "string" &&
       workspaceId.length > 0 &&
-      envelope.targetWorkspaceId === workspaceId)
+      envelope.destination?.kind === "workspace" &&
+      envelope.destination.workspaceId === workspaceId)
   );
 }
 

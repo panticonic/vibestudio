@@ -963,7 +963,7 @@ describe("RpcServer relay behavior", () => {
         envelope: {
           from: "forged",
           target: "main",
-          targetWorkspaceId: "foreign-workspace",
+          destination: { kind: "workspace", workspaceId: "foreign-workspace" },
           delivery: {
             caller: { callerId: "forged", callerKind: "server", workspaceId: "foreign-workspace" },
           },
@@ -4061,6 +4061,55 @@ describe("RpcServer relay behavior", () => {
       error: "Target not reachable: panel:nav-b",
       errorCode: "TARGET_NOT_REACHABLE",
     });
+  });
+});
+
+describe("RpcServer socket destination admission", () => {
+  it.each(
+    (["ws:rpc", "ws:route"] as const).flatMap((frameType) =>
+      (["request", "stream-request"] as const).flatMap((messageType) => [
+        { frameType, messageType, destination: { kind: "hub" } },
+        { frameType, messageType, destination: { kind: "workspace", workspaceId: "" } },
+        { frameType, messageType, destination: { kind: "workspace", workspaceId: 42 } },
+      ])
+    )
+  )("closes $frameType $messageType with an unsupported destination", (input) => {
+    const { server } = createServer();
+    const client = createClient();
+    registerClient(server, client);
+    const message: RpcMessage =
+      input.messageType === "request"
+        ? {
+            type: "request",
+            requestId: "invalid-destination",
+            fromId: client.caller.runtime.id,
+            method: "workspace.getInfo",
+            args: [],
+          }
+        : {
+            type: "stream-request",
+            requestId: "invalid-destination",
+            fromId: client.caller.runtime.id,
+            method: "events.subscribe",
+            args: [],
+          };
+    const envelope = {
+      ...clientEnvelope(
+        client,
+        input.frameType === "ws:rpc" ? "main" : "do:workers/example:Store:one",
+        message
+      ),
+      destination: input.destination,
+    } as RpcEnvelope;
+
+    testServer(server).handleMessage(client, {
+      type: input.frameType,
+      envelope,
+    });
+
+    expect(client.ws.close).toHaveBeenCalledWith(4004, "Invalid RPC destination");
+    expect(client.ws.sendMessage).not.toHaveBeenCalled();
+    expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
   });
 });
 

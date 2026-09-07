@@ -3,6 +3,13 @@
  * streaming. Stateful workspace services can layer their own protocols
  * on top of the same runtime service-resolution path.
  */
+export {
+  isLocalRpcDestination,
+  isWorkspaceRpcDestination,
+  rpcDestinationMatchesCaller,
+  rpcDestinationKey,
+  workspaceRpcDestination,
+} from "./destination.js";
 
 export type {
   RpcRequest,
@@ -16,6 +23,7 @@ export type {
   RpcTransport,
   RpcCallOptions,
   RpcTargetOptions,
+  RpcDestination,
   RpcCausalParent,
   RpcStreamOptions,
   AuthenticatedCaller,

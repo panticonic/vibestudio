@@ -73,8 +73,10 @@ export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocat
     !record(value["envelope"]["message"]) ||
     typeof value["envelope"]["from"] !== "string" ||
     typeof value["envelope"]["target"] !== "string" ||
-    typeof value["envelope"]["targetWorkspaceId"] !== "string" ||
-    !value["envelope"]["targetWorkspaceId"] ||
+    !record(value["envelope"]["destination"]) ||
+    value["envelope"]["destination"]["kind"] !== "workspace" ||
+    typeof value["envelope"]["destination"]["workspaceId"] !== "string" ||
+    !value["envelope"]["destination"]["workspaceId"] ||
     !record(value["envelope"]["delivery"]) ||
     !record(value["envelope"]["delivery"]["caller"]) ||
     !Array.isArray(value["envelope"]["provenance"]) ||
@@ -161,9 +163,11 @@ function assertReply(invocation: WorkspaceRpcInvocation, reply: RpcEnvelope): vo
     !record(reply.message) ||
     !record(reply.delivery) ||
     !record(reply.delivery.caller) ||
-    reply.targetWorkspaceId !== invocation.caller.workspaceId ||
+    reply.destination?.kind !== "workspace" ||
+    reply.destination.workspaceId !== invocation.caller.workspaceId ||
     reply.target !== invocation.envelope.from ||
-    reply.delivery.caller.workspaceId !== invocation.envelope.targetWorkspaceId
+    invocation.envelope.destination?.kind !== "workspace" ||
+    reply.delivery.caller.workspaceId !== invocation.envelope.destination.workspaceId
   )
     throw denied();
   const message = reply.message;

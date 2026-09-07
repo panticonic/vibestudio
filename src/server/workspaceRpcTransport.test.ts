@@ -50,7 +50,7 @@ function invocation(type: "request" | "stream-request" = "request"): WorkspaceRp
     envelope: {
       from: "panel:123",
       target: "do:workers/calendar:Calendar:context-object",
-      targetWorkspaceId: "destination",
+      destination: { kind: "workspace", workspaceId: "destination" },
       delivery: {
         caller: {
           callerId: "panel:123",
@@ -96,7 +96,12 @@ async function fixture(dispatch: (delivery: WorkspaceRpcDelivery) => Promise<voi
         if (req.headers.authorization !== "Bearer destination-secret") deny();
       },
       assertLive(input) {
-        if (!destinationLive || input.envelope.targetWorkspaceId !== "destination") deny();
+        if (
+          !destinationLive ||
+          input.envelope.destination?.kind !== "workspace" ||
+          input.envelope.destination.workspaceId !== "destination"
+        )
+          deny();
       },
       dispatch: receiver,
     });

@@ -1,3 +1,5 @@
+import { isLocalRpcDestination, rpcDestinationMatchesCaller } from "./destination.js";
+import type { RpcDestination } from "./types.js";
 import type {
   AuthenticatedCaller,
   CallerKind,
@@ -73,8 +75,8 @@ function acquisitionIdOf(error: unknown, selfId: string): string | null {
  * caller↔caller call, whose response the server inbox can replay after a clean
  * reconnect.
  */
-function isServerTarget(target: string, targetWorkspaceId?: string): boolean {
-  return targetWorkspaceId === undefined && (target === "main" || target === "server");
+function isServerTarget(target: string, destination?: RpcDestination): boolean {
+  return destination === undefined && (target === "main" || target === "server");
 }
 
 function generateRequestId(): string {
@@ -206,7 +208,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       abortCleanup: (() => void) | null;
       /** Envelope target — drives the direct-server vs routed rejection policy (§3.4). */
       target: string;
-      targetWorkspaceId?: string;
+      destination?: RpcDestination;
     }
   >();
   const pendingStreams = new Map<
@@ -226,7 +228,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       idleTimer: ReturnType<typeof setTimeout> | null;
       cancel: () => void;
       cleanup: () => void;
-      targetWorkspaceId?: string;
+      destination?: RpcDestination;
     }
   >();
   const activeStreamingHandlers = new Map<
@@ -274,7 +276,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     return {
       from: config.selfId,
       target: targetId,
-      ...(options?.targetWorkspaceId ? { targetWorkspaceId: options.targetWorkspaceId } : {}),
+      ...(options?.destination ? { destination: options.destination } : {}),
       delivery: {
         caller: selfCaller,
         ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
@@ -336,7 +338,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       idempotencyKey?: string;
       readOnly?: boolean;
       signal?: AbortSignal;
-      targetWorkspaceId?: string;
+      destination?: RpcDestination;
     },
     provenance?: AuthenticatedCaller[]
   ): Promise<void> {
@@ -347,7 +349,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   async function deliverEnvelope(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
     if (
       envelope.target === config.selfId &&
-      (!envelope.targetWorkspaceId || envelope.targetWorkspaceId === config.workspaceId)
+      isLocalRpcDestination(envelope.destination, config.workspaceId)
     ) {
       queueMicrotask(() => handleEnvelope(envelope));
       return;
@@ -407,11 +409,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   // (§3.4) uses it twice: direct-server pendings on pipe-down, routed pendings
   // on cold-recover.
   function rejectPendingRequests(
-    predicate: (target: string, targetWorkspaceId?: string) => boolean,
+    predicate: (target: string, destination?: RpcDestination) => boolean,
     error: Error
   ): void {
     for (const [requestId, pending] of [...pendingRequests]) {
-      if (!predicate(pending.target, pending.targetWorkspaceId)) continue;
+      if (!predicate(pending.target, pending.destination)) continue;
       pendingRequests.delete(requestId);
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.abortCleanup?.();
@@ -422,11 +424,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   function handleResponse(envelope: RpcEnvelope, response: RpcResponse): void {
     const pending = pendingRequests.get(response.requestId);
     if (!pending) return;
-    if (
-      pending.targetWorkspaceId &&
-      envelope.delivery.caller.workspaceId !== pending.targetWorkspaceId
-    )
-      return;
+    if (!rpcDestinationMatchesCaller(pending.destination, envelope.delivery.caller)) return;
     pendingRequests.delete(response.requestId);
     if (pending.timeout) clearTimeout(pending.timeout);
     pending.abortCleanup?.();
@@ -459,8 +457,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   function handleStreamFrame(envelope: RpcEnvelope, frame: RpcStreamFrameMessage): void {
     const entry = pendingStreams.get(frame.requestId);
     if (!entry || entry.bodyClosed) return;
-    if (entry.targetWorkspaceId && envelope.delivery.caller.workspaceId !== entry.targetWorkspaceId)
-      return;
+    if (!rpcDestinationMatchesCaller(entry.destination, envelope.delivery.caller)) return;
     if (frame.frameType === FRAME_HEAD) {
       try {
         if (entry.idleTimer) {
@@ -674,7 +671,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   }
 
   function handleEnvelope(envelope: RpcEnvelope): void {
-    if (envelope.targetWorkspaceId && envelope.targetWorkspaceId !== config.workspaceId) return;
+    if (!isLocalRpcDestination(envelope.destination, config.workspaceId)) return;
     const message = envelope.message;
     switch (message.type) {
       case "request":
@@ -737,9 +734,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           void send(
             targetId,
             { type: "request-cancel", requestId, fromId: config.selfId },
-            options?.targetWorkspaceId
-              ? { targetWorkspaceId: options.targetWorkspaceId }
-              : undefined,
+            options?.destination ? { destination: options.destination } : undefined,
             provenance
           ).catch(() => {});
           rejectPending(new Error(`RPC call timed out after ${effectiveTimeoutMs}ms`));
@@ -750,9 +745,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           void send(
             targetId,
             { type: "request-cancel", requestId, fromId: config.selfId },
-            options?.targetWorkspaceId
-              ? { targetWorkspaceId: options.targetWorkspaceId }
-              : undefined,
+            options?.destination ? { destination: options.destination } : undefined,
             provenance
           ).catch(() => {});
           rejectPending(new Error("RPC call aborted by caller"));
@@ -766,7 +759,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         timeout,
         abortCleanup,
         target: targetId,
-        ...(options?.targetWorkspaceId ? { targetWorkspaceId: options.targetWorkspaceId } : {}),
+        ...(options?.destination ? { destination: options.destination } : {}),
       });
       void send(targetId, request, options, provenance).catch((error) => {
         const pending = pendingRequests.get(requestId);
@@ -794,8 +787,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           acquisitionMode === "wait" ? acquisitionIdOf(error, config.selfId) : null;
         if (
           !acquisitionId ||
-          (isServerTarget(targetId, options?.targetWorkspaceId) &&
-            method === "authority.awaitDecision")
+          (isServerTarget(targetId, options?.destination) && method === "authority.awaitDecision")
         ) {
           throw error;
         }
@@ -809,7 +801,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           "main",
           "authority.awaitDecision",
           [{ acquisitionId }],
-          options?.signal ? { signal: options.signal } : undefined
+          {
+            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(options?.destination ? { destination: options.destination } : {}),
+          }
         );
         if (outcome.state !== "decided") throw error;
       }
@@ -943,7 +938,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   ): RpcPeer<TMethods, TEvents, TEmitEvents> {
     const result: RpcPeer<TMethods, TEvents, TEmitEvents> = {
       id: targetId,
-      ...(options?.targetWorkspaceId ? { targetWorkspaceId: options.targetWorkspaceId } : {}),
+      ...(options?.destination ? { destination: options.destination } : {}),
       call: createCallProxy<TMethods>((method, args) =>
         observeOutbound(callWithProvenance(provenance, targetId, method, args, options))
       ),
@@ -951,7 +946,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         return client.on(event, (ev) => {
           if (
             ev.caller.callerId === targetId &&
-            (!options?.targetWorkspaceId || ev.caller.workspaceId === options.targetWorkspaceId)
+            rpcDestinationMatchesCaller(options?.destination, ev.caller)
           )
             listener(ev as never);
         });
@@ -996,7 +991,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       void send(
         targetId,
         { type: "stream-cancel", requestId, fromId: config.selfId },
-        options?.targetWorkspaceId ? { targetWorkspaceId: options.targetWorkspaceId } : undefined,
+        options?.destination ? { destination: options.destination } : undefined,
         provenance
       ).catch(() => {});
     };
@@ -1039,7 +1034,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       idleTimer: null,
       cancel: sendCancel,
       cleanup: () => signal?.removeEventListener("abort", onAbort),
-      ...(options?.targetWorkspaceId ? { targetWorkspaceId: options.targetWorkspaceId } : {}),
+      ...(options?.destination ? { destination: options.destination } : {}),
     });
     armStreamHeadTimer(requestId, options?.headTimeoutMs ?? streamIdleTimeoutMs);
     try {
@@ -1185,7 +1180,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   config.onRecovery?.((kind) => {
     if (kind === "cold-recover") {
       rejectPendingRequests(
-        (target, targetWorkspaceId) => !isServerTarget(target, targetWorkspaceId),
+        (target, destination) => !isServerTarget(target, destination),
         makeConnectionLostError()
       );
     }

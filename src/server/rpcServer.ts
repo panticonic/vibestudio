@@ -1,3 +1,8 @@
+import {
+  isWorkspaceRpcDestination,
+  workspaceRpcDestination,
+  type RpcDestination,
+} from "@vibestudio/rpc";
 import { isLocalWorkspaceTarget, WORKSPACE_RPC_NOT_ADMITTED } from "./rpcServer/workspaceTarget.js";
 /**
  * RPC session server — handles caller-scoped app, panel, worker, extension,
@@ -2377,13 +2382,17 @@ export class RpcServer {
           return;
         }
         const envelope = stampEnvelopeCaller(inboundEnvelope, authenticatedCallerOf(client.caller));
+        if (!isWorkspaceRpcDestination(envelope.destination)) {
+          client.ws.close(4004, "Invalid RPC destination");
+          return;
+        }
         if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
           this.sendRouteError(
             client,
             envelope.target,
             envelope.message,
             createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
-            envelope.targetWorkspaceId
+            envelope.destination
           );
           return;
         }
@@ -2441,13 +2450,17 @@ export class RpcServer {
           msg.envelope,
           authenticatedCallerOf(client.caller)
         );
+        if (!isWorkspaceRpcDestination(routeEnvelope.destination)) {
+          client.ws.close(4004, "Invalid RPC destination");
+          return;
+        }
         if (!isLocalWorkspaceTarget(routeEnvelope, this.deps.workspaceId)) {
           this.sendRouteError(
             client,
             routeEnvelope.target,
             routeEnvelope.message,
             createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
-            routeEnvelope.targetWorkspaceId
+            routeEnvelope.destination
           );
           return;
         }
@@ -2833,7 +2846,7 @@ export class RpcServer {
     targetId: string,
     message: RpcMessage,
     err: unknown,
-    targetWorkspaceId?: string
+    destination?: RpcDestination
   ): void {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorCode = getErrorCode(err);
@@ -2852,7 +2865,7 @@ export class RpcServer {
             ...(errorCode ? { errorCode } : {}),
             ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
           },
-          targetWorkspaceId ?? this.deps.workspaceId
+          workspaceRpcDestination(destination) ?? this.deps.workspaceId
         ),
       });
       return;
@@ -2878,7 +2891,7 @@ export class RpcServer {
               ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
             }),
           },
-          targetWorkspaceId ?? this.deps.workspaceId
+          workspaceRpcDestination(destination) ?? this.deps.workspaceId
         ),
       });
       return;
@@ -2889,7 +2902,7 @@ export class RpcServer {
         callerId: client.caller.runtime.id,
         callerKind: client.caller.runtime.kind,
         targetId,
-        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
+        ...(destination ? { destination } : {}),
         requestId: message.requestId,
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
@@ -2898,7 +2911,7 @@ export class RpcServer {
       this.sendToSession(client.ws, {
         type: "ws:routed-response-error",
         targetId,
-        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
+        ...(destination ? { destination } : {}),
         requestId: message.requestId,
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
@@ -2916,7 +2929,7 @@ export class RpcServer {
         callerId: client.caller.runtime.id,
         callerKind: client.caller.runtime.kind,
         targetId,
-        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
+        ...(destination ? { destination } : {}),
         event: eventMessage.event,
         fromId: eventMessage.fromId,
         error: errorMessage,
@@ -2925,7 +2938,7 @@ export class RpcServer {
       this.sendToSession(client.ws, {
         type: "ws:routed-event-error",
         targetId,
-        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
+        ...(destination ? { destination } : {}),
         event: eventMessage.event,
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),

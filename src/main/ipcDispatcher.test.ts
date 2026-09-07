@@ -7,7 +7,7 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
-import { base64ToBytes } from "@vibestudio/rpc";
+import { base64ToBytes, createRpcClient } from "@vibestudio/rpc";
 import { FRAME_DATA, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
@@ -168,7 +168,7 @@ describe("IpcDispatcher", () => {
       { sender: contents } as never,
       {
         ...envelope,
-        targetWorkspaceId: "destination",
+        destination: { kind: "workspace", workspaceId: "destination" },
         delivery: {
           ...envelope.delivery,
           caller: { callerId: "forged", callerKind: "server", workspaceId: "forged-workspace" },
@@ -181,14 +181,17 @@ describe("IpcDispatcher", () => {
         "workspace",
         "getInfo",
         [],
-        { targetWorkspaceId: "destination" }
+        { destination: { kind: "workspace", workspaceId: "destination" } }
       )
     );
     await vi.waitFor(() => {
       const response = contents.send.mock.calls.find(
         (call) => call[0] === "vibestudio:rpc:message"
       )?.[1] as RpcEnvelope;
-      expect(response.targetWorkspaceId).toBe("workspace-owning-ipc");
+      expect(response.destination).toEqual({
+        kind: "workspace",
+        workspaceId: "workspace-owning-ipc",
+      });
       expect(response.delivery.caller.workspaceId).toBe("workspace-owning-ipc");
     });
     expect(serverClient.call).not.toHaveBeenCalled();
@@ -232,14 +235,16 @@ describe("IpcDispatcher", () => {
           { sender: contents } as never,
           {
             ...rpcEnvelope("forged", "server", message, undefined, "worker:branch"),
-            targetWorkspaceId,
+            ...(targetWorkspaceId
+              ? { destination: { kind: "workspace", workspaceId: targetWorkspaceId } }
+              : {}),
           } as never
         );
         await vi.waitFor(() =>
           expect(session.send).toHaveBeenCalledWith(
             expect.objectContaining({
               target: "worker:branch",
-              targetWorkspaceId: targetWorkspaceId ?? "system",
+              destination: { kind: "workspace", workspaceId: targetWorkspaceId ?? "system" },
               message,
             })
           )
@@ -279,7 +284,7 @@ describe("IpcDispatcher", () => {
           method: "workspace.getInfo",
           args: [],
         }),
-        targetWorkspaceId: "project",
+        destination: { kind: "workspace", workspaceId: "project" },
       } as never
     );
     await vi.waitFor(() =>
@@ -287,7 +292,7 @@ describe("IpcDispatcher", () => {
         "vibestudio:rpc:message",
         expect.objectContaining({
           target: "shell-app",
-          targetWorkspaceId: "system",
+          destination: { kind: "workspace", workspaceId: "system" },
           delivery: expect.objectContaining({
             caller: expect.objectContaining({ workspaceId: "project" }),
           }),
@@ -296,6 +301,123 @@ describe("IpcDispatcher", () => {
       )
     );
     expect(serverClient.callAs).not.toHaveBeenCalled();
+    await ipcDispatcher.shutdown();
+  });
+
+  it.each([
+    {
+      name: "request",
+      message: {
+        type: "request" as const,
+        requestId: "hub-request",
+        fromId: "shell-app",
+        method: "workspace.getInfo",
+        args: [],
+      },
+      responseType: "response",
+    },
+    {
+      name: "stream",
+      message: {
+        type: "stream-request" as const,
+        requestId: "hub-stream",
+        fromId: "shell-app",
+        method: "events.subscribe",
+        args: [],
+      },
+      responseType: "stream-frame",
+    },
+  ])("returns an explicit error for a hub-addressed $name", async ({ message, responseType }) => {
+    const contents = makeWebContents(60);
+    const caller = {
+      callerId: "native:system:app",
+      runtimeId: "shell-app",
+      workspaceId: "system",
+      callerKind: "app" as const,
+    };
+    const { ipcDispatcher, serverClient } = makeDispatcher({ resolve: () => caller });
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: contents } as never,
+      {
+        ...rpcEnvelope("shell-app", "app", message),
+        destination: { kind: "hub" },
+      } as never
+    );
+
+    await vi.waitFor(() => {
+      const response = contents.send.mock.calls.find(
+        (call) => call[0] === "vibestudio:rpc:message"
+      )?.[1] as RpcEnvelope | undefined;
+      expect(response).toMatchObject({
+        target: "shell-app",
+        destination: { kind: "workspace", workspaceId: "system" },
+        delivery: { caller: { callerId: "hub", callerKind: "server" } },
+        message: {
+          type: responseType,
+          requestId: message.requestId,
+        },
+      });
+      expect(response?.delivery.caller).not.toHaveProperty("workspaceId");
+      if (responseType === "response") {
+        expect(response?.message).toMatchObject({
+          error: "This receiver requires a workspace RPC destination",
+          errorKind: "access",
+        });
+      } else {
+        expect(JSON.parse((response?.message as { payload: string }).payload)).toMatchObject({
+          message: "This receiver requires a workspace RPC destination",
+          errorKind: "access",
+        });
+      }
+    });
+    expect(serverClient.callAs).not.toHaveBeenCalled();
+    expect(serverClient.streamAs).not.toHaveBeenCalled();
+    await ipcDispatcher.shutdown();
+  });
+
+  it("settles hub-addressed calls and streams rejected by the workspace IPC receiver", async () => {
+    const rendererHandlers = new Set<(envelope: RpcEnvelope) => void>();
+    const contents = makeWebContents(61);
+    contents.send.mockImplementation((channel: string, envelope: RpcEnvelope) => {
+      if (channel === "vibestudio:rpc:message")
+        rendererHandlers.forEach((handler) => handler(envelope));
+    });
+    const caller = {
+      callerId: "native:system:app",
+      runtimeId: "shell-app",
+      workspaceId: "system",
+      callerKind: "app" as const,
+    };
+    const { ipcDispatcher } = makeDispatcher({ resolve: () => caller });
+    const rpc = createRpcClient({
+      selfId: caller.runtimeId,
+      callerKind: "app",
+      workspaceId: caller.workspaceId,
+      transport: {
+        send: async (envelope) => {
+          ipcHandlers.get("vibestudio:rpc:send")?.(
+            { sender: contents } as never,
+            envelope as never
+          );
+        },
+        onMessage: (handler) => {
+          rendererHandlers.add(handler);
+          return () => rendererHandlers.delete(handler);
+        },
+        status: () => "connected",
+        ready: async () => {},
+        onStatusChange: () => () => {},
+      },
+    });
+    const destination = { kind: "hub" } as const;
+
+    await expect(rpc.call("main", "workspace.getInfo", [], { destination })).rejects.toMatchObject({
+      message: "This receiver requires a workspace RPC destination",
+      errorKind: "access",
+    });
+    await expect(rpc.stream("main", "events.subscribe", [], { destination })).rejects.toThrow(
+      "This receiver requires a workspace RPC destination"
+    );
     await ipcDispatcher.shutdown();
   });
 
@@ -383,7 +505,7 @@ describe("IpcDispatcher", () => {
           method: "panel.new",
           args: [],
         }),
-        targetWorkspaceId: "project",
+        destination: { kind: "workspace", workspaceId: "project" },
       } as never
     );
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
@@ -396,7 +518,7 @@ describe("IpcDispatcher", () => {
         "vibestudio:rpc:message",
         expect.objectContaining({
           target: "shell-app",
-          targetWorkspaceId: "system",
+          destination: { kind: "workspace", workspaceId: "system" },
           delivery: expect.objectContaining({
             caller: expect.objectContaining({ workspaceId: "project" }),
           }),
@@ -1459,7 +1581,10 @@ describe("IpcDispatcher", () => {
         {
           opId: "ui-upload",
           bodyId: "ui-body",
-          envelope: { ...streamRequest(), targetWorkspaceId: "project" },
+          envelope: {
+            ...streamRequest(),
+            destination: { kind: "workspace", workspaceId: "project" },
+          },
         } as never
       );
       await ipcInvokeHandlers.get("vibestudio:rpc:stream-body-chunk")?.(
@@ -1478,7 +1603,7 @@ describe("IpcDispatcher", () => {
       );
       expect(received).toEqual(new Uint8Array([1, 2]));
       expect(streamReadable.mock.calls[0]?.[0]).toMatchObject({
-        targetWorkspaceId: "project",
+        destination: { kind: "workspace", workspaceId: "project" },
         delivery: {
           caller: { callerId: "shell-app", callerKind: "shell", workspaceId: "project" },
         },

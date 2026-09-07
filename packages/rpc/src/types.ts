@@ -305,14 +305,19 @@ export type StreamingMethodHandler = (
   abortSignal: AbortSignal
 ) => Promise<void>;
 
+/** Transport owner; hub control is not a workspace or a workspace member. */
+export type RpcDestination =
+  | { readonly kind: "workspace"; readonly workspaceId: string }
+  | { readonly kind: "hub" };
+
 export interface RpcTargetOptions {
   /**
-   * Route this operation to one exact workspace. Omission means the caller's
+   * Route this operation to one exact transport owner. Omission means the caller's
    * current workspace; transports must not search other workspaces by target
    * name. This caller-selected destination is distinct from the authenticated
    * origin at `delivery.caller.workspaceId`.
    */
-  targetWorkspaceId?: string;
+  destination?: RpcDestination;
 }
 
 export interface RpcCallOptions extends RpcTargetOptions {
@@ -396,8 +401,8 @@ export interface RpcCaller {
 export interface RpcEnvelope {
   from: string;
   target: string;
-  /** Exact destination workspace. Omission keeps routing workspace-local. */
-  targetWorkspaceId?: string;
+  /** Exact destination owner. Omission keeps routing local to the current transport. */
+  destination?: RpcDestination;
   delivery: {
     caller: AuthenticatedCaller;
     idempotencyKey?: string;
@@ -512,7 +517,7 @@ export interface RpcPeer<
   TEmitEvents extends EventMap = TEvents,
 > {
   readonly id: string;
-  readonly targetWorkspaceId?: string;
+  readonly destination?: RpcDestination;
   readonly call: TypedCallProxy<TMethods>;
   on<K extends keyof TEvents & string>(
     event: K,

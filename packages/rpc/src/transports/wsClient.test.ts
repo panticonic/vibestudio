@@ -423,7 +423,7 @@ describe("wsClientTransport", () => {
       data: JSON.stringify({
         type: "ws:routed-response-error",
         targetId: "do:notes:Bucket:key",
-        targetWorkspaceId: "workspace:notes",
+        destination: { kind: "workspace", workspaceId: "workspace:notes" },
         requestId: "req-123",
         error: "Target not reachable: do:notes:Bucket:key",
         errorKind: "transport",
