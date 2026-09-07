@@ -40,6 +40,16 @@ describe("workspace state entity source identity", () => {
     ]);
   });
 
+  it("omits private ownership for shared panel initialization instead of encoding null", () => {
+    const seeds = [{ source: "panels/chat" }];
+    expect(workspaceStateEngineMethods.initializePanels.args.parse([seeds])).toEqual([seeds]);
+    expect(workspaceStateEngineMethods.initializePanels.args.parse([seeds, "user-owner"])).toEqual([
+      seeds,
+      "user-owner",
+    ]);
+    expect(() => workspaceStateEngineMethods.initializePanels.args.parse([seeds, null])).toThrow();
+  });
+
   it("preserves task-scoped system-test authority through alarm scheduling", () => {
     const input = {
       source: "workers/agent-worker",

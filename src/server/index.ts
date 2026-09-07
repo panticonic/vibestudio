@@ -7013,7 +7013,7 @@ async function main() {
     },
     "initializePanels",
     workspaceConfig.initPanels ?? [],
-    privateWorkspaceOwner?.userId
+    ...(privateWorkspaceOwner ? [privateWorkspaceOwner.userId] : [])
   )) as import("@vibestudio/shared/panel/workspaceStateSnapshot").WorkspacePanelDetail[];
   const initialPanelGraph = container
     .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
