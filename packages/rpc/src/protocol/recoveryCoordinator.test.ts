@@ -77,11 +77,13 @@ describe("DefaultRecoveryCoordinator", () => {
     expect(attempts).toBe(2); // succeeded on the 2nd attempt, no 3rd
   });
 
-  it("keeps expected outage retries quiet but reports terminal exhaustion", async () => {
+  it("defers an interrupted generation until the host signals recovery again", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const coord = createRecoveryCoordinator();
-    coord.registerResubscribeHandler("subscription", () => {
+    let offline = true;
+    const subscription = vi.fn(() => {
+      if (!offline) return;
       const cause = new RemoteRpcError("offline", "transport", "CONNECTION_LOST");
       throw Object.assign(new Error("subscription unavailable"), {
         code: "connection",
@@ -89,15 +91,23 @@ describe("DefaultRecoveryCoordinator", () => {
         cause,
       });
     });
+    coord.registerResubscribeHandler("subscription", subscription);
+    const following = vi.fn();
+    coord.registerResubscribeHandler("following", following);
+    await coord.run("resubscribe");
+    const late = vi.fn();
+    coord.registerResubscribeHandler("late", late);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(subscription).toHaveBeenCalledTimes(1);
+    expect(following).not.toHaveBeenCalled();
+    expect(late).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
 
-    const run = coord.run("resubscribe");
-    await vi.advanceTimersByTimeAsync(2_000);
-    await run;
-
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(
-      '[RecoveryCoordinator] resubscribe handler "subscription" exhausted all 3 attempts'
-    );
+    offline = false;
+    await coord.run("resubscribe");
+    expect(subscription).toHaveBeenCalledTimes(2);
+    expect(following).toHaveBeenCalledTimes(1);
+    expect(late).toHaveBeenCalledTimes(1);
   });
 
   it("late-registers a resubscribe handler AFTER a completed generation and runs it immediately", async () => {

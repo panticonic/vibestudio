@@ -81,24 +81,26 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
       kind === "cold-recover" ? [...this.handlers[kind].values()] : this.handlers[kind].values();
     for (const handler of handlers) {
       if (this.handlers[kind].get(handler.name) !== handler) continue;
-      await this.runOne(kind, handler);
+      if (!(await this.runOne(kind, handler))) return;
     }
     this.completedGeneration[kind] = generation;
   }
 
-  private async runOne(kind: RecoveryKind, handler: Handler): Promise<void> {
+  private async runOne(kind: RecoveryKind, handler: Handler): Promise<boolean> {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await handler.fn();
-        return;
+        return true;
       } catch (error) {
-        if (!isRpcConnectionLost(error)) {
-          console.warn(
-            `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}):`,
-            error
-          );
-        }
+        // A resource can close just before its transport reports an outage.
+        // Once that outage is known, this generation cannot finish. The host
+        // owns the next recovery signal; local retries cannot restore a pipe.
+        if (isRpcConnectionLost(error)) return false;
+        console.warn(
+          `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}):`,
+          error
+        );
         if (attempt < maxAttempts) {
           await new Promise((resolve) =>
             setTimeout(resolve, Math.min(250 * 2 ** (attempt - 1), 1000))
@@ -109,6 +111,7 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
     console.warn(
       `[RecoveryCoordinator] ${kind} handler "${handler.name}" exhausted all ${maxAttempts} attempts`
     );
+    return true;
   }
 }
 
