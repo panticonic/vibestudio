@@ -9,6 +9,7 @@ import { authorityRow, type AuthorityRow } from "./authority/authorityRows.js";
 import { diffAuthorityRows, type AuthorityRowDiff } from "./authority/authorityRowDiff.js";
 import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
 import type { CapabilityNotability } from "./authority/capabilityNotability.js";
+import { APP_CAPABILITY_CATALOG } from "./unitManifest.js";
 
 export interface CapabilityPresentation extends EditableCapabilityCopy {
   authorityCategory?: { domain: AuthorityDomainId; verb: AuthorityVerb; declaredBy?: string };
@@ -16,17 +17,27 @@ export interface CapabilityPresentation extends EditableCapabilityCopy {
   notability?: CapabilityNotability;
 }
 
-export type CapabilityRequesterKind =
-  | "app"
-  | "panel"
-  | "worker"
-  | "extension"
-  | "durable-object";
+export type CapabilityRequesterKind = "app" | "panel" | "worker" | "extension" | "durable-object";
 
 export type CapabilityPresentationResolver = (
   capability: string,
   requesterKind?: CapabilityRequesterKind
 ) => CapabilityPresentation;
+
+/**
+ * Validate the native-host effects a shipped app requests through the ordinary
+ * install-review vocabulary. App ABI capabilities that are not requested do
+ * not need review copy; declaring one as authority does.
+ */
+export function assertReviewedNativeAppAuthorityRequests(
+  requests: readonly UnitAuthorityRequest[]
+): void {
+  summarizeAuthorityRequests(
+    requests.filter((request) =>
+      Object.prototype.hasOwnProperty.call(APP_CAPABILITY_CATALOG, request.capability)
+    )
+  );
+}
 
 export function summarizeAuthorityRequests(
   requests: readonly UnitAuthorityRequest[],

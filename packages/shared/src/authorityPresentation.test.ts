@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCapabilityPresentationResolver,
+  assertReviewedNativeAppAuthorityRequests,
   describeCapability,
   summarizeAuthorityManifest,
   summarizeAuthorityRequests,
@@ -115,6 +116,38 @@ describe("authority request presentation", () => {
         },
       ])("workspace-service:notes").notability
     ).toBe("everyday");
+  });
+
+  it("presents the mobile browser-import capability for install review", () => {
+    expect(
+      summarizeAuthorityRequests([
+        {
+          capability: "browser-import",
+          resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+          evidence: "intentional-broad",
+        },
+      ]).rows
+    ).toEqual([
+      expect.objectContaining({
+        capability: "browser-import",
+        domain: "web",
+        action: "choose and read a browser export from this device",
+      }),
+    ]);
+  });
+
+  it("rejects a native app authority request without reviewed presentation", () => {
+    expect(() =>
+      assertReviewedNativeAppAuthorityRequests([
+        {
+          capability: "tray",
+          resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+          evidence: "intentional-broad",
+        },
+      ])
+    ).toThrow("Capability tray has no reviewed authority presentation");
   });
 
   it("presents a tier change distinctly without inventing added or removed authority", () => {

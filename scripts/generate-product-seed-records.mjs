@@ -33,6 +33,9 @@ const check = process.argv.includes("--check");
 const { productSeedSourceDigest, writeProductSeedSourceRecord } = await import(
   path.join(root, "packages/shared/src/productSeedTrust.ts")
 );
+const { assertReviewedNativeAppAuthorityRequests } = await import(
+  path.join(root, "packages/shared/src/authorityPresentation.ts")
+);
 
 const SEED_RECORD_FILE = ".vibestudio-seed.json";
 /** Only the live workspace tree; `release/` holds packaged copies, not sources. */
@@ -56,6 +59,8 @@ const stale = [];
 let verified = 0;
 
 for (const unitDir of seededUnitDirs()) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(unitDir, "package.json"), "utf-8"));
+  assertReviewedNativeAppAuthorityRequests(manifest.vibestudio?.authority?.requests ?? []);
   const record = JSON.parse(fs.readFileSync(path.join(unitDir, SEED_RECORD_FILE), "utf-8"));
   const repoPath = path.relative(userlandRoot, unitDir).split(path.sep).join("/");
   // Compared directly rather than through the runtime verifier: the runtime

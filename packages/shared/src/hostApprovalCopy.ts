@@ -934,6 +934,14 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "network",
   },
   {
+    prefix: "browser-import",
+    authorityCategory: { domain: "web", verb: "act" },
+    title: "Import browser data from this device",
+    action: "choose and read a browser export from this device",
+    description: "Choose and read a browser export so its data can be imported into this workspace",
+    group: "browser-data",
+  },
+  {
     prefix: "window-management",
     authorityCategory: { domain: "computer", verb: "manage" },
     title: "Manage windows",

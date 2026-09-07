@@ -68,6 +68,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "browser-data.read", notability: "headline" },
   { key: "browser-data.write", notability: "headline" },
   { key: "browser-data.delete", notability: "headline" },
+  { key: "browser-import", notability: "headline" },
   { key: "adblock.manage", notability: "everyday" },
   { key: "panel.navigate", notability: "everyday" },
 
