@@ -99,7 +99,7 @@ function fakeSource(
   };
 }
 
-async function loadWithMocks(): Promise<{
+async function loadWithMocks(options: { blockingAuthorityConsumer?: boolean } = {}): Promise<{
   buildSystem: BuildSystemV2;
   workspaceRoot: string;
   cleanup: () => Promise<void>;
@@ -121,6 +121,15 @@ async function loadWithMocks(): Promise<{
   writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
     "@workspace/mid": "workspace:*",
   });
+  if (options.blockingAuthorityConsumer) {
+    const appManifestPath = path.join(workspaceRoot, "panels/app/package.json");
+    const appManifest = JSON.parse(fs.readFileSync(appManifestPath, "utf8"));
+    appManifest.vibestudio.authority = {
+      serviceRequests: [{ protocol: "removed.notes.v1", availability: "required" }],
+    };
+    fs.writeFileSync(appManifestPath, JSON.stringify(appManifest));
+    writeUnit(workspaceRoot, "workers/removed-notes", "@workspace-workers/removed-notes");
+  }
   writeUnit(workspaceRoot, "panels/solo", "@workspace-panels/solo");
 
   const { setUserDataPath } = await import("@vibestudio/env-paths");
@@ -204,6 +213,9 @@ async function loadWithMocks(): Promise<{
     appRoot: process.cwd(),
     runNativeJob: runIsolatedBuildJob,
     dependencyWorkspaceRoot: workspaceRoot,
+    ...(options.blockingAuthorityConsumer
+      ? { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) }
+      : {}),
   });
   // Initialization only discovers/version-tracks units. Actual panel/worker
   // builds are demand-driven by their runtime access paths.
@@ -408,6 +420,19 @@ describe("BuildSystemV2 — explicit build reports", () => {
     await expect(
       buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["projects/notes"])
     ).resolves.toEqual([]);
+  });
+
+  it("selects the same authority consumers for forward metadata and provider removal batches", async () => {
+    env = await loadWithMocks({ blockingAuthorityConsumer: true });
+    const { buildSystem } = env;
+
+    const forward = await buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["meta"]);
+    const reverse = await buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, [
+      "workers/removed-notes",
+    ]);
+
+    expect(forward).toContain("@workspace-panels/app");
+    expect(reverse).toContain("@workspace-panels/app");
   });
 
   it("keeps an unrelated broken sibling outside the protected-publication closure", async () => {

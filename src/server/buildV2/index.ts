@@ -2711,7 +2711,11 @@ export async function initBuildSystemV2(
       // protected-main host effect would re-enter the workspace source DO that
       // is awaiting this validation and deadlock a cold process.
       const authorityRelevant = changedPaths.some(
-        (changed) => changed === "meta/vibestudio.yml" || changed.startsWith("workers/")
+        (changed) =>
+          changed === "meta" ||
+          changed === "meta/vibestudio.yml" ||
+          changed.startsWith("meta/") ||
+          changed.startsWith("workers/")
       );
       if (authorityRelevant) {
         const candidateIndex = candidateAuthorityIndex!;
@@ -2748,7 +2752,8 @@ export async function initBuildSystemV2(
         if (
           removedProvider ||
           changedPaths.some(
-            (changed) => changed === "meta/vibestudio.yml" || changed.startsWith("meta/")
+            (changed) =>
+              changed === "meta" || changed === "meta/vibestudio.yml" || changed.startsWith("meta/")
           )
         ) {
           // A removed provider has no candidate provider mapping. Recheck all
