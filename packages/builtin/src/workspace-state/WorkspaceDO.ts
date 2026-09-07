@@ -27,6 +27,7 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
+import { mintHistoryEntryKey } from "@vibestudio/shared/panel/idValues";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { computePanelId, SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -2246,7 +2247,7 @@ export class WorkspaceDO extends DurableObjectBase {
         ) {
           for (const input of inputs) {
             const slotId = computePanelId({ relativePath: input.source, isRoot: true });
-            const key = globalThis.crypto.randomUUID();
+            const key = mintHistoryEntryKey();
             const entity = this.entityReserve({
               kind: "panel",
               source: { repoPath: input.source, effectiveVersion: "" },

@@ -34,7 +34,11 @@ import {
   updatePanelNavigationState,
 } from "@vibestudio/shared/panel/accessors";
 import type { RuntimeCodePanelEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
-import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/idValues";
+import {
+  asPanelEntityId,
+  asPanelSlotId,
+  mintHistoryEntryKey,
+} from "@vibestudio/shared/panel/idValues";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
@@ -181,16 +185,6 @@ export interface PanelOperationClients {
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
   panelMetadata: PanelMetadataClient;
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-function mintHistoryEntryKey(): string {
-  const bytes = new Uint8Array(8);
-  globalThis.crypto.getRandomValues(bytes);
-  return `nav-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 // =============================================================================

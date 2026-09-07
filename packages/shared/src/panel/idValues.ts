@@ -43,3 +43,10 @@ export const PANEL_ID_PREFIXES = {
   slot: PANEL_SLOT_PREFIX,
   entity: PANEL_ENTITY_PREFIX,
 } as const;
+
+/** Mint the navigation-entry key used by canonical panel runtime entities. */
+export function mintHistoryEntryKey(): string {
+  const bytes = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(bytes);
+  return `nav-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}

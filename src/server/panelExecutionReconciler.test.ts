@@ -6,6 +6,7 @@ import type {
   RuntimeCodePanelEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { PanelExecutionReconciler } from "./panelExecutionReconciler.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { WorkspaceDOTestable } from "../../packages/builtin/src/workspace-state/testFixture.js";
@@ -51,6 +52,25 @@ it("activates durable distribution seeds through ordinary preparing-panel recove
     stateArgs: { welcome: true },
   });
   expect(instance.panelTreeDetail(seed!.slot.slot_id)?.entity.status).toBe("active");
+  // Exercise the real native lease boundary: reserved runtime keys must use
+  // the same panel:nav- namespace as ordinary panel navigation.
+  const coordinator = new PanelRuntimeCoordinator();
+  coordinator.registerClient({
+    clientSessionId: "seed-viewer",
+    ownerCallerId: "shell:seed-viewer",
+    label: "Seed viewer",
+    platform: "desktop",
+  });
+  const acquisition = coordinator.acquire(seed!.entity.id, {
+    slotId: seed!.slot.slot_id,
+    clientSessionId: "seed-viewer",
+    connectionId: "seed-connection",
+  });
+  expect(acquisition.acquired).toBe(true);
+  expect(coordinator.authorizePanelConnection(seed!.entity.id, "seed-connection")).toEqual({
+    ok: true,
+  });
+  coordinator.release(seed!.entity.id, "seed-connection");
   await reconciler.recoverPreparingPanels();
   expect(activate).toHaveBeenCalledOnce();
 });
