@@ -93,6 +93,7 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     // binding lets a service row name the contract it came from alongside the
     // provider currently filling it.
     ...(unit.authority?.serviceBindings ? { serviceBindings: unit.authority.serviceBindings } : {}),
+    ...(unit.authority?.serviceReviews ? { serviceReviews: unit.authority.serviceReviews } : {}),
     ...(input.userlandDefinitions ? { userlandDefinitions: input.userlandDefinitions } : {}),
     ...(input.presentationFor ? { presentationFor: input.presentationFor } : {}),
     ...(input.previouslyCleared ? { previouslyCleared: input.previouslyCleared } : {}),

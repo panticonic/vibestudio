@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { installRowKey } from "@vibestudio/shared/authority/unitInstallReview";
+import { hostBuildOrigin, reviewedUnitPart } from "@vibestudio/shared/authority/reviewedUnitParts";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { UnitAdmissionStore } from "./unitAdmissionStore.js";
 import { heldClearanceRowKeys } from "./unitClearanceGrants.js";
@@ -243,6 +244,65 @@ describe("acceptUnitInstallReview", () => {
 
     expect([...heldClearanceRowKeys({ grantStore, ...first })]).toEqual([]);
     expect([...heldClearanceRowKeys({ grantStore, ...updated })]).toEqual([rowKey(capability)]);
+  });
+
+  it("mints the candidate service row selected through the shared review projection", () => {
+    const capability = "workspace-service:task-board-store";
+    const identity = {
+      repoPath: "panels/task-board",
+      effectiveVersion: "ev-candidate",
+      authority: authority(capability),
+    };
+    const serviceReviews = [
+      {
+        capability,
+        providerUnit: "meta/task-board-store",
+        catalogDigest: "candidate-catalog",
+        presentation: {
+          action: "manage the task board",
+          authorityCategory: { domain: "automation" as const, verb: "manage" as const },
+          notability: "everyday" as const,
+        },
+      },
+    ];
+    const part = reviewedUnitPart({
+      unit: {
+        unitKind: "panel",
+        unitName: "@workspace-panels/task-board",
+        displayName: "Task board",
+        source: { kind: "workspace-repo", repo: identity.repoPath, ref: "main" },
+        ev: identity.effectiveVersion,
+        capabilities: [],
+        authority: {
+          ...identity.authority,
+          serviceRequests: [],
+          previousServiceRequests: [],
+          serviceReviews,
+          previousProvides: [],
+          rows: [],
+          diff: { added: [], removed: [], unchanged: [], retiered: [] },
+        },
+      },
+      identityKey: "candidate-task-board",
+      origin: hostBuildOrigin("test"),
+      presentationFor: () => ({
+        title: "Unknown",
+        action: "unknown",
+        description: "Missing from the live catalog",
+        group: "other",
+      }),
+    });
+    const selected = [...part.notableRows, ...part.everydayRows]
+      .filter((row) => row.selectable && row.selectedByDefault)
+      .map((row) => row.key);
+
+    acceptUnitInstallReview(
+      { admissionStore, grantStore },
+      { units: [{ identity, serviceReviews, clearedRowKeys: selected }], origin: "publication" }
+    );
+
+    expect(selected).toEqual([rowKey(capability)]);
+    expect([...heldClearanceRowKeys({ grantStore, ...identity })]).toEqual([rowKey(capability)]);
   });
 
   it("keeps an update the user emptied empty, rather than reading it as unasked", () => {
