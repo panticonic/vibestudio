@@ -474,7 +474,6 @@ export class PanelPresentationController {
         runtimeEntityId: lease.runtimeEntityId,
         connectionId: lease.connectionId,
       });
-      await this.deps.shellCore.refreshPanel(asPanelSlotId(lease.slotId));
       void this.present(lease.slotId, "acquire", false, lease);
       await this.progressBySlot.get(lease.slotId);
     }
@@ -564,7 +563,6 @@ export class PanelPresentationController {
       ...(activeAttempt?.status === "active" ? { ownerToken: activeAttempt.token } : {}),
     });
     if (this.loadOnLeaseAssignment) {
-      await this.deps.shellCore.refreshPanel(asPanelSlotId(slotId));
       void this.present(slotId, "acquire", false, event.next);
       await this.progressBySlot.get(slotId);
     }
@@ -700,12 +698,12 @@ export class PanelPresentationController {
     ownedLease?: PanelRuntimeLease
   ): Promise<PresentationAttemptResult> {
     let panel = this.deps.registry.getPanel(panelId);
-    if (!panel) panel = await this.hydrateAddressedPanel(panelId);
-    const targetKey = this.targetKeyFor(
-      panel,
-      ownedLease?.runtimeEntityId,
-      ownedLease?.connectionId ?? this.connectionBySlot.get(panelId)?.connectionId
-    );
+    if (!panel && !ownedLease) panel = await this.hydrateAddressedPanel(panelId);
+    const connectionId =
+      ownedLease?.connectionId ?? this.connectionBySlot.get(panelId)?.connectionId;
+    const targetKey = panel
+      ? this.targetKeyFor(panel, ownedLease?.runtimeEntityId, connectionId)
+      : `${ownedLease!.runtimeEntityId}|${connectionId ?? "unassigned"}|unhydrated`;
     const currentAttempt = this.attemptBySlot.get(panelId);
     const currentSnapshot = this.getPresentation(panelId).presentation;
     if (!force && currentAttempt?.status === "active" && currentAttempt.targetKey === targetKey) {
@@ -728,7 +726,7 @@ export class PanelPresentationController {
       if (!this.isCurrent(panelId, attempt)) return;
       await this.runPresentationAttempt(
         attempt,
-        getCurrentSnapshot(panel),
+        panel ? getCurrentSnapshot(panel) : null,
         leaseMode,
         Boolean(ownedLease)
       );
@@ -763,15 +761,24 @@ export class PanelPresentationController {
 
   private async runPresentationAttempt(
     attempt: PresentationAttempt,
-    snapshot: PanelSnapshot,
+    snapshot: PanelSnapshot | null,
     leaseMode: "acquire" | "takeOver",
     reuseOwnedLease = false
   ): Promise<void> {
     try {
       this.setAttemptStage(attempt, "leasing");
+      let currentSnapshot = snapshot;
+      if (reuseOwnedLease) {
+        await this.deps.shellCore.refreshPanel(asPanelSlotId(attempt.slotId));
+        if (!this.isCurrent(attempt.slotId, attempt)) return;
+        const refreshed = this.deps.registry.getPanel(attempt.slotId);
+        if (!refreshed) throw new Error(`Panel disappeared while preparing ${attempt.slotId}`);
+        currentSnapshot = getCurrentSnapshot(refreshed);
+      }
+      if (!currentSnapshot) throw new Error(`Panel not found: ${attempt.slotId}`);
       await this.performLoadSnapshotIntoView(
         attempt.slotId,
-        snapshot,
+        currentSnapshot,
         leaseMode,
         attempt,
         reuseOwnedLease

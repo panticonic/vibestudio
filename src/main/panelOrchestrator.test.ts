@@ -2334,6 +2334,105 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
 });
 
 describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
+  it("settles an assigned lease when its projection refresh fails", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/assigned-refresh-failure", [], {
+      runtimeEntityId: "panel:nav-assigned-refresh-failure",
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, shellCore, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "headless-session",
+        label: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
+    shellCore.refreshPanel.mockRejectedValueOnce(new Error("projection unavailable"));
+    const lease = runtimeLease(panel.runtimeEntityId!, {
+      slotId: panel.id,
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: "assigned-refresh-failure",
+    });
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 1 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: lease.runtimeEntityId,
+      previous: null,
+      next: lease,
+      reason: "acquired",
+    });
+
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
+      lease.runtimeEntityId,
+      lease.connectionId,
+    ]);
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "failed",
+      message: "projection unavailable",
+    });
+  });
+
+  it("does not release a replacement when an old assignment refresh fails late", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/late-refresh-failure", [], {
+      runtimeEntityId: "panel:nav-late-refresh-failure",
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, shellCore, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "headless-session",
+        label: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
+    let rejectOldRefresh!: (error: unknown) => void;
+    shellCore.refreshPanel
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (rejectOldRefresh = reject)))
+      .mockResolvedValue(panel);
+    const oldLease = runtimeLease(panel.runtimeEntityId!, {
+      slotId: panel.id,
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: "assigned-old",
+    });
+    const replacement = { ...oldLease, connectionId: "assigned-replacement" };
+
+    const oldLoad = orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 1 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: oldLease.runtimeEntityId,
+      previous: null,
+      next: oldLease,
+      reason: "acquired",
+    });
+    await vi.waitFor(() => expect(shellCore.refreshPanel).toHaveBeenCalledTimes(1));
+    const replacementLoad = orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: replacement.runtimeEntityId,
+      previous: oldLease,
+      next: replacement,
+      reason: "acquired",
+    });
+    rejectOldRefresh(new Error("late old refresh failure"));
+    await Promise.all([oldLoad, replacementLoad]);
+
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "release", [
+      replacement.runtimeEntityId,
+      replacement.connectionId,
+    ]);
+    expect(orchestrator.getPanelRuntimeConnection(panel.id)).toMatchObject({
+      connectionId: replacement.connectionId,
+    });
+  });
+
   it("preserves a lease transferred by its direct event before acquire returns", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/promoted-chat", [], {
