@@ -412,6 +412,15 @@ function savedAuthorityGrant(
       grant.scope === "agent"
         ? "The next matching action asks again, and this agent's active protected work is stopped."
         : "The next matching action asks again; work using this permission can no longer continue.",
+    authority: {
+      effect: grant.effect,
+      provenance: grant.provenance,
+      ...(grant.scope ? { scope: grant.scope } : {}),
+      subject: grant.subject,
+      capability: grant.capability,
+      resource: grant.resource,
+      ...(grant.decisionSurface ? { decisionSurface: grant.decisionSurface } : {}),
+    },
   };
 }
 

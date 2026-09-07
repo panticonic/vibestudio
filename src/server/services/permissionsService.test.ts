@@ -134,6 +134,15 @@ describe("permissions service", () => {
       duration: expect.stringContaining("3 months"),
       revokeEffect: expect.stringContaining("active protected work"),
       lastUsedAt: 100,
+      authority: {
+        effect: "allow",
+        provenance: "acquisition",
+        scope: "agent",
+        subject: "agent:do:workers/agent-worker:assistant@context-1",
+        capability: "external.open",
+        resource: { kind: "origin", origin: "https://example.com" },
+        decisionSurface: "card",
+      },
     });
     harness.capabilityGrants.close();
   });

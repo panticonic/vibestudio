@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { AuthorityResourceScopeSchema } from "./authority.js";
 
 export const savedPermissionGrantSchema = z
   .object({
@@ -28,6 +29,20 @@ export const savedPermissionGrantSchema = z
     approvedBy: z.string().min(1),
     duration: z.string().min(1),
     revokeEffect: z.string().min(1),
+    authority: z
+      .object({
+        effect: z.enum(["allow", "deny"]),
+        provenance: z.string().min(1),
+        scope: z
+          .enum(["once", "task", "agent", "mission", "version", "session", "system"])
+          .optional(),
+        subject: z.string().min(1),
+        capability: z.string().min(1),
+        resource: AuthorityResourceScopeSchema,
+        decisionSurface: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
