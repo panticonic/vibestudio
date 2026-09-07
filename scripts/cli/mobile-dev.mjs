@@ -6,16 +6,54 @@ import net from "net";
 import spawn from "cross-spawn";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
-import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import { INTERNAL_ANDROID_PACKAGE } from "./lib/mobile-native-android.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
+const developmentBaseResolver = path.join(repoRoot, "scripts", "resolve-development-base.ts");
+const runInstanceEntry = path.join(repoRoot, "src", "dev", "runInstance.ts");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
-const androidDir = path.join(mobileDir, "android");
-const appPackage = "app.vibestudio.mobile";
-const appActivity = `${appPackage}/.MainActivity`;
+const appPackage = INTERNAL_ANDROID_PACKAGE;
+const appActivity = `${appPackage}/app.vibestudio.mobile.MainActivity`;
 const metroPort = 8081;
-const apkPath = path.join(androidDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+
+export function mobileDevServerArgs({ instanceId, mobileSourceRoot, readyFilePath }) {
+  return [
+    "--import",
+    "tsx",
+    runInstanceEntry,
+    "server",
+    "--instance",
+    instanceId,
+    "--base-checkout",
+    mobileSourceRoot,
+    "--ready-file",
+    readyFilePath,
+    "--ephemeral",
+  ];
+}
+
+export function mobileDevMetroEnvironment(baseCheckout, env = process.env) {
+  return {
+    ...env,
+    REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
+    VIBESTUDIO_USERLAND_ROOT: baseCheckout,
+    VIBESTUDIO_WORKSPACE_APP_ROOT: path.join(baseCheckout, "apps", "mobile"),
+    VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join(baseCheckout, "node_modules"),
+  };
+}
+
+export function mobileDevInstallArgs({ platform, device, noLaunch }) {
+  return [
+    mobileInstallScript,
+    "--platform",
+    platform,
+    ...(platform === "android" ? ["--from-source"] : ["--simulator", "--configuration", "Debug"]),
+    ...(platform === "android" && device ? ["--device", device] : []),
+    ...(!noLaunch && platform === "ios" ? ["--launch"] : []),
+  ];
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,6 +83,7 @@ function parseArgs(argv) {
     noMetro: false,
     noInstall: false,
     noLaunch: false,
+    baseCheckout: null,
     help: false,
   };
 
@@ -66,6 +105,8 @@ function parseArgs(argv) {
       options.noInstall = true;
     } else if (arg === "--no-launch") {
       options.noLaunch = true;
+    } else if (arg === "--base-checkout") {
+      options.baseCheckout = argv[++i] ?? null;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -93,6 +134,8 @@ Runner options:
   --no-metro        Do not start Metro
   --no-install      Do not build/install the Android app
   --no-launch       Do not launch the Android app after setup
+  --base-checkout <dir>
+                     Use this Base authoring checkout for mobile source and workspaces
   --help            Show this help message
 `);
 }
@@ -303,15 +346,39 @@ async function main() {
     printHelp();
     return;
   }
+  const resolvedBase = await runCommand(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      developmentBaseResolver,
+      "--source-only",
+      ...(options.baseCheckout ? ["--checkout", options.baseCheckout] : []),
+    ],
+    { cwd: repoRoot }
+  );
+  const mobileSourceRoot = JSON.parse(resolvedBase.stdout.trim());
+  if (typeof mobileSourceRoot !== "string" || !mobileSourceRoot) {
+    throw new Error(
+      "mobile dev requires a development Base checkout. Configure one with `pnpm dev:base setup` or pass --base-checkout <dir>."
+    );
+  }
   if (
     !(await fsp
       .stat(mobileDir)
       .then((stat) => stat.isDirectory())
       .catch(() => false))
   ) {
-    throw new Error(
-      "mobile dev requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap`."
-    );
+    throw new Error("mobile dev requires a complete Host source checkout");
+  }
+  const workspaceMobileDir = path.join(mobileSourceRoot, "apps", "mobile");
+  if (
+    !(await fsp
+      .stat(workspaceMobileDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false))
+  ) {
+    throw new Error(`Development Base has no workspace mobile source at ${workspaceMobileDir}`);
   }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
@@ -325,10 +392,7 @@ async function main() {
         const pnpmStart = createPnpmInvocation(["start"]);
         const metroChild = spawnManaged(pnpmStart.command, pnpmStart.args, {
           cwd: mobileDir,
-          env: {
-            ...process.env,
-            REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
-          },
+          env: mobileDevMetroEnvironment(mobileSourceRoot),
           label: "metro",
         });
         startedChildren.push(metroChild);
@@ -338,15 +402,11 @@ async function main() {
       if (!options.noInstall) {
         await runCommand(
           process.execPath,
-          [
-            path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
-            "--platform",
-            "ios",
-            "--simulator",
-            "--configuration",
-            "Debug",
-            ...(options.noLaunch ? [] : ["--launch"]),
-          ],
+          mobileDevInstallArgs({
+            platform: "ios",
+            device: options.device,
+            noLaunch: options.noLaunch,
+          }),
           { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
         );
       }
@@ -367,8 +427,8 @@ async function main() {
   const startedChildren = [];
   let cleanedUp = false;
   let emulatorChild = null;
-  let tempRoot = "";
-  let readyFilePath = "";
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-dev-"));
+  const readyFilePath = path.join(tempRoot, "server-ready.json");
   let readyInfo = null;
 
   const cleanup = async (exitCode = 0) => {
@@ -398,8 +458,8 @@ async function main() {
       }
     }
     await Promise.all(startedChildren.map((child) => waitForChildExit(child, 2_000)));
-    if (readyFilePath) await fsp.rm(readyFilePath, { force: true }).catch(() => undefined);
-    if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    await fsp.rm(readyFilePath, { force: true }).catch(() => undefined);
+    await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     process.exit(exitCode);
   };
 
@@ -436,10 +496,7 @@ async function main() {
         const pnpmStart = createPnpmInvocation(["start"]);
         metroChild = spawnManaged(pnpmStart.command, pnpmStart.args, {
           cwd: mobileDir,
-          env: {
-            ...process.env,
-            REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
-          },
+          env: mobileDevMetroEnvironment(mobileSourceRoot),
           label: "metro",
         });
         await waitForSpawn(metroChild, pnpmStart.command, pnpmStart.args);
@@ -448,33 +505,16 @@ async function main() {
       }
     }
 
-    try {
-      await fsp.unlink(readyFilePath);
-    } catch {}
-
     // The server publishes one complete root invitation fact through its strict
     // ready-file handoff. Mobile consumes its deep-link presentation directly.
-    const serverArgs = [
-      serverEntryArg(),
-      "--app-root",
-      repoRoot,
-      "--ready-file",
-      readyFilePath,
-      "--ephemeral",
-    ];
-    const serverInvocation = createServerInvocation(serverArgs);
-    const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
+    const instanceId = `mobile-dev-${process.pid}`;
+    const serverArgs = mobileDevServerArgs({ instanceId, mobileSourceRoot, readyFilePath });
+    const serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV ?? "development",
-        HOME: serverHome,
-        XDG_CONFIG_HOME: serverConfig,
-        APPDATA: path.join(tempRoot, "server-appdata"),
-      },
+      env: process.env,
       label: "server",
     });
-    await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
+    await waitForSpawn(serverChild, process.execPath, serverArgs);
     startedChildren.push(serverChild);
     const ready = await waitForServerReady(readyFilePath, serverChild);
     readyInfo = ready;
@@ -489,12 +529,19 @@ async function main() {
     await adb(options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
 
     if (!options.noInstall) {
-      await runCommand("./gradlew", ["assembleDebug"], {
-        cwd: androidDir,
-        env: process.env,
-        label: "gradle",
-      });
-      await adb(options.device, "install", "-r", "-d", apkPath);
+      await runCommand(
+        process.execPath,
+        mobileDevInstallArgs({
+          platform: "android",
+          device: options.device,
+          noLaunch: true,
+        }),
+        {
+          cwd: repoRoot,
+          env: process.env,
+          label: "mobile-install-android",
+        }
+      );
     }
 
     if (options.resetApp) {
@@ -531,4 +578,6 @@ async function main() {
   }
 }
 
-void main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main();
+}

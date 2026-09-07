@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  "env": {
+    "browser": true,
+    "es2022": true,
+    "node": true
+  },
+  "rules": {
+    "eslint/no-undef": "error"
+  }
+}
