@@ -319,11 +319,11 @@ export function workspaceReadinessFromLog(log: string, sinceMs = 0) {
   const relevant = log
     .split(/\r?\n/u)
     .filter((line) => {
-      const timestamp = /^(\d+(?:\.\d+)?)\s/u.exec(line)?.[1];
+      const timestamp = /^\s*(\d+(?:\.\d+)?)\s/u.exec(line)?.[1];
       return !timestamp || Number(timestamp) * 1000 >= sinceMs;
     })
     .join("\n");
-  const panelHostReady = relevant.includes("phase=workspace-panels-initialized");
+  const panelHostReady = relevant.includes("phase=workspace-shell-ready");
   const workspaceConnected = relevant.includes("phase=workspace-connected");
   const panelWebViewLoaded = relevant.includes("phase=workspace-panel-webview-loaded");
   const failure = relevant.match(
