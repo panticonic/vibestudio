@@ -378,7 +378,14 @@ export type RuntimeSupervisionReleaseVersions = z.infer<
 export const CodeExecutionSchema = z
   .object({
     surface: z.literal("code"),
-    source: z.string().describe("Workspace-relative executable source repo path."),
+    source: z
+      .string()
+      .min(1)
+      .refine((source) => !/^[a-z][a-z\d+.-]*:/iu.test(source), {
+        message:
+          'Code execution requires a workspace-relative source path; use surface "external" with a URL for a browser document.',
+      })
+      .describe("Workspace-relative executable source repo path."),
     ref: BuildRefSchema.optional(),
     artifact: z
       .object({

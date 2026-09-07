@@ -5,6 +5,29 @@ import {
   runtimeMethods,
 } from "./runtime.js";
 
+describe("runtime execution surfaces", () => {
+  it.each(["browser:https://example.com", "https://example.com", "about:blank", "data:text/html,hi"])(
+    "rejects %s before it can become a preparing code reservation",
+    (source) => {
+      const input = { kind: "panel", execution: { surface: "code", source } };
+      for (const method of [runtimeMethods.reserveEntity, runtimeMethods.createEntity]) {
+        expect(() => method.args.parse([input])).toThrow("workspace-relative source path");
+      }
+    }
+  );
+
+  it("retains code reservations and direct external-document creation", () => {
+    const code = { kind: "panel", execution: { surface: "code", source: "panels/chat" } };
+    const external = {
+      kind: "panel",
+      execution: { surface: "external", url: "https://example.com" },
+    };
+    expect(runtimeMethods.reserveEntity.args.parse([code])).toEqual([code]);
+    expect(runtimeMethods.createEntity.args.parse([external])).toEqual([external]);
+    expect(() => runtimeMethods.reserveEntity.args.parse([external])).toThrow();
+  });
+});
+
 describe("RuntimeEntityHandleSchema", () => {
   it("preserves the execution authority selected by runtime.createEntity", () => {
     const handle = {
