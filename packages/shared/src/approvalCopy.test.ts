@@ -713,6 +713,45 @@ describe("approvalCopy", () => {
     );
   });
 
+  it("identifies a browser permission by its website origin rather than its native mediator", () => {
+    const approval: Extract<PendingApproval, { kind: "browser-permission" }> = {
+      ...base,
+      kind: "browser-permission",
+      callerKind: "system",
+      callerId: "browser:panel-in-personal",
+      callerTitle: "Workspace",
+      ownerUserId: "alice",
+      workspaceId: "personal-alice",
+      environmentKey: "personal-browser",
+      panelId: "panel-in-personal",
+      origin: "https://calendar.example:8443",
+      topLevelUrl: "https://calendar.example:8443/meetings",
+      capabilities: ["camera"],
+      deviceLabel: "Alice's phone",
+      requester: {
+        id: "native-mediator",
+        kind: "system",
+        category: "system",
+        title: "tree/about~new/runtime-id",
+        icon: "shield",
+        repoPath: "",
+        effectiveVersion: "v1",
+        stableIdentityKey: "native-mediator",
+        ephemeralInstanceKey: "native-runtime",
+        breadcrumbs: [],
+      },
+    };
+
+    const caller = getApprovalCallerPresentation(approval);
+    expect(caller).toMatchObject({
+      label: "https://calendar.example:8443",
+      kindLabel: "Website",
+      kind: "browser",
+      panelId: "panel-in-personal",
+    });
+    expect(caller.icon).toBeUndefined();
+  });
+
   it("keeps runtime ids out of caller copy and standing-action labels", () => {
     const capability = fixtures.find((fixture) => fixture.name === "capability")!.approval;
     const approval: Extract<PendingApproval, { kind: "capability" }> = {

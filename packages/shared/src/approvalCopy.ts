@@ -104,7 +104,7 @@ export interface ApprovalCallerPresentation {
   icon?: string;
   iconSourcePath?: string;
   kindLabel: string;
-  kind: PendingApproval["callerKind"];
+  kind: PendingApproval["callerKind"] | "browser";
   panelId?: string;
   shortId: string;
 }
@@ -118,6 +118,17 @@ function basename(path: string): string {
 export function getApprovalCallerPresentation(
   approval: PendingApproval
 ): ApprovalCallerPresentation {
+  // The native browser mediates this request; the website is the requester
+  // shown to the user. Generic runtime titles must not disguise its origin.
+  if (approval.kind === "browser-permission") {
+    return {
+      label: approval.origin,
+      kindLabel: "Website",
+      kind: "browser",
+      panelId: approval.panelId,
+      shortId: truncateId(approval.callerId),
+    };
+  }
   if (approval.requester) {
     const kindLabel = getRequesterCategoryLabel(approval.requester.category);
     return {
