@@ -1134,7 +1134,9 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
             const observation = await contents.executeJavaScript(`(() => {
               const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
               const args = window.__vibestudioStateArgs ?? {};
-              const setup = document.querySelector('[data-inline-ui-id="onboarding-setup-overview"]');
+              const setup = Array.from(document.querySelectorAll('.inline-ui-frame')).find(
+                  (frame) => frame.textContent?.includes('onboarding-setup-overview')
+                );
               return {
                 source: window.__vibestudioSourceRepo,
                 text: document.body.innerText,

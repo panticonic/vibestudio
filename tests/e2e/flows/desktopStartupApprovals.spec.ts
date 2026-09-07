@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import * as fsSync from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import type { PanelReadinessSnapshot } from "../../../src/main/panelReadiness.js";
 
 import { CredentialStore } from "@vibestudio/credential-client/store";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
@@ -227,7 +228,11 @@ async function rpcCall(
   args: unknown[] = [],
   workspaceId = testApp.workspaceId
 ): Promise<unknown> {
-  return callTestApi(testApp.app, "rpcCall", [service, method, args], workspaceId);
+  return callTestApi({ app: testApp.app, workspaceId: workspaceId }, "rpcCall", [
+    service,
+    method,
+    args,
+  ]);
 }
 
 async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
@@ -625,12 +630,12 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   const shellDom = await listShellDomSnapshots(testApp).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error),
   }));
-  const panels = await getPanelTree(testApp.app, testApp.workspaceId).catch(() => []);
+  const panels = await getPanelTree(testApp).catch(() => []);
   const panelDetails = [];
   const channelNames: string[] = [];
   for (const panel of panels) {
     const id = panel.id;
-    const text = await getPanelText(testApp.app, id, testApp.workspaceId).catch((error: unknown) =>
+    const text = await getPanelText(testApp, id).catch((error: unknown) =>
       error instanceof Error ? `ERROR: ${error.message}` : `ERROR: ${String(error)}`
     );
     const stateArgs = panel.snapshot?.stateArgs as Record<string, unknown> | undefined;
@@ -646,7 +651,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
       source: panel.snapshot?.source,
       text,
       boot: await executePanelScript(
-        testApp.app,
+        testApp,
         id,
         `(async () => {
           const loader = document.querySelector("script[data-bundle-src]");
@@ -684,12 +689,11 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
             resources,
             bundleFetch,
           };
-        })()`,
-        testApp.workspaceId
+        })()`
       ).catch((error: unknown) => ({
         error: error instanceof Error ? error.message : String(error),
       })),
-      htmlSummary: await getPanelHtml(testApp.app, id, testApp.workspaceId)
+      htmlSummary: await getPanelHtml(testApp, id)
         .then((html) => ({
           length: html.length,
           hasLoader: html.includes("/__loader.js"),
@@ -700,7 +704,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         .catch((error: unknown) => ({
           error: error instanceof Error ? error.message : String(error),
         })),
-      diagnostics: await getPanelDiagnostics(testApp.app, id, testApp.workspaceId).catch(() => []),
+      diagnostics: await getPanelDiagnostics(testApp, id).catch(() => []),
     });
   }
   const channelParticipants = [];
@@ -728,10 +732,9 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     const participants =
       targetId && firstPanelId
         ? await executePanelScript(
-            testApp.app,
+            testApp,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`,
-            testApp.workspaceId
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -739,7 +742,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     const replay =
       targetId && firstPanelId
         ? await executePanelScript(
-            testApp.app,
+            testApp,
             firstPanelId,
             `(() => globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }])).then((replay) => ({
               ready: replay?.ready,
@@ -754,8 +757,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
                 role: event.payload?.payload?.message?.role ?? event.payload?.message?.role,
                 content: String(event.payload?.payload?.message?.content ?? event.payload?.message?.content ?? event.payload?.content ?? "").slice(0, 300),
               })),
-            })))()`,
-            testApp.workspaceId
+            })))()`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -772,10 +774,9 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
       const agentId = (agent as { participantId: string }).participantId;
       const debugState = firstPanelId
         ? await executePanelScript(
-            testApp.app,
+            testApp,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`,
-            testApp.workspaceId
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -854,7 +855,7 @@ async function collectStartupAgentCompletion(
   testApp: TestApp,
   expectedInitialPrompt: string
 ): Promise<StartupAgentCompletionState> {
-  const panels = await getPanelTree(testApp.app, testApp.workspaceId).catch(() => []);
+  const panels = await getPanelTree(testApp).catch(() => []);
   const firstPanelId = panels[0]?.id;
   const channelNames = new Set<string>();
   for (const panel of panels) {
@@ -862,17 +863,13 @@ async function collectStartupAgentCompletion(
     const channelName =
       typeof stateArgs?.["channelName"] === "string"
         ? stateArgs["channelName"]
-        : (await getPanelText(testApp.app, panel.id, testApp.workspaceId).catch(() => "")).match(
-            /\bchat-[a-z0-9]+\b/
-          )?.[0];
+        : (await getPanelText(testApp, panel.id).catch(() => "")).match(/\bchat-[a-z0-9]+\b/)?.[0];
     if (channelName) channelNames.add(channelName);
   }
   if (!firstPanelId) {
     return { complete: false, channels: [], errors: ["No panel is available for RPC inspection"] };
   }
-  const panelSurfaceText = await getPanelText(testApp.app, firstPanelId, testApp.workspaceId).catch(
-    () => ""
-  );
+  const panelSurfaceText = await getPanelText(testApp, firstPanelId).catch(() => "");
   const surfaceAgentHandle = panelSurfaceText.match(/@ai-chat-[a-z0-9-]+/i)?.[0] ?? null;
   // A completed first turn can be fully rendered in the panel after the agent
   // has retired its live subscription. Keep the user-visible contract as a
@@ -925,7 +922,7 @@ async function collectStartupAgentCompletion(
     }
 
     const snapshot = await executePanelScript(
-      testApp.app,
+      testApp,
       firstPanelId,
       `(async () => {
         const { rpc } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
@@ -1015,8 +1012,7 @@ async function collectStartupAgentCompletion(
             )
           ).then((events) => events.filter((event) => event !== null)),
         };
-      })()`,
-      testApp.workspaceId
+      })()`
     ).catch((error: unknown) => {
       errors.push(
         `${channelName}: replay inspection failed: ${
@@ -1160,10 +1156,9 @@ async function collectStartupAgentCompletion(
     const pendingWork: string[] = [];
     for (const agentId of observedAgentIds) {
       const debugState = await executePanelScript(
-        testApp.app,
+        testApp,
         firstPanelId,
-        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`,
-        testApp.workspaceId
+        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
       ).catch(() => null);
       const state = (debugState as { result?: unknown } | null)?.result ?? debugState;
       const loop =
@@ -1223,13 +1218,12 @@ async function resolveWorkspaceServiceFromPanel(
   objectKey: string | null
 ): Promise<unknown> {
   return executePanelScript(
-    testApp.app,
+    testApp,
     panelId,
     `(async () => {
       const { workers } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
       return workers.resolveService(${JSON.stringify(query)}, ${JSON.stringify(objectKey)});
-    })()`,
-    testApp.workspaceId
+    })()`
   );
 }
 
@@ -1327,8 +1321,8 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
     })
     .toBe(false);
 
-  for (const panel of await getPanelTree(testApp.app, testApp.workspaceId)) {
-    await startPanelDiagnostics(testApp.app, panel.id, testApp.workspaceId).catch(() => {});
+  for (const panel of await getPanelTree(testApp)) {
+    await startPanelDiagnostics(testApp, panel.id).catch(() => {});
   }
 
   const drainDeadline = Date.now() + 120_000;
@@ -1363,11 +1357,10 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
         pendingInstallReviews.map((approval) => approval.workspaceId)
       )) {
         await approvePendingWorkspaceCreationReview(
-          testApp.app,
+          { app: testApp.app, workspaceId: workspaceId },
           pendingInstallReviews
             .filter((approval) => approval.workspaceId === workspaceId)
-            .map(({ approvalId }) => approvalId),
-          workspaceId
+            .map(({ approvalId }) => approvalId)
         );
       }
     }
@@ -1547,7 +1540,7 @@ test.describe("Desktop Startup Approvals", () => {
   test("launch gate starts shell, then in-app approvals unblock initial chats", async () => {
     let configuredInitialPrompt = "";
     workspaceDir = await createManagedTestWorkspace({
-      privateRole: "personal",
+      workspaceKind: "personal",
       configureSource: (sourceRoot) => {
         configuredInitialPrompt = configureWorkspaceSourceForApproval(sourceRoot);
       },
@@ -1602,11 +1595,57 @@ test.describe("Desktop Startup Approvals", () => {
           }
         )
         .toBe(true);
+
+      const onboardingPanel = (await getPanelTree(testApp)).find(
+        (panel) =>
+          panel.snapshot?.source === "panels/chat" &&
+          panel.snapshot.stateArgs?.["initialPrompt"] === configuredInitialPrompt
+      );
+      if (!onboardingPanel) throw new Error("The automatic onboarding panel disappeared");
+      await expect
+        .poll(
+          () =>
+            executePanelScript<boolean>(
+              testApp!,
+              onboardingPanel.id,
+              `(() => {
+                const overview = Array.from(document.querySelectorAll('.inline-ui-frame')).find(
+                  (frame) => frame.textContent?.includes('onboarding-setup-overview')
+                );
+                if (!(overview instanceof HTMLElement)) return false;
+                overview.scrollIntoView({ block: "start" });
+                const bounds = overview.getBoundingClientRect();
+                return bounds.width > 0 && bounds.height > 0 && bounds.top < innerHeight && bounds.bottom > 0
+                  && overview.innerText.includes("Your Vibestudio")
+                  && Boolean(overview.querySelector('[aria-label="Refresh setup overview"]'));
+              })()`
+            ),
+          { timeout: 30_000, intervals: [250, 500, 1000] }
+        )
+        .toBe(true);
+      const readiness = await callTestApi<PanelReadinessSnapshot>(testApp, "getPanelReadiness", [
+        onboardingPanel.id,
+      ]);
+      if (readiness.presentation.state !== "ready") {
+        throw new Error("The completed onboarding panel lost its native presentation");
+      }
+      const screenshot = await testApp.app.evaluate(async ({ webContents }, id) => {
+        const contents = webContents.fromId(id);
+        if (!contents || contents.isDestroyed())
+          throw new Error("Onboarding native view disappeared");
+        return (await contents.capturePage()).toPNG().toString("base64");
+      }, readiness.presentation.webContentsId);
+      const screenshotPath = test.info().outputPath("personal-onboarding-complete.png");
+      fsSync.writeFileSync(screenshotPath, Buffer.from(screenshot, "base64"), { mode: 0o600 });
+      await test.info().attach("personal-onboarding-complete", {
+        path: screenshotPath,
+        contentType: "image/png",
+      });
     } catch (error) {
       await attachStartupDiagnostics(testApp);
       const [pending, panels] = await Promise.all([
         listPendingApprovals(testApp).catch(() => []),
-        getPanelTree(testApp.app, testApp.workspaceId).catch(() => []),
+        getPanelTree(testApp).catch(() => []),
       ]);
       throw new Error(
         `Initial chat did not complete: ${JSON.stringify({
@@ -1631,7 +1670,7 @@ test.describe("Desktop Startup Approvals", () => {
     const prompt =
       "Read skills/onboarding/SKILL.md first. Then run a short sandbox eval that fetches https://example.com and tell me the page title.";
     workspaceDir = await createManagedTestWorkspace({
-      privateRole: "personal",
+      workspaceKind: "personal",
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot, prompt);
       },
@@ -1762,7 +1801,7 @@ test.describe("Desktop Startup Approvals", () => {
     // execution: it targets the workspace-creation grant for the app and the
     // exact shell incarnation restored on the second process.
     workspaceDir = await createManagedTestWorkspace({
-      privateRole: "personal",
+      workspaceKind: "personal",
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot);
         const configPath = path.join(sourceRoot, "meta", "template.yml");

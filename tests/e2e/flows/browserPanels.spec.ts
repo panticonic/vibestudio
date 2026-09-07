@@ -27,11 +27,11 @@ function configureWithoutBrowserDataExtension(sourceRoot: string): void {
     extensions?: Array<{ source: string }>;
     providers?: Record<string, unknown>;
   };
-  config.initPanels = [{ source: "about/new" }];
+  config["initPanels"] = [{ source: "about/new" }];
   config.extensions = config.extensions?.filter(
     (extension) => extension.source !== "extensions/browser-data"
   );
-  if (config.providers) delete config.providers.browserData;
+  if (config.providers) delete config.providers["browserData"];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
@@ -53,21 +53,21 @@ test.describe("Browser panel startup", () => {
 
     try {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
-      await approvePendingStartupUnits(testApp.app);
-      await approvePendingWorkspaceCreationReview(testApp.app);
-      const initial = await ensureHostedShellReady(testApp.app, { panelSource: "about/new" });
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
+      const initial = await ensureHostedShellReady(testApp, { panelSource: "about/new" });
       const browserSource = `browser:${url}`;
-      const created = await createBrowserPanel(testApp.app, initial.panelId, url, {
+      const created = await createBrowserPanel(testApp, initial.panelId, url, {
         focus: true,
       });
-      const readiness = await ensureHostedShellReady(testApp.app, {
+      const readiness = await ensureHostedShellReady(testApp, {
         panelSource: browserSource,
       });
 
       expect(readiness.panelId).toBe(created.id);
 
       await expect
-        .poll(() => getPanelText(testApp!.app, readiness.panelId).catch(() => ""), {
+        .poll(() => getPanelText(testApp!, readiness.panelId).catch(() => ""), {
           timeout: 30_000,
         })
         .toContain("Browser panel is ready");

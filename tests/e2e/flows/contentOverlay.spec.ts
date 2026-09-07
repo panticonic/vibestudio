@@ -271,7 +271,7 @@ test.describe("Content overlay", () => {
         const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as {
           initPanels?: Array<{ source: string }>;
         };
-        config.initPanels = [{ source: "about/new" }];
+        config["initPanels"] = [{ source: "about/new" }];
         fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
       },
     });
@@ -452,11 +452,14 @@ test.describe("Content overlay", () => {
     await expect
       .poll(
         () =>
-          testApp!.app.evaluate(async () => {
-            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
-            const tree = api?.getPanelTree?.() ?? [];
-            return Array.isArray(tree) ? tree.length : 0;
-          }),
+          testApp!.app.evaluate(
+            async (_electron, { workspaceId }) => {
+              const api = await globalThis.__testApi?.forWorkspace(workspaceId);
+              const tree = api?.getPanelTree?.() ?? [];
+              return Array.isArray(tree) ? tree.length : 0;
+            },
+            { workspaceId: testApp!.workspaceId }
+          ),
         { timeout: 30_000, intervals: [300, 600, 1000] }
       )
       .toBeGreaterThan(0);

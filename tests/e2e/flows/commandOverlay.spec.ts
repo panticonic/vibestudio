@@ -55,7 +55,7 @@ test.describe("command overlay", () => {
     // before the test API is exposed. Neither budget relaxes an assertion.
     testApp = await launchTestApp({ launchTimeout: 300_000 });
     await waitHostedShellReady(testApp);
-    await approvePendingWorkspaceCreationReview(testApp.app);
+    await approvePendingWorkspaceCreationReview(testApp);
     await captureShellConsole(testApp);
   });
 

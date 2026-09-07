@@ -60,11 +60,11 @@ class FakeTransport {
     );
   }
 }
-function tempRegistrationsPath(): string {
-  return path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-approval-flow-")),
-    "registrations.json"
-  );
+const ownedRoots: string[] = [];
+function tempDatabasePath(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-approval-flow-"));
+  ownedRoots.push(root);
+  return path.join(root, "push.db");
 }
 async function flushAsyncWork(): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
@@ -82,7 +82,7 @@ async function createHarness(): Promise<Harness> {
   const pushService = createPushService({
     workspaceId: "ws-test",
     serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
-    registrationsPath: tempRegistrationsPath(),
+    databasePath: tempDatabasePath(),
     firebaseAdminLoader: async () => ({
       send: async (message) => {
         sentMessages.push(message as SentMessage);
@@ -91,7 +91,11 @@ async function createHarness(): Promise<Harness> {
     }),
     metrics,
   });
-  const shellApprovalService = createShellApprovalService({ approvalQueue, metrics, workspaceAccess });
+  const shellApprovalService = createShellApprovalService({
+    approvalQueue,
+    metrics,
+    workspaceAccess,
+  });
   const services = {
     push: pushService.definition,
     shellApproval: shellApprovalService,
@@ -145,6 +149,7 @@ function requestCredentialApproval(queue: ApprovalQueueWithListeners) {
   });
 }
 afterEach(() => {
+  for (const root of ownedRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 describe("approval flow e2e", () => {

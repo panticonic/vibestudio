@@ -1,4 +1,4 @@
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
@@ -28,14 +28,15 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 function configureInitialPanel(sourceRoot: string, source: string): void {
   const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
-  config.initPanels = [{ source }];
+  config["initPanels"] = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
-async function shellStatus(app: ElectronApplication): Promise<{
+async function shellStatus(owner: TestApp): Promise<{
   buildingCount: number;
   hasOperationFailure: boolean;
 }> {
+  const { app } = owner;
   return app.evaluate(async ({ webContents }) => {
     const contents = webContents
       .getAllWebContents()
@@ -64,32 +65,20 @@ async function shellStatus(app: ElectronApplication): Promise<{
   });
 }
 
-async function navigatePanel(
-  app: ElectronApplication,
-  panelId: string,
-  source: string
-): Promise<void> {
+async function navigatePanel(owner: TestApp, panelId: string, source: string): Promise<void> {
+  const { app } = owner;
   await app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            navigatePanel: (
-              panelId: string,
-              source: string
-            ) => Promise<{ id: string; title: string } | null>;
-          };
-        }
-      ).__testApi;
+    async (_electron, { workspaceId, payload: request }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
       if (!testApi) throw new Error("Test API not available");
       await testApi.navigatePanel(request.panelId, request.source);
     },
-    { panelId, source }
+    { workspaceId: owner.workspaceId, payload: { panelId, source } }
   );
 }
 
 async function panelSurfaceState(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string
 ): Promise<{
   text: string;
@@ -98,22 +87,20 @@ async function panelSurfaceState(
   controlReady: boolean;
   initialLoading: boolean;
 }> {
-  const text = await getPanelText(app, panelId);
-  const alertState = await app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: { executePanelScript: <T>(panelId: string, script: string) => Promise<T> };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.executePanelScript<{
-      count: number;
-      text: string;
-      controlReady: boolean;
-      initialLoading: boolean;
-    }>(
-      id,
-      `(() => {
+  const { app } = owner;
+  const text = await getPanelText(owner, panelId);
+  const alertState = await app.evaluate(
+    async (_electron, { workspaceId, payload: id }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.executePanelScript<{
+        count: number;
+        text: string;
+        controlReady: boolean;
+        initialLoading: boolean;
+      }>(
+        id,
+        `(() => {
         const alerts = Array.from(document.querySelectorAll('[role="alert"]'));
         return {
           count: alerts.length,
@@ -126,8 +113,10 @@ async function panelSurfaceState(
           ),
         };
       })()`
-    );
-  }, panelId);
+      );
+    },
+    { workspaceId: owner.workspaceId, payload: panelId }
+  );
   return {
     text,
     alertCount: alertState.count,
@@ -138,10 +127,10 @@ async function panelSurfaceState(
 }
 
 async function severePanelDiagnostics(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string
 ): ReturnType<typeof getPanelDiagnostics> {
-  return (await getPanelDiagnostics(app, panelId)).filter((item) => {
+  return (await getPanelDiagnostics(owner, panelId)).filter((item) => {
     if (item.type !== "console")
       return item.type !== "did-fail-load" || !item.message.includes("(-3)");
     const level = String(item.level ?? "").toLowerCase();
@@ -163,28 +152,28 @@ test.describe("Panel navigation convergence", () => {
         workspace: workspacePath,
         launchTimeout: 180_000,
       });
-      await approvePendingStartupUnits(testApp.app);
-      await approvePendingWorkspaceCreationReview(testApp.app);
-      const initialReadiness = await ensureHostedShellReady(testApp.app, {
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
+      const initialReadiness = await ensureHostedShellReady(testApp, {
         panelSource: "about/new",
       });
       const initialPanelId = initialReadiness.panelId;
-      await startPanelDiagnostics(testApp.app, initialPanelId);
+      await startPanelDiagnostics(testApp, initialPanelId);
       await expect
-        .poll(() => getPanelText(testApp!.app, initialPanelId).catch(() => ""), {
+        .poll(() => getPanelText(testApp!, initialPanelId).catch(() => ""), {
           timeout: 30_000,
           intervals: [250, 500, 1_000],
         })
         .toContain("Jump to a panel, revisit a page, or ask an agent.");
       // Utility pages are searchable, but intentionally stay out of the idle
       // app suggestions.
-      await typePanelText(testApp.app, initialPanelId, "About Vibestudio");
+      await typePanelText(testApp, initialPanelId, "About Vibestudio");
       await expect
         .poll(
           async () => {
             try {
-              const panel = (await getPanelTree(testApp!.app))[0];
-              const readiness = await getPanelReadiness(testApp!.app, initialPanelId);
+              const panel = (await getPanelTree(testApp!))[0];
+              const readiness = await getPanelReadiness(testApp!, initialPanelId);
               if (
                 panel?.id === initialPanelId &&
                 panel.snapshot?.source === "about/about" &&
@@ -197,7 +186,7 @@ test.describe("Panel navigation convergence", () => {
               // the idempotent user action coupled to the authoritative panel
               // tree until the same panel has actually converged.
               await clickPanelText(
-                testApp!.app,
+                testApp!,
                 initialPanelId,
                 ".launcher-title",
                 "About Vibestudio"
@@ -218,7 +207,7 @@ test.describe("Panel navigation convergence", () => {
         .toEqual({ source: "about/about", state: "ready" });
 
       await expect
-        .poll(() => shellStatus(testApp!.app), {
+        .poll(() => shellStatus(testApp!), {
           timeout: 30_000,
           intervals: [250, 500, 1_000],
         })
@@ -234,16 +223,16 @@ test.describe("Panel navigation convergence", () => {
           readyText: "Lasting access you granted to apps and agents",
         },
       ]) {
-        await navigatePanel(testApp.app, initialPanelId, surface.source);
+        await navigatePanel(testApp, initialPanelId, surface.source);
         await expect
           .poll(
             async () => {
               try {
-                const panel = (await getPanelTree(testApp!.app))[0];
+                const panel = (await getPanelTree(testApp!))[0];
                 if (
                   panel?.id !== initialPanelId ||
                   panel.snapshot?.source !== surface.source ||
-                  !(await isPanelReady(testApp!.app, initialPanelId))
+                  !(await isPanelReady(testApp!, initialPanelId))
                 ) {
                   return {
                     source: panel?.snapshot?.source ?? null,
@@ -253,10 +242,10 @@ test.describe("Panel navigation convergence", () => {
                     hasReadyText: false,
                     controlReady: false,
                     initialLoading: false,
-                    diagnostics: await severePanelDiagnostics(testApp!.app, initialPanelId),
+                    diagnostics: await severePanelDiagnostics(testApp!, initialPanelId),
                   };
                 }
-                const state = await panelSurfaceState(testApp!.app, initialPanelId);
+                const state = await panelSurfaceState(testApp!, initialPanelId);
                 return {
                   source: panel.snapshot.source,
                   ready: true,
@@ -265,7 +254,7 @@ test.describe("Panel navigation convergence", () => {
                   hasReadyText: state.text.includes(surface.readyText),
                   controlReady: state.controlReady,
                   initialLoading: state.initialLoading,
-                  diagnostics: await severePanelDiagnostics(testApp!.app, initialPanelId),
+                  diagnostics: await severePanelDiagnostics(testApp!, initialPanelId),
                 };
               } catch (error) {
                 return {
@@ -299,7 +288,7 @@ test.describe("Panel navigation convergence", () => {
           });
       }
 
-      expect(await shellStatus(testApp.app)).toEqual({
+      expect(await shellStatus(testApp)).toEqual({
         buildingCount: 0,
         hasOperationFailure: false,
       });

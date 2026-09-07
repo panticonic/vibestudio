@@ -66,7 +66,7 @@ describe("hosted-shell initialization diagnostics", () => {
 
   it("terminates readiness immediately from the authoritative test API state", async () => {
     const rpcCall = vi.fn();
-    globalThis.__testApi = {
+    const ownerApi = {
       readPanelInitializationFailure: () => ({
         timestamp: 1234,
         phase: "panel-tree",
@@ -75,18 +75,22 @@ describe("hosted-shell initialization diagnostics", () => {
       }),
       rpcCall,
     } as unknown as TestApi;
+    const forWorkspace = vi.fn(async () => ownerApi);
+    globalThis.__testApi = { forWorkspace } as unknown as TestApi;
     const app = {
-      evaluate: async (
-        callback: (_electron: unknown, input: unknown) => unknown,
-        input: unknown
-      ) => callback(undefined, input),
+      evaluate: async (callback: (_electron: unknown, input: unknown) => unknown, input: unknown) =>
+        callback(undefined, input),
     } as unknown as ElectronApplication;
 
     await expect(
-      ensureHostedShellReady(app, { panelSource: "panels/chat", timeoutMs: 30_000 })
+      ensureHostedShellReady(
+        { app, workspaceId: "personal-test" },
+        { panelSource: "panels/chat", timeoutMs: 30_000 }
+      )
     ).rejects.toThrow(
       "Hosted shell panel initialization failed during electron-host-ready: workspace-state denied the snapshot"
     );
+    expect(forWorkspace).toHaveBeenCalledWith("personal-test");
     expect(rpcCall).not.toHaveBeenCalled();
   });
 });

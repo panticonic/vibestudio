@@ -1,3 +1,4 @@
+import type { TestApp } from "../../setup/electronSetup";
 import { expect, test } from "@playwright/test";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
@@ -14,16 +15,13 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
-async function waitForPanelRuntime(
-  app: Parameters<typeof executePanelScript>[0],
-  panelId: string
-): Promise<void> {
+async function waitForPanelRuntime(owner: TestApp, panelId: string): Promise<void> {
   await expect
     .poll(
       async () => {
         try {
           return await executePanelScript<boolean>(
-            app,
+            owner,
             panelId,
             `typeof globalThis.__vibestudioRequireAsync__ === "function"`
           );
@@ -42,15 +40,15 @@ test.describe("agentic DX contracts", () => {
     const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp.app, 75_000);
-      await ensureHostedShellReady(testApp.app, {
+      await approvePendingStartupUnits(testApp, 75_000);
+      await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
-      await approvePendingWorkspaceCreationReview(testApp.app);
-      const panel = (await getPanelTree(testApp.app))[0];
+      await approvePendingWorkspaceCreationReview(testApp);
+      const panel = (await getPanelTree(testApp))[0];
       expect(panel).toBeTruthy();
-      await waitForPanelRuntime(testApp.app, panel!.id);
+      await waitForPanelRuntime(testApp, panel!.id);
 
       const result = await executePanelScript<{
         entries: string[];
@@ -73,7 +71,7 @@ test.describe("agentic DX contracts", () => {
           };
         };
       }>(
-        testApp.app,
+        testApp,
         panel!.id,
         `(async () => {
           const bounded = (stage, operation) => Promise.race([
@@ -132,15 +130,15 @@ test.describe("agentic DX contracts", () => {
     const workspacePath = await createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp.app, 75_000);
-      await ensureHostedShellReady(testApp.app, {
+      await approvePendingStartupUnits(testApp, 75_000);
+      await ensureHostedShellReady(testApp, {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
-      await approvePendingWorkspaceCreationReview(testApp.app);
-      const panel = (await getPanelTree(testApp.app))[0];
+      await approvePendingWorkspaceCreationReview(testApp);
+      const panel = (await getPanelTree(testApp))[0];
       expect(panel).toBeTruthy();
-      await waitForPanelRuntime(testApp.app, panel!.id);
+      await waitForPanelRuntime(testApp, panel!.id);
 
       const result = await executePanelScript<{
         screenshot: {
@@ -167,7 +165,7 @@ test.describe("agentic DX contracts", () => {
           buildKey: string;
         };
       }>(
-        testApp.app,
+        testApp,
         panel!.id,
         `(async () => {
           const bounded = (stage, operation) => Promise.race([

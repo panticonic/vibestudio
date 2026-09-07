@@ -20,7 +20,7 @@
  * than the Playwright window handle (same pattern as desktopShellChrome.spec).
  */
 
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
@@ -45,35 +45,34 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 function configureInitialPanel(sourceRoot: string, source: string): void {
   const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
-  config.initPanels = [{ source }];
+  config["initPanels"] = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
 /** Find the hosted-shell WebContents (the one rendering pane surfaces / tree). */
-async function findShellWebContentsId(app: ElectronApplication): Promise<number> {
-  const id = await app.evaluate(async ({ webContents }) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          getHostViewDebugInfo(): { hostedShellUrl: string | null };
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    const hostedShellUrl = testApi.getHostViewDebugInfo().hostedShellUrl;
-    if (!hostedShellUrl) return -1;
-    return (
-      webContents
-        .getAllWebContents()
-        .find((contents) => !contents.isDestroyed() && contents.getURL() === hostedShellUrl)?.id ??
-      -1
-    );
-  });
+async function findShellWebContentsId(owner: TestApp): Promise<number> {
+  const { app } = owner;
+  const id = await app.evaluate(
+    async ({ webContents }, { workspaceId }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      const hostedShellUrl = testApi.getHostViewDebugInfo().hostedShellUrl;
+      if (!hostedShellUrl) return -1;
+      return (
+        webContents
+          .getAllWebContents()
+          .find((contents) => !contents.isDestroyed() && contents.getURL() === hostedShellUrl)
+          ?.id ?? -1
+      );
+    },
+    { workspaceId: owner.workspaceId }
+  );
   if (id < 0) throw new Error("Hosted shell WebContents not found");
   return id;
 }
 
-async function shellEval<T>(app: ElectronApplication, wcId: number, script: string): Promise<T> {
+async function shellEval<T>(owner: TestApp, wcId: number, script: string): Promise<T> {
+  const { app } = owner;
   return app.evaluate(
     async ({ webContents }, args) => {
       const contents = webContents.fromId(args.wcId);
@@ -88,11 +87,11 @@ type ShellRect = { x: number; y: number; width: number; height: number };
 
 /** DOM boxes of every mounted pane surface, keyed by native slot id. */
 async function getSurfaceRects(
-  app: ElectronApplication,
+  owner: TestApp,
   wcId: number
 ): Promise<Array<{ nativeSlotId: string; panelId: string; paneId: string; rect: ShellRect }>> {
   return shellEval(
-    app,
+    owner,
     wcId,
     `Array.from(document.querySelectorAll('[data-native-panel-slot-id]')).map((node) => {
        const rect = node.getBoundingClientRect();
@@ -116,13 +115,13 @@ async function getSurfaceRects(
  * box within `tolerance` px on every edge — the §5.4 lockstep assertion.
  */
 async function surfacesMatchNativeBounds(
-  app: ElectronApplication,
+  owner: TestApp,
   wcId: number,
   tolerance = 1
 ): Promise<boolean> {
   const [slots, surfaces] = await Promise.all([
-    getNativePanelSlotDebugInfo(app),
-    getSurfaceRects(app, wcId),
+    getNativePanelSlotDebugInfo(owner),
+    getSurfaceRects(owner, wcId),
   ]);
   if (slots.length === 0 || slots.length !== surfaces.length) return false;
   return slots.every((slot) => {
@@ -137,9 +136,9 @@ async function surfacesMatchNativeBounds(
   });
 }
 
-async function shellErrorOverlayCount(app: ElectronApplication, wcId: number): Promise<number> {
+async function shellErrorOverlayCount(owner: TestApp, wcId: number): Promise<number> {
   return shellEval<number>(
-    app,
+    owner,
     wcId,
     `document.querySelectorAll('[role="alert"]').length +
        ((document.body?.innerText ?? '').includes('A Vibestudio operation failed') ? 1 : 0)`
@@ -154,13 +153,13 @@ async function shellErrorOverlayCount(app: ElectronApplication, wcId: number): P
  * slot id.
  */
 async function clickTreeRowForPanel(
-  app: ElectronApplication,
+  owner: TestApp,
   wcId: number,
   panelId: string,
   modifiers: { ctrlKey?: boolean } = {}
 ): Promise<boolean> {
   return shellEval<boolean>(
-    app,
+    owner,
     wcId,
     `(() => {
        const row = document.querySelector(
@@ -177,11 +176,8 @@ async function clickTreeRowForPanel(
   );
 }
 
-async function setWindowSize(
-  app: ElectronApplication,
-  width: number,
-  height: number
-): Promise<void> {
+async function setWindowSize(owner: TestApp, width: number, height: number): Promise<void> {
+  const { app } = owner;
   // The shell window is a BaseWindow (WebContentsView architecture), not a
   // BrowserWindow.
   await app.evaluate(
@@ -197,12 +193,13 @@ async function setWindowSize(
 }
 
 async function sendShellMouseDrag(
-  app: ElectronApplication,
+  owner: TestApp,
   wcId: number,
   from: { x: number; y: number },
   to: { x: number; y: number },
   steps: number
 ): Promise<void> {
+  const { app } = owner;
   await app.evaluate(
     async ({ webContents }, args) => {
       const contents = webContents.fromId(args.wcId);
@@ -220,7 +217,7 @@ async function sendShellMouseDrag(
       for (let step = 1; step <= args.steps; step++) {
         const x = Math.round(args.from.x + ((args.to.x - args.from.x) * step) / args.steps);
         const y = Math.round(args.from.y + ((args.to.y - args.from.y) * step) / args.steps);
-        contents.sendInputEvent({ type: "mouseMove", x, y, button: "left", buttons: 1 });
+        contents.sendInputEvent({ type: "mouseMove", x, y, button: "left" });
         await sleep(16);
       }
       contents.sendInputEvent({
@@ -245,12 +242,13 @@ async function sendShellMouseDrag(
  * releasing.
  */
 async function dragTreePanelToPane(
-  app: ElectronApplication,
+  owner: TestApp,
   wcId: number,
   panelId: string,
   targetPaneId: string,
   zone: "left" | "right" | "top" | "bottom" | "center"
 ): Promise<void> {
+  const { app } = owner;
   await app.evaluate(
     async ({ webContents }, args) => {
       const contents = webContents.fromId(args.wcId);
@@ -300,7 +298,6 @@ async function dragTreePanelToPane(
         x: rowCenter.x + 12,
         y: rowCenter.y,
         button: "left",
-        buttons: 1,
       });
 
       for (let step = 1; step <= 10; step++) {
@@ -309,7 +306,6 @@ async function dragTreePanelToPane(
           x: Math.round(rowCenter.x + ((target.x - rowCenter.x) * step) / 10),
           y: Math.round(rowCenter.y + ((target.y - rowCenter.y) * step) / 10),
           button: "left",
-          buttons: 1,
         });
         await sleep(16);
       }
@@ -356,8 +352,8 @@ test.describe("Multi-column panel layout", () => {
         workspace: workspacePath,
         launchTimeout: 240_000,
       });
-      await approvePendingStartupUnits(testApp.app);
-      await approvePendingWorkspaceCreationReview(testApp.app);
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
       const app = testApp.app;
 
       // The server RPC bridge connects only once the workspace runtime is
@@ -394,7 +390,7 @@ test.describe("Multi-column panel layout", () => {
       let readiness = null as Awaited<ReturnType<typeof ensureHostedShellReady>> | null;
       for (let attempt = 0; readiness === null; attempt++) {
         try {
-          readiness = await ensureHostedShellReady(app, { panelSource: "about/about" });
+          readiness = await ensureHostedShellReady(testApp, { panelSource: "about/about" });
         } catch (error) {
           // "Extension is not installed" is equally transient on first boot:
           // the browser-data extension is still building/activating.
@@ -412,13 +408,13 @@ test.describe("Multi-column panel layout", () => {
 
       // Exercise the application's default desktop width. With the 232px tree,
       // the remaining viewport fits two 460px columns and their divider.
-      await setWindowSize(app, 1200, 800);
+      await setWindowSize(testApp, 1200, 800);
 
       let wcId = 0;
       await expect
         .poll(async () => {
           try {
-            wcId = await findShellWebContentsId(app);
+            wcId = await findShellWebContentsId(testApp!);
             return true;
           } catch {
             return false;
@@ -428,22 +424,15 @@ test.describe("Multi-column panel layout", () => {
 
       // ---- Scenario 1: open a second panel beside the first --------------
       const created = await app.evaluate(
-        async (_electron, args) => {
-          const testApi = (
-            globalThis as {
-              __testApi?: {
-                createPanel: (
-                  parentId: string,
-                  source: string,
-                  options?: { focus?: boolean }
-                ) => Promise<{ id: string; title: string }>;
-              };
-            }
-          ).__testApi;
+        async (_electron, { workspaceId, payload: args }) => {
+          const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
           if (!testApi) throw new Error("Test API not available");
           return testApi.createPanel(args.parentId, args.source, { focus: true });
         },
-        { parentId: panel1, source: "about/adblock" }
+        {
+          workspaceId: testApp!.workspaceId,
+          payload: { parentId: panel1, source: "about/adblock" },
+        }
       );
       const panel2 = created.id;
 
@@ -451,24 +440,24 @@ test.describe("Multi-column panel layout", () => {
         try {
           await expect
             .poll(async () => {
-              if ((await getSurfaceRects(app, wcId)).length !== 2) return false;
+              if ((await getSurfaceRects(testApp!, wcId)).length !== 2) return false;
               // Residency changes intentionally clear native surfaces for a
               // 150ms transition. Require the two-pane state to survive that
               // handoff rather than accepting its initial pre-effect frame.
               await new Promise((resolve) => setTimeout(resolve, 200));
               return (
-                (await getSurfaceRects(app, wcId)).length === 2 &&
-                (await surfacesMatchNativeBounds(app, wcId))
+                (await getSurfaceRects(testApp!, wcId)).length === 2 &&
+                (await surfacesMatchNativeBounds(testApp!, wcId))
               );
             }, POLL)
             .toBe(true);
         } catch (error) {
           const diagnostics = await Promise.all([
-            getPanelTree(app),
-            getSurfaceRects(app, wcId),
-            getNativePanelSlotDebugInfo(app),
+            getPanelTree(testApp!),
+            getSurfaceRects(testApp!, wcId),
+            getNativePanelSlotDebugInfo(testApp!),
             shellEval(
-              app,
+              testApp!,
               wcId,
               `({
                 rows: Array.from(document.querySelectorAll('[data-panel-tree-row="true"]')).map(
@@ -483,22 +472,17 @@ test.describe("Multi-column panel layout", () => {
                 })),
               })`
             ),
-            app.evaluate(async (_electron, panelId) => {
-              const testApi = (
-                globalThis as {
-                  __testApi?: {
-                    getPanel: (id: string) => unknown;
-                    getPanelReadiness: (id: string) => Promise<unknown>;
-                    getFocusedPanelId: () => string | null;
-                  };
-                }
-              ).__testApi;
-              return {
-                panel: testApi?.getPanel(panelId) ?? null,
-                readiness: testApi ? await testApi.getPanelReadiness(panelId) : null,
-                focusedPanelId: testApi?.getFocusedPanelId() ?? null,
-              };
-            }, panel2),
+            app.evaluate(
+              async (_electron, { workspaceId, payload: panelId }) => {
+                const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+                return {
+                  panel: testApi?.getPanel(panelId) ?? null,
+                  readiness: testApi ? await testApi.getPanelReadiness(panelId) : null,
+                  focusedPanelId: testApi?.getFocusedPanelId() ?? null,
+                };
+              },
+              { workspaceId: testApp!.workspaceId, payload: panel2 }
+            ),
           ]);
           await test.info().attach("multi-column-open-beside-diagnostics.json", {
             contentType: "application/json",
@@ -520,7 +504,7 @@ test.describe("Multi-column panel layout", () => {
           throw error;
         }
 
-        const surfaces = await getSurfaceRects(app, wcId);
+        const surfaces = await getSurfaceRects(testApp!, wcId);
         expect(surfaces).toHaveLength(2);
         const slotIds = surfaces.map((surface) => surface.nativeSlotId);
         expect(new Set(slotIds).size).toBe(2);
@@ -531,8 +515,8 @@ test.describe("Multi-column panel layout", () => {
           new Set([panel1, panel2])
         );
         // Both native slots bound, with distinct ids, in lockstep with the DOM.
-        await expect.poll(() => surfacesMatchNativeBounds(app, wcId), POLL).toBe(true);
-        const slots = await getNativePanelSlotDebugInfo(app);
+        await expect.poll(() => surfacesMatchNativeBounds(testApp!, wcId), POLL).toBe(true);
+        const slots = await getNativePanelSlotDebugInfo(testApp!);
         expect(slots).toHaveLength(2);
         expect(new Set(slots.map((slot) => slot.nativeSlotId)).size).toBe(2);
       });
@@ -540,12 +524,12 @@ test.describe("Multi-column panel layout", () => {
       // ---- Scenario 2: divider drag keeps native bounds in lockstep ------
       await test.step("column divider drag settles with native bounds matching DOM within 1px", async () => {
         // Give the divider room to move beyond both columns' minima.
-        await setWindowSize(app, 1600, 1000);
-        await expect.poll(() => surfacesMatchNativeBounds(app, wcId), POLL).toBe(true);
-        const before = await getSurfaceRects(app, wcId);
+        await setWindowSize(testApp!, 1600, 1000);
+        await expect.poll(() => surfacesMatchNativeBounds(testApp!, wcId), POLL).toBe(true);
+        const before = await getSurfaceRects(testApp!, wcId);
         const leftBefore = before.reduce((min, s) => Math.min(min, s.rect.width), Infinity);
         const separator = await shellEval<ShellRect | null>(
-          app,
+          testApp!,
           wcId,
           `(() => {
              const node = document.querySelector('[role="separator"][aria-orientation="vertical"]');
@@ -557,7 +541,7 @@ test.describe("Multi-column panel layout", () => {
         expect(separator).not.toBeNull();
 
         await sendShellMouseDrag(
-          app,
+          testApp!,
           wcId,
           { x: separator!.x, y: separator!.y },
           { x: separator!.x + 160, y: separator!.y },
@@ -568,25 +552,29 @@ test.describe("Multi-column panel layout", () => {
         // bring every native slot to the DOM box within one frame of settling.
         await expect
           .poll(async () => {
-            const surfaces = await getSurfaceRects(app, wcId);
+            const surfaces = await getSurfaceRects(testApp!, wcId);
             const widths = surfaces.map((surface) => surface.rect.width);
             const changed = widths.some((width) => Math.abs(width - leftBefore) > 50);
-            return changed && (await surfacesMatchNativeBounds(app, wcId));
+            return changed && (await surfacesMatchNativeBounds(testApp!, wcId));
           }, POLL)
           .toBe(true);
-        expect(await shellErrorOverlayCount(app, wcId)).toBe(0);
+        expect(await shellErrorOverlayCount(testApp!, wcId)).toBe(0);
       });
 
       // ---- Scenario 3: hide non-resident columns without slivers ----------
       await test.step("window shrink hides a column without a sliver; tree selection rebinds it", async () => {
-        await setWindowSize(app, 780, 900); // only one actual column minimum fits
+        await setWindowSize(testApp!, 780, 900); // only one actual column minimum fits
 
         let parkedPanelId = "";
         await expect
           .poll(async () => {
             const [slots, hasEdgeTabs] = await Promise.all([
-              getNativePanelSlotDebugInfo(app),
-              shellEval<boolean>(app, wcId, `Boolean(document.querySelector('[data-edge-tabs]'))`),
+              getNativePanelSlotDebugInfo(testApp!),
+              shellEval<boolean>(
+                testApp!,
+                wcId,
+                `Boolean(document.querySelector('[data-edge-tabs]'))`
+              ),
             ]);
             if (hasEdgeTabs || slots.length !== 1) return false;
             const residentPanelId = slots[0]!.panelId;
@@ -596,40 +584,40 @@ test.describe("Multi-column panel layout", () => {
           .toBe(true);
 
         // The parked column's slot must be cleared: not bound in the main process.
-        const parkedReadinessBefore = await getPanelReadiness(app, parkedPanelId);
+        const parkedReadinessBefore = await getPanelReadiness(testApp!, parkedPanelId);
         expect(parkedReadinessBefore.nativeSlotBound).toBe(false);
 
         // Select the hidden presentation through the ordinary panel tree.
-        expect(await clickTreeRowForPanel(app, wcId, parkedPanelId)).toBe(true);
+        expect(await clickTreeRowForPanel(testApp!, wcId, parkedPanelId)).toBe(true);
 
         // The column returns, rebinds its slot, and the panel is live again —
         // no dead surface (§5.4: un-parking re-runs loading if GC unloaded it).
         await expect
           .poll(async () => {
-            const slots = await getNativePanelSlotDebugInfo(app);
+            const slots = await getNativePanelSlotDebugInfo(testApp!);
             if (slots.length !== 1 || slots[0]!.panelId !== parkedPanelId) return false;
-            const parkedReadiness = await getPanelReadiness(app, parkedPanelId);
+            const parkedReadiness = await getPanelReadiness(testApp!, parkedPanelId);
             return (
               parkedReadiness.nativeSlotBound &&
               parkedReadiness.terminal &&
-              (await surfacesMatchNativeBounds(app, wcId))
+              (await surfacesMatchNativeBounds(testApp!, wcId))
             );
           }, POLL)
           .toBe(true);
 
         // Restore the wide window; both columns become resident again.
-        await setWindowSize(app, 1600, 1000);
+        await setWindowSize(testApp!, 1600, 1000);
         await expect
           .poll(async () => {
-            const slots = await getNativePanelSlotDebugInfo(app);
-            return slots.length === 2 && (await surfacesMatchNativeBounds(app, wcId));
+            const slots = await getNativePanelSlotDebugInfo(testApp!);
+            return slots.length === 2 && (await surfacesMatchNativeBounds(testApp!, wcId));
           }, POLL)
           .toBe(true);
       });
 
       // ---- Scenario 4: close-pane never archives ------------------------
       await test.step("closing a pane from its local rail keeps the panel in the tree", async () => {
-        const surfaces = await getSurfaceRects(app, wcId);
+        const surfaces = await getSurfaceRects(testApp!, wcId);
         const secondSurface = surfaces.find((surface) => surface.panelId === panel2);
         expect(secondSurface).toBeDefined();
 
@@ -637,7 +625,7 @@ test.describe("Multi-column panel layout", () => {
         // would survive; no focus round-trip through the global titlebar.
         expect(
           await shellEval<boolean>(
-            app,
+            testApp!,
             wcId,
             `(() => {
                const frame = document.querySelector('[data-pane-id=${JSON.stringify(secondSurface!.paneId)}]');
@@ -650,51 +638,51 @@ test.describe("Multi-column panel layout", () => {
         ).toBe(true);
 
         await expect
-          .poll(async () => (await getNativePanelSlotDebugInfo(app)).length, POLL)
+          .poll(async () => (await getNativePanelSlotDebugInfo(testApp!)).length, POLL)
           .toBe(1);
         expect(
           await shellEval<number>(
-            app,
+            testApp!,
             wcId,
             `document.querySelectorAll('button[aria-label="Close pane"]').length`
           )
         ).toBe(0);
         // The panel is still in the tree — pane close is layout-only, never archive.
-        const tree = await getPanelTree(app);
+        const tree = await getPanelTree(testApp!);
         expect(tree.some((panel) => panel.id === panel2)).toBe(true);
-        expect(await shellErrorOverlayCount(app, wcId)).toBe(0);
+        expect(await shellErrorOverlayCount(testApp!, wcId)).toBe(0);
       });
 
       // ---- Scenario 5: geometric drag placement ---------------------------
       await test.step("a tree drag lands where it was dropped, not where focus was", async () => {
-        const survivingPaneId = (await getSurfaceRects(app, wcId))[0]?.paneId;
+        const survivingPaneId = (await getSurfaceRects(testApp!, wcId))[0]?.paneId;
         expect(survivingPaneId).toBeTruthy();
 
         // Dropped on the centre of the only pane: it takes that pane over.
-        await dragTreePanelToPane(app, wcId, panel2, survivingPaneId!, "center");
+        await dragTreePanelToPane(testApp!, wcId, panel2, survivingPaneId!, "center");
         await expect
           .poll(async () => {
-            const surfaces = await getSurfaceRects(app, wcId);
+            const surfaces = await getSurfaceRects(testApp!, wcId);
             return (
               surfaces.length === 1 &&
               surfaces[0]?.panelId === panel2 &&
-              (await surfacesMatchNativeBounds(app, wcId))
+              (await surfacesMatchNativeBounds(testApp!, wcId))
             );
           }, POLL)
           .toBe(true);
 
         // Dropped on that pane's left edge: a new column appears to its left.
-        const occupiedPaneId = (await getSurfaceRects(app, wcId))[0]?.paneId;
+        const occupiedPaneId = (await getSurfaceRects(testApp!, wcId))[0]?.paneId;
         expect(occupiedPaneId).toBeTruthy();
-        await dragTreePanelToPane(app, wcId, panel1, occupiedPaneId!, "left");
+        await dragTreePanelToPane(testApp!, wcId, panel1, occupiedPaneId!, "left");
         await expect
           .poll(async () => {
-            const surfaces = (await getSurfaceRects(app, wcId)).sort(
+            const surfaces = (await getSurfaceRects(testApp!, wcId)).sort(
               (left, right) => left.rect.x - right.rect.x
             );
             return (
               surfaces.map((surface) => surface.panelId).join(",") === `${panel1},${panel2}` &&
-              (await surfacesMatchNativeBounds(app, wcId))
+              (await surfacesMatchNativeBounds(testApp!, wcId))
             );
           }, POLL)
           .toBe(true);
@@ -705,22 +693,24 @@ test.describe("Multi-column panel layout", () => {
         // Re-open the second panel beside the first for a two-column layout.
         await expect
           .poll(async () => {
-            const surfaces = await getSurfaceRects(app, wcId);
+            const surfaces = await getSurfaceRects(testApp!, wcId);
             if (surfaces.length >= 2) return true;
-            await clickTreeRowForPanel(app, wcId, panel2, { ctrlKey: true }).catch(() => false);
+            await clickTreeRowForPanel(testApp!, wcId, panel2, { ctrlKey: true }).catch(
+              () => false
+            );
             return false;
           }, POLL)
           .toBe(true);
-        await expect.poll(() => surfacesMatchNativeBounds(app, wcId), POLL).toBe(true);
+        await expect.poll(() => surfacesMatchNativeBounds(testApp!, wcId), POLL).toBe(true);
 
         // Keyboard divider resize: ArrowRight on the focused separator commits
         // a step and the native bounds follow.
-        const widthsBefore = (await getSurfaceRects(app, wcId)).map(
+        const widthsBefore = (await getSurfaceRects(testApp!, wcId)).map(
           (surface) => surface.rect.width
         );
         expect(
           await shellEval<boolean>(
-            app,
+            testApp!,
             wcId,
             `(() => {
                const node = document.querySelector('[role="separator"][aria-orientation="vertical"]');
@@ -735,20 +725,22 @@ test.describe("Multi-column panel layout", () => {
         ).toBe(true);
         await expect
           .poll(async () => {
-            const widths = (await getSurfaceRects(app, wcId)).map((surface) => surface.rect.width);
+            const widths = (await getSurfaceRects(testApp!, wcId)).map(
+              (surface) => surface.rect.width
+            );
             const changed = widths.some(
               (width, index) => Math.abs(width - (widthsBefore[index] ?? width)) >= 10
             );
-            return changed && (await surfacesMatchNativeBounds(app, wcId));
+            return changed && (await surfacesMatchNativeBounds(testApp!, wcId));
           }, POLL)
           .toBe(true);
 
         // Focus ring movement: Ctrl+Alt+ArrowRight/Left flips which slot is focused.
-        const focusedSlotBefore = (await getNativePanelSlotDebugInfo(app)).find(
+        const focusedSlotBefore = (await getNativePanelSlotDebugInfo(testApp!)).find(
           (slot) => slot.focused
         );
         expect(focusedSlotBefore).toBeDefined();
-        const slotsByPosition = (await getNativePanelSlotDebugInfo(app)).sort(
+        const slotsByPosition = (await getNativePanelSlotDebugInfo(testApp!)).sort(
           (left, right) => left.bounds.x - right.bounds.x
         );
         const focusedIndex = slotsByPosition.findIndex(
@@ -758,7 +750,7 @@ test.describe("Multi-column panel layout", () => {
         const returnDirection = firstDirection === "ArrowLeft" ? "ArrowRight" : "ArrowLeft";
         const moveFocus = (key: string) =>
           shellEval<boolean>(
-            app,
+            testApp!,
             wcId,
             `(window.dispatchEvent(new KeyboardEvent('keydown', {
                key: ${JSON.stringify(key)}, ctrlKey: true, altKey: true, bubbles: true, cancelable: true,
@@ -768,7 +760,9 @@ test.describe("Multi-column panel layout", () => {
         let focusedAfterFirstMove = "";
         await expect
           .poll(async () => {
-            const focused = (await getNativePanelSlotDebugInfo(app)).find((slot) => slot.focused);
+            const focused = (await getNativePanelSlotDebugInfo(testApp!)).find(
+              (slot) => slot.focused
+            );
             if (!focused) return false;
             focusedAfterFirstMove = focused.nativeSlotId;
             return focused.nativeSlotId !== focusedSlotBefore!.nativeSlotId;
@@ -777,13 +771,15 @@ test.describe("Multi-column panel layout", () => {
         await moveFocus(returnDirection);
         await expect
           .poll(async () => {
-            const focused = (await getNativePanelSlotDebugInfo(app)).find((slot) => slot.focused);
+            const focused = (await getNativePanelSlotDebugInfo(testApp!)).find(
+              (slot) => slot.focused
+            );
             return Boolean(focused && focused.nativeSlotId !== focusedAfterFirstMove);
           }, POLL)
           .toBe(true);
       });
 
-      expect(await shellErrorOverlayCount(app, wcId)).toBe(0);
+      expect(await shellErrorOverlayCount(testApp, wcId)).toBe(0);
     } finally {
       await testApp?.cleanup();
       removeManagedTestWorkspace(workspacePath);

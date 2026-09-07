@@ -8,7 +8,7 @@
  * panel chrome path in the desktop shell.
  */
 
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
@@ -16,7 +16,6 @@ import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
   callTerminalPanel,
-  clickPanelSelector,
   clickPanelText,
   createManagedTestWorkspace,
   getPanelLayoutAudit,
@@ -59,7 +58,7 @@ function writeInitPanelsConfig(
 ): void {
   const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
-  config.initPanels = panels;
+  config["initPanels"] = panels;
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
@@ -75,17 +74,17 @@ async function launchMobileTestApp(
       workspace: workspacePath,
       launchTimeout: 240_000,
     });
-    await approvePendingStartupUnits(testApp.app);
-    await approvePendingWorkspaceCreationReview(testApp.app);
+    await approvePendingStartupUnits(testApp);
+    await approvePendingWorkspaceCreationReview(testApp);
     const initialPanel = panels[0];
     if (initialPanel) {
-      await waitForHostedShellChrome(testApp.app, initialPanel.source);
+      await waitForHostedShellChrome(testApp, initialPanel.source);
     }
     if (initialPanel) {
       // Hosted chrome can render before its authenticated panel-tree read has
       // seeded the server-authoritative init panels. The fixture is ready only
       // when the panel declaration it wrote is present and loaded.
-      await waitForSourcePanel(testApp.app, initialPanel.source, 180_000);
+      await waitForSourcePanel(testApp, initialPanel.source, 180_000);
     }
     return {
       ...testApp,
@@ -101,7 +100,7 @@ async function launchMobileTestApp(
     if (testApp) {
       console.log(
         "MOBILE_SHELL_DISCOVERY_DIAGNOSTICS",
-        JSON.stringify(await listShellCandidateSnapshots(testApp.app).catch(() => []), null, 2)
+        JSON.stringify(await listShellCandidateSnapshots(testApp).catch(() => []), null, 2)
       );
       await testApp.cleanup().catch(() => {});
     }
@@ -110,7 +109,7 @@ async function launchMobileTestApp(
   }
 }
 
-async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
+async function listShellCandidateSnapshots(owner: TestApp): Promise<
   Array<{
     id: number;
     url: string;
@@ -121,6 +120,7 @@ async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
     viewport: { width: number; height: number; scrollWidth: number };
   }>
 > {
+  const { app } = owner;
   return app.evaluate(async ({ webContents }) => {
     const snapshots = [];
     for (const contents of webContents.getAllWebContents()) {
@@ -173,82 +173,25 @@ async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
   });
 }
 
-async function clickShellButton(app: ElectronApplication, label: RegExp): Promise<boolean> {
-  return app.evaluate(async ({ webContents }, source) => {
-    const candidates: Array<{ contents: Electron.WebContents; priority: number }> = [];
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const priority = await contents.executeJavaScript(
-          `(() => {
-              const hasHostedShellChrome = Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
-                || document.querySelector(".titlebar-breadcrumb-scroll")
-                || document.querySelector('[aria-label="Menu"]')
-                || document.querySelector('[aria-label="Open panel tree"]')
-                || document.querySelector('[aria-label="Close panel tree"]')
-                || document.querySelector('[aria-label="Switch to tree navigation"]')
-                || document.querySelector('[aria-label="Switch to breadcrumb navigation"]')
-                || document.querySelector('[data-shell-top-chrome]')
-                || document.querySelector('[data-native-panel-slot-id]'));
-              const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'));
-              if (hasHostedShellChrome) return 0;
-              if (hasLaunchGateApproval) return 1;
-              return 2;
-            })()`,
-          true
-        );
-        candidates.push({ contents, priority });
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    candidates.sort((a, b) => a.priority - b.priority);
-    for (const { contents } of candidates) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const clicked = await contents.executeJavaScript(
-          `(() => {
-              const pattern = new RegExp(${JSON.stringify(source)}, "i");
-              const buttons = Array.from(document.querySelectorAll("button"));
-              const button = buttons.find((item) => pattern.test((item.textContent ?? "").trim()));
-              if (!button) return false;
-              button.click();
-              return true;
-            })()`,
-          true
-        );
-        if (clicked) return true;
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    return false;
-  }, label.source);
-}
-
 async function rpcCall(
-  app: ElectronApplication,
+  owner: TestApp,
   service: string,
   method: string,
   args: unknown[] = []
 ): Promise<unknown> {
+  const { app } = owner;
   return app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-          };
-        }
-      ).__testApi;
+    async (_electron, { workspaceId, payload: request }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
       if (!testApi) throw new Error("Test API not available");
       return testApi.rpcCall(request.service, request.method, request.args);
     },
-    { service, method, args }
+    { workspaceId: owner.workspaceId, payload: { service, method, args } }
   );
 }
 
-async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean> {
+async function clickRecoveryApproval(owner: TestApp): Promise<boolean> {
+  const { app } = owner;
   return app.evaluate(async ({ webContents }) => {
     const candidates = webContents.getAllWebContents().filter((contents) => {
       if (contents.isDestroyed()) return false;
@@ -282,10 +225,8 @@ async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean>
   });
 }
 
-async function evaluateInHostedShell<T>(
-  app: ElectronApplication,
-  script: string
-): Promise<T | null> {
+async function evaluateInHostedShell<T>(owner: TestApp, script: string): Promise<T | null> {
+  const { app } = owner;
   return app.evaluate(async ({ webContents }, code) => {
     const timed = async <Value>(promise: Promise<Value>, timeoutMs = 1500): Promise<Value | null> =>
       Promise.race([
@@ -318,20 +259,14 @@ async function evaluateInHostedShell<T>(
   }, script);
 }
 
-async function waitForHostedShellChrome(
-  app: ElectronApplication,
-  panelSource: string
-): Promise<void> {
-  await ensureHostedShellReady(app, { panelSource });
+async function waitForHostedShellChrome(owner: TestApp, panelSource: string): Promise<void> {
+  await ensureHostedShellReady(owner, { panelSource });
 }
 
-async function shellElementVisibleByLabel(
-  app: ElectronApplication,
-  label: string
-): Promise<boolean> {
+async function shellElementVisibleByLabel(owner: TestApp, label: string): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
-      app,
+      owner,
       `(() => {
         const label = ${JSON.stringify(label)};
         const visible = (node) => {
@@ -351,13 +286,10 @@ async function shellElementVisibleByLabel(
   );
 }
 
-async function shellElementVisibleByLabels(
-  app: ElectronApplication,
-  labels: string[]
-): Promise<boolean> {
+async function shellElementVisibleByLabels(owner: TestApp, labels: string[]): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
-      app,
+      owner,
       `(() => {
         const labels = ${JSON.stringify(labels)};
         const visible = (node) => {
@@ -377,7 +309,7 @@ async function shellElementVisibleByLabels(
   );
 }
 
-async function getHostedShellNavigationState(app: ElectronApplication): Promise<{
+async function getHostedShellNavigationState(owner: TestApp): Promise<{
   found: boolean;
   viewport: { width: number; height: number } | null;
   labels: string[];
@@ -386,7 +318,7 @@ async function getHostedShellNavigationState(app: ElectronApplication): Promise<
 }> {
   return (
     (await evaluateInHostedShell(
-      app,
+      owner,
       `(() => ({
         found: true,
         viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -408,10 +340,10 @@ async function getHostedShellNavigationState(app: ElectronApplication): Promise<
   );
 }
 
-async function shellClickByLabels(app: ElectronApplication, labels: string[]): Promise<boolean> {
+async function shellClickByLabels(owner: TestApp, labels: string[]): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
-      app,
+      owner,
       `(() => {
         const labels = ${JSON.stringify(labels)};
         const visible = (node) => {
@@ -436,10 +368,10 @@ async function shellClickByLabels(app: ElectronApplication, labels: string[]): P
   );
 }
 
-async function shellClickByLabel(app: ElectronApplication, label: string): Promise<boolean> {
+async function shellClickByLabel(owner: TestApp, label: string): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
-      app,
+      owner,
       `(() => {
         const label = ${JSON.stringify(label)};
         const visible = (node) => {
@@ -474,13 +406,10 @@ function normalizeHideAddressBarLabels(): string[] {
   return ["Hide address bar", "Back to breadcrumbs"];
 }
 
-async function shellClickButtonByTextPattern(
-  app: ElectronApplication,
-  pattern: RegExp
-): Promise<boolean> {
+async function shellClickButtonByTextPattern(owner: TestApp, pattern: RegExp): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
-      app,
+      owner,
       `(() => {
         const pattern = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(pattern.flags)});
         const visible = (node) => {
@@ -503,7 +432,8 @@ async function shellClickButtonByTextPattern(
   );
 }
 
-async function setMobileWindow(app: ElectronApplication): Promise<void> {
+async function setMobileWindow(owner: TestApp): Promise<void> {
+  const { app } = owner;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const hasWindow = await app.evaluate(
       ({ BaseWindow, BrowserWindow }) =>
@@ -521,29 +451,27 @@ async function setMobileWindow(app: ElectronApplication): Promise<void> {
 }
 
 async function waitForDeclaredSourcePanel(
-  app: ElectronApplication,
+  owner: TestApp,
   source: string,
   timeout = 60_000
 ): Promise<string> {
+  const { app } = owner;
   let panelId: string | null = null;
   await expect
     .poll(
       async () => {
         panelId = await app
-          .evaluate((_electron, panelSource) => {
-            const testApi = (
-              globalThis as {
-                __testApi?: {
-                  getPanelTree: () => Array<{ id: string; snapshot?: { source?: string } }>;
-                };
-              }
-            ).__testApi;
-            if (!testApi) throw new Error("Test API not available");
-            return (
-              testApi.getPanelTree().find((panel) => panel.snapshot?.source === panelSource)?.id ??
-              null
-            );
-          }, source)
+          .evaluate(
+            async (_electron, { workspaceId, payload: panelSource }) => {
+              const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+              if (!testApi) throw new Error("Test API not available");
+              return (
+                testApi.getPanelTree().find((panel) => panel.snapshot?.source === panelSource)
+                  ?.id ?? null
+              );
+            },
+            { workspaceId: owner.workspaceId, payload: source }
+          )
           .catch(() => null);
         return panelId;
       },
@@ -555,14 +483,14 @@ async function waitForDeclaredSourcePanel(
 }
 
 async function waitForSourcePanel(
-  app: ElectronApplication,
+  owner: TestApp,
   source: string,
   timeout = 60_000
 ): Promise<string> {
-  const panelId = await waitForDeclaredSourcePanel(app, source, timeout);
+  const panelId = await waitForDeclaredSourcePanel(owner, source, timeout);
 
   await expect
-    .poll(() => isPanelReady(app, panelId).catch(() => false), {
+    .poll(() => isPanelReady(owner, panelId).catch(() => false), {
       timeout,
       intervals: [250, 500, 1000],
     })
@@ -572,62 +500,61 @@ async function waitForSourcePanel(
 }
 
 async function ensurePanelSource(
-  app: ElectronApplication,
+  owner: TestApp,
   source: string,
   options?: { stateArgs?: Record<string, unknown> }
 ): Promise<string> {
+  const { app } = owner;
   const existingPanelId = await app
-    .evaluate((_electron, panelSource) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            getPanelTree: () => Array<{ id: string; snapshot?: { source?: string } }>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      return testApi.getPanelTree().find((panel) => panel.snapshot?.source === panelSource)?.id;
-    }, source)
+    .evaluate(
+      async (_electron, { workspaceId, payload: panelSource }) => {
+        const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+        if (!testApi) throw new Error("Test API not available");
+        return testApi.getPanelTree().find((panel) => panel.snapshot?.source === panelSource)?.id;
+      },
+      { workspaceId: owner.workspaceId, payload: source }
+    )
     .catch(() => null);
 
   if (existingPanelId) {
-    await app.evaluate(async (_electron, panelId) => {
-      const testApi = (
-        globalThis as { __testApi?: { focusPanel: (id: string) => Promise<unknown> } }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      await testApi.focusPanel(panelId);
-    }, existingPanelId);
-    await approveShellPrompts(app);
-    await waitForTerminalPanel(app, existingPanelId, source);
+    await app.evaluate(
+      async (_electron, { workspaceId, payload: panelId }) => {
+        const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+        if (!testApi) throw new Error("Test API not available");
+        await testApi.focusPanel(panelId);
+      },
+      { workspaceId: owner.workspaceId, payload: existingPanelId }
+    );
+    await approveShellPrompts(owner);
+    await waitForTerminalPanel(owner, existingPanelId, source);
     return existingPanelId;
   }
 
-  const parentId = await waitForAnyPanel(app);
-  const created = await createPanel(app, parentId, source, {
+  const parentId = await waitForAnyPanel(owner);
+  const created = await createPanel(owner, parentId, source, {
     focus: true,
     stateArgs: options?.stateArgs,
   });
-  await approveShellPrompts(app);
-  await waitForTerminalPanel(app, created.id, source);
+  await approveShellPrompts(owner);
+  await waitForTerminalPanel(owner, created.id, source);
   return created.id;
 }
 
 async function waitForTerminalPanel(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   source: string
 ): Promise<void> {
   try {
     await expect
-      .poll(() => isPanelReady(app, panelId).catch(() => false), {
+      .poll(() => isPanelReady(owner, panelId).catch(() => false), {
         timeout: 60_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
   } catch (error) {
-    const readiness = await getPanelReadiness(app, panelId).catch(() => null);
-    const tree = await getPanelTree(app).catch(() => []);
+    const readiness = await getPanelReadiness(owner, panelId).catch(() => null);
+    const tree = await getPanelTree(owner).catch(() => []);
     throw new Error(
       `Panel ${source} (${panelId}) did not become terminally ready. ` +
         `readiness=${JSON.stringify(readiness)} tree=${JSON.stringify(tree)}`,
@@ -636,22 +563,20 @@ async function waitForTerminalPanel(
   }
 }
 
-async function waitForAnyPanel(app: ElectronApplication): Promise<string> {
+async function waitForAnyPanel(owner: TestApp): Promise<string> {
+  const { app } = owner;
   let panelId: string | null = null;
   await expect
     .poll(
       async () => {
-        panelId = await app.evaluate(() => {
-          const testApi = (
-            globalThis as {
-              __testApi?: {
-                getPanelTree: () => Array<{ id: string }>;
-              };
-            }
-          ).__testApi;
-          if (!testApi) throw new Error("Test API not available");
-          return testApi.getPanelTree()[0]?.id ?? null;
-        });
+        panelId = await app.evaluate(
+          async (_electron, { workspaceId }) => {
+            const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+            if (!testApi) throw new Error("Test API not available");
+            return testApi.getPanelTree()[0]?.id ?? null;
+          },
+          { workspaceId: owner.workspaceId }
+        );
         return panelId;
       },
       { timeout: 60_000, intervals: [250, 500, 1000] }
@@ -660,7 +585,7 @@ async function waitForAnyPanel(app: ElectronApplication): Promise<string> {
   return panelId!;
 }
 
-async function expectShellFitsMobileViewport(app: ElectronApplication): Promise<void> {
+async function expectShellFitsMobileViewport(owner: TestApp): Promise<void> {
   const audit = await evaluateInHostedShell<{
     viewportWidth: number;
     viewportHeight: number;
@@ -670,7 +595,7 @@ async function expectShellFitsMobileViewport(app: ElectronApplication): Promise<
     hasMenu: boolean;
     hasNewPanel: boolean;
   }>(
-    app,
+    owner,
     `(() => ({
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
@@ -689,26 +614,29 @@ async function expectShellFitsMobileViewport(app: ElectronApplication): Promise<
   expect(audit.hasNewPanel).toBe(true);
 }
 
-async function getRootPanelIds(app: ElectronApplication): Promise<string[]> {
-  return app.evaluate(() => {
-    const testApi = (globalThis as { __testApi?: { getRootPanels: () => Array<{ id: string }> } })
-      .__testApi;
-    return testApi?.getRootPanels().map((panel) => panel.id) ?? [];
-  });
+async function getRootPanelIds(owner: TestApp): Promise<string[]> {
+  const { app } = owner;
+  return app.evaluate(
+    async (_electron, { workspaceId }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      return testApi?.getRootPanels().map((panel) => panel.id) ?? [];
+    },
+    { workspaceId: owner.workspaceId }
+  );
 }
 
-async function ensureShellStackMode(app: ElectronApplication): Promise<void> {
-  await shellClickByLabels(app, normalizeHideAddressBarLabels()).catch(() => false);
-  await shellClickByLabels(app, normalizeNavigationTreeCloseLabel()).catch(() => false);
+async function ensureShellStackMode(owner: TestApp): Promise<void> {
+  await shellClickByLabels(owner, normalizeHideAddressBarLabels()).catch(() => false);
+  await shellClickByLabels(owner, normalizeNavigationTreeCloseLabel()).catch(() => false);
   try {
     await expect
-      .poll(() => shellElementVisibleByLabels(app, normalizeNavigationTreeOpenLabel()), {
+      .poll(() => shellElementVisibleByLabels(owner, normalizeNavigationTreeOpenLabel()), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
   } catch (error) {
-    const state = await getHostedShellNavigationState(app).catch(() => null);
+    const state = await getHostedShellNavigationState(owner).catch(() => null);
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}\n` +
         `Hosted shell navigation state: ${JSON.stringify(state)}`
@@ -716,11 +644,8 @@ async function ensureShellStackMode(app: ElectronApplication): Promise<void> {
   }
 }
 
-async function expectPanelFitsMobileViewport(
-  app: ElectronApplication,
-  panelId: string
-): Promise<void> {
-  const audit = await getPanelLayoutAudit(app, panelId);
+async function expectPanelFitsMobileViewport(owner: TestApp, panelId: string): Promise<void> {
+  const audit = await getPanelLayoutAudit(owner, panelId);
   expect(audit.viewport.width).toBeGreaterThan(0);
   expect(audit.viewport.width).toBeLessThanOrEqual(MOBILE_BOUNDS.width);
   expect(audit.document.scrollWidth).toBeLessThanOrEqual(audit.viewport.width + 2);
@@ -728,88 +653,87 @@ async function expectPanelFitsMobileViewport(
   expect(audit.verticalOverflow).toEqual([]);
 }
 
-async function listPendingApprovals(app: ElectronApplication): Promise<PendingApproval[]> {
-  return app.evaluate(async () => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
-      approvalId: string;
-      kind: string;
-      allowedDecisions?: unknown;
-      options?: Array<{
-        value: unknown;
-        tone?: unknown;
-        label?: unknown;
+async function listPendingApprovals(owner: TestApp): Promise<PendingApproval[]> {
+  const { app } = owner;
+  return app.evaluate(
+    async (_electron, { workspaceId }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
+        approvalId: string;
+        kind: string;
+        allowedDecisions?: unknown;
+        options?: Array<{
+          value: unknown;
+          tone?: unknown;
+          label?: unknown;
+        }>;
       }>;
-    }>;
-    return pending.map((approval) => ({
-      approvalId: approval.approvalId,
-      kind: approval.kind,
-      allowedDecisions: Array.isArray(approval.allowedDecisions)
-        ? approval.allowedDecisions.filter((decision): decision is string => typeof decision === "string")
-        : undefined,
-      options: Array.isArray(approval.options)
-        ? approval.options.map((option) => ({
-            value: String(option.value),
-            tone: typeof option.tone === "string" ? option.tone : undefined,
-            label: typeof option.label === "string" ? option.label : undefined,
-          }))
-        : undefined,
-    }));
-  });
+      return pending.map((approval) => ({
+        approvalId: approval.approvalId,
+        kind: approval.kind,
+        allowedDecisions: Array.isArray(approval.allowedDecisions)
+          ? approval.allowedDecisions.filter(
+              (decision): decision is string => typeof decision === "string"
+            )
+          : undefined,
+        options: Array.isArray(approval.options)
+          ? approval.options.map((option) => ({
+              value: String(option.value),
+              tone: typeof option.tone === "string" ? option.tone : undefined,
+              label: typeof option.label === "string" ? option.label : undefined,
+            }))
+          : undefined,
+      }));
+    },
+    { workspaceId: owner.workspaceId }
+  );
 }
 
-async function resolveApproval(app: ElectronApplication, approval: PendingApproval): Promise<void> {
-  await app.evaluate(async (_electron, pending) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
+async function resolveApproval(owner: TestApp, approval: PendingApproval): Promise<void> {
+  const { app } = owner;
+  await app.evaluate(
+    async (_electron, { workspaceId, payload: pending }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      if (pending.kind === "userland") {
+        const choice =
+          pending.options?.find((option) => option.tone === "primary")?.value ??
+          pending.options?.find((option) => option.tone !== "danger")?.value ??
+          pending.options?.[0]?.value;
+        if (!choice) {
+          throw new Error(`Userland approval ${pending.approvalId} did not include any options`);
+        }
+        await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
+        return;
       }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    if (pending.kind === "userland") {
-      const choice =
-        pending.options?.find((option) => option.tone === "primary")?.value ??
-        pending.options?.find((option) => option.tone !== "danger")?.value ??
-        pending.options?.[0]?.value;
-      if (!choice) {
-        throw new Error(`Userland approval ${pending.approvalId} did not include any options`);
-      }
-      await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
-      return;
-    }
-    const decision = pending.allowedDecisions?.find((candidate) => candidate !== "deny") ?? "once";
-    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, decision]);
-  }, approval);
+      const decision =
+        pending.allowedDecisions?.find((candidate) => candidate !== "deny") ?? "once";
+      await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, decision]);
+    },
+    { workspaceId: owner.workspaceId, payload: approval }
+  );
 }
 
-async function approveShellPrompts(app: ElectronApplication): Promise<void> {
+async function approveShellPrompts(owner: TestApp): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const clickedRecovery = await clickRecoveryApproval(app);
-    const pending = await listPendingApprovals(app);
+    const clickedRecovery = await clickRecoveryApproval(owner);
+    const pending = await listPendingApprovals(owner);
     for (const approval of pending) {
       // Unit-install reviews have a structured resolution contract; the
       // generic approval path below is intentionally only for ordinary
       // session/userland prompts.
       if (approval.kind === "unit-install-review") continue;
-      await resolveApproval(app, approval);
+      await resolveApproval(owner, approval);
     }
-    await approvePendingWorkspaceCreationReview(app);
+    await approvePendingWorkspaceCreationReview(owner);
     const clicked = await shellClickButtonByTextPattern(
-      app,
+      owner,
       /Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i
     );
     const hasApprovalSurface = Boolean(
       await evaluateInHostedShell(
-        app,
+        owner,
         `(() => Boolean(
           document.querySelector('.approval-card, .approval-pill')
             || document.querySelector('[data-bootstrap-launch-gate="true"]')
@@ -820,10 +744,10 @@ async function approveShellPrompts(app: ElectronApplication): Promise<void> {
     await delay(500);
   }
 
-  const unresolved = await listPendingApprovals(app);
+  const unresolved = await listPendingApprovals(owner);
   const hasApprovalSurface = Boolean(
     await evaluateInHostedShell(
-      app,
+      owner,
       `(() => Boolean(
         document.querySelector('.approval-card, .approval-pill')
           || document.querySelector('[data-bootstrap-launch-gate="true"]')
@@ -836,11 +760,11 @@ async function approveShellPrompts(app: ElectronApplication): Promise<void> {
 }
 
 async function diagnosePendingApprovalResolution(
-  app: ElectronApplication
+  owner: TestApp
 ): Promise<
   Array<{ approvalId: string; before: string[]; choice?: string; outcome: string; after: string[] }>
 > {
-  const pending = await listPendingApprovals(app);
+  const pending = await listPendingApprovals(owner);
   const attempts: Array<{
     approvalId: string;
     before: string[];
@@ -858,11 +782,13 @@ async function diagnosePendingApprovalResolution(
         : undefined;
     let outcome = "resolved";
     try {
-      await resolveApproval(app, approval);
+      await resolveApproval(owner, approval);
     } catch (reason) {
       outcome = reason instanceof Error ? reason.message : String(reason);
     }
-    const after = (await listPendingApprovals(app).catch(() => [])).map((item) => item.approvalId);
+    const after = (await listPendingApprovals(owner).catch(() => [])).map(
+      (item) => item.approvalId
+    );
     attempts.push({
       approvalId: approval.approvalId,
       before,
@@ -882,7 +808,7 @@ test.describe("Mobile Panels", () => {
   test.beforeAll(async ({}, testInfo) => {
     testInfo.setTimeout(600_000);
     testApp = await launchMobileTestApp([{ source: "about/new" }]);
-    await setMobileWindow(testApp.app);
+    await setMobileWindow(testApp);
   });
 
   test.afterAll(async ({}, testInfo) => {
@@ -893,24 +819,24 @@ test.describe("Mobile Panels", () => {
 
   test("shell chrome exposes mobile panel tree without horizontal overflow", async () => {
     expect(testApp).toBeDefined();
-    await setMobileWindow(testApp!.app);
-    await ensureShellStackMode(testApp!.app);
+    await setMobileWindow(testApp!);
+    await ensureShellStackMode(testApp!);
     await delay(500);
 
-    await expectShellFitsMobileViewport(testApp!.app);
+    await expectShellFitsMobileViewport(testApp!);
 
-    expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeOpenLabel())).toBe(true);
+    expect(await shellClickByLabels(testApp!, normalizeNavigationTreeOpenLabel())).toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeCloseLabel()), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
-    await expectShellFitsMobileViewport(testApp!.app);
+    await expectShellFitsMobileViewport(testApp!);
 
-    expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeCloseLabel())).toBe(true);
+    expect(await shellClickByLabels(testApp!, normalizeNavigationTreeCloseLabel())).toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeOpenLabel()), {
+      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeOpenLabel()), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
@@ -919,42 +845,42 @@ test.describe("Mobile Panels", () => {
 
   test("mobile titlebar toggles the address bar without overflow", async () => {
     expect(testApp).toBeDefined();
-    await setMobileWindow(testApp!.app);
-    await ensureShellStackMode(testApp!.app);
-    await ensurePanelSource(testApp!.app, "about/help");
+    await setMobileWindow(testApp!);
+    await ensureShellStackMode(testApp!);
+    await ensurePanelSource(testApp!, "about/help");
 
-    expect(await shellClickByLabel(testApp!.app, "Show address bar")).toBe(true);
+    expect(await shellClickByLabel(testApp!, "Show address bar")).toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
+      .poll(() => shellElementVisibleByLabel(testApp!, "Panel path"), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
-    await expectShellFitsMobileViewport(testApp!.app);
+    await expectShellFitsMobileViewport(testApp!);
 
-    expect(await shellClickByLabels(testApp!.app, normalizeHideAddressBarLabels())).toBe(true);
+    expect(await shellClickByLabels(testApp!, normalizeHideAddressBarLabels())).toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
+      .poll(() => shellElementVisibleByLabel(testApp!, "Panel path"), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(false);
-    await expectShellFitsMobileViewport(testApp!.app);
+    await expectShellFitsMobileViewport(testApp!);
   });
 
   test("mobile titlebar creates a new panel", async () => {
     expect(testApp).toBeDefined();
-    await setMobileWindow(testApp!.app);
-    await ensureShellStackMode(testApp!.app);
-    await waitForAnyPanel(testApp!.app);
-    const initialCount = (await getPanelTree(testApp!.app)).length;
+    await setMobileWindow(testApp!);
+    await ensureShellStackMode(testApp!);
+    await waitForAnyPanel(testApp!);
+    const initialCount = (await getPanelTree(testApp!)).length;
 
-    expect(await shellClickByLabel(testApp!.app, "New panel")).toBe(true);
+    expect(await shellClickByLabel(testApp!, "New panel")).toBe(true);
     await expect
       .poll(
         async () => {
-          const panels = await getPanelTree(testApp!.app);
-          const rootPanelIds = await getRootPanelIds(testApp!.app);
+          const panels = await getPanelTree(testApp!);
+          const rootPanelIds = await getRootPanelIds(testApp!);
           const newPanel = panels.find((panel) => panel.snapshot?.source === "about/new");
           return {
             count: panels.length,
@@ -965,87 +891,87 @@ test.describe("Mobile Panels", () => {
         { timeout: 30_000, intervals: [250, 500, 1000] }
       )
       .toEqual({ count: initialCount + 1, hasNewPanel: true, hasRootNewPanel: true });
-    await expectShellFitsMobileViewport(testApp!.app);
+    await expectShellFitsMobileViewport(testApp!);
   });
 
   test("mobile panel tree selection returns to stack mode", async () => {
     expect(testApp).toBeDefined();
-    await setMobileWindow(testApp!.app);
-    await ensureShellStackMode(testApp!.app);
-    const parentId = await ensurePanelSource(testApp!.app, "about/new");
-    const existingHelpPanel = (await getPanelTree(testApp!.app)).find(
+    await setMobileWindow(testApp!);
+    await ensureShellStackMode(testApp!);
+    const parentId = await ensurePanelSource(testApp!, "about/new");
+    const existingHelpPanel = (await getPanelTree(testApp!)).find(
       (panel) => panel.snapshot?.source === "about/help"
     );
     const helpPanel =
       existingHelpPanel ??
-      (await createPanel(testApp!.app, parentId, "about/help", {
+      (await createPanel(testApp!, parentId, "about/help", {
         focus: false,
       }));
 
     // A background panel has no native slot, so canonical presentation
     // readiness begins only after selecting it. Its durable tree row is the
     // precondition for exercising that selection.
-    expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeOpenLabel())).toBe(true);
+    expect(await shellClickByLabels(testApp!, normalizeNavigationTreeOpenLabel())).toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeCloseLabel()), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabel(testApp!.app, "Select panel Help"), {
+      .poll(() => shellElementVisibleByLabel(testApp!, "Select panel Help"), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
-    expect(await shellClickByLabel(testApp!.app, "Select panel Help")).toBe(true);
+    expect(await shellClickByLabel(testApp!, "Select panel Help")).toBe(true);
 
     await expect
-      .poll(() => isPanelReady(testApp!.app, helpPanel.id).catch(() => false), {
+      .poll(() => isPanelReady(testApp!, helpPanel.id).catch(() => false), {
         timeout: 60_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
 
     await expect
-      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeOpenLabel()), {
+      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeOpenLabel()), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(true);
     await expect
-      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+      .poll(() => shellElementVisibleByLabels(testApp!, normalizeNavigationTreeCloseLabel()), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
       .toBe(false);
-    await expectShellFitsMobileViewport(testApp!.app);
+    await expectShellFitsMobileViewport(testApp!);
   });
 
   test("terminal session fits the mobile panel viewport", async () => {
     expect(testApp).toBeDefined();
-    await setMobileWindow(testApp!.app);
-    await ensureShellStackMode(testApp!.app);
-    const panelId = await ensurePanelSource(testApp!.app, "panels/terminal");
-    await startPanelDiagnostics(testApp!.app, panelId);
-    await approveShellPrompts(testApp!.app);
+    await setMobileWindow(testApp!);
+    await ensureShellStackMode(testApp!);
+    const panelId = await ensurePanelSource(testApp!, "panels/terminal");
+    await startPanelDiagnostics(testApp!, panelId);
+    await approveShellPrompts(testApp!);
     // Terminal is the first flow that lazily activates the native shell
     // extension. Re-run the host launch review after the panel has requested
     // it; approving only the cold-start batch leaves the panel waiting forever
     // when the extension build is first materialized on demand.
-    await approvePendingStartupUnits(testApp!.app, 30_000).catch(() => {});
-    await approvePendingWorkspaceCreationReview(testApp!.app).catch(() => {});
+    await approvePendingStartupUnits(testApp!, 30_000).catch(() => {});
+    await approvePendingWorkspaceCreationReview(testApp!).catch(() => {});
 
     try {
       await expect
         .poll(
           async () => {
-            await approveShellPrompts(testApp!.app);
+            await approveShellPrompts(testApp!);
             // The panel can mount before the newly approved native shell
             // extension finishes its first build. Exercise its user-facing
             // recovery path once the approval/build race settles.
-            await clickPanelText(testApp!.app, panelId, "button", "Retry").catch(() => false);
-            return getPanelText(testApp!.app, panelId);
+            await clickPanelText(testApp!, panelId, "button", "Retry").catch(() => false);
+            return getPanelText(testApp!, panelId);
           },
           {
             timeout: 60_000,
@@ -1054,7 +980,7 @@ test.describe("Mobile Panels", () => {
         )
         .toMatch(/(?:\$|#|>\s*)|(?:\d+x\d+)/);
     } catch (error) {
-      const units = (await rpcCall(testApp!.app, "workspace", "units.list").catch((reason) => ({
+      const units = (await rpcCall(testApp!, "workspace", "units.list").catch((reason) => ({
         error: reason instanceof Error ? reason.message : String(reason),
       }))) as unknown;
       const shellUnits = Array.isArray(units)
@@ -1067,9 +993,9 @@ test.describe("Mobile Panels", () => {
         "MOBILE_TERMINAL_STARTUP_DIAGNOSTICS",
         JSON.stringify(
           {
-            text: await getPanelText(testApp!.app, panelId).catch(() => ""),
-            pendingApprovals: await listPendingApprovals(testApp!.app).catch(() => []),
-            approvalResolutionAttempts: await diagnosePendingApprovalResolution(testApp!.app).catch(
+            text: await getPanelText(testApp!, panelId).catch(() => ""),
+            pendingApprovals: await listPendingApprovals(testApp!).catch(() => []),
+            approvalResolutionAttempts: await diagnosePendingApprovalResolution(testApp!).catch(
               (reason) => [
                 {
                   outcome: reason instanceof Error ? reason.message : String(reason),
@@ -1077,16 +1003,16 @@ test.describe("Mobile Panels", () => {
               ]
             ),
             shellUnits,
-            shellLogs: await rpcCall(testApp!.app, "workspace", "units.logs", [
+            shellLogs: await rpcCall(testApp!, "workspace", "units.logs", [
               "@workspace-extensions/shell",
               { limit: 200 },
             ]).catch((reason) => ({
               error: reason instanceof Error ? reason.message : String(reason),
             })),
-            sessions: await callTerminalPanel(testApp!.app, panelId, "listSessions").catch(
+            sessions: await callTerminalPanel(testApp!, panelId, "listSessions").catch(
               (reason) => ({ error: reason instanceof Error ? reason.message : String(reason) })
             ),
-            panelDiagnostics: await getPanelDiagnostics(testApp!.app, panelId).catch(() => []),
+            panelDiagnostics: await getPanelDiagnostics(testApp!, panelId).catch(() => []),
           },
           null,
           2
@@ -1094,19 +1020,19 @@ test.describe("Mobile Panels", () => {
       );
       throw error;
     }
-    await expectPanelFitsMobileViewport(testApp!.app, panelId);
+    await expectPanelFitsMobileViewport(testApp!, panelId);
   });
 
   for (const source of SHIPPED_PANELS) {
     test(`${source} fits a phone-width panel viewport`, async () => {
       expect(testApp).toBeDefined();
-      await setMobileWindow(testApp!.app);
-      await ensureShellStackMode(testApp!.app);
-      const panelId = await ensurePanelSource(testApp!.app, source);
+      await setMobileWindow(testApp!);
+      await ensureShellStackMode(testApp!);
+      const panelId = await ensurePanelSource(testApp!, source);
       await delay(500);
 
-      await expectShellFitsMobileViewport(testApp!.app);
-      await expectPanelFitsMobileViewport(testApp!.app, panelId);
+      await expectShellFitsMobileViewport(testApp!);
+      await expectPanelFitsMobileViewport(testApp!, panelId);
     });
   }
 });

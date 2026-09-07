@@ -128,7 +128,7 @@ export async function pressChordOnFocusedContents(
  * no DOM backdrop can observe the press.
  */
 export async function clickOutsideCommandOverlay(testApp: TestApp): Promise<boolean> {
-  await clickWindowPointThroughNativeInput(testApp.app, { x: 8, y: 80 });
+  await clickWindowPointThroughNativeInput(testApp, { x: 8, y: 80 });
   return true;
 }
 
@@ -376,12 +376,8 @@ export async function callWorkspaceService(
   args: unknown[] = []
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
   return testApp.app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: { rpcCall(s: string, m: string, a: unknown[]): Promise<unknown> };
-        }
-      ).__testApi;
+    async (_electron, { workspaceId, payload: request }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
       if (!testApi) return { ok: false, error: "Test API not available" };
       try {
         return {
@@ -392,7 +388,7 @@ export async function callWorkspaceService(
         return { ok: false, error: String((error as { message?: string })?.message ?? error) };
       }
     },
-    { service, method, args }
+    { workspaceId: testApp!.workspaceId, payload: { service, method, args } }
   );
 }
 

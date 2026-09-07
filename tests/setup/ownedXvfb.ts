@@ -18,7 +18,7 @@ export function hasOwnedX11Display(): boolean {
   return (
     process.platform === "linux" &&
     process.env[E2E_OWNED_X11_ENV] === "1" &&
-    Boolean(process.env.DISPLAY)
+    Boolean(process.env["DISPLAY"])
   );
 }
 
@@ -95,7 +95,7 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<bool
 export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSession | null> {
   if (process.platform !== "linux") return null;
   if (process.env[E2E_USE_HOST_DISPLAY_ENV] === "1") {
-    if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    if (!process.env["DISPLAY"] && !process.env["WAYLAND_DISPLAY"]) {
       throw new Error(
         `${E2E_USE_HOST_DISPLAY_ENV}=1 requires an existing X11 or Wayland desktop session`
       );
@@ -143,23 +143,23 @@ export async function startOwnedXvfb(runTempRoot: string): Promise<OwnedXvfbSess
     const displayNumber = await waitForDisplayNumber(child, 10_000);
     if (!child.pid) throw new Error("Xvfb did not expose an owned process id");
     const display = `:${displayNumber}`;
-    const ownedEnvironment = {
+    const ownedEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       DISPLAY: display,
       XAUTHORITY: xauthorityPath,
       XDG_SESSION_TYPE: "x11",
     };
-    delete ownedEnvironment.WAYLAND_DISPLAY;
+    delete ownedEnvironment["WAYLAND_DISPLAY"];
     execFileSync("xdpyinfo", ["-display", display], {
       env: ownedEnvironment,
       stdio: "ignore",
       timeout: 5_000,
     });
 
-    process.env.DISPLAY = display;
-    process.env.XAUTHORITY = xauthorityPath;
-    process.env.XDG_SESSION_TYPE = "x11";
-    delete process.env.WAYLAND_DISPLAY;
+    process.env["DISPLAY"] = display;
+    process.env["XAUTHORITY"] = xauthorityPath;
+    process.env["XDG_SESSION_TYPE"] = "x11";
+    delete process.env["WAYLAND_DISPLAY"];
     process.env[E2E_OWNED_X11_ENV] = "1";
     const startedAt = new Date().toISOString();
     writeManifest({

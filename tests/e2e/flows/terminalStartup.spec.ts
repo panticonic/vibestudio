@@ -7,7 +7,7 @@
  * diagnostics assertion is interwoven with the pty/approval startup flow
  * (shell-level approval prompts cannot run in-system), so this spec stays.
  */
-import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
@@ -40,6 +40,7 @@ import { hasOwnedX11Display } from "../../setup/ownedXvfb";
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type PendingApproval = {
+  workspaceId: string;
   approvalId: string;
   kind: string;
   title?: string;
@@ -63,43 +64,47 @@ type PendingApproval = {
 };
 
 async function getTerminalPanelId(
-  app: ElectronApplication,
+  owner: TestApp,
   window: Page,
   resolvedApprovals?: PendingApproval[]
 ): Promise<string> {
+  const { app } = owner;
   const deadline = Date.now() + 45_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await resolvePendingTerminalWork(app, window, resolvedApprovals);
-      const id = await app.evaluate(() => {
-        type PanelNode = {
-          id: string;
-          source?: string;
-          snapshot?: { source?: string };
-          children?: unknown[];
-        };
+      await resolvePendingTerminalWork(owner, window, resolvedApprovals);
+      const id = await app.evaluate(
+        async (_electron, { workspaceId }) => {
+          type PanelNode = {
+            id: string;
+            source?: string;
+            snapshot?: { source?: string };
+            children?: unknown[];
+          };
 
-        const testApi = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
-        if (!testApi) return "";
-        const panels = testApi.getPanelTree() as PanelNode[];
-        const walk = (nodes: unknown[]): PanelNode[] => {
-          const out: PanelNode[] = [];
-          for (const node of nodes) {
-            if (!node || typeof node !== "object") continue;
-            const candidate = node as PanelNode;
-            if (typeof candidate.id === "string") out.push(candidate);
-            const children = Array.isArray(candidate.children) ? candidate.children : [];
-            out.push(...walk(children));
-          }
-          return out;
-        };
-        const terminal = walk(panels).find((panel) => {
-          const source = panel.snapshot?.source ?? panel.source;
-          return source === "panels/terminal";
-        });
-        return terminal?.id ?? "";
-      });
+          const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+          if (!testApi) return "";
+          const panels = testApi.getPanelTree() as PanelNode[];
+          const walk = (nodes: unknown[]): PanelNode[] => {
+            const out: PanelNode[] = [];
+            for (const node of nodes) {
+              if (!node || typeof node !== "object") continue;
+              const candidate = node as PanelNode;
+              if (typeof candidate.id === "string") out.push(candidate);
+              const children = Array.isArray(candidate.children) ? candidate.children : [];
+              out.push(...walk(children));
+            }
+            return out;
+          };
+          const terminal = walk(panels).find((panel) => {
+            const source = panel.snapshot?.source ?? panel.source;
+            return source === "panels/terminal";
+          });
+          return terminal?.id ?? "";
+        },
+        { workspaceId: owner.workspaceId }
+      );
       if (id) return id;
       lastError = new Error("Terminal panel not yet discoverable");
       await delay(250);
@@ -111,7 +116,8 @@ async function getTerminalPanelId(
   throw lastError instanceof Error ? lastError : new Error("Timed out waiting for terminal panel");
 }
 
-async function clickLaunchApprovalButton(app: ElectronApplication): Promise<boolean> {
+async function clickLaunchApprovalButton(owner: TestApp): Promise<boolean> {
+  const { app } = owner;
   return app.evaluate(
     async ({ webContents }, source) => {
       const candidates = webContents
@@ -158,26 +164,26 @@ async function clickLaunchApprovalButton(app: ElectronApplication): Promise<bool
 }
 
 async function resolvePendingTerminalWork(
-  app: ElectronApplication,
+  owner: TestApp,
   window?: Page,
   resolvedApprovals?: PendingApproval[]
 ): Promise<void> {
-  await approvePendingTerminalWork(app, window, resolvedApprovals);
-  await clickLaunchApprovalButton(app).catch(() => false);
+  await approvePendingTerminalWork(owner, window, resolvedApprovals);
+  await clickLaunchApprovalButton(owner).catch(() => false);
 }
 
 async function waitForTerminalPanel(
-  app: ElectronApplication,
+  owner: TestApp,
   window: Page,
   resolvedApprovals?: PendingApproval[]
 ): Promise<string> {
-  await resolvePendingTerminalWork(app, window, resolvedApprovals);
-  const panelId = await getTerminalPanelId(app, window, resolvedApprovals);
+  await resolvePendingTerminalWork(owner, window, resolvedApprovals);
+  const panelId = await getTerminalPanelId(owner, window, resolvedApprovals);
   await expect
     .poll(
       async () => {
-        await approvePendingTerminalWork(app, window, resolvedApprovals).catch(() => {});
-        return isPanelReady(app, panelId).catch(() => false);
+        await approvePendingTerminalWork(owner, window, resolvedApprovals).catch(() => {});
+        return isPanelReady(owner, panelId).catch(() => false);
       },
       { timeout: 30_000, intervals: [250, 500, 1000] }
     )
@@ -185,148 +191,163 @@ async function waitForTerminalPanel(
   return panelId;
 }
 
-async function listPendingApprovals(app: ElectronApplication): Promise<PendingApproval[]> {
-  return app.evaluate(async () => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
-      approvalId: string;
-      kind: string;
-      title?: string;
-      capability?: unknown;
-      resource?: unknown;
-      allowedDecisions?: string[];
-      mode?: string;
-      parts?: Array<{
-        identityKey: unknown;
-        change?: unknown;
-        notableRows?: Array<{ key: unknown; selectable: unknown; selectedByDefault: unknown }>;
-        everydayRows?: Array<{ key: unknown; selectable: unknown; selectedByDefault: unknown }>;
-      }>;
-      options?: Array<{
-        value: unknown;
-        tone?: unknown;
-        label?: unknown;
-      }>;
-    }>;
-    return pending.map((approval) => ({
-      approvalId: approval.approvalId,
-      kind: approval.kind,
-      title: approval.title,
-      capability: typeof approval.capability === "string" ? approval.capability : undefined,
-      resource: approval.resource,
-      allowedDecisions: Array.isArray(approval.allowedDecisions)
-        ? approval.allowedDecisions.filter(
-            (decision): decision is NonNullable<PendingApproval["allowedDecisions"]>[number] =>
-              decision === "once" ||
-              decision === "session" ||
-              decision === "task" ||
-              decision === "mission" ||
-              decision === "agent" ||
-              decision === "version" ||
-              decision === "lock" ||
-              decision === "deny"
-          )
-        : undefined,
-      mode:
-        approval.mode === "install" ||
-        approval.mode === "update" ||
-        approval.mode === "adopt-root" ||
-        approval.mode === "part-changed"
-          ? approval.mode
-          : undefined,
-      parts: Array.isArray(approval.parts)
-        ? approval.parts.map((part) => ({
-            identityKey: String(part.identityKey),
-            change: typeof part.change === "string" ? part.change : undefined,
-            notableRows: Array.isArray(part.notableRows)
-              ? part.notableRows.map((row) => ({
-                  key: String(row.key),
-                  selectable: row.selectable === true,
-                  selectedByDefault: row.selectedByDefault === true,
-                }))
-              : [],
-            everydayRows: Array.isArray(part.everydayRows)
-              ? part.everydayRows.map((row) => ({
-                  key: String(row.key),
-                  selectable: row.selectable === true,
-                  selectedByDefault: row.selectedByDefault === true,
-                }))
-              : [],
-          }))
-        : undefined,
-      options: Array.isArray(approval.options)
-        ? approval.options.map((option) => ({
-            value: String(option.value),
-            tone: typeof option.tone === "string" ? option.tone : undefined,
-            label: typeof option.label === "string" ? option.label : undefined,
-          }))
-        : undefined,
-    }));
-  });
+async function listPendingApprovals(owner: TestApp): Promise<PendingApproval[]> {
+  const { app } = owner;
+  const queues = await Promise.all(
+    [...new Set([owner.systemWorkspaceId, owner.workspaceId])].map((workspaceId) =>
+      app.evaluate(
+        async (_electron, { workspaceId }) => {
+          const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+          if (!testApi) throw new Error("Test API not available");
+          const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
+            approvalId: string;
+            kind: string;
+            title?: string;
+            capability?: unknown;
+            resource?: unknown;
+            allowedDecisions?: string[];
+            mode?: string;
+            parts?: Array<{
+              identityKey: unknown;
+              change?: unknown;
+              notableRows?: Array<{
+                key: unknown;
+                selectable: unknown;
+                selectedByDefault: unknown;
+              }>;
+              everydayRows?: Array<{
+                key: unknown;
+                selectable: unknown;
+                selectedByDefault: unknown;
+              }>;
+            }>;
+            options?: Array<{
+              value: unknown;
+              tone?: unknown;
+              label?: unknown;
+            }>;
+          }>;
+          return pending.map(
+            (approval): PendingApproval => ({
+              workspaceId,
+              approvalId: approval.approvalId,
+              kind: approval.kind,
+              title: approval.title,
+              capability: typeof approval.capability === "string" ? approval.capability : undefined,
+              resource: approval.resource,
+              allowedDecisions: Array.isArray(approval.allowedDecisions)
+                ? approval.allowedDecisions.filter(
+                    (
+                      decision
+                    ): decision is NonNullable<PendingApproval["allowedDecisions"]>[number] =>
+                      decision === "once" ||
+                      decision === "session" ||
+                      decision === "task" ||
+                      decision === "mission" ||
+                      decision === "agent" ||
+                      decision === "version" ||
+                      decision === "lock" ||
+                      decision === "deny"
+                  )
+                : undefined,
+              mode:
+                approval.mode === "install" ||
+                approval.mode === "update" ||
+                approval.mode === "adopt-root" ||
+                approval.mode === "part-changed"
+                  ? approval.mode
+                  : undefined,
+              parts: Array.isArray(approval.parts)
+                ? approval.parts.map((part) => ({
+                    identityKey: String(part.identityKey),
+                    change: typeof part.change === "string" ? part.change : undefined,
+                    notableRows: Array.isArray(part.notableRows)
+                      ? part.notableRows.map((row) => ({
+                          key: String(row.key),
+                          selectable: row.selectable === true,
+                          selectedByDefault: row.selectedByDefault === true,
+                        }))
+                      : [],
+                    everydayRows: Array.isArray(part.everydayRows)
+                      ? part.everydayRows.map((row) => ({
+                          key: String(row.key),
+                          selectable: row.selectable === true,
+                          selectedByDefault: row.selectedByDefault === true,
+                        }))
+                      : [],
+                  }))
+                : undefined,
+              options: Array.isArray(approval.options)
+                ? approval.options.map((option) => ({
+                    value: String(option.value),
+                    tone: typeof option.tone === "string" ? option.tone : undefined,
+                    label: typeof option.label === "string" ? option.label : undefined,
+                  }))
+                : undefined,
+            })
+          );
+        },
+        { workspaceId }
+      )
+    )
+  );
+  return queues.flat();
 }
 
-async function resolveApproval(app: ElectronApplication, approval: PendingApproval): Promise<void> {
-  await app.evaluate(async (_electron, pending) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
+async function resolveApproval(owner: TestApp, approval: PendingApproval): Promise<void> {
+  const { app } = owner;
+  await app.evaluate(
+    async (_electron, { workspaceId, payload: pending }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      if (pending.kind === "userland") {
+        const choice =
+          pending.options?.find((option) => option.tone === "primary")?.value ??
+          pending.options?.find((option) => option.tone !== "danger")?.value ??
+          pending.options?.[0]?.value;
+        if (!choice) {
+          throw new Error(`Userland approval ${pending.approvalId} did not include any options`);
+        }
+        await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
+        return;
       }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    if (pending.kind === "userland") {
-      const choice =
-        pending.options?.find((option) => option.tone === "primary")?.value ??
-        pending.options?.find((option) => option.tone !== "danger")?.value ??
-        pending.options?.[0]?.value;
-      if (!choice) {
-        throw new Error(`Userland approval ${pending.approvalId} did not include any options`);
+      if (pending.kind === "unit-install-review") {
+        const decision =
+          pending.mode === "update"
+            ? "update"
+            : pending.mode === "adopt-root"
+              ? "adopt-root"
+              : "install";
+        const allowNow = (pending.parts ?? [])
+          .filter((part) => part.change !== "removed")
+          .map((part) => ({
+            identityKey: part.identityKey,
+            permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
+              .filter((row) => row.selectable && row.selectedByDefault)
+              .map((row) => row.key),
+          }));
+        await testApi.rpcCall("shellApproval", "resolveInstallReview", [
+          pending.approvalId,
+          { decision, allowNow },
+        ]);
+        return;
       }
-      await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
-      return;
-    }
-    if (pending.kind === "unit-install-review") {
       const decision =
-        pending.mode === "update"
-          ? "update"
-          : pending.mode === "adopt-root"
-            ? "adopt-root"
-            : "install";
-      const allowNow = (pending.parts ?? [])
-        .filter((part) => part.change !== "removed")
-        .map((part) => ({
-          identityKey: part.identityKey,
-          permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
-            .filter((row) => row.selectable && row.selectedByDefault)
-            .map((row) => row.key),
-        }));
-      await testApi.rpcCall("shellApproval", "resolveInstallReview", [
-        pending.approvalId,
-        { decision, allowNow },
-      ]);
-      return;
-    }
-    const decision = pending.allowedDecisions?.find((candidate) => candidate !== "deny") ?? "once";
-    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, decision]);
-  }, approval);
+        pending.allowedDecisions?.find((candidate) => candidate !== "deny") ?? "once";
+      await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, decision]);
+    },
+    { workspaceId: approval.workspaceId, payload: approval }
+  );
 }
 
 async function approvePendingTerminalWork(
-  app: ElectronApplication,
+  owner: TestApp,
   window?: Page,
   resolved?: PendingApproval[]
 ): Promise<void> {
-  const pending = await listPendingApprovals(app);
+  const pending = await listPendingApprovals(owner);
   for (const approval of pending) {
-    await resolveApproval(app, approval);
+    await resolveApproval(owner, approval);
     resolved?.push(approval);
   }
   if (window) {
@@ -340,7 +361,7 @@ async function approvePendingTerminalWork(
 }
 
 async function callTerminalPanelWithApprovals<T>(
-  app: ElectronApplication,
+  owner: TestApp,
   window: Page,
   panelId: string,
   method: string,
@@ -349,7 +370,7 @@ async function callTerminalPanelWithApprovals<T>(
   let settled = false;
   let value: T | undefined;
   let failure: unknown;
-  void callTerminalPanel<T>(app, panelId, method, args)
+  void callTerminalPanel<T>(owner, panelId, method, args)
     .then((result) => {
       value = result;
     })
@@ -363,7 +384,7 @@ async function callTerminalPanelWithApprovals<T>(
   await expect
     .poll(
       async () => {
-        await approvePendingTerminalWork(app, window);
+        await approvePendingTerminalWork(owner, window);
         return settled;
       },
       { timeout: 30_000, intervals: [100, 250, 500, 1000] }
@@ -376,7 +397,7 @@ async function callTerminalPanelWithApprovals<T>(
 function configureTerminalOnlySource(sourceRoot: string): void {
   const configPath = path.join(sourceRoot, "meta", "template.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
-  config.initPanels = [{ source: "panels/terminal" }];
+  config["initPanels"] = [{ source: "panels/terminal" }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
@@ -398,27 +419,24 @@ type TerminalSessionRef = {
   sessionId: string;
 };
 
-async function listTerminalSessions(
-  app: ElectronApplication,
-  panelId: string
-): Promise<TerminalSession[]> {
-  return callTerminalPanel<TerminalSession[]>(app, panelId, "listSessions");
+async function listTerminalSessions(owner: TestApp, panelId: string): Promise<TerminalSession[]> {
+  return callTerminalPanel<TerminalSession[]>(owner, panelId, "listSessions");
 }
 
 async function ensureUsableTerminalSessionId(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   session: string | TerminalSessionRef,
   window?: Page
 ): Promise<string> {
   const currentSessionId = typeof session === "string" ? session : session.sessionId;
-  const sessions = await listTerminalSessions(app, panelId).catch(() => []);
+  const sessions = await listTerminalSessions(owner, panelId).catch(() => []);
   const alive = sessions.find(
     (item) => item.sessionId === currentSessionId && item.alive !== false
   );
   if (alive?.sessionId) return alive.sessionId;
 
-  const next = await waitForUsableTerminalSession(app, panelId, window);
+  const next = await waitForUsableTerminalSession(owner, panelId, window);
   if (typeof session !== "string") {
     session.sessionId = next.sessionId;
   }
@@ -426,80 +444,75 @@ async function ensureUsableTerminalSessionId(
 }
 
 async function sendTerminalText(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   session: string | TerminalSessionRef,
   text: string,
   window?: Page
 ): Promise<void> {
-  const sessionId = await ensureUsableTerminalSessionId(app, panelId, session, window);
-  await callTerminalPanel(app, panelId, "sendText", {
+  const sessionId = await ensureUsableTerminalSessionId(owner, panelId, session, window);
+  await callTerminalPanel(owner, panelId, "sendText", {
     sessionId,
     text,
   });
 }
 
 async function requestTerminalSession(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string
 ): Promise<string | undefined> {
-  const result = await callTerminalPanel<{ sessionId?: string }>(app, panelId, "openSession");
+  const result = await callTerminalPanel<{ sessionId?: string }>(owner, panelId, "openSession");
   return result.sessionId;
 }
 
 async function terminalAuthorityRequests(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string
 ): Promise<Array<{ capability: string; resource: unknown }>> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+  const { app } = owner;
+  return app.evaluate(
+    async (_electron, { workspaceId, payload: id }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      const slot = (await testApi.rpcCall("workspace-state", "slot.get", [id])) as {
+        current_entity_id?: string | null;
+      } | null;
+      const runtimeEntityId = slot?.current_entity_id;
+      if (!runtimeEntityId) throw new Error(`Terminal panel ${id} has no active runtime entity`);
+      const entity = (await testApi.rpcCall("workspace-state", "entity.resolveActive", [
+        runtimeEntityId,
+      ])) as {
+        activeAuthority?: {
+          requests?: Array<{ capability: string; resource: unknown }>;
         };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    const slot = (await testApi.rpcCall("workspace-state", "slot.get", [id])) as {
-      current_entity_id?: string | null;
-    } | null;
-    const runtimeEntityId = slot?.current_entity_id;
-    if (!runtimeEntityId) throw new Error(`Terminal panel ${id} has no active runtime entity`);
-    const entity = (await testApi.rpcCall("workspace-state", "entity.resolveActive", [
-      runtimeEntityId,
-    ])) as {
-      activeAuthority?: {
-        requests?: Array<{ capability: string; resource: unknown }>;
-      };
-    } | null;
-    return entity?.activeAuthority?.requests ?? [];
-  }, panelId);
+      } | null;
+      return entity?.activeAuthority?.requests ?? [];
+    },
+    { workspaceId: owner.workspaceId, payload: panelId }
+  );
 }
 
 async function terminalNativeAuthorityRequests(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string
 ): Promise<Array<{ capability: string; resource: unknown }>> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          getPanelCodeIdentity: (panelId: string) => {
-            requested?: Array<{ capability: string; resource: unknown }>;
-          } | null;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.getPanelCodeIdentity(id)?.requested ?? [];
-  }, panelId);
+  const { app } = owner;
+  return app.evaluate(
+    async (_electron, { workspaceId, payload: id }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      return [...(testApi.getPanelCodeIdentity(id)?.requested ?? [])];
+    },
+    { workspaceId: owner.workspaceId, payload: panelId }
+  );
 }
 
 async function waitForUsableTerminalSession(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   window?: Page
 ): Promise<TerminalSession> {
+  const { app } = owner;
   const startedAt = Date.now();
   let lastOpenRequestAt = 0;
   let lastOpenErrorMessage = "";
@@ -509,13 +522,13 @@ async function waitForUsableTerminalSession(
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(app, window);
+          await approvePendingTerminalWork(owner, window);
           // The panel may mount before the approved shell extension's first build
           // finishes. Once approvals are resolved, drive its explicit recovery
           // action so the same panel instance reconnects instead of waiting for a
           // manual click forever.
-          await clickPanelText(app, panelId, "button", "Retry").catch(() => false);
-          let sessions = await listTerminalSessions(app, panelId).catch(() => []);
+          await clickPanelText(owner, panelId, "button", "Retry").catch(() => false);
+          let sessions = await listTerminalSessions(owner, panelId).catch(() => []);
           const alive = sessions.find((session) => session.alive !== false)?.sessionId;
           if (alive) return alive;
 
@@ -523,38 +536,37 @@ async function waitForUsableTerminalSession(
           if (now - startedAt > 5_000 && now - lastOpenRequestAt > 5_000) {
             lastOpenRequestAt = now;
             let openError: unknown;
-            const opened = await requestTerminalSession(app, panelId).catch((error: unknown) => {
+            const opened = await requestTerminalSession(owner, panelId).catch((error: unknown) => {
               openError = error;
               return undefined;
             });
-            await approvePendingTerminalWork(app, window);
+            await approvePendingTerminalWork(owner, window);
             if (opened) return opened;
             const openErrorMessage = openError instanceof Error ? openError.message : "";
-            const panelHtml = await getPanelHtml(app, panelId).catch(() => "");
+            const panelHtml = await getPanelHtml(owner, panelId).catch(() => "");
             lastOpenErrorMessage = openErrorMessage;
             lastPanelHtml = panelHtml;
             lastPanelText = await app
-              .evaluate(async (_electron, id) => {
-                const testApi = (
-                  globalThis as {
-                    __testApi?: { getPanelText: (panelId: string) => Promise<string> };
-                  }
-                ).__testApi;
-                return testApi ? await testApi.getPanelText(id) : "";
-              }, panelId)
+              .evaluate(
+                async (_electron, { workspaceId, payload: id }) => {
+                  const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+                  return testApi ? await testApi.getPanelText(id) : "";
+                },
+                { workspaceId: owner.workspaceId, payload: panelId }
+              )
               .catch(() => "");
             if (
               openErrorMessage.includes("did not request") ||
               panelHtml.includes("did not request")
             ) {
-              const nativeRequests = await terminalNativeAuthorityRequests(app, panelId);
+              const nativeRequests = await terminalNativeAuthorityRequests(owner, panelId);
               throw new Error(
                 `Terminal authority failed with native requests ${JSON.stringify(nativeRequests)}: ${
                   openErrorMessage || panelHtml
                 }`
               );
             }
-            sessions = await listTerminalSessions(app, panelId).catch(() => []);
+            sessions = await listTerminalSessions(owner, panelId).catch(() => []);
           }
           return sessions.find((session) => session.alive !== false)?.sessionId ?? "";
         },
@@ -570,38 +582,38 @@ async function waitForUsableTerminalSession(
     );
   }
 
-  const sessions = await listTerminalSessions(app, panelId);
+  const sessions = await listTerminalSessions(owner, panelId);
   const session = sessions.find((item) => item.alive !== false);
   if (!session) throw new Error("No usable terminal session");
   return session;
 }
 
 async function waitForAutomaticallyResumedTerminalSession(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   window: Page,
   resolvedApprovals: PendingApproval[]
 ): Promise<TerminalSession> {
+  const { app } = owner;
   let lastPanelText = "";
   let lastPanelHtml = "";
   try {
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(app, window, resolvedApprovals);
-          const sessions = await listTerminalSessions(app, panelId).catch(() => []);
+          await approvePendingTerminalWork(owner, window, resolvedApprovals);
+          const sessions = await listTerminalSessions(owner, panelId).catch(() => []);
           const alive = sessions.find((session) => session.alive !== false);
           if (alive) return alive.sessionId;
-          lastPanelHtml = await getPanelHtml(app, panelId).catch(() => "");
+          lastPanelHtml = await getPanelHtml(owner, panelId).catch(() => "");
           lastPanelText = await app
-            .evaluate(async (_electron, id) => {
-              const testApi = (
-                globalThis as {
-                  __testApi?: { getPanelText: (panelId: string) => Promise<string> };
-                }
-              ).__testApi;
-              return testApi ? await testApi.getPanelText(id) : "";
-            }, panelId)
+            .evaluate(
+              async (_electron, { workspaceId, payload: id }) => {
+                const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+                return testApi ? await testApi.getPanelText(id) : "";
+              },
+              { workspaceId: owner.workspaceId, payload: panelId }
+            )
             .catch(() => "");
           return "";
         },
@@ -626,7 +638,7 @@ async function waitForAutomaticallyResumedTerminalSession(
     );
   }
 
-  const sessions = await listTerminalSessions(app, panelId);
+  const sessions = await listTerminalSessions(owner, panelId);
   const session = sessions.find((item) => item.alive !== false);
   if (!session) throw new Error("No automatically resumed terminal session");
   return session;
@@ -648,7 +660,7 @@ function severePanelDiagnostics(items: PanelDiagnostic[]): PanelDiagnostic[] {
 }
 
 async function expectScrollbackToContain(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   session: string | TerminalSessionRef,
   text: string
@@ -656,22 +668,22 @@ async function expectScrollbackToContain(
   await expect
     .poll(
       async () => {
-        const sessionId = await ensureUsableTerminalSessionId(app, panelId, session);
+        const sessionId = await ensureUsableTerminalSessionId(owner, panelId, session);
         let activeSessionId = sessionId;
         let scrollback: { text: string } | null = null;
         try {
-          scrollback = await callTerminalPanel<{ text: string }>(app, panelId, "getScrollback", {
+          scrollback = await callTerminalPanel<{ text: string }>(owner, panelId, "getScrollback", {
             sessionId: activeSessionId,
             maxBytes: 1024 * 1024,
           });
         } catch (error) {
           const message = String((error as Error | undefined)?.message ?? error);
           if (/unknown session/i.test(message)) {
-            const refreshed = await ensureUsableTerminalSessionId(app, panelId, session);
+            const refreshed = await ensureUsableTerminalSessionId(owner, panelId, session);
             if (refreshed !== activeSessionId) {
               activeSessionId = refreshed;
               const reloaded = await callTerminalPanel<{ text: string }>(
-                app,
+                owner,
                 panelId,
                 "getScrollback",
                 { sessionId: activeSessionId, maxBytes: 1024 * 1024 }
@@ -694,36 +706,8 @@ async function expectScrollbackToContain(
     .toContain(text);
 }
 
-async function scrollbackContains(
-  app: ElectronApplication,
-  panelId: string,
-  session: string | TerminalSessionRef,
-  text: string
-): Promise<boolean> {
-  const sessionId = await ensureUsableTerminalSessionId(app, panelId, session);
-  let activeSessionId = sessionId;
-  let scrollback: { text: string };
-  try {
-    scrollback = await callTerminalPanel<{ text: string }>(app, panelId, "getScrollback", {
-      sessionId: activeSessionId,
-      maxBytes: 1024 * 1024,
-    });
-  } catch (error) {
-    const message = String((error as Error | undefined)?.message ?? error);
-    if (!/unknown session/i.test(message)) throw error;
-    const refreshed = await ensureUsableTerminalSessionId(app, panelId, session);
-    if (refreshed === activeSessionId) throw error;
-    activeSessionId = refreshed;
-    scrollback = await callTerminalPanel<{ text: string }>(app, panelId, "getScrollback", {
-      sessionId: activeSessionId,
-      maxBytes: 1024 * 1024,
-    });
-  }
-  return scrollback.text.includes(text);
-}
-
 async function expectRenderedToContain(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   session: string | TerminalSessionRef,
   text: string
@@ -732,15 +716,15 @@ async function expectRenderedToContain(
     .poll(
       async () => {
         try {
-          const sessionId = await ensureUsableTerminalSessionId(app, panelId, session);
-          return callTerminalPanel<string>(app, panelId, "getRenderedText", {
+          const sessionId = await ensureUsableTerminalSessionId(owner, panelId, session);
+          return callTerminalPanel<string>(owner, panelId, "getRenderedText", {
             sessionId,
           });
         } catch (error) {
           const message = String((error as Error | undefined)?.message ?? error);
           if (!/unknown session/i.test(message)) throw error;
-          const refreshed = await ensureUsableTerminalSessionId(app, panelId, session);
-          return callTerminalPanel<string>(app, panelId, "getRenderedText", {
+          const refreshed = await ensureUsableTerminalSessionId(owner, panelId, session);
+          return callTerminalPanel<string>(owner, panelId, "getRenderedText", {
             sessionId: refreshed,
           });
         }
@@ -754,35 +738,35 @@ async function expectRenderedToContain(
 }
 
 async function clickTerminalThroughWindow(testApp: TestApp, panelId: string): Promise<void> {
-  expect(await clickPanelSelector(testApp.app, panelId, ".xterm")).toBe(true);
+  expect(await clickPanelSelector(testApp, panelId, ".xterm")).toBe(true);
   await expect
-    .poll(async () => getFocusedPanelWebContentsId(testApp.app), {
+    .poll(async () => getFocusedPanelWebContentsId(testApp), {
       timeout: 5_000,
       intervals: [100, 250, 500],
     })
     .toBe(panelId);
 }
 
-async function panelTreeTitle(app: ElectronApplication, panelId: string): Promise<string | null> {
-  return app.evaluate((_electron, id) => {
-    type PanelNode = { id: string; title?: string; children?: PanelNode[] };
-    const tree = (
-      globalThis as { __testApi?: { getPanelTree: () => PanelNode[] } }
-    ).__testApi?.getPanelTree();
-    const visit = (nodes: PanelNode[]): string | null => {
-      for (const node of nodes) {
-        if (node.id === id) return node.title ?? null;
-        const nested = visit(node.children ?? []);
-        if (nested !== null) return nested;
-      }
-      return null;
-    };
-    return visit(tree ?? []);
-  }, panelId);
-}
-
-function shortcut(key: string): string {
-  return process.platform === "darwin" ? `Meta+${key}` : `Control+Shift+${key}`;
+async function panelTreeTitle(owner: TestApp, panelId: string): Promise<string | null> {
+  const { app } = owner;
+  return app.evaluate(
+    async (_electron, { workspaceId, payload: id }) => {
+      type PanelNode = { id: string; title?: string; children?: PanelNode[] };
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
+      const tree = testApi.getPanelTree() as PanelNode[];
+      const visit = (nodes: PanelNode[]): string | null => {
+        for (const node of nodes) {
+          if (node.id === id) return node.title ?? null;
+          const nested = visit(node.children ?? []);
+          if (nested !== null) return nested;
+        }
+        return null;
+      };
+      return visit(tree ?? []);
+    },
+    { workspaceId: owner.workspaceId, payload: panelId }
+  );
 }
 
 test.describe("Terminal Startup", () => {
@@ -802,9 +786,9 @@ test.describe("Terminal Startup", () => {
     testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 90_000 });
     const { app } = testApp;
     const resolvedApprovals: PendingApproval[] = [];
-    let terminalPanelId = await waitForTerminalPanel(app, testApp.window, resolvedApprovals);
-    await startPanelDiagnostics(app, terminalPanelId);
-    expect(await terminalAuthorityRequests(app, terminalPanelId)).toContainEqual(
+    let terminalPanelId = await waitForTerminalPanel(testApp, testApp.window, resolvedApprovals);
+    await startPanelDiagnostics(testApp, terminalPanelId);
+    expect(await terminalAuthorityRequests(testApp, terminalPanelId)).toContainEqual(
       expect.objectContaining({
         capability: "userland:extensions/shell/native.shell.execute#*",
         resource: {
@@ -814,7 +798,7 @@ test.describe("Terminal Startup", () => {
       })
     );
     await expect
-      .poll(async () => terminalNativeAuthorityRequests(app, terminalPanelId), {
+      .poll(async () => terminalNativeAuthorityRequests(testApp!, terminalPanelId), {
         timeout: 10_000,
         intervals: [250, 500, 1000],
       })
@@ -829,7 +813,7 @@ test.describe("Terminal Startup", () => {
       );
 
     const session = await waitForAutomaticallyResumedTerminalSession(
-      app,
+      testApp,
       terminalPanelId,
       testApp.window,
       resolvedApprovals
@@ -847,23 +831,23 @@ test.describe("Terminal Startup", () => {
     const sessionRef: TerminalSessionRef = { sessionId: session.sessionId };
 
     await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
+      .poll(async () => getPanelHtml(testApp!, terminalPanelId), {
         timeout: 10_000,
         intervals: [250, 500, 1000],
       })
       .toMatch(/aria-label="Terminal input"/);
 
     await sendTerminalText(
-      app,
+      testApp,
       terminalPanelId,
       sessionRef,
       "echo vibestudio-e2e-input\r",
       testApp.window
     );
-    await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-e2e-input");
+    await expectScrollbackToContain(testApp, terminalPanelId, sessionRef, "vibestudio-e2e-input");
 
     await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
+      .poll(async () => getPanelHtml(testApp!, terminalPanelId), {
         timeout: 10_000,
         intervals: [250, 500, 1000],
       })
@@ -875,7 +859,7 @@ test.describe("Terminal Startup", () => {
       settingsInHeader: boolean;
       horizontalOverflow: number;
     }>(
-      app,
+      testApp,
       terminalPanelId,
       `(() => {
         const viewport = document.querySelector('.xterm-viewport');
@@ -898,14 +882,14 @@ test.describe("Terminal Startup", () => {
     });
     expect(initialChrome.sessionLabel).not.toContain("shellIntegration-bash.sh");
 
-    expect(await clickPanelSelector(app, terminalPanelId, '[aria-label="Terminal settings"]')).toBe(
-      true
-    );
+    expect(
+      await clickPanelSelector(testApp, terminalPanelId, '[aria-label="Terminal settings"]')
+    ).toBe(true);
     await expect
       .poll(
         () =>
           executePanelScript<boolean>(
-            app,
+            testApp!,
             terminalPanelId,
             `Boolean(document.querySelector('[aria-label="Panel name"]'))`
           ),
@@ -913,7 +897,7 @@ test.describe("Terminal Startup", () => {
       )
       .toBe(true);
     await executePanelScript(
-      app,
+      testApp,
       terminalPanelId,
       `(() => {
         const input = document.querySelector('[aria-label="Panel name"]');
@@ -924,19 +908,19 @@ test.describe("Terminal Startup", () => {
       })()`
     );
     await expect
-      .poll(() => executePanelScript<string>(app, terminalPanelId, "document.title"), {
+      .poll(() => executePanelScript<string>(testApp!, terminalPanelId, "document.title"), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toBe("Project terminal");
-    expect(await clickPanelSelector(app, terminalPanelId, '[aria-label="Terminal settings"]')).toBe(
-      true
-    );
+    expect(
+      await clickPanelSelector(testApp, terminalPanelId, '[aria-label="Terminal settings"]')
+    ).toBe(true);
     await expect
       .poll(
         () =>
           executePanelScript<boolean>(
-            app,
+            testApp!,
             terminalPanelId,
             `!document.querySelector('[aria-label="Panel name"]') &&
               document.activeElement?.getAttribute('aria-label') !== 'Panel name'`
@@ -945,14 +929,14 @@ test.describe("Terminal Startup", () => {
       )
       .toBe(true);
     await expect
-      .poll(() => panelTreeTitle(app, terminalPanelId), {
+      .poll(() => panelTreeTitle(testApp!, terminalPanelId), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toBe("Project terminal");
 
     await executePanelScript(
-      app,
+      testApp,
       terminalPanelId,
       `(() => {
         const samples = [document.documentElement.clientWidth];
@@ -961,16 +945,16 @@ test.describe("Terminal Startup", () => {
         window.__terminalPanelWidthProbe = { samples, observer };
       })()`
     );
-    expect(await clickPanelSelector(app, terminalPanelId, ".xterm")).toBe(true);
+    expect(await clickPanelSelector(testApp, terminalPanelId, ".xterm")).toBe(true);
     await expect
-      .poll(async () => getFocusedPanelWebContentsId(app), {
+      .poll(async () => getFocusedPanelWebContentsId(testApp!), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toBe(terminalPanelId);
     await delay(500);
     const clickWidths = await executePanelScript<number[]>(
-      app,
+      testApp,
       terminalPanelId,
       `(() => {
         const probe = window.__terminalPanelWidthProbe;
@@ -979,63 +963,84 @@ test.describe("Terminal Startup", () => {
       })()`
     );
     expect(new Set(clickWidths).size).toBe(1);
-    await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-keyboard-input\\n'\r");
-    await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
-    await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
+    await typePanelText(testApp, terminalPanelId, "\u0015printf 'vibestudio-keyboard-input\\n'\r");
+    await expectScrollbackToContain(
+      testApp,
+      terminalPanelId,
+      sessionRef,
+      "vibestudio-keyboard-input"
+    );
+    await expectRenderedToContain(
+      testApp,
+      terminalPanelId,
+      sessionRef,
+      "vibestudio-keyboard-input"
+    );
 
     if (hasOwnedX11Display()) {
       await typeTerminalThroughNativeInput(
-        app,
+        testApp,
         terminalPanelId,
         "printf 'vibestudio-os-keyboard-input\\n'"
       );
     } else {
       await clickTerminalThroughWindow(testApp, terminalPanelId);
-      await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-os-keyboard-input\\n'\r");
+      await typePanelText(
+        testApp,
+        terminalPanelId,
+        "\u0015printf 'vibestudio-os-keyboard-input\\n'\r"
+      );
     }
     await expectScrollbackToContain(
-      app,
+      testApp,
       terminalPanelId,
       sessionRef,
       "vibestudio-os-keyboard-input"
     );
-    await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-os-keyboard-input");
+    await expectRenderedToContain(
+      testApp,
+      terminalPanelId,
+      sessionRef,
+      "vibestudio-os-keyboard-input"
+    );
 
     await setElectronClipboardText(app, "printf 'vibestudio-paste-input\\n'\n");
     if (hasOwnedX11Display()) {
-      await pressTerminalShortcutThroughNativeInput(app, terminalPanelId, "v");
+      await pressTerminalShortcutThroughNativeInput(testApp, terminalPanelId, "v");
     } else {
       await clickTerminalThroughWindow(testApp, terminalPanelId);
-      await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-paste-input\\n'\r");
+      await typePanelText(testApp, terminalPanelId, "\u0015printf 'vibestudio-paste-input\\n'\r");
     }
-    await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
-    await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
+    await expectScrollbackToContain(testApp, terminalPanelId, sessionRef, "vibestudio-paste-input");
+    await expectRenderedToContain(testApp, terminalPanelId, sessionRef, "vibestudio-paste-input");
     await expect
-      .poll(() => executePanelScript<string>(app, terminalPanelId, "document.title"), {
+      .poll(() => executePanelScript<string>(testApp!, terminalPanelId, "document.title"), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toBe("Project terminal");
     await expect
-      .poll(() => panelTreeTitle(app, terminalPanelId), {
+      .poll(() => panelTreeTitle(testApp!, terminalPanelId), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toBe("Project terminal");
 
-    await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
+    await clickPanelSelector(testApp, terminalPanelId, "[aria-label='Pane menu']");
     await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
+      .poll(async () => getPanelHtml(testApp!, terminalPanelId), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toContain("Copy all");
     await setElectronClipboardText(app, "vibestudio-copy-sentinel");
-    expect(await clickPanelText(app, terminalPanelId, "[role='menuitem']", "Copy all")).toBe(true);
+    expect(await clickPanelText(testApp, terminalPanelId, "[role='menuitem']", "Copy all")).toBe(
+      true
+    );
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(app, testApp.window);
+          await approvePendingTerminalWork(testApp!, testApp!.window);
           return getElectronClipboardText(app);
         },
         {
@@ -1045,23 +1050,25 @@ test.describe("Terminal Startup", () => {
       )
       .toContain("vibestudio-paste-input");
 
-    await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
+    await clickPanelSelector(testApp, terminalPanelId, "[aria-label='Pane menu']");
     await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
+      .poll(async () => getPanelHtml(testApp!, terminalPanelId), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toContain("Find");
-    expect(await clickPanelText(app, terminalPanelId, "[role='menuitem']", "Find")).toBe(true);
+    expect(await clickPanelText(testApp, terminalPanelId, "[role='menuitem']", "Find")).toBe(true);
     await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
+      .poll(async () => getPanelHtml(testApp!, terminalPanelId), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toContain('placeholder="Find"');
-    expect(await clickPanelSelector(app, terminalPanelId, "input[placeholder='Find']")).toBe(true);
+    expect(await clickPanelSelector(testApp, terminalPanelId, "input[placeholder='Find']")).toBe(
+      true
+    );
     await executePanelScript(
-      app,
+      testApp,
       terminalPanelId,
       `(() => {
         const input = document.querySelector("input[placeholder='Find']");
@@ -1072,63 +1079,75 @@ test.describe("Terminal Startup", () => {
       })()`
     );
     await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
+      .poll(async () => getPanelHtml(testApp!, terminalPanelId), {
         timeout: 5_000,
         intervals: [250, 500],
       })
       .toMatch(/[1-9]\d* of \d+/);
-    await clickPanelSelector(app, terminalPanelId, "[aria-label='Close find']");
+    await clickPanelSelector(testApp, terminalPanelId, "[aria-label='Close find']");
 
     const split = await callTerminalPanelWithApprovals<{ sessionId: string | undefined }>(
-      app,
+      testApp,
       testApp.window,
       terminalPanelId,
       "splitPane",
       { direction: "right" }
     );
     expect(split.sessionId).toBeTruthy();
-    await callTerminalPanel(app, terminalPanelId, "sendText", {
+    await callTerminalPanel(testApp, terminalPanelId, "sendText", {
       sessionId: split.sessionId,
       text: "printf 'vibestudio-split-input\\n'\r",
     });
     await expectScrollbackToContain(
-      app,
+      testApp,
       terminalPanelId,
       split.sessionId!,
       "vibestudio-split-input"
     );
-    await expectRenderedToContain(app, terminalPanelId, split.sessionId!, "vibestudio-split-input");
+    await expectRenderedToContain(
+      testApp,
+      terminalPanelId,
+      split.sessionId!,
+      "vibestudio-split-input"
+    );
 
     const tab = await callTerminalPanelWithApprovals<{ sessionId: string | undefined }>(
-      app,
+      testApp,
       testApp.window,
       terminalPanelId,
       "openSession",
       {}
     );
     expect(tab.sessionId).toBeTruthy();
-    await callTerminalPanel(app, terminalPanelId, "sendText", {
+    await callTerminalPanel(testApp, terminalPanelId, "sendText", {
       sessionId: tab.sessionId,
       text: "printf 'vibestudio-tab-input\\n'\r",
     });
-    await expectScrollbackToContain(app, terminalPanelId, tab.sessionId!, "vibestudio-tab-input");
+    await expectScrollbackToContain(
+      testApp,
+      terminalPanelId,
+      tab.sessionId!,
+      "vibestudio-tab-input"
+    );
 
     const focusSessionId = await ensureUsableTerminalSessionId(
-      app,
+      testApp,
       terminalPanelId,
       sessionRef,
       testApp.window
     );
     sessionRef.sessionId = focusSessionId;
-    await callTerminalPanel(app, terminalPanelId, "focusSession", { sessionId: focusSessionId });
-    await callTerminalPanel(app, terminalPanelId, "sendText", {
+    await callTerminalPanel(testApp, terminalPanelId, "focusSession", {
+      sessionId: focusSessionId,
+    });
+    await callTerminalPanel(testApp, terminalPanelId, "sendText", {
       sessionId: focusSessionId,
       text: "printf 'http://localhost:43210\\n'\r",
     });
     await expect
       .poll(
         async () => {
-          const sessions = await listTerminalSessions(app, terminalPanelId);
+          const sessions = await listTerminalSessions(testApp!, terminalPanelId);
           const current = sessions.find((item) => item.sessionId === sessionRef.sessionId);
           return {
             ports: current?.detectedPorts ?? [],
@@ -1145,14 +1164,14 @@ test.describe("Terminal Startup", () => {
         urls: expect.arrayContaining(["http://localhost:43210"]),
       });
 
-    await callTerminalPanel(app, terminalPanelId, "sendText", {
+    await callTerminalPanel(testApp, terminalPanelId, "sendText", {
       sessionId: sessionRef.sessionId,
       text: "printf '\\033]633;E;vibestudio-shell-integration\\007\\033]633;C\\007\\033]633;D;0\\007'\r",
     });
     await expect
       .poll(
         async () => {
-          const sessions = await listTerminalSessions(app, terminalPanelId);
+          const sessions = await listTerminalSessions(testApp!, terminalPanelId);
           return sessions.find((item) => item.sessionId === sessionRef.sessionId)?.meta?.[
             "vscodeShellIntegration"
           ];
@@ -1169,7 +1188,7 @@ test.describe("Terminal Startup", () => {
         lastExitCode: 0,
       });
 
-    const beforeResize = (await listTerminalSessions(app, terminalPanelId)).find(
+    const beforeResize = (await listTerminalSessions(testApp, terminalPanelId)).find(
       (item) => item.sessionId === sessionRef.sessionId
     );
     await testApp.app.evaluate(({ BaseWindow, BrowserWindow }) => {
@@ -1181,7 +1200,7 @@ test.describe("Terminal Startup", () => {
     await expect
       .poll(
         async () => {
-          const sessions = await listTerminalSessions(app, terminalPanelId);
+          const sessions = await listTerminalSessions(testApp!, terminalPanelId);
           const current = sessions.find((item) => item.sessionId === sessionRef.sessionId);
           return `${current?.cols ?? 0}x${current?.rows ?? 0}`;
         },
@@ -1195,21 +1214,18 @@ test.describe("Terminal Startup", () => {
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(app, testApp.window);
-          const stateArgs = await app.evaluate(async (_electron, panelId) => {
-            const testApi = (
-              globalThis as {
-                __testApi?: {
-                  rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-                };
-              }
-            ).__testApi;
-            if (!testApi) throw new Error("Test API not available");
-            const detail = (await testApi.rpcCall("workspace-state", "panelTree.detail", [
-              panelId,
-            ])) as { currentHistory?: { state_args?: string | null } } | null;
-            return detail?.currentHistory?.state_args ?? null;
-          }, terminalPanelId);
+          await approvePendingTerminalWork(testApp!, testApp!.window);
+          const stateArgs = await app.evaluate(
+            async (_electron, { workspaceId, payload: panelId }) => {
+              const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+              if (!testApi) throw new Error("Test API not available");
+              const detail = (await testApi.rpcCall("workspace-state", "panelTree.detail", [
+                panelId,
+              ])) as { currentHistory?: { state_args?: string | null } } | null;
+              return detail?.currentHistory?.state_args ?? null;
+            },
+            { workspaceId: testApp!.workspaceId, payload: terminalPanelId }
+          );
           if (!stateArgs) return { leaves: 0, focusedSessionId: null };
           const state = JSON.parse(stateArgs) as {
             tree?: { kind: string; sessionId?: string; a?: unknown; b?: unknown };
@@ -1232,38 +1248,40 @@ test.describe("Terminal Startup", () => {
       .toEqual({ leaves: 3, focusedSessionId: sessionRef.sessionId });
 
     const preReloadPanelId = terminalPanelId;
-    await reloadPanel(app, preReloadPanelId);
-    terminalPanelId = await waitForTerminalPanel(app, testApp.window);
+    await reloadPanel(testApp, preReloadPanelId);
+    terminalPanelId = await waitForTerminalPanel(testApp, testApp.window);
     if (terminalPanelId !== preReloadPanelId) {
-      await startPanelDiagnostics(app, terminalPanelId);
+      await startPanelDiagnostics(testApp, terminalPanelId);
     }
     await expect
       .poll(
         async () => {
-          await approvePendingTerminalWork(app, testApp.window).catch(() => {});
-          return getPanelHtml(app, terminalPanelId).catch(() => "");
+          await approvePendingTerminalWork(testApp!, testApp!.window).catch(() => {});
+          return getPanelHtml(testApp!, terminalPanelId).catch(() => "");
         },
         { timeout: 30_000, intervals: [500, 1000, 2000] }
       )
       .toContain("xterm");
 
     const reloadedSessionId = await ensureUsableTerminalSessionId(
-      app,
+      testApp,
       terminalPanelId,
       sessionRef,
       testApp.window
     );
-    await callTerminalPanel(app, terminalPanelId, "focusSession", {
+    await callTerminalPanel(testApp, terminalPanelId, "focusSession", {
       sessionId: reloadedSessionId,
     }).catch(() => undefined);
     await expect
       .poll(
         async () =>
-          (await clickPanelSelector(app, terminalPanelId, '[data-focused="true"] .xterm').catch(
-            () => false
-          )) ||
           (await clickPanelSelector(
-            app,
+            testApp!,
+            terminalPanelId,
+            '[data-focused="true"] .xterm'
+          ).catch(() => false)) ||
+          (await clickPanelSelector(
+            testApp!,
             terminalPanelId,
             '[data-focused="true"] .xterm-helper-textarea'
           ).catch(() => false)),
@@ -1271,29 +1289,29 @@ test.describe("Terminal Startup", () => {
       )
       .toBe(true);
     await expect
-      .poll(async () => getFocusedPanelWebContentsId(app), {
+      .poll(async () => getFocusedPanelWebContentsId(testApp!), {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
       .toBe(terminalPanelId);
     await typePanelText(
-      app,
+      testApp,
       terminalPanelId,
       "\u0003\u0015printf 'vibestudio-reloaded-keyboard-input\\n'\r"
     );
     await expectScrollbackToContain(
-      app,
+      testApp,
       terminalPanelId,
       reloadedSessionId,
       "vibestudio-reloaded-keyboard-input"
     );
     await expectRenderedToContain(
-      app,
+      testApp,
       terminalPanelId,
       reloadedSessionId,
       "vibestudio-reloaded-keyboard-input"
     );
 
-    expect(severePanelDiagnostics(await getPanelDiagnostics(app, terminalPanelId))).toEqual([]);
+    expect(severePanelDiagnostics(await getPanelDiagnostics(testApp, terminalPanelId))).toEqual([]);
   });
 });

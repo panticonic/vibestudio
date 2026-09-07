@@ -71,6 +71,8 @@ function isElectronEvaluationTimeout(error: unknown): boolean {
   );
 }
 
+export type TestWorkspaceOwner = Pick<TestApp, "app" | "workspaceId">;
+
 export interface TestApp {
   /** The Playwright Electron application handle */
   app: ElectronApplication;
@@ -139,7 +141,7 @@ const CASE_ROOT_TEMPLATE_FILE = "case-root-template.json";
 
 interface CaseRootTemplateSelection {
   template: E2eRootTemplate;
-  privateRole?: "personal" | "system";
+  workspaceKind: "personal" | "system" | "project";
 }
 function readCaseRootTemplateSelection(testRoot: string): CaseRootTemplateSelection | null {
   const selectionPath = path.join(testRoot, CASE_ROOT_TEMPLATE_FILE);
@@ -226,10 +228,12 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
 export async function createManagedTestWorkspace(
   options: {
     configureSource?: (sourceRoot: string) => void;
-    privateRole?: "personal" | "system";
+    workspaceKind?: "personal" | "system" | "project";
   } = {}
 ): Promise<string> {
   const runRootTemplate = requireE2eRootTemplate();
+  const workspaceKind = options.workspaceKind ?? "personal";
+  const privateRole = workspaceKind === "project" ? undefined : workspaceKind;
   const runTempRoot = process.env[E2E_TEMP_ROOT_ENV];
   const testRoot = fs.mkdtempSync(
     runTempRoot ? path.join(runTempRoot, "case-") : path.join(os.tmpdir(), "vibestudio-e2e-")
@@ -240,18 +244,18 @@ export async function createManagedTestWorkspace(
   // so anything the case wants the runtime to read has to be committed into a
   // root of its own before the workspace names it.
   const rootTemplate =
-    options.configureSource || options.privateRole
+    options.configureSource || privateRole
       ? await deriveE2eRootTemplate({
           base: runRootTemplate,
           workRoot: path.join(testRoot, "case-root-template"),
           configureSource: options.configureSource ?? (() => {}),
-          distribution: options.privateRole,
+          distribution: privateRole,
         })
       : runRootTemplate;
   if (rootTemplate !== runRootTemplate) {
     fs.writeFileSync(
       path.join(testRoot, CASE_ROOT_TEMPLATE_FILE),
-      `${JSON.stringify({ template: rootTemplate, privateRole: options.privateRole }, null, 2)}\n`,
+      `${JSON.stringify({ template: rootTemplate, workspaceKind }, null, 2)}\n`,
       "utf8"
     );
   }
@@ -276,7 +280,7 @@ export async function createManagedTestWorkspace(
     // the selected child creates and admits the workspace. Pre-scaffolding the
     // directory here bypasses launch-record dispatch and is no longer a valid
     // first-run lifecycle.
-    if (!options.privateRole) centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
+    if (!privateRole) centralData.addWorkspaceCreation(workspaceName, rootTemplate.pin);
     // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
     // policy in this fixture's private identity database so Electron can take
     // its normal graceful shutdown path without opening an interactive dialog.
@@ -322,7 +326,9 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   let workspacePath = workspace ?? (await createManagedTestWorkspace());
   const workspaceInfo = getWorkspaceInfo(workspacePath);
   const ownsWorkspace = workspace === undefined;
-  const privateRole = readCaseRootTemplateSelection(workspaceInfo.testRoot)?.privateRole;
+  const workspaceKind =
+    readCaseRootTemplateSelection(workspaceInfo.testRoot)?.workspaceKind ?? "project";
+  const privateRole = workspaceKind === "project" ? undefined : workspaceKind;
 
   // Determine the main entry point
   const mainPath = path.resolve(projectRoot, "dist", "main.cjs");
@@ -385,6 +391,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   // orphan the detached local hub (or its workspace/workerd children).
   let testApiReady = false;
   let cleanupPromise: Promise<void> | undefined;
+  let workspaceId: string | undefined;
+  let systemWorkspaceId: string | undefined;
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= (async () => {
       let ledgerFailure: Error | undefined;
@@ -401,7 +409,9 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       }
       if (testApiReady) {
         try {
-          const panelInitializationFailure = await readPanelInitializationFailure(app);
+          const panelInitializationFailure = workspaceId
+            ? await readPanelInitializationFailure({ app, workspaceId })
+            : null;
           await playwrightTest
             .info()
             .attach(`panel-initialization-${workspaceInfo.workspaceName}.json`, {
@@ -510,8 +520,6 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   // Get the first window and wait for the test bridge. Readiness failures must
   // carry the detached hub log because child startup diagnostics live there.
   let window: Page;
-  let workspaceId: string;
-  let systemWorkspaceId: string;
   try {
     window = await app.firstWindow({ timeout: launchTimeout });
     await window.waitForLoadState("domcontentloaded");
@@ -579,21 +587,15 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
  * responsible for non-launch approval kinds.
  */
 export async function approvePendingStartupUnits(
-  app: ElectronApplication,
+  fixture: TestApp,
   timeoutMs = 180_000
 ): Promise<void> {
+  const owner = { app: fixture.app, workspaceId: fixture.systemWorkspaceId };
   const deadline = Date.now() + timeoutMs;
   let lastState: unknown = null;
   const hostLaunch = new HostLaunchClient((service, method, args) =>
     withElectronEvaluationTimeout(
-      app.evaluate(
-        async (_electron, request) => {
-          const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
-          if (!testApi) throw new Error("Test API not available");
-          return testApi.rpcCall(request.service, request.method, request.args);
-        },
-        { service, method, args }
-      ),
+      callTestApi(owner, "rpcCall", [service, method, args]),
       Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
       `${service}.${method}`
     )
@@ -604,15 +606,11 @@ export async function approvePendingStartupUnits(
       if ((await hostLaunch.resolvePendingStartupApprovals("once")) > 0) continue;
       const hostView = await retryIdempotentAutomationRead(
         () =>
-          app.evaluate(async () => {
-            const testApi = (
-              globalThis as {
-                __testApi?: Pick<TestApi, "getHostViewDebugInfo">;
-              }
-            ).__testApi;
-            if (!testApi) throw new Error("Test API not available");
-            return testApi.getHostViewDebugInfo();
-          }),
+          callTestApi<Awaited<ReturnType<TestApi["getHostViewDebugInfo"]>>>(
+            owner,
+            "getHostViewDebugInfo",
+            []
+          ),
         {
           label: "reading host view diagnostics",
           timeoutMs: Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
@@ -633,7 +631,7 @@ export async function approvePendingStartupUnits(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   const initializationFailure = await withElectronEvaluationTimeout(
-    readPanelInitializationFailure(app),
+    readPanelInitializationFailure(owner),
     5_000,
     "reading panel initialization diagnostics"
   ).catch(() => null);
@@ -652,15 +650,14 @@ export async function approvePendingStartupUnits(
  * the product UI.
  */
 export async function approvePendingWorkspaceCreationReview(
-  app: ElectronApplication,
-  approvalIds?: readonly string[],
-  workspaceId?: string
+  owner: TestWorkspaceOwner,
+  approvalIds?: readonly string[]
 ): Promise<void> {
-  await app.evaluate(
+  await owner.app.evaluate(
     async (_electron, request) => {
       const root = globalThis.__testApi;
       if (!root) throw new Error("Test API not available");
-      const testApi = request.workspaceId ? await root.forWorkspace(request.workspaceId) : root;
+      const testApi = await root.forWorkspace(request.workspaceId);
       const requestedApprovalIds = request.approvalIds;
 
       let requested = requestedApprovalIds ? new Set(requestedApprovalIds) : null;
@@ -727,7 +724,7 @@ export async function approvePendingWorkspaceCreationReview(
         ]);
       }
     },
-    { approvalIds: approvalIds ? [...approvalIds] : null, workspaceId }
+    { approvalIds: approvalIds ? [...approvalIds] : null, workspaceId: owner.workspaceId }
   );
 }
 
@@ -948,10 +945,7 @@ export async function waitForPanel(
 /**
  * Get the panel tree from the main process via TestApi.
  */
-export async function getPanelTree(
-  app: ElectronApplication,
-  workspaceId?: string
-): Promise<
+export async function getPanelTree(owner: TestWorkspaceOwner): Promise<
   Array<{
     id: string;
     title: string;
@@ -963,45 +957,30 @@ export async function getPanelTree(
     };
   }>
 > {
-  return callTestApi(app, "getPanelTree", [], workspaceId);
+  return callTestApi(owner, "getPanelTree", []);
 }
 
 /**
  * Get the focused panel ID from the main process.
  */
-export async function getFocusedPanelId(app: ElectronApplication): Promise<string | null> {
-  return app.evaluate(() => {
-    const testApi = (globalThis as { __testApi?: { getFocusedPanelId: () => string | null } })
-      .__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getFocusedPanelId();
-  });
+export async function getFocusedPanelId(owner: TestWorkspaceOwner): Promise<string | null> {
+  return callTestApi(owner, "getFocusedPanelId", []);
 }
 
 /**
  * Get the panel whose WebContents currently has Electron focus.
  */
 export async function getFocusedPanelWebContentsId(
-  app: ElectronApplication
+  owner: TestWorkspaceOwner
 ): Promise<string | null> {
-  return app.evaluate(() => {
-    const testApi = (
-      globalThis as { __testApi?: { getFocusedPanelWebContentsId: () => string | null } }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getFocusedPanelWebContentsId();
-  });
+  return callTestApi(owner, "getFocusedPanelWebContentsId", []);
 }
 
 /**
  * Create a panel via the TestApi.
  */
 export async function createPanel(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   parentId: string,
   source: string,
   options?: {
@@ -1011,140 +990,68 @@ export async function createPanel(
     stateArgs?: Record<string, unknown>;
   }
 ): Promise<{ id: string; type: string; title: string }> {
-  return app.evaluate(
-    async (_electron, { parentId, source, options }) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            createPanel: (
-              p: string,
-              s: string,
-              o?: unknown
-            ) => Promise<{ id: string; type: string; title: string }>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.createPanel(parentId, source, options);
-    },
-    { parentId, source, options }
-  );
+  return callTestApi(owner, "createPanel", [parentId, source, options]);
 }
 
 /** Create an external browser panel via the test-only main-process bridge. */
 export async function createBrowserPanel(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   parentId: string,
   url: string,
   options?: { focus?: boolean }
 ): Promise<{ id: string; title: string }> {
-  return app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: Pick<TestApi, "createBrowserPanel">;
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      return testApi.createBrowserPanel(request.parentId, request.url, request.options);
-    },
-    { parentId, url, options }
-  );
+  return callTestApi(owner, "createBrowserPanel", [parentId, url, options]);
 }
 
 /**
  * Close a panel via the TestApi.
  */
-export async function closePanel(app: ElectronApplication, panelId: string): Promise<void> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (globalThis as { __testApi?: { closePanel: (id: string) => Promise<void> } })
-      .__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.closePanel(id);
-  }, panelId);
+export async function closePanel(owner: TestWorkspaceOwner, panelId: string): Promise<void> {
+  return callTestApi(owner, "closePanel", [panelId]);
 }
 
 /**
  * Reload a panel via the TestApi.
  */
 export async function reloadPanel(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string
 ): Promise<PanelLifecycleResult> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: { reloadPanel: (id: string) => Promise<PanelLifecycleResult> };
-      }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.reloadPanel(id);
-  }, panelId);
+  return callTestApi(owner, "reloadPanel", [panelId]);
 }
 
 /** Force a panel rebuild through the same main-process path used by the desktop UI. */
 export async function rebuildPanel(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string
 ): Promise<PanelLifecycleResult> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: Pick<TestApi, "rebuildPanel">;
-      }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.rebuildPanel(id);
-  }, panelId);
+  return callTestApi(owner, "rebuildPanel", [panelId]);
 }
 
 export async function getPanelReadiness(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string
 ): Promise<PanelReadinessSnapshot> {
-  return app.evaluate((_electron, id) => {
-    const testApi = (globalThis as { __testApi?: Pick<TestApi, "getPanelReadiness"> }).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getPanelReadiness(id);
-  }, panelId);
+  return callTestApi(owner, "getPanelReadiness", [panelId]);
 }
 
-export async function isPanelReady(app: ElectronApplication, panelId: string): Promise<boolean> {
-  return (await getPanelReadiness(app, panelId)).terminal;
+export async function isPanelReady(owner: TestWorkspaceOwner, panelId: string): Promise<boolean> {
+  return (await getPanelReadiness(owner, panelId)).terminal;
 }
 
 /** True once background panel content is built and live, without requiring visible-slot binding. */
 export async function isPanelContentReady(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string
 ): Promise<boolean> {
-  return (await getPanelReadiness(app, panelId)).contentReady;
+  return (await getPanelReadiness(owner, panelId)).contentReady;
 }
 
 export async function readPanelInitializationFailure(
-  app: ElectronApplication
+  owner: TestWorkspaceOwner
 ): Promise<PanelInitializationFailure | null> {
   return retryIdempotentAutomationRead(
-    () =>
-      app.evaluate(() => {
-        const testApi = (
-          globalThis as {
-            __testApi?: Pick<TestApi, "readPanelInitializationFailure">;
-          }
-        ).__testApi;
-        if (!testApi) throw new Error("Test API not available");
-        return testApi.readPanelInitializationFailure();
-      }),
+    () => callTestApi(owner, "readPanelInitializationFailure", []),
     { label: "reading panel initialization failure" }
   );
 }
@@ -1160,20 +1067,15 @@ export function panelInitializationFailureError(
 }
 
 export async function ensureHostedShellReady(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   options: { panelSource: string; timeoutMs?: number }
 ): Promise<PanelReadinessSnapshot> {
+  const { app, workspaceId } = owner;
   const watch = await app.evaluate(
     async (_electron, input) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: Pick<
-            TestApi,
-            "getPanelTree" | "getPanelReadiness" | "readPanelInitializationFailure"
-          >;
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
+      const root = globalThis.__testApi;
+      if (!root) throw new Error("Test API not available");
+      const testApi = await root.forWorkspace(input.workspaceId);
 
       const deadline = Date.now() + input.timeoutMs;
       let lastState: unknown = null;
@@ -1200,6 +1102,7 @@ export async function ensureHostedShellReady(
       return { readiness: null, initializationFailure: null, lastState };
     },
     {
+      workspaceId,
       panelSource: options.panelSource,
       timeoutMs: options.timeoutMs ?? 180_000,
     }
@@ -1286,20 +1189,12 @@ export async function assertNoMainProcessErrors(
   );
 }
 
-export async function getPanelText(
-  app: ElectronApplication,
-  panelId: string,
-  workspaceId?: string
-): Promise<string> {
-  return callTestApi(app, "getPanelText", [panelId], workspaceId);
+export async function getPanelText(owner: TestWorkspaceOwner, panelId: string): Promise<string> {
+  return callTestApi(owner, "getPanelText", [panelId]);
 }
 
-export async function getPanelHtml(
-  app: ElectronApplication,
-  panelId: string,
-  workspaceId?: string
-): Promise<string> {
-  return callTestApi(app, "getPanelHtml", [panelId], workspaceId);
+export async function getPanelHtml(owner: TestWorkspaceOwner, panelId: string): Promise<string> {
+  return callTestApi(owner, "getPanelHtml", [panelId]);
 }
 
 export type PanelDiagnostic = {
@@ -1331,39 +1226,27 @@ export interface PanelLayoutAudit {
 }
 
 export async function startPanelDiagnostics(
-  app: ElectronApplication,
-  panelId: string,
-  workspaceId?: string
+  owner: TestWorkspaceOwner,
+  panelId: string
 ): Promise<void> {
-  return callTestApi(app, "startPanelDiagnostics", [panelId], workspaceId);
+  return callTestApi(owner, "startPanelDiagnostics", [panelId]);
 }
 
 export async function getPanelDiagnostics(
-  app: ElectronApplication,
-  panelId: string,
-  workspaceId?: string
+  owner: TestWorkspaceOwner,
+  panelId: string
 ): Promise<PanelDiagnostic[]> {
-  return callTestApi(app, "getPanelDiagnostics", [panelId], workspaceId);
+  return callTestApi(owner, "getPanelDiagnostics", [panelId]);
 }
 
 export async function getPanelLayoutAudit(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string
 ): Promise<PanelLayoutAudit> {
-  return app.evaluate(async (_electron, id) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: { getPanelLayoutAudit: (id: string) => Promise<PanelLayoutAudit> };
-      }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getPanelLayoutAudit(id);
-  }, panelId);
+  return callTestApi(owner, "getPanelLayoutAudit", [panelId]);
 }
 
-export async function getNativePanelSlotDebugInfo(app: ElectronApplication): Promise<
+export async function getNativePanelSlotDebugInfo(owner: TestWorkspaceOwner): Promise<
   Array<{
     nativeSlotId: string;
     panelId: string;
@@ -1373,127 +1256,48 @@ export async function getNativePanelSlotDebugInfo(app: ElectronApplication): Pro
     ownerGeneration: number;
   }>
 > {
-  return app.evaluate(async () => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          getNativePanelSlotDebugInfo: () => Array<{
-            nativeSlotId: string;
-            panelId: string;
-            bounds: { x: number; y: number; width: number; height: number };
-            focused: boolean;
-            ownerViewId: string;
-            ownerGeneration: number;
-          }>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) {
-      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-    }
-    return testApi.getNativePanelSlotDebugInfo();
-  });
+  return callTestApi(owner, "getNativePanelSlotDebugInfo", []);
 }
 
 export async function clickPanelSelector(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string,
   selector: string
 ): Promise<boolean> {
-  return app.evaluate(
-    async (_electron, args) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: { clickPanelSelector: (id: string, selector: string) => Promise<boolean> };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.clickPanelSelector(args.panelId, args.selector);
-    },
-    { panelId, selector }
-  );
+  return callTestApi(owner, "clickPanelSelector", [panelId, selector]);
 }
 
 export async function clickPanelText(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string,
   selector: string,
   text: string
 ): Promise<boolean> {
-  return app.evaluate(
-    async (_electron, args) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            clickPanelText: (id: string, selector: string, text: string) => Promise<boolean>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.clickPanelText(args.panelId, args.selector, args.text);
-    },
-    { panelId, selector, text }
-  );
+  return callTestApi(owner, "clickPanelText", [panelId, selector, text]);
 }
 
 export async function executePanelScript<T = unknown>(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string,
-  script: string,
-  workspaceId?: string
+  script: string
 ): Promise<T> {
-  return callTestApi<T>(app, "executePanelScript", [panelId, script], workspaceId);
+  return callTestApi<T>(owner, "executePanelScript", [panelId, script]);
 }
 
 export async function getPanelSelectorWindowPoint(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string,
   selector: string
 ): Promise<{ x: number; y: number } | null> {
-  return app.evaluate(
-    async (_electron, args) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            getPanelSelectorWindowPoint: (
-              id: string,
-              selector: string
-            ) => Promise<{ x: number; y: number } | null>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.getPanelSelectorWindowPoint(args.panelId, args.selector);
-    },
-    { panelId, selector }
-  );
+  return callTestApi(owner, "getPanelSelectorWindowPoint", [panelId, selector]);
 }
 
 export async function typePanelText(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string,
   text: string
 ): Promise<void> {
-  return app.evaluate(
-    async (_electron, args) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: { typePanelText: (id: string, text: string) => Promise<void> };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.typePanelText(args.panelId, args.text);
-    },
-    { panelId, text }
-  );
+  return callTestApi(owner, "typePanelText", [panelId, text]);
 }
 
 export async function setElectronClipboardText(
@@ -1510,27 +1314,12 @@ export async function getElectronClipboardText(app: ElectronApplication): Promis
 }
 
 export async function callTerminalPanel<T = unknown>(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   panelId: string,
   method: string,
   args?: unknown
 ): Promise<T> {
-  return app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            callTerminalPanel: (id: string, method: string, args?: unknown) => Promise<unknown>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) {
-        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
-      }
-      return testApi.callTerminalPanel(request.panelId, request.method, request.args) as Promise<T>;
-    },
-    { panelId, method, args }
-  );
+  return callTestApi<T>(owner, "callTerminalPanel", [panelId, method, args]);
 }
 
 /**
@@ -1558,18 +1347,17 @@ export async function takeScreenshot(window: Page, name: string): Promise<Buffer
 
 /** Invoke the existing native test surface with an explicit captured workspace owner. */
 export async function callTestApi<T = unknown>(
-  app: ElectronApplication,
+  owner: TestWorkspaceOwner,
   method: keyof TestApi,
-  args: unknown[],
-  workspaceId?: string
+  args: unknown[]
 ): Promise<T> {
-  return app.evaluate(
+  return owner.app.evaluate(
     async (_electron, request) => {
       const root = globalThis.__testApi;
       if (!root) throw new Error("Test API not available");
-      const owner = request.workspaceId ? await root.forWorkspace(request.workspaceId) : root;
+      const owner = await root.forWorkspace(request.workspaceId);
       return (owner[request.method] as (...args: unknown[]) => unknown)(...request.args);
     },
-    { method, args, workspaceId }
+    { method, args, workspaceId: owner.workspaceId }
   ) as Promise<T>;
 }

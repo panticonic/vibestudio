@@ -1,3 +1,4 @@
+import type { TestApp } from "../../setup/electronSetup";
 /**
  * Panel Lifecycle E2E Tests
  *
@@ -33,14 +34,14 @@ test.describe("Panel Rebuild Lifecycle", () => {
 
     try {
       testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
-      await approvePendingStartupUnits(testApp.app);
-      await approvePendingWorkspaceCreationReview(testApp.app);
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
 
-      const before = await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
+      const before = await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
       expect(before.presentation.state).toBe("ready");
       expect(before.runtimeEntityId).toBeTruthy();
 
-      const result = await rebuildPanel(testApp.app, before.panelId);
+      const result = await rebuildPanel(testApp, before.panelId);
       expect(result).toMatchObject({
         panelId: before.panelId,
         operation: "rebuild",
@@ -50,20 +51,20 @@ test.describe("Panel Rebuild Lifecycle", () => {
       try {
         await expect
           .poll(
-            async () => (await getPanelReadiness(testApp!.app, before.panelId)).presentation.state,
+            async () => (await getPanelReadiness(testApp!, before.panelId)).presentation.state,
             {
               timeout: 120_000,
             }
           )
           .toBe("ready");
       } catch (error) {
-        const readiness = await getPanelReadiness(testApp.app, before.panelId);
+        const readiness = await getPanelReadiness(testApp, before.panelId);
         throw new Error(
           `Replacement panel did not become ready:\n${JSON.stringify(readiness, null, 2)}`,
           { cause: error }
         );
       }
-      const after = await getPanelReadiness(testApp.app, before.panelId);
+      const after = await getPanelReadiness(testApp, before.panelId);
       expect(after.runtimeEntityId).not.toBe(before.runtimeEntityId);
       expect(after.presentation).toMatchObject({ state: "ready" });
       if (before.presentation.state !== "ready" || after.presentation.state !== "ready") {
@@ -91,78 +92,72 @@ type DurablePanelEntry = {
   source: string | null;
 };
 
-async function getDurablePanelTree(
-  app: Parameters<typeof getPanelTree>[0]
-): Promise<DurablePanelEntry[]> {
-  return app.evaluate(async () => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
+async function getDurablePanelTree(owner: TestApp): Promise<DurablePanelEntry[]> {
+  const { app } = owner;
+  return app.evaluate(
+    async (_electron, { workspaceId }) => {
+      const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+      if (!testApi) throw new Error("Test API not available");
 
-    type RootGroup = { ownerUserId: string | null };
-    type TreeNode = { slotId: string; childCount: number; source?: string };
-    type RootGroupsPage = {
-      groups: RootGroup[];
-      nextCursor: string | null;
-    };
-    type TreePage = {
-      nodes: TreeNode[];
-      nextCursor: string | null;
-    };
+      type RootGroup = { ownerUserId: string | null };
+      type TreeNode = { slotId: string; childCount: number; source?: string };
+      type RootGroupsPage = {
+        groups: RootGroup[];
+        nextCursor: string | null;
+      };
+      type TreePage = {
+        nodes: TreeNode[];
+        nextCursor: string | null;
+      };
 
-    const groups: RootGroup[] = [];
-    let groupCursor: string | undefined;
-    do {
-      const page = (await testApi.rpcCall("workspace-state", "panelTree.rootGroups", [
-        { cursor: groupCursor, limit: 200 },
-      ])) as RootGroupsPage;
-      groups.push(...page.groups);
-      groupCursor = page.nextCursor ?? undefined;
-    } while (groupCursor);
-
-    const result: DurablePanelEntry[] = [];
-    const readGroup = async (
-      group:
-        | { kind: "roots"; ownerUserId: string | null }
-        | { kind: "children"; parentSlotId: string }
-    ): Promise<void> => {
-      let cursor: string | undefined;
+      const groups: RootGroup[] = [];
+      let groupCursor: string | undefined;
       do {
-        const page = (await testApi.rpcCall("workspace-state", "panelTree.page", [
-          { group, cursor, limit: 200 },
-        ])) as TreePage;
-        for (const node of page.nodes) {
-          result.push({ id: node.slotId, source: node.source ?? null });
-          if (node.childCount > 0) {
-            await readGroup({ kind: "children", parentSlotId: node.slotId });
-          }
-        }
-        cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-    };
+        const page = (await testApi.rpcCall("workspace-state", "panelTree.rootGroups", [
+          { cursor: groupCursor, limit: 200 },
+        ])) as RootGroupsPage;
+        groups.push(...page.groups);
+        groupCursor = page.nextCursor ?? undefined;
+      } while (groupCursor);
 
-    for (const group of groups) {
-      await readGroup({ kind: "roots", ownerUserId: group.ownerUserId });
-    }
-    return result;
-  });
+      const result: DurablePanelEntry[] = [];
+      const readGroup = async (
+        group:
+          | { kind: "roots"; ownerUserId: string | null }
+          | { kind: "children"; parentSlotId: string }
+      ): Promise<void> => {
+        let cursor: string | undefined;
+        do {
+          const page = (await testApi.rpcCall("workspace-state", "panelTree.page", [
+            { group, cursor, limit: 200 },
+          ])) as TreePage;
+          for (const node of page.nodes) {
+            result.push({ id: node.slotId, source: node.source ?? null });
+            if (node.childCount > 0) {
+              await readGroup({ kind: "children", parentSlotId: node.slotId });
+            }
+          }
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+      };
+
+      for (const group of groups) {
+        await readGroup({ kind: "roots", ownerUserId: group.ownerUserId });
+      }
+      return result;
+    },
+    { workspaceId: owner.workspaceId }
+  );
 }
 
-async function waitForRestorablePanelTree(
-  app: Parameters<typeof getPanelTree>[0]
-): Promise<PanelTreeEntry[]> {
+async function waitForRestorablePanelTree(owner: TestApp): Promise<PanelTreeEntry[]> {
   let tree: PanelTreeEntry[] = [];
   let lastError = "";
   await expect
     .poll(
       async () => {
         try {
-          tree = await getPanelTree(app);
+          tree = await getPanelTree(owner);
           return flattenPanelTree(tree).length;
         } catch (error) {
           // Electron can replace its automation execution context while the
@@ -195,22 +190,22 @@ test.describe("Panel Persistence", () => {
         workspace: workspacePath,
         launchTimeout: 180_000,
       });
-      await approvePendingStartupUnits(testApp.app);
-      await approvePendingWorkspaceCreationReview(testApp.app);
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
 
-      await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
-      const seededTree = await waitForRestorablePanelTree(testApp.app);
-      const created = await createPanel(testApp.app, seededTree[0]!.id, "about/help", {
+      await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
+      const seededTree = await waitForRestorablePanelTree(testApp);
+      const created = await createPanel(testApp, seededTree[0]!.id, "about/help", {
         name: "persistence-check",
         focus: false,
       });
       await expect
         .poll(async () =>
-          (await getDurablePanelTree(testApp!.app)).some((panel) => panel.id === created.id)
+          (await getDurablePanelTree(testApp!)).some((panel) => panel.id === created.id)
         )
         .toBe(true);
 
-      const initialPanels = await getDurablePanelTree(testApp.app);
+      const initialPanels = await getDurablePanelTree(testApp);
       // Save workspace path for restart
       // Close app using cleanup (which has a timeout to prevent hanging)
       await testApp.cleanup();
@@ -221,12 +216,12 @@ test.describe("Panel Persistence", () => {
         workspace: workspacePath,
         launchTimeout: 180_000,
       });
-      await approvePendingStartupUnits(testApp.app);
-      await approvePendingWorkspaceCreationReview(testApp.app);
+      await approvePendingStartupUnits(testApp);
+      await approvePendingWorkspaceCreationReview(testApp);
 
-      await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
-      await waitForRestorablePanelTree(testApp.app);
-      const restoredPanels = await getDurablePanelTree(testApp.app);
+      await ensureHostedShellReady(testApp, { panelSource: "panels/chat" });
+      await waitForRestorablePanelTree(testApp);
+      const restoredPanels = await getDurablePanelTree(testApp);
 
       expect(restoredPanels).toEqual(initialPanels);
     } finally {

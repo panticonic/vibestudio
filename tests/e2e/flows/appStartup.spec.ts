@@ -63,7 +63,7 @@ test.describe("App Startup", () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Should be able to get the panel tree
-    const panelTree = await getPanelTree(testApp.app);
+    const panelTree = await getPanelTree(testApp);
 
     // Panel tree should exist (may be empty initially)
     expect(Array.isArray(panelTree)).toBe(true);

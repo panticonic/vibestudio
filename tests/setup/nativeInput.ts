@@ -1,4 +1,4 @@
-import type { ElectronApplication } from "@playwright/test";
+import type { TestApp } from "./electronSetup";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getPanelSelectorWindowPoint } from "./electronSetup.js";
@@ -12,7 +12,8 @@ interface NativeWindowInfo {
   contentOffset: { x: number; y: number };
 }
 
-async function nativeWindowInfo(app: ElectronApplication): Promise<NativeWindowInfo> {
+async function nativeWindowInfo(owner: TestApp): Promise<NativeWindowInfo> {
+  const { app } = owner;
   return app.evaluate(({ BaseWindow, BrowserWindow }) => {
     const win = BaseWindow.getAllWindows()[0] ?? BrowserWindow.getAllWindows()[0];
     if (!win) throw new Error("No Electron window");
@@ -36,9 +37,9 @@ function requireOwnedLinuxInput(): void {
   }
 }
 
-async function validatedWindowId(app: ElectronApplication): Promise<NativeWindowInfo> {
+async function validatedWindowId(owner: TestApp): Promise<NativeWindowInfo> {
   requireOwnedLinuxInput();
-  const windowInfo = await nativeWindowInfo(app);
+  const windowInfo = await nativeWindowInfo(owner);
   const { stdout } = await execFileAsync("xdotool", ["getwindowpid", windowInfo.id]);
   const actualPid = Number(stdout.trim());
   if (actualPid !== windowInfo.pid) {
@@ -49,8 +50,8 @@ async function validatedWindowId(app: ElectronApplication): Promise<NativeWindow
   return windowInfo;
 }
 
-async function focusNativeWindow(app: ElectronApplication): Promise<NativeWindowInfo> {
-  const windowInfo = await validatedWindowId(app);
+async function focusNativeWindow(owner: TestApp): Promise<NativeWindowInfo> {
+  const windowInfo = await validatedWindowId(owner);
   await execFileAsync("xdotool", ["windowfocus", "--sync", windowInfo.id]);
   const { stdout } = await execFileAsync("xdotool", ["getwindowfocus"]);
   if (stdout.trim() !== windowInfo.id) {
@@ -60,10 +61,10 @@ async function focusNativeWindow(app: ElectronApplication): Promise<NativeWindow
 }
 
 export async function clickWindowPointThroughNativeInput(
-  app: ElectronApplication,
+  owner: TestApp,
   point: { x: number; y: number }
 ): Promise<void> {
-  const windowInfo = await focusNativeWindow(app);
+  const windowInfo = await focusNativeWindow(owner);
   await execFileAsync("xdotool", [
     "mousemove",
     "--window",
@@ -76,14 +77,14 @@ export async function clickWindowPointThroughNativeInput(
 }
 
 async function focusTerminalThroughNativeInput(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string
 ): Promise<NativeWindowInfo> {
   const point =
-    (await getPanelSelectorWindowPoint(app, panelId, ".xterm-helper-textarea")) ??
-    (await getPanelSelectorWindowPoint(app, panelId, ".xterm"));
+    (await getPanelSelectorWindowPoint(owner, panelId, ".xterm-helper-textarea")) ??
+    (await getPanelSelectorWindowPoint(owner, panelId, ".xterm"));
   if (!point) throw new Error("Terminal input surface does not have a native-window point");
-  const windowInfo = await focusNativeWindow(app);
+  const windowInfo = await focusNativeWindow(owner);
   await execFileAsync("xdotool", [
     "mousemove",
     "--window",
@@ -97,22 +98,22 @@ async function focusTerminalThroughNativeInput(
 }
 
 export async function typeTerminalThroughNativeInput(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   command: string
 ): Promise<void> {
-  const windowInfo = await focusTerminalThroughNativeInput(app, panelId);
+  const windowInfo = await focusTerminalThroughNativeInput(owner, panelId);
   await execFileAsync("xdotool", ["key", "--window", windowInfo.id, "ctrl+u"]);
   await execFileAsync("xdotool", ["type", "--window", windowInfo.id, "--delay", "1", command]);
   await execFileAsync("xdotool", ["key", "--window", windowInfo.id, "Return"]);
 }
 
 export async function pressTerminalShortcutThroughNativeInput(
-  app: ElectronApplication,
+  owner: TestApp,
   panelId: string,
   key: string
 ): Promise<void> {
-  const windowInfo = await focusTerminalThroughNativeInput(app, panelId);
+  const windowInfo = await focusTerminalThroughNativeInput(owner, panelId);
   await execFileAsync("xdotool", [
     "key",
     "--window",

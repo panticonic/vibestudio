@@ -170,20 +170,15 @@ async function approveStartupUnitsIfNeeded(testApp: TestApp): Promise<void> {
   await expect
     .poll(
       async () =>
-        testApp.app.evaluate(async ({ webContents }) => {
-          const testApi = (
-            globalThis as {
-              __testApi?: {
-                getHostViewDebugInfo(): { visibleHostChromeAppId: string | null };
-              };
-            }
-          ).__testApi;
-          if (testApi?.getHostViewDebugInfo().visibleHostChromeAppId) return true;
-          for (const contents of webContents.getAllWebContents()) {
-            if (contents.isDestroyed()) continue;
-            try {
-              const result = await contents.executeJavaScript(
-                `(() => {
+        testApp.app.evaluate(
+          async ({ webContents }, { workspaceId }) => {
+            const testApi = await globalThis.__testApi?.forWorkspace(workspaceId);
+            if (testApi?.getHostViewDebugInfo().visibleHostChromeAppId) return true;
+            for (const contents of webContents.getAllWebContents()) {
+              if (contents.isDestroyed()) continue;
+              try {
+                const result = await contents.executeJavaScript(
+                  `(() => {
                   const hasHostedShellChrome = Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
                     || document.querySelector(".titlebar-breadcrumb-scroll")
                     || document.querySelector('[aria-label="Menu"]'));
@@ -201,15 +196,17 @@ async function approveStartupUnitsIfNeeded(testApp: TestApp): Promise<void> {
                   approveAll.click();
                   return "approved";
                 })()`,
-                true
-              );
-              if (result === "approved") return true;
-            } catch {
-              // Ignore non-DOM webContents.
+                  true
+                );
+                if (result === "approved") return true;
+              } catch {
+                // Ignore non-DOM webContents.
+              }
             }
-          }
-          return false;
-        }),
+            return false;
+          },
+          { workspaceId: testApp!.workspaceId }
+        ),
       { timeout: 120_000, intervals: [500, 1000, 2000] }
     )
     .toBe(true);
@@ -659,8 +656,8 @@ test.describe("Desktop Shell Chrome", () => {
         .poll(
           async () => {
             const [panelsResult, slotsResult, layoutResult] = await Promise.allSettled([
-              getPanelTree(testApp!.app),
-              getNativePanelSlotDebugInfo(testApp!.app),
+              getPanelTree(testApp!),
+              getNativePanelSlotDebugInfo(testApp!),
               getPanelSurfaceLayout(testApp!),
             ]);
             const panels = panelsResult.status === "fulfilled" ? panelsResult.value : [];
