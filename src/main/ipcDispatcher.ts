@@ -84,8 +84,14 @@ function localVerifiedCaller(
     : createVerifiedCaller(callerId, callerKind, code);
 }
 
-function envelopeFor(target: string, from: string, message: RpcMessage): RpcEnvelope {
+function envelopeFor(
+  workspaceId: string,
+  target: string,
+  from: string,
+  message: RpcMessage
+): RpcEnvelope {
   const caller = {
+    workspaceId,
     callerId: from,
     callerKind: from === "main" ? ("server" as const) : ("unknown" as const),
   };
@@ -555,24 +561,21 @@ export class IpcDispatcher {
     return relay;
   }
 
-  /**
-   * Send an event to the shell renderer.
-   */
-  sendToShell(fromId: string, message: RpcMessage): void {
+  /** Relay an authenticated workspace session's event to its shell UI client. */
+  sendEventToShell(workspaceId: string, event: string, payload: unknown): void {
+    if (this.shuttingDown) return;
     const wc = this.deps.getShellWebContents();
     if (wc && !wc.isDestroyed()) {
-      wc.send("vibestudio:rpc:message", envelopeFor("shell", fromId, message));
+      wc.send(
+        "vibestudio:rpc:message",
+        envelopeFor(workspaceId, "shell", "main", {
+          type: "event",
+          fromId: "main",
+          event,
+          payload,
+        })
+      );
     }
-  }
-
-  /** Relay an event addressed to the authenticated desktop shell session. */
-  sendEventToShell(event: string, payload: unknown): void {
-    this.sendToShell("main", {
-      type: "event",
-      fromId: "main",
-      event,
-      payload,
-    });
   }
 
   private async handleEnvelope(

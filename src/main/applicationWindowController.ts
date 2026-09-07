@@ -111,9 +111,11 @@ export class ApplicationWindowController {
   }
 
   detachWorkspace(workspaceId: string): void {
-    if (workspaceId === this.deps.getSystemWorkspaceId())
-      throw new Error("The System presentation host owns the desktop window");
     const lifetime = this.currentLifetime;
+    if (workspaceId === this.deps.getSystemWorkspaceId()) {
+      this.deps.stopElectronHostTargetLaunchLoop();
+      if (lifetime) lifetime.appOrchestrator = null;
+    }
     for (const release of this.workspaceViewReleases.get(workspaceId) ?? []) release();
     this.workspaceViewReleases.delete(workspaceId);
     lifetime?.panelViews.get(workspaceId)?.dispose();
@@ -210,6 +212,36 @@ export class ApplicationWindowController {
       closed: false,
     };
     this.currentLifetime = lifetime;
+    // Native→shell focus feedback (§5.2): surface native view focus
+    // transitions so the shell's layout focus follows every route, not just
+    // shell-initiated clicks. Cleared with the viewManager on window teardown.
+    viewManager.onNativeSlotFocused((payload) => {
+      const identity = viewManager.getViewInfo(payload.panelId)?.workspaceIdentity;
+      if (!identity) return;
+      this.focusedWorkspaceId = identity.workspaceId;
+      this.workspaceServices
+        .get(identity.workspaceId)
+        ?.eventService.emit("native-slot-focused", { ...payload, panelId: identity.runtimeId });
+    });
+    if (this.deps.onHostedShellReady) {
+      viewManager.onHostedShellReady(this.deps.onHostedShellReady);
+    }
+
+    viewManager.onViewCrashed((viewId, reason) => {
+      const identity = viewManager.getViewInfo(viewId)?.workspaceIdentity;
+      if (!identity) return;
+      const owner = this.workspaceServices.get(identity.workspaceId);
+      if (!owner) return;
+      void owner.panelOrchestrator
+        .handlePanelViewCrash(identity.runtimeId, reason)
+        .catch((error) => {
+          log.warn("Failed to recover crashed panel presentation", {
+            panelId: viewId,
+            reason,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    });
     window.setTitle(this.deps.getWindowTitle());
     window.on("focus", () => {
       app.setBadgeCount(0);
@@ -291,7 +323,7 @@ export class ApplicationWindowController {
           }
         },
         onPanelLinkError: (_panelId, url, message) => {
-          this.deps.eventService.emit("notification:show", {
+          services.eventService.emit("notification:show", {
             id: `panel-link-error:${Date.now()}`,
             type: "error",
             title: "Couldn't open link",
@@ -356,20 +388,6 @@ export class ApplicationWindowController {
     const systemId = this.deps.getSystemWorkspaceId();
     const services = systemId ? this.workspaceServices.get(systemId) : undefined;
     if (!services || lifetime.appOrchestrator) return;
-    // Native→shell focus feedback (§5.2): surface native view focus
-    // transitions so the shell's layout focus follows every route, not just
-    // shell-initiated clicks. Cleared with the viewManager on window teardown.
-    viewManager.onNativeSlotFocused((payload) => {
-      const identity = viewManager.getViewInfo(payload.panelId)?.workspaceIdentity;
-      if (!identity) return;
-      this.focusedWorkspaceId = identity.workspaceId;
-      this.workspaceServices
-        .get(identity.workspaceId)
-        ?.eventService.emit("native-slot-focused", { ...payload, panelId: identity.runtimeId });
-    });
-    if (this.deps.onHostedShellReady) {
-      viewManager.onHostedShellReady(this.deps.onHostedShellReady);
-    }
     const appOrchestrator = new AppOrchestrator({
       getPanelView: () => lifetime.panelViews.get(services.serverSession.workspaceId) ?? null,
       statePath: services.serverSession.statePath,
@@ -387,7 +405,12 @@ export class ApplicationWindowController {
     void assertPresent(lifetime.appOrchestrator)
       .loadBakedApp(path.join(getResourcesPath(), "baked-app"))
       .then((loaded) => {
-        if (loaded && this.currentLifetime === lifetime && !lifetime.closed) {
+        if (
+          loaded &&
+          this.currentLifetime === lifetime &&
+          !lifetime.closed &&
+          lifetime.appOrchestrator === appOrchestrator
+        ) {
           this.deps.initializePanelTreeOnce("baked-electron-host");
         }
       })
@@ -399,21 +422,6 @@ export class ApplicationWindowController {
         );
       });
 
-    viewManager.onViewCrashed((viewId, reason) => {
-      const identity = viewManager.getViewInfo(viewId)?.workspaceIdentity;
-      if (!identity) return;
-      const owner = this.workspaceServices.get(identity.workspaceId);
-      if (!owner) return;
-      void owner.panelOrchestrator
-        .handlePanelViewCrash(identity.runtimeId, reason)
-        .catch((error) => {
-          log.warn("Failed to recover crashed panel presentation", {
-            panelId: viewId,
-            reason,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    });
     setupTestApi(
       services.panelOrchestrator,
       services.panelRegistry,

@@ -423,21 +423,38 @@ describe("IpcDispatcher", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("relays an addressed server event directly to the shell RPC client", () => {
+  it.each(["system", "personal", "shared"])(
+    "labels a native %s event for the owning shell RPC client",
+    (workspaceId) => {
+      const shellWc = makeWebContents(9);
+      const { ipcDispatcher } = makeDispatcher({
+        resolve: () => ({ callerId: "shell", callerKind: "shell" }),
+        getShellWebContents: () => shellWc,
+      });
+
+      ipcDispatcher.sendEventToShell(workspaceId, "workspace-focused", { workspaceId });
+
+      expectSentRpcMessage(shellWc, "shell", {
+        type: "event",
+        fromId: "main",
+        event: "workspace-focused",
+        payload: { workspaceId },
+      });
+      const envelope = shellWc.send.mock.calls[0]?.[1] as RpcEnvelope;
+      expect(envelope.delivery.caller.workspaceId).toBe(workspaceId);
+      expect(envelope.provenance).toEqual([envelope.delivery.caller]);
+    }
+  );
+
+  it("retires direct workspace event delivery with its IPC owner", async () => {
     const shellWc = makeWebContents(9);
     const { ipcDispatcher } = makeDispatcher({
       resolve: () => ({ callerId: "shell", callerKind: "shell" }),
       getShellWebContents: () => shellWc,
     });
-
-    ipcDispatcher.sendEventToShell("user-notifications-changed", { changedAt: 10 });
-
-    expectSentRpcMessage(shellWc, "shell", {
-      type: "event",
-      fromId: "main",
-      event: "user-notifications-changed",
-      payload: { changedAt: 10 },
-    });
+    await ipcDispatcher.shutdown();
+    ipcDispatcher.sendEventToShell("personal", "notification:show", { id: "late" });
+    expect(shellWc.send).not.toHaveBeenCalled();
   });
 
   it("carries a local event watch as framed IPC streaming RPC and cancels its response", async () => {

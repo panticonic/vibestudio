@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PanelView } from "./panelView.js";
 
 type WindowEvent = "focus" | "close" | "closed";
 
@@ -20,6 +21,10 @@ interface MockWindow {
 interface MockViewManager {
   destroy: ReturnType<typeof vi.fn>;
   getShellWebContents: ReturnType<typeof vi.fn>;
+  onNativeSlotFocused: ReturnType<typeof vi.fn>;
+  onViewCrashed: ReturnType<typeof vi.fn>;
+  getViewIds: ReturnType<typeof vi.fn>;
+  setWorkspaceProtectedViews: ReturnType<typeof vi.fn>;
 }
 
 const mocks = vi.hoisted(() => {
@@ -56,6 +61,10 @@ const mocks = vi.hoisted(() => {
   const ViewManager = vi.fn(() => {
     const viewManager = {
       destroy: vi.fn(() => lifecycleEvents.push("view:destroy")),
+      onNativeSlotFocused: vi.fn(),
+      onViewCrashed: vi.fn(),
+      getViewIds: vi.fn(() => []),
+      setWorkspaceProtectedViews: vi.fn(),
       getShellWebContents: vi.fn(() => ({ id: `shell-${viewManagers.length}` })),
     } satisfies MockViewManager;
     viewManagers.push(viewManager);
@@ -90,9 +99,11 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("./viewManager.js", () => ({ ViewManager: mocks.ViewManager }));
-vi.mock("./panelView.js", () => ({ PanelView: vi.fn() }));
+vi.mock("./panelView.js", () => ({ PanelView: vi.fn(() => ({ dispose: vi.fn() })) }));
 vi.mock("./browserHistoryRecorder.js", () => ({ BrowserHistoryRecorder: vi.fn() }));
-vi.mock("./appOrchestrator.js", () => ({ AppOrchestrator: vi.fn() }));
+vi.mock("./appOrchestrator.js", () => ({
+  AppOrchestrator: vi.fn(() => ({ loadBakedApp: vi.fn(async () => false) })),
+}));
 vi.mock("./memoryMonitor.js", () => ({
   setMemoryMonitorViewManager: mocks.setMemoryMonitorViewManager,
   setMemoryPressureHandler: mocks.setMemoryPressureHandler,
@@ -117,6 +128,7 @@ vi.mock("@vibestudio/dev-log", () => ({
 import {
   ApplicationWindowController,
   type ApplicationWindowControllerDeps,
+  type WorkspaceWindowServices,
 } from "./applicationWindowController.js";
 
 function createHarness() {
@@ -135,6 +147,7 @@ function createHarness() {
     onWindowClosed,
   };
   return {
+    eventService: deps.eventService,
     controller: new ApplicationWindowController(deps),
     stopElectronHostTargetLaunchLoop,
     onWindowClosed,
@@ -147,6 +160,53 @@ describe("ApplicationWindowController window lifetime", () => {
     mocks.lifecycleEvents.length = 0;
     mocks.windows.length = 0;
     mocks.viewManagers.length = 0;
+  });
+
+  it("keeps panel link failures with their originating workspace", () => {
+    const harness = createHarness();
+    harness.controller.create();
+    const emitters = [vi.fn(), vi.fn()];
+    for (const [index, workspaceId] of ["personal", "shared"].entries()) {
+      harness.controller.attachWorkspaceServices({
+        serverSession: { workspaceId },
+        eventService: { emit: emitters[index] },
+      } as unknown as WorkspaceWindowServices);
+    }
+    const personalOptions = vi.mocked(PanelView).mock.calls[0]![0];
+    const sharedOptions = vi.mocked(PanelView).mock.calls[1]![0];
+    personalOptions.onPanelLinkError?.("same-panel-id", "https://personal.example", "Unavailable");
+    sharedOptions.onPanelLinkError?.("same-panel-id", "https://shared.example", "Denied");
+    expect(emitters[0]).toHaveBeenCalledExactlyOnceWith(
+      "notification:show",
+      expect.objectContaining({ message: "Unavailable (https://personal.example)" })
+    );
+    expect(emitters[1]).toHaveBeenCalledExactlyOnceWith(
+      "notification:show",
+      expect.objectContaining({ message: "Denied (https://shared.example)" })
+    );
+    expect(harness.eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("retires System through normal workspace cleanup without duplicating window callbacks", () => {
+    const harness = createHarness();
+    harness.controller.create();
+    const services = {
+      serverSession: { workspaceId: "system" },
+      eventService: { emit: vi.fn() },
+    } as unknown as WorkspaceWindowServices;
+    harness.controller.attachWorkspaceServices(services);
+    const firstAppOwner = harness.controller.appOrchestrator;
+    expect(firstAppOwner).not.toBeNull();
+    harness.controller.detachWorkspace("system");
+    expect(harness.controller.getWorkspacePanelView("system")).toBeNull();
+    expect(harness.controller.appOrchestrator).toBeNull();
+    expect(harness.stopElectronHostTargetLaunchLoop).toHaveBeenCalledOnce();
+
+    harness.controller.attachWorkspaceServices(services);
+    expect(harness.controller.appOrchestrator).not.toBe(firstAppOwner);
+    const manager = expectPresent(mocks.viewManagers[0]);
+    expect(manager.onNativeSlotFocused).toHaveBeenCalledOnce();
+    expect(manager.onViewCrashed).toHaveBeenCalledOnce();
   });
 
   it("destroys the ViewManager exactly once before clearing owned references and globals", () => {

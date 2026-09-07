@@ -1,4 +1,4 @@
-import { parseWorkspaceNativeViewId, WorkspaceNativeViews } from "./workspaceNativeViews.js";
+import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
 import {
   app,
   dialog,
@@ -56,7 +56,6 @@ import {
   peekPendingConnectLinkError,
   registerProtocol,
 } from "./protocolHandler.js";
-import { BrowserEnvironmentReadiness } from "./services/browserEnvironmentReadiness.js";
 import { installRelaunchHandler, type RelaunchOptions } from "./relaunchApp.js";
 import {
   startEventLoopResponsivenessMonitor,
@@ -156,17 +155,10 @@ dialog.showErrorBox = logSuppressedErrorDialog;
 
 app.setName(APP_NAME);
 
-import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
-import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { panelLogMethods } from "@vibestudio/service-schemas/panelLog";
 import { corsApprovalMethods } from "@vibestudio/service-schemas/corsApproval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
-import { PanelOrchestrator } from "./panelOrchestrator.js";
-import { PanelPinStore } from "./panelPinStore.js";
-import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
-import type { PanelView } from "./panelView.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { resolveElectronViewCaller } from "./callerResolution.js";
@@ -199,34 +191,22 @@ import {
   readPendingPairLabel,
 } from "./services/remoteCredService.js";
 import type { ServerClient } from "./serverClient.js";
-import { CdpHostProvider } from "./cdpHostProvider.js";
-import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
-import {
-  bindHostDirectServerEvents,
-  createServerEventBridge,
-  notificationAttention,
-  type ServerHostTargetChangeEvent,
-} from "./serverEventBridge.js";
-import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
+import type { ServerHostTargetChangeEvent } from "./serverEventBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
-import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 
 import {
   createHostCaller,
   createVerifiedCaller,
   ServiceDispatcher,
   parseServiceMethod,
-  type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import { authorizeVerifiedCaller } from "../server/services/authorityRuntime.js";
-import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
-import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
+import { viewHasAppCapability } from "./services/appCapabilities.js";
 import { assertPresent } from "../lintHelpers";
 import { ApplicationWindowController } from "./applicationWindowController.js";
 import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
@@ -341,9 +321,7 @@ if (startupMode.kind === "local") {
   );
 }
 
-let cdpHostProvider: CdpHostProvider | null = null;
-let panelRegistry: PanelRegistry | null = null;
-let panelOrchestrator: PanelOrchestrator | null = null;
+let systemRuntime: import("./workspaceRuntimeController.js").DesktopWorkspaceRuntime | null = null;
 let pendingReadyElectronLaunch: AppAvailableEvent | null = null;
 let electronHostLaunchBlockedByApproval = false;
 let electronHostTargetSyncLoop: AsyncStateConvergenceLoop<ElectronHostTargetSyncResult> | null =
@@ -392,32 +370,16 @@ function shouldAutoPairPendingDevIrohLink(): boolean {
 }
 
 let appliedElectronHostTargetKey: string | null = null;
-let appliedElectronHostAppId: string | null = null;
 let electronHostTargetApplicationTail: Promise<void> = Promise.resolve();
 const electronHostTargetApplications = new Map<string, Promise<boolean>>();
 let electronHostLaunchLastStatusKey: string | null = null;
-let panelTreeInitializationPromise: Promise<void> | null = null;
-let latestPanelTreeInvalidation: PanelTreeInvalidation | undefined;
-let shellCore: ReturnType<
-  typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
-> | null = null;
 let activeIpcDispatcher: import("./ipcDispatcher.js").IpcDispatcher | null = null;
-type DesktopUiWorkspaceRuntime = import("./ipcDispatcher.js").WorkspaceIpcRuntime & {
-  orchestrator: PanelOrchestrator;
-  registry: PanelRegistry;
-  core: ReturnType<
-    typeof import("./desktopWorkspaceController.js").createDesktopWorkspaceController
-  >["core"];
-  eventService: EventService;
-  browserPermissions?: import("./services/browserPermissionController.js").BrowserPermissionController;
-  close(): Promise<void>;
-};
+type DesktopUiWorkspaceRuntime = import("./workspaceRuntimeController.js").DesktopWorkspaceRuntime;
 const desktopWorkspaceRuntimes = new Map<string, Promise<DesktopUiWorkspaceRuntime>>();
 const openNativeControllers = new Map<string, DesktopUiWorkspaceRuntime>();
 const adBlockManager = new AdBlockManager();
 
 let serverSession: SessionConnection | null = null;
-const browserEnvironmentReadiness = new BrowserEnvironmentReadiness();
 let approvalAttention: ApprovalAttention | null = null;
 let currentHostDevelopmentExecutor:
   | import("./currentHostDevelopmentClientExecutor.js").CurrentHostDevelopmentClientExecutor
@@ -516,10 +478,8 @@ const applicationWindow = new ApplicationWindowController({
   initializePanelTreeOnce,
   onHostedShellReady: finishPresentedStartup,
   onWindowClosed: () => {
-    panelTreeInitializationPromise = null;
     clearPanelInitializationFailure();
     appliedElectronHostTargetKey = null;
-    appliedElectronHostAppId = null;
     electronHostTargetApplications.clear();
     electronHostTargetApplicationTail = Promise.resolve();
     electronHostLaunchLastStatusKey = null;
@@ -552,9 +512,6 @@ let personalBrowserServices: import("./personalBrowserServices.js").PersonalBrow
 let personalWorkspaceId: string | null = null;
 const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
-let browserPermissionController:
-  | import("./services/browserPermissionController.js").BrowserPermissionController
-  | null = null;
 
 type AppCapability = import("@vibestudio/shared/unitManifest").AppCapability;
 
@@ -748,27 +705,6 @@ function sendIncomingPanelLocation(location: unknown): void {
       contents.send("vibestudio:incoming-panel-location", location);
     }
   }
-}
-
-function createCdpRegistrationAdapter() {
-  return {
-    registerTarget(panelId: string, contentsId: number): void {
-      cdpHostProvider?.registerTarget(panelId, contentsId);
-    },
-    unregisterTarget(panelId: string): void {
-      cdpHostProvider?.unregisterTarget(panelId);
-    },
-    cleanupPanelAccess(panelId: string): void {
-      cdpHostProvider?.cleanupPanelAccess(panelId);
-    },
-    isTargetUnderAutomation(panelId: string): boolean {
-      return cdpHostProvider?.isTargetUnderAutomation(panelId) ?? false;
-    },
-    getAccessibilityTree(panelId: string): Promise<unknown[]> {
-      if (cdpHostProvider) return cdpHostProvider.getAccessibilityTree(panelId);
-      return Promise.resolve([]);
-    },
-  };
 }
 
 log.info(` Starting in main mode`);
@@ -1048,9 +984,13 @@ async function handleCredentialSessionCaptureRequest(
     }
 
     applicationWindow.focusWorkspace(personal.workspaceId);
-    activeIpcDispatcher?.sendEventToShell("workspace-focused", {
-      workspaceId: personal.workspaceId,
-    });
+    activeIpcDispatcher?.sendEventToShell(
+      assertPresent(serverSession).workspaceId,
+      "workspace-focused",
+      {
+        workspaceId: personal.workspaceId,
+      }
+    );
     const panel = await panelOrchestrator.createBrowserUrlPanel("shell", signInUrl.href, {
       title: "Credential sign-in",
       focus: true,
@@ -1203,7 +1143,7 @@ async function handleCredentialSessionCaptureRequest(
 
 async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<boolean> {
   const appOrchestrator = applicationWindow.appOrchestrator;
-  if (!appOrchestrator || !panelOrchestrator) {
+  if (!appOrchestrator || !systemRuntime) {
     pendingReadyElectronLaunch = event;
     log.info(
       `[apps] Holding ready Electron host target until app and panel hosts are initialized: ${event.appId}`
@@ -1230,7 +1170,6 @@ async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<
       log.info(`[apps] Applying ready Electron host target: ${event.appId}`);
       await appOrchestrator.applyAppAvailable(event);
       appliedElectronHostTargetKey = launchKey;
-      appliedElectronHostAppId = event.appId;
       void panelTreeInitialization.catch(() => undefined);
       return true;
     });
@@ -1367,16 +1306,14 @@ async function drainPendingReadyElectronLaunch(): Promise<void> {
 }
 
 function initializePanelTreeOnce(reason: string): Promise<void> {
-  if (panelTreeInitializationPromise) return panelTreeInitializationPromise;
-  const orchestrator = panelOrchestrator;
-  if (!orchestrator) return Promise.resolve();
+  const runtime = systemRuntime;
+  if (!runtime) return Promise.resolve();
   clearPanelInitializationFailure();
   log.info(`[panels] Initializing panel tree after ${reason}`);
-  panelTreeInitializationPromise = orchestrator
+  return runtime
     .initializePanelTree()
     .then(() => clearPanelInitializationFailure())
     .catch((error) => {
-      panelTreeInitializationPromise = null;
       const failure = recordPanelInitializationFailure(reason, error);
       console.error("[App] Failed to initialize panel tree:", error);
       eventService.emit("panel-initialization-error", {
@@ -1385,7 +1322,6 @@ function initializePanelTreeOnce(reason: string): Promise<void> {
       });
       throw error;
     });
-  return panelTreeInitializationPromise;
 }
 
 function stopElectronHostTargetLaunchLoop(): void {
@@ -2145,36 +2081,36 @@ app.on("ready", async () => {
   performance.mark("startup:services-registered");
 
   let serverClientRef: import("./serverClient.js").ServerClient | null = null;
-  let semanticRecoveryEpoch = 0;
-  const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
-    await serverEventSubscriptions.recover();
-    if (recoveredLocalServerCrash) {
-      eventService.emit("notification:show", {
-        id: "local-server-crash-recovered",
-        type: "warning",
-        title: "Workspace server recovered",
-        message: `The local server stopped unexpectedly (code ${recoveredLocalServerCrash}) and was restarted. Your workspace is available again.`,
-        ttl: 0,
-      });
-    }
-    // Catch up on approvals that arrived while the event stream was down.
-    void approvalAttention?.refresh();
-    if (!panelOrchestrator) return;
-    await panelOrchestrator
-      .recoverShellSnapshot({ loadFocusedView: false })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`[recovery] shell snapshot failed: ${msg}`);
-      });
-  };
 
   if (!IS_HEADLESS_HOST) {
     approvalAttention = createApprovalAttention({
       getWindow: () => applicationWindow.window,
       listPending: async () => {
-        const client = serverClientRef;
-        if (!client) return null;
-        return (await client.call("shellApproval", "listPending", [])) as PendingApproval[];
+        const session = serverSession;
+        if (!session) return null;
+        const members = (await session.hubControlClient.call(
+          "hubControl",
+          "listWorkspaces",
+          []
+        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+        return Promise.all(
+          members.flatMap((member) => {
+            const runtime = openNativeControllers.get(member.workspaceId);
+            if (!runtime) return [];
+            return [
+              runtime.serverClient.call("shellApproval", "listPending", []).then((pending) => ({
+                workspaceId: member.workspaceId,
+                workspaceLabel:
+                  member.privateRole === "personal"
+                    ? "Personal"
+                    : member.privateRole === "system"
+                      ? "System"
+                      : member.name,
+                pending: pending as PendingApproval[],
+              })),
+            ];
+          })
+        );
       },
       log,
     });
@@ -2197,7 +2133,7 @@ app.on("ready", async () => {
   const ensureDesktopWorkspace = (id: string): Promise<DesktopUiWorkspaceRuntime> => {
     const existing = desktopWorkspaceRuntimes.get(id);
     if (existing) return existing;
-    const opening = (async () => {
+    const opening = Promise.resolve().then(async () => {
       const session = assertPresent(serverSession);
       const members = (await session.hubControlClient.call(
         "hubControl",
@@ -2207,10 +2143,19 @@ app.on("ready", async () => {
       const membership = members.find((entry) => entry.workspaceId === id);
       if (!membership) throw new Error("Workspace access was removed");
       const connection = await session.workspaceSessions.get(id);
-      const { openDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
-      const runtime = await openDesktopWorkspaceRuntime({
+      const { createDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
+      const runtime = createDesktopWorkspaceRuntime({
         connection,
         personal: membership.privateRole === "personal",
+        events: {
+          onAttentionRequired: handleAttentionRequired,
+          onApprovalPendingChanged: (pending) =>
+            approvalAttention?.handlePendingChanged({
+              workspaceId: id,
+              workspaceLabel: membership.privateRole === "personal" ? "Personal" : membership.name,
+              pending,
+            }),
+        },
         adBlockManager,
         ...(membership.privateRole === "personal"
           ? {
@@ -2231,13 +2176,18 @@ app.on("ready", async () => {
             tier,
           }),
       });
+      await runtime.start();
+      if (desktopWorkspaceRuntimes.get(id) !== opening) {
+        await runtime.close();
+        throw new Error("Workspace access was removed during startup");
+      }
       openNativeControllers.set(id, runtime);
       if (membership.privateRole === "personal") {
         personalWorkspaceId = id;
         personalBrowserServices = runtime.personalBrowser;
       }
       return runtime;
-    })();
+    });
     desktopWorkspaceRuntimes.set(id, opening);
     void opening.catch(() => {
       if (desktopWorkspaceRuntimes.get(id) === opening) desktopWorkspaceRuntimes.delete(id);
@@ -2252,36 +2202,30 @@ app.on("ready", async () => {
     await ensureDesktopWorkspace(route.workspaceId);
     if (generation !== routeGeneration) return;
     applicationWindow.focusWorkspace(route.workspaceId);
-    activeIpcDispatcher?.sendEventToShell("workspace-focused", { workspaceId: route.workspaceId });
+    activeIpcDispatcher?.sendEventToShell(
+      assertPresent(serverSession).workspaceId,
+      "workspace-focused",
+      { workspaceId: route.workspaceId }
+    );
   };
-  const handleServerEvent = createServerEventBridge({
-    eventService,
-    getPanelOrchestrator: () => panelOrchestrator,
+  const systemEvents: NonNullable<
+    Parameters<
+      typeof import("./workspaceRuntimeController.js").createDesktopWorkspaceRuntime
+    >[0]["events"]
+  > = {
     applyAppAvailable: applyReadyElectronLaunchEvent,
-    getServerClient: () => serverClientRef,
-    openExternal: (url) => shell.openExternal(url),
-    warn: (message) => log.warn(message),
-    notifyError: (title, message) => {
-      eventService.emit("notification:show", {
-        id: `oauth-handoff-error-${Date.now()}`,
-        type: "error",
-        title,
-        message,
-        ttl: 0,
-      });
-    },
     onAttentionRequired: handleAttentionRequired,
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
-    onPanelTreeInvalidated: (event) => {
-      latestPanelTreeInvalidation = event;
-    },
     resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
-      approvalAttention?.handlePendingChanged(pending);
+      approvalAttention?.handlePendingChanged({
+        workspaceId: assertPresent(serverSession).workspaceId,
+        workspaceLabel: "System",
+        pending,
+      });
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
     onNotificationAction: async (_id, actionId) => {
-      personalBrowserServices?.onNotificationAction(_id, actionId);
       if (actionId === "desktop-npm-update-install") {
         if (!npmUpdateController) throw new Error("The npm updater is unavailable");
         await npmUpdateController.requestInstall().catch((error: unknown) => {
@@ -2300,19 +2244,9 @@ app.on("ready", async () => {
         else copyPendingNpmUpdateCommand();
       } else if (actionId === "desktop-npm-update-copy-result") {
         copyPendingNpmUpdateCommand();
-      } else if (actionId.startsWith("oauth-cancel:")) {
-        const transactionId = actionId.slice("oauth-cancel:".length);
-        const client = serverClientRef;
-        if (!client) throw new Error("The server connection is unavailable");
-        await client.call("credentials", "cancelOAuth", [{ transactionId }]);
       }
     },
-  });
-  const serverEventSubscriptions = createServerEventSubscriptionBridge({
-    getServerClient: () => serverClientRef,
-    onEvent: handleServerEvent,
-    log,
-  });
+  };
 
   try {
     performance.mark("startup:server-spawn-begin");
@@ -2366,37 +2300,13 @@ app.on("ready", async () => {
         storedRemote: storedRemoteAtLaunch ?? undefined,
         centralData,
         onMainSessionTerminalClose: (error) => {
-          semanticRecoveryEpoch += 1;
           const message = error.message || "The paired server ended this session.";
           log.error(`[connection] paired workspace session ended: ${message}`);
           workspaceConnection.end();
-          eventService.emit("server-connection-changed", {
-            status: "disconnected",
-            isRemote: true,
-            remoteHost,
-          });
         },
         onConnectionStatusChanged: (status) => {
-          if (status !== "connected") semanticRecoveryEpoch += 1;
           const wasRecovering = workspaceConnection.snapshot().phase === "reconnecting";
-          // A physical Iroh path can be connected while its logical sessions
-          // and replay subscriptions are still reopening. Keep the outage
-          // presentation up until onRecovery finishes that semantic boundary.
-          if (!(status === "connected" && wasRecovering)) {
-            // One host-owned availability state covers every native surface.
-            // Individual panel error events here used to turn one outage into
-            // many unrelated error UIs and retry loops.
-            workspaceConnection.transport(status);
-          }
-          const remoteTransport = serverClientRef?.transportDiagnostics() ?? undefined;
-          if (!(status === "connected" && wasRecovering)) {
-            eventService.emit("server-connection-changed", {
-              status,
-              isRemote: isRemoteSession,
-              remoteHost,
-              ...(remoteTransport ? { remoteTransport } : {}),
-            });
-          }
+          if (!(status === "connected" && wasRecovering)) workspaceConnection.transport(status);
         },
         onTransportDiagnosticsChanged: (remoteTransport) => {
           if (!serverClientRef || !isRemoteSession) return;
@@ -2404,53 +2314,8 @@ app.on("ready", async () => {
             remoteTransport,
           });
         },
-        onReconnectProgress: (progress) => {
-          workspaceConnection.reconnect(progress);
-          eventService.emit("server-connection-changed", {
-            status: "connecting",
-            isRemote: true,
-            remoteHost,
-            reconnect: progress,
-          });
-        },
-        onRecovery: (kind) => {
-          // Panel sessions share the recovered host transport, but each panel
-          // owns its own durable subscriptions and replay cursors. Tell every
-          // live panel to replace those subscriptions and catch up; recovering
-          // only the shell leaves a long-lived panel half-connected.
-          for (const entry of panelRegistry?.listPanels() ?? []) {
-            const wc = applicationWindow.viewManager?.getWebContents(entry.panelId);
-            if (wc && !wc.isDestroyed()) {
-              wc.send("vibestudio:rpc:recovery", kind);
-            }
-          }
-          // Replay uses the recovered logical session. The epoch prevents an
-          // older replay from marking a newer, flapping connection ready.
-          if (workspaceConnection.snapshot().phase !== "reconnecting") return;
-          const recoveryEpoch = ++semanticRecoveryEpoch;
-          return recoverShellStateFromServer(kind)
-            .then(() => {
-              if (
-                recoveryEpoch !== semanticRecoveryEpoch ||
-                serverClientRef?.getConnectionStatus() !== "connected"
-              ) {
-                return;
-              }
-              workspaceConnection.transport("connected");
-              const remoteTransport = serverClientRef.transportDiagnostics() ?? undefined;
-              eventService.emit("server-connection-changed", {
-                status: "connected",
-                isRemote: isRemoteSession,
-                remoteHost,
-                ...(remoteTransport ? { remoteTransport } : {}),
-              });
-            })
-            .catch((err: unknown) => {
-              if (recoveryEpoch !== semanticRecoveryEpoch) return;
-              const msg = err instanceof Error ? err.message : String(err);
-              log.warn(`[recovery] ${kind} failed: ${msg}`);
-            });
-        },
+        onReconnectProgress: (progress) => workspaceConnection.reconnect(progress),
+        // Workspace runtimes subscribe to recovery on their immutable clients.
       });
 
     // Phase 1: Establish server session (spawn the local child server)
@@ -2469,7 +2334,6 @@ app.on("ready", async () => {
     }
     serverClientRef = serverSession.serverClient;
     workspaceConnection.transport("connected");
-    bindHostDirectServerEvents(serverClientRef, handleServerEvent);
     if (!IS_HEADLESS_HOST || IS_DEVELOPMENT_CLIENT_EXECUTOR) {
       const { CurrentHostDevelopmentClientExecutor } =
         await import("./currentHostDevelopmentClientExecutor.js");
@@ -2495,25 +2359,6 @@ app.on("ready", async () => {
         ]);
       }
     }
-    await serverEventSubscriptions.retainAll([
-      "build:complete",
-      "apps:available",
-      "apps:status",
-      "extensions:status",
-      "external-open:open",
-      "browser-panel:open",
-      "panel-tree-invalidated",
-      "panel-presentation-changed",
-      "panel:runtimeLeaseChanged",
-      "shell-approval:pending-changed",
-      "notification:action",
-      "development:client-launch-request",
-      "development:client-stop-request",
-    ]);
-    // Seed badge/seen-set from approvals already pending at launch without
-    // firing OS notifications for them — the bar shows them once the shell
-    // window is up.
-    void approvalAttention?.refresh({ quiet: true });
     workspaceId = serverSession.workspaceId;
 
     if (IS_DEVELOPMENT_CLIENT_EXECUTOR) {
@@ -2537,11 +2382,65 @@ app.on("ready", async () => {
     // debounced projection notification is the Electron-local presentation
     // signal; the server's lifecycle observer must not be re-entered merely to
     // tell hosted chrome that a native view finished loading.
-    let forwardPanelProjectionChange = (
-      _payload: import("@vibestudio/shared/events").EventPayloads["panel-presentation-changed"]
-    ): void => {};
     // PanelHttpServer is created by serverSession (RPC-backed proxy)
     const conn = assertPresent(serverSession);
+    const { createDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
+    const workspaceController = createDesktopWorkspaceRuntime({
+      connection: conn,
+      personal: false,
+      headless: IS_HEADLESS_HOST,
+      eventService,
+      dispatcher,
+      adBlockManager,
+      window: applicationWindow,
+      openExternal: (url) => shell.openExternal(url),
+      authorize: ({ caller, capability, resourceKey, tier }) =>
+        authorizeVerifiedCaller(caller, {
+          workspaceId: conn.workspaceId,
+          workspaceMember: true,
+          sessionId: `electron-main:${conn.workspaceId}`,
+          audience: "electron-main-services",
+          capability,
+          resourceKey,
+          tier,
+        }),
+      events: systemEvents,
+      onRecovered: async () => {
+        if (recoveredLocalServerCrash)
+          eventService.emit("notification:show", {
+            id: "local-server-crash-recovered",
+            type: "warning",
+            title: "Workspace server recovered",
+            message: `The local server stopped unexpectedly (code ${recoveredLocalServerCrash}) and was restarted. Your workspace is available again.`,
+            ttl: 0,
+          });
+        void approvalAttention?.refresh();
+        if (serverClientRef?.getConnectionStatus() !== "connected") return;
+        workspaceConnection.transport("connected");
+      },
+      view: {
+        authorizeWorkspaceMaterialization: async (workspaceId) => {
+          const members = await conn.hubControlClient.call("hubControl", "listWorkspaces", []);
+          if (
+            !(members as Array<{ workspaceId: string }>).some(
+              (entry) => entry.workspaceId === workspaceId
+            )
+          )
+            throw new Error("Workspace access was removed");
+          await ensureDesktopWorkspace(workspaceId);
+        },
+        onNativeSlotChanged: (nativeId, declared) => {
+          const identity = parseWorkspaceNativeViewId(nativeId);
+          if (!identity) throw new Error("Native panel lacks workspace ownership");
+          const runtime = openNativeControllers.get(identity.workspaceId);
+          if (declared) runtime?.orchestrator.onNativeSlotDeclared(identity.runtimeId);
+          else runtime?.orchestrator.onNativeSlotCleared(identity.runtimeId);
+        },
+      },
+    });
+    systemRuntime = workspaceController;
+    desktopWorkspaceRuntimes.set(conn.workspaceId, Promise.resolve(workspaceController));
+    openNativeControllers.set(conn.workspaceId, workspaceController);
 
     // Create IpcDispatcher (replaces Electron-side RpcServer for shell)
     // Forwards server-service calls to the server, dispatches Electron-local
@@ -2624,8 +2523,6 @@ app.on("ready", async () => {
       getPanelRuntimeConnection: (nativeId) => {
         const identity = applicationWindow.viewManager?.getViewInfo(nativeId)?.workspaceIdentity;
         if (!identity) return undefined;
-        if (identity.workspaceId === conn.workspaceId)
-          return workspaceController.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
         return openNativeControllers
           .get(identity.workspaceId)
           ?.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
@@ -2633,221 +2530,10 @@ app.on("ready", async () => {
       authorizeAppServerCall,
     });
     activeIpcDispatcher = ipcDispatcher;
-    forwardPanelProjectionChange = (payload) => {
-      ipcDispatcher.sendEventToShell("panel-presentation-changed", payload);
-    };
-    // Account- and caller-addressed events arrive on the authenticated server
-    // session, independently of the response-owned server watch. Preserve that
-    // addressing across Electron IPC; the renderer binds them with rpc.on().
-    for (const event of [
-      "user-notifications-changed",
-      "notification:show",
-      "notification:dismiss",
-    ] as const) {
-      conn.serverClient.onDirectEvent(event, (payload) => {
-        const attention = notificationAttention(event, payload);
-        if (attention) handleAttentionRequired(attention.title, attention.message);
-        ipcDispatcher.sendEventToShell(event, payload);
-      });
-    }
-    log.info(`[PanelHTTP] Using server's panel HTTP via gateway port ${conn.gatewayPort}`);
-
-    // A workspace selected in-process cannot safely repoint Electron's userData
-    // directory, so derive the pin path from the resolved workspace itself.
-    const clientLocalStateDir =
-      conn.connectionMode === "local" ? conn.statePath : app.getPath("userData");
-    const panelPinStore = IS_HEADLESS_HOST
-      ? undefined
-      : new PanelPinStore(path.join(clientLocalStateDir, "panel-pins.json"));
-
-    const { createDesktopWorkspaceController } = await import("./desktopWorkspaceController.js");
-    const workspaceController = createDesktopWorkspaceController({
-      connection: conn,
-      eventService,
-      onPresentationUpdated: (update) => forwardPanelProjectionChange(update),
-      presentation: {
-        cdpHost: createCdpRegistrationAdapter(),
-        getPanelView: () => applicationWindow.getWorkspacePanelView(conn.workspaceId),
-        waitForBrowserSessionPartition: () => browserEnvironmentReadiness.wait(),
-        sendPanelEvent: (panelId, event, payload) => {
-          const wc = applicationWindow
-            .getWorkspacePanelView(conn.workspaceId)
-            ?.getWebContents(panelId);
-          if (wc && !wc.isDestroyed()) {
-            wc.send("vibestudio:event", event, payload);
-          }
-        },
-        pinStore: panelPinStore,
-        // Resident-set GC protection (§5.3) follows shell-declared presentation
-        // demand, including the interval before native attachment commits.
-        getResidentPanelIds: () =>
-          applicationWindow
-            .getWorkspacePanelView(conn.workspaceId)
-            ?.getViewManager()
-            .getDeclaredPanelSlotIds() ?? [],
-        getNativeBinding: (panelId) =>
-          applicationWindow
-            .getWorkspacePanelView(conn.workspaceId)
-            ?.getViewManager()
-            .getNativePanelSlotBinding(panelId) ?? null,
-        attachNativeBinding: (panelId) =>
-          applicationWindow
-            .getWorkspacePanelView(conn.workspaceId)
-            ?.getViewManager()
-            .attachDeclaredPanelSlot(panelId) ?? null,
-        publishPresentation: (snapshot) => {
-          ipcDispatcher.sendEventToShell("panel-local-presentation-changed", snapshot);
-        },
-        runtimeClient: IS_HEADLESS_HOST
-          ? {
-              label: "Headless",
-              platform: "headless",
-              supportsCdp: true,
-              loadOnLeaseAssignment: true,
-              restorePolicy: "none",
-            }
-          : {
-              label: "Desktop",
-              platform: "desktop",
-              supportsCdp: true,
-              loadOnLeaseAssignment: true,
-              maxAssignedPanelViews: PANEL_UI_MAX_LOADED_DESKTOP,
-              uiIdleUnloadMs: PANEL_UI_IDLE_UNLOAD_MS,
-            },
-      },
-    });
-    panelRegistry = workspaceController.registry;
-    shellCore = workspaceController.core;
-    panelOrchestrator = workspaceController.orchestrator;
-    const initialRuntime: DesktopUiWorkspaceRuntime = {
-      workspaceId: conn.workspaceId,
-      serverClient: conn.serverClient,
-      dispatcher,
-      orchestrator: workspaceController.orchestrator,
-      registry: workspaceController.registry,
-      core: workspaceController.core,
-      eventService,
-      close: async () => {
-        await serverEventSubscriptions.close();
-        await workspaceController.orchestrator.unregisterRuntimeClient();
-      },
-    };
-    desktopWorkspaceRuntimes.set(conn.workspaceId, Promise.resolve(initialRuntime));
-    openNativeControllers.set(conn.workspaceId, initialRuntime);
-
-    await panelOrchestrator.registerRuntimeClient();
-    if (IS_HEADLESS_HOST) {
-      await initializePanelTreeOnce("panel-orchestrator-ready");
-    } else if (pendingReadyElectronLaunch) {
-      await drainPendingReadyElectronLaunch();
-    } else if (appliedElectronHostAppId) {
-      await initializePanelTreeOnce("panel-orchestrator-ready");
-    }
-
-    // Batch panel warn/error + lifecycle diagnostics into `panelLog.append`
-    // so panel failures land in the server's per-unit diagnostics store
-    // (queryable by workspace agents). Best-effort: drops on send failure.
-    const panelLogClient = createTypedServiceClient("panelLog", panelLogMethods, (svc, m, a) =>
-      conn.serverClient.call(svc, m, a)
-    );
-    const panelLogQueue: import("@vibestudio/service-schemas/panelLog").PanelLogRecord[] = [];
-    let panelLogFlushTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushPanelLog = () => {
-      panelLogFlushTimer = null;
-      const batch = panelLogQueue.splice(0, panelLogQueue.length);
-      if (batch.length === 0) return;
-      void panelLogClient
-        .append(batch)
-        .catch((error: unknown) =>
-          console.warn("[App] Failed to persist panel diagnostics:", error)
-        );
-    };
-    const forwardPanelDiagnostic = (
-      panelId: string,
-      entry: import("./cdpHostProvider.js").PanelConsoleHistoryEntry
-    ) => {
-      const panel = panelRegistry?.getPanel(panelId);
-      if (!panel) return;
-      const rawSource = getPanelSource(panel);
-      // Browser panels aren't workspace units; their console isn't unit health.
-      if (rawSource.startsWith("browser:")) return;
-      const unitSource = rawSource.split(/[?#]/)[0];
-      if (!unitSource) return;
-      panelLogQueue.push({
-        unitSource,
-        panelId,
-        timestamp: entry.timestamp,
-        level:
-          entry.level === "warning" ? "warn" : entry.level === "unknown" ? "info" : entry.level,
-        message: entry.message,
-        source: entry.source === "lifecycle" ? "lifecycle" : "console",
-        fields: entry.fields,
-        url: entry.url || undefined,
-        line: entry.line || undefined,
-      });
-      if (panelLogQueue.length >= 50) {
-        if (panelLogFlushTimer) clearTimeout(panelLogFlushTimer);
-        flushPanelLog();
-      } else if (!panelLogFlushTimer) {
-        panelLogFlushTimer = setTimeout(flushPanelLog, 500);
-      }
-    };
-
-    const cdpHostConnectionId = panelOrchestrator.getRuntimeClientSessionId();
-    cdpHostProvider = new CdpHostProvider({
-      serverUrl: conn.gatewayConfig.serverUrl,
-      transport:
-        conn.connectionMode === "remote"
-          ? {
-              kind: "preauthenticated",
-              createSocket: () =>
-                new RemoteCdpHostProviderSocket({
-                  serverClient: conn.serverClient,
-                  hostConnectionId: cdpHostConnectionId,
-                }),
-            }
-          : {
-              kind: "authenticated-websocket",
-              authToken: () => conn.getCdpAuthToken(),
-            },
-      hostConnectionId: cdpHostConnectionId,
-      getViewManager: () =>
-        applicationWindow.getWorkspacePanelView(conn.workspaceId)?.getViewManager() ?? null,
-      diagnosticsStore: new RuntimeDiagnosticsStore({
-        statePath: serverSession.statePath,
-      }),
-      forwardDiagnostic: forwardPanelDiagnostic,
-      onHostCommand: async (panelId, action) => {
-        if (action === "rebuildPanel") {
-          return panelOrchestrator?.rebuildPanel(panelId) ?? null;
-        }
-        if (action === "reloadPanel") {
-          return panelOrchestrator?.reloadPanel(panelId) ?? null;
-        }
-        // navigatePanel / navigatePanelHistory host commands were removed: the
-        // server is the sole panel-tree writer (panelManager.navigate /
-        // navigateHistory) and broadcasts; the desktop reloads views reactively
-        // (panel-tree invalidation reconcile).
-        if (action === "panelObservation") {
-          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
-          if (!panelOrchestrator) throw new Error("Panel orchestrator not initialized");
-          const { observeDesktopPanelHost } = await import("./panelHostObservation.js");
-          return observeDesktopPanelHost(
-            {
-              getBootObservation: (id) => cdpHostProvider!.getBootObservation(id),
-              getPanelHostObservation: (id, boot) =>
-                panelOrchestrator!.getPanelHostObservation(id, boot),
-            },
-            panelId
-          );
-        }
-        throw new Error(`Unknown host command: ${action}`);
-      },
-    });
-    cdpHostProvider.start();
-
+    // The same workspace runtime owns ordinary native services and presentation
+    // for every workspace. System adds only its app/account host services below.
     // Set up test API for E2E testing (only when VIBESTUDIO_TEST_MODE=1)
-    setupTestApi(panelOrchestrator, panelRegistry, null);
+    setupTestApi(workspaceController.orchestrator, workspaceController.registry, null);
     setMenuWorkspaceResolver(() => {
       const id = applicationWindow.focusedWorkspace;
       return id ? (openNativeControllers.get(id) ?? null) : null;
@@ -2875,99 +2561,17 @@ app.on("ready", async () => {
 
     // Register all Electron-main RPC services via ServiceContainer. Window-owned
     // hosts are resolved from their lifecycle owner when an RPC is invoked.
-    const getPanelView = (): PanelView => {
-      const panelView = applicationWindow.panelView;
-      if (!panelView) throw new Error("PanelView not initialized yet");
-      return panelView;
-    };
     const getViewManager = () => assertPresent(applicationWindow.viewManager);
 
     const { createAppService } = await import("./services/appService.js");
-    const { createViewService } = await import("./services/viewService.js");
-    const { createMenuService } = await import("./services/menuService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
-    const { createDesktopEventsService } = await import("./services/desktopEventsService.js");
-    // FS and git-local services removed — server owns these via panel service
-
-    const electronContainer = new ServiceContainer(dispatcher);
-
+    const electronContainer = workspaceController.container;
     const { serverClient: sc } = conn;
-    const { createBrowserVaultNativeClient } =
-      await import("./services/browserVaultNativeClient.js");
-    const browserVault = createBrowserVaultNativeClient(sc);
-    const { BrowserPermissionController } =
-      await import("./services/browserPermissionController.js");
-    let systemDownloads:
-      | import("./services/browserDownloadManager.js").BrowserDownloadManager
-      | null = null;
-    const workspacePermissionController = new BrowserPermissionController({
-      nativeStorageScope: conn.nativeStorageScope,
-      serverClient: sc,
-      eventService,
-      getViewManager: () =>
-        applicationWindow.viewManager
-          ? new WorkspaceNativeViews(conn.workspaceId, applicationWindow.viewManager)
-          : null,
-      isTargetUnderAutomation: (targetId) =>
-        cdpHostProvider?.isTargetUnderAutomation(targetId) ?? false,
-    });
-    browserPermissionController?.stop();
-    browserPermissionController = workspacePermissionController;
-    initialRuntime.browserPermissions = workspacePermissionController;
-    electronContainer.registerManaged({
-      name: "browser-permissions-host",
-      async start() {
-        try {
-          const partition = await workspacePermissionController.attachBrowserEnvironment();
-          browserEnvironmentReadiness.ready(partition);
-          const { BrowserDownloadManager } = await import("./services/browserDownloadManager.js");
-          systemDownloads = new BrowserDownloadManager({
-            browserSession: session.fromPartition(partition),
-            environmentKey: workspacePermissionController.getEnvironmentKey(),
-            hostId: `desktop:${conn.workspaceId}`,
-            downloadsDirectory: app.getPath("downloads"),
-            eventService,
-            getViewManager: () =>
-              applicationWindow.viewManager
-                ? new WorkspaceNativeViews(conn.workspaceId, applicationWindow.viewManager)
-                : null,
-            requestSiteCapability: (contents, capability) =>
-              workspacePermissionController.requestSiteCapability(contents, capability),
-          });
-          await systemDownloads.start();
-        } catch (error) {
-          browserEnvironmentReadiness.unavailable(error);
-          throw error;
-        }
-        return workspacePermissionController;
-      },
-      async stop() {
-        browserEnvironmentReadiness.stopped(
-          new Error("Browser environment stopped with the workspace")
-        );
-        await systemDownloads?.stop();
-        systemDownloads = null;
-        workspacePermissionController.stop();
-        if (browserPermissionController === workspacePermissionController) {
-          browserPermissionController = null;
-        }
-      },
-    });
-
-    const { createBrowserEnvironmentService, localBrowserEnvironmentImportRouter } =
-      await import("./services/browserEnvironmentService.js");
-    electronContainer.registerRpc(
-      createBrowserEnvironmentService({
-        getDownloads: () => systemDownloads,
-        importRouter: localBrowserEnvironmentImportRouter(() => null),
-        browserDataBrokerRepoPath: null,
-      })
-    );
 
     // Shell-only services
     electronContainer.registerRpc(
       createAppService({
-        panelOrchestrator,
+        panelOrchestrator: workspaceController.orchestrator,
         serverClient: sc,
         getViewManager,
         getAppOrchestrator: () => applicationWindow.appOrchestrator,
@@ -2986,57 +2590,32 @@ app.on("ready", async () => {
         onWorkspaceRoute: handleWorkspaceRoute,
         onWorkspaceCatalog: async (entries) => {
           const members = new Set(entries.map((entry) => entry.workspaceId));
-          for (const [id, opening] of desktopWorkspaceRuntimes) {
-            if (id === conn.workspaceId || members.has(id)) continue;
-            const runtime = await opening;
-            await runtime.close();
-            await conn.workspaceSessions.release(id);
+          const retiring = [...desktopWorkspaceRuntimes].filter(
+            ([id]) => id !== conn.workspaceId && !members.has(id)
+          );
+          for (const [id] of retiring) {
             desktopWorkspaceRuntimes.delete(id);
             openNativeControllers.delete(id);
+            approvalAttention?.removeWorkspace(id);
             if (personalWorkspaceId === id) {
               personalWorkspaceId = null;
               personalBrowserServices = null;
             }
           }
+          const retired = await Promise.allSettled(
+            retiring.map(async ([id, opening]) => {
+              try {
+                await (await opening).close();
+              } finally {
+                await conn.workspaceSessions.release(id);
+              }
+            })
+          );
+          const errors = retired.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []
+          );
+          if (errors.length) throw new AggregateError(errors, "Workspace removal cleanup failed");
         },
-      })
-    );
-    electronContainer.registerRpc(
-      createViewService({
-        workspaceId: conn.workspaceId,
-        panelOrchestrator,
-        panelRegistry,
-        get panelView(): PanelView {
-          return getPanelView();
-        },
-        browserVault,
-        getViewManager,
-        authorizeWorkspaceMaterialization: async (workspaceId) => {
-          const members = await conn.hubControlClient.call("hubControl", "listWorkspaces", []);
-          if (
-            !(members as Array<{ workspaceId: string }>).some(
-              (entry) => entry.workspaceId === workspaceId
-            )
-          )
-            throw new Error("Workspace access was removed");
-          await ensureDesktopWorkspace(workspaceId);
-        },
-        onNativeSlotChanged: (nativeId, declared) => {
-          const identity = parseWorkspaceNativeViewId(nativeId);
-          if (!identity) throw new Error("Native panel lacks workspace ownership");
-          const runtime = openNativeControllers.get(identity.workspaceId);
-          if (declared) runtime?.orchestrator.onNativeSlotDeclared(identity.runtimeId);
-          else runtime?.orchestrator.onNativeSlotCleared(identity.runtimeId);
-        },
-      })
-    );
-    electronContainer.registerRpc(
-      createMenuService({
-        getPanelWebContents: (id) => getPanelView().getWebContents(id),
-        panelOrchestrator,
-        panelRegistry,
-        getViewManager,
-        serverClient: sc,
       })
     );
     // Current-workspace operations route to the selected child. Server-wide
@@ -3062,38 +2641,10 @@ app.on("ready", async () => {
     });
     electronContainer.registerRpc(desktopPhoneProvider);
     electronContainer.registerRpc(createAdblockService({ adBlockManager }));
-    // Each local watch retains its server topics for exactly the lifetime of
-    // its response. The bridge folds all retained topics into one server watch.
-    {
-      const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
-        if (callerHasPlatformCapability(caller.runtime.id, caller.runtime.kind, "panel-hosting")) {
-          return true;
-        }
-        if (caller.runtime.kind !== "app") return false;
-        const viewInfo = applicationWindow.viewManager?.getViewInfo(caller.runtime.id) ?? null;
-        return viewHasAppCapability(caller.runtime.id, viewInfo, "panel-hosting");
-      };
-      electronContainer.registerRpc(
-        createDesktopEventsService({
-          eventService,
-          // Tree invalidation is level-triggered state, not an edge. A shell
-          // can render and issue its first empty query while the host seeds the
-          // manifest roots. Replaying the latest reset when its watch opens
-          // closes that startup race without duplicating tree state in main.
-          snapshots: {
-            "panel-tree-invalidated": () => latestPanelTreeInvalidation,
-          },
-          onWatchOpened: (events, ctx) => {
-            if (!shouldForwardServerEvents(ctx.caller)) return undefined;
-            return serverEventSubscriptions.retainMany(events);
-          },
-        })
-      );
-    }
+    await workspaceController.start();
+    void approvalAttention?.refresh({ quiet: true });
+    if (pendingReadyElectronLaunch) await drainPendingReadyElectronLaunch();
 
-    await electronContainer.startAll();
-
-    dispatcher.markInitialized();
     const { publishHostService } = await import("./hostServicePublisher.js");
     publishHostService(sc, dispatcher, desktopPhoneProvider);
 
@@ -3353,16 +2904,6 @@ app.on("ready", async () => {
     // starting state and open the startup approval gate.
     bootstrapWorkspaceRpcReady = true;
     pushBootstrapConnectionState();
-    applicationWindow.attachWorkspaceServices({
-      eventService,
-      panelRegistry,
-      panelOrchestrator,
-      serverSession: conn,
-      cdpHost: createCdpRegistrationAdapter(),
-      formFillManager: null,
-      browserFaviconObserver: null,
-      getBrowserPermissionController: () => browserPermissionController,
-    });
     if (IS_HEADLESS_HOST) {
       performance.mark("startup:window-created");
     }
@@ -3375,6 +2916,17 @@ app.on("ready", async () => {
 
     // Fail-fast: clean up all partial state, show error, and exit.
     const cleanupPromises: Promise<void>[] = [];
+    const runtimes = [...desktopWorkspaceRuntimes.values()];
+    desktopWorkspaceRuntimes.clear();
+    openNativeControllers.clear();
+    await Promise.allSettled(runtimes.map(async (runtime) => (await runtime).close()));
+    systemRuntime = null;
+    if (activeIpcDispatcher) {
+      await activeIpcDispatcher
+        .shutdown()
+        .catch((error) => console.error("IPC cleanup failed", error));
+      activeIpcDispatcher = null;
+    }
 
     if (serverSession) {
       cleanupPromises.push(
@@ -3386,10 +2938,6 @@ app.on("ready", async () => {
     // client ever comes back.
     serverSession?.hubProcessManager?.detach();
     serverSession = null;
-    if (cdpHostProvider) {
-      cdpHostProvider.stop();
-      cdpHostProvider = null;
-    }
     await Promise.all(cleanupPromises);
 
     console.error("[App] Startup failed:", formatUnknownError(error));
@@ -3499,7 +3047,7 @@ app.on("will-quit", (event) => {
   const relaunchQuit = quitIntent.kind === "relaunch";
   const hasResourcesToClean =
     serverSession ||
-    cdpHostProvider ||
+    systemRuntime?.cdpHostProvider ||
     currentHostDevelopmentExecutor ||
     updateQuit ||
     relaunchQuit;
@@ -3553,7 +3101,15 @@ app.on("will-quit", (event) => {
       const runtimes = [...desktopWorkspaceRuntimes.values()];
       desktopWorkspaceRuntimes.clear();
       openNativeControllers.clear();
-      const unregister = Promise.all(runtimes.map(async (runtime) => (await runtime).close()));
+      const unregister = Promise.allSettled(
+        runtimes.map(async (runtime) => (await runtime).close())
+      ).then((results) => {
+        systemRuntime = null;
+        const errors = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        if (errors.length) throw new AggregateError(errors, "Workspace runtime cleanup failed");
+      });
 
       let unregisterFailure: unknown = null;
       try {
@@ -3605,11 +3161,6 @@ app.on("will-quit", (event) => {
     stopPromises.push(cleanupThenClose);
   }
 
-  if (cdpHostProvider) {
-    cdpHostProvider.stop();
-    cdpHostProvider = null;
-  }
-
   // Add a timeout to ensure we exit even if cleanup hangs
   const shutdownTimeout = setTimeout(() => {
     if (shutdownRequiresLocalHubStop && !localHubStopConfirmed) {
@@ -3627,9 +3178,6 @@ app.on("will-quit", (event) => {
 
   Promise.all(stopPromises)
     .then(() => {
-      const core = shellCore;
-      shellCore = null;
-      core?.shutdown?.();
       clearTimeout(shutdownTimeout);
       console.log("[App] Shutdown complete");
       app.exit(
@@ -3663,13 +3211,6 @@ app.on("will-quit", (event) => {
         })();
         return;
       }
-      const core = shellCore;
-      shellCore = null;
-      try {
-        core?.shutdown?.();
-      } catch (cleanupError) {
-        console.error("[App] Shell cleanup also failed:", formatUnknownError(cleanupError));
-      }
       clearTimeout(shutdownTimeout);
       console.error(
         `[App] Shutdown failed${updateQuit ? "; update cancelled" : ""}:`,
@@ -3686,9 +3227,12 @@ app.on("activate", () => {
   ) {
     applicationWindow.create();
   }
-  const focusedPanelId = panelRegistry?.getFocusedPanelId();
+  const focusedRuntime = applicationWindow.focusedWorkspace
+    ? openNativeControllers.get(applicationWindow.focusedWorkspace)
+    : undefined;
+  const focusedPanelId = focusedRuntime?.registry.getFocusedPanelId();
   if (focusedPanelId) {
-    void shellCore?.panelManager
+    void focusedRuntime?.core.panelManager
       .notifyFocused(asPanelSlotId(focusedPanelId))
       .catch((error: unknown) =>
         console.warn(`[App] Failed to restore focus for panel ${focusedPanelId}:`, error)

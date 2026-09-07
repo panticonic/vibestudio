@@ -1,6 +1,5 @@
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { EventPayloads } from "@vibestudio/shared/events";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { createElectronShellCore } from "./shellCore/createElectronShellCore.js";
 import type { WorkspaceSessionConnection } from "./serverSession.js";
@@ -27,13 +26,13 @@ type PresentationDependencies = Omit<
 export function createDesktopWorkspaceController(deps: {
   connection: WorkspaceSessionConnection;
   eventService: EventService;
-  onPresentationUpdated(payload: EventPayloads["panel-presentation-changed"]): void;
   presentation: PresentationDependencies;
 }) {
   const connection = deps.connection;
   const registry = new PanelRegistry({
     workspaceId: connection.workspaceId,
-    onPresentationUpdated: deps.onPresentationUpdated,
+    onPresentationUpdated: (payload) =>
+      deps.eventService.emit("panel-presentation-changed", payload),
   });
   const core = createElectronShellCore({
     workspaceId: connection.workspaceId,

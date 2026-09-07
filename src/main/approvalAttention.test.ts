@@ -41,7 +41,7 @@ vi.mock("electron", () => ({
 }));
 
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
-import { createApprovalAttention } from "./approvalAttention.js";
+import { createApprovalAttention, type WorkspaceApprovalSnapshot } from "./approvalAttention.js";
 
 function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
   return {
@@ -95,9 +95,13 @@ function makeWindow(opts: { focused?: boolean; visible?: boolean } = {}) {
 function makeAttention(window: ReturnType<typeof makeWindow> | null, pending?: PendingApproval[]) {
   return createApprovalAttention({
     getWindow: () => window as never,
-    listPending: vi.fn(async () => pending ?? null),
+    listPending: vi.fn(async () => (pending ? [snapshot(pending)] : null)),
     log: { warn: vi.fn() },
   });
+}
+
+function snapshot(pending: PendingApproval[], workspaceId = "personal"): WorkspaceApprovalSnapshot {
+  return { workspaceId, workspaceLabel: workspaceId, pending };
 }
 
 function deferred<T>() {
@@ -116,14 +120,68 @@ beforeEach(() => {
 });
 
 describe("createApprovalAttention", () => {
+  it("aggregates owners without conflating identical approval IDs", () => {
+    const attention = makeAttention(makeWindow());
+    attention.handlePendingChanged(snapshot([makeApproval()], "personal"));
+    attention.handlePendingChanged(snapshot([makeApproval()], "shared"));
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+    expect(electronMocks.notificationInstances).toHaveLength(2);
+    expect(electronMocks.notificationInstances[1]?.options.body).toContain("shared");
+
+    attention.handlePendingChanged(snapshot([], "personal"));
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    attention.removeWorkspace("shared");
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+  });
+
+  it("counts preparation only when it becomes actionable", () => {
+    const attention = makeAttention(makeWindow());
+    attention.handlePendingChanged(
+      snapshot([makeApproval({ lifecycle: { state: "preparing" } } as Partial<PendingApproval>)])
+    );
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+    expect(electronMocks.notificationInstances).toHaveLength(0);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    expect(electronMocks.notificationInstances).toHaveLength(1);
+  });
+
+  it("dismisses the removed owner's native notification while another queue remains", () => {
+    const attention = makeAttention(makeWindow());
+    attention.handlePendingChanged(snapshot([makeApproval()], "personal"));
+    attention.handlePendingChanged(snapshot([makeApproval()], "shared"));
+    const sharedNotification = electronMocks.notificationInstances[1]!;
+    attention.removeWorkspace("shared");
+    expect(sharedNotification.close).toHaveBeenCalledOnce();
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+  });
+
+  it("does not let a delayed refresh restore removed or resolved requests", async () => {
+    const pending = deferred<WorkspaceApprovalSnapshot[]>();
+    const attention = createApprovalAttention({
+      getWindow: () => makeWindow() as never,
+      listPending: () => pending.promise,
+    });
+    attention.handlePendingChanged(snapshot([makeApproval()], "personal"));
+    const refresh = attention.refresh();
+    attention.handlePendingChanged(snapshot([], "personal"));
+    attention.removeWorkspace("shared");
+    pending.resolve([snapshot([makeApproval()], "personal"), snapshot([makeApproval()], "shared")]);
+    await refresh;
+    expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+    expect(electronMocks.notificationInstances).toHaveLength(1);
+  });
+
   it("tracks the badge count and clears attention when the queue drains", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeApproval(), makeApproval({ approvalId: "approval-2" })]);
+    attention.handlePendingChanged(
+      snapshot([makeApproval(), makeApproval({ approvalId: "approval-2" })])
+    );
     expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(2);
 
-    attention.handlePendingChanged([]);
+    attention.handlePendingChanged(snapshot([]));
     expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(0);
     expect(window.flashFrame).toHaveBeenLastCalledWith(false);
   });
@@ -132,7 +190,7 @@ describe("createApprovalAttention", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeStartupUnitApproval()]);
+    attention.handlePendingChanged(snapshot([makeStartupUnitApproval()]));
 
     expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(0);
     expect(window.flashFrame).not.toHaveBeenCalledWith(true);
@@ -143,7 +201,7 @@ describe("createApprovalAttention", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeApproval()]);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
 
     expect(window.flashFrame).toHaveBeenCalledWith(true);
     const [notification] = electronMocks.notificationInstances;
@@ -157,7 +215,7 @@ describe("createApprovalAttention", () => {
     const window = makeWindow({ focused: true, visible: true });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeApproval()]);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
 
     expect(window.flashFrame).not.toHaveBeenCalled();
     expect(electronMocks.notificationInstances).toHaveLength(0);
@@ -168,7 +226,7 @@ describe("createApprovalAttention", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeApproval({ attention: "queue" })]);
+    attention.handlePendingChanged(snapshot([makeApproval({ attention: "queue" })]));
 
     expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(1);
     expect(window.flashFrame).not.toHaveBeenCalledWith(true);
@@ -179,13 +237,15 @@ describe("createApprovalAttention", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeApproval()]);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
     electronMocks.notificationInstances.length = 0;
 
-    attention.handlePendingChanged([makeApproval()]);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
     expect(electronMocks.notificationInstances).toHaveLength(0);
 
-    attention.handlePendingChanged([makeApproval(), makeApproval({ approvalId: "approval-2" })]);
+    attention.handlePendingChanged(
+      snapshot([makeApproval(), makeApproval({ approvalId: "approval-2" })])
+    );
     expect(electronMocks.notificationInstances).toHaveLength(1);
   });
 
@@ -200,7 +260,7 @@ describe("createApprovalAttention", () => {
     expect(electronMocks.notificationInstances).toHaveLength(0);
 
     // The same approval arriving via the event stream is not "new" anymore.
-    attention.handlePendingChanged([makeApproval()]);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
     expect(electronMocks.notificationInstances).toHaveLength(0);
   });
 
@@ -208,7 +268,7 @@ describe("createApprovalAttention", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
-    attention.handlePendingChanged([makeApproval()]);
+    attention.handlePendingChanged(snapshot([makeApproval()]));
     attention.handleWindowFocus();
     expect(window.flashFrame).toHaveBeenLastCalledWith(false);
 
@@ -219,7 +279,7 @@ describe("createApprovalAttention", () => {
   });
 
   it("silences an in-flight refresh disposed during shutdown", async () => {
-    const pending = deferred<PendingApproval[]>();
+    const pending = deferred<WorkspaceApprovalSnapshot[]>();
     const warn = vi.fn();
     const attention = createApprovalAttention({
       getWindow: () => makeWindow() as never,
