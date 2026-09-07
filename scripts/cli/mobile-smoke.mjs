@@ -307,7 +307,10 @@ async function cdpCommand(socket, method, params = {}) {
       if (message.id !== id) return;
       socket.removeEventListener("message", onMessage);
       if (message.error) reject(new Error(message.error.message ?? "CDP evaluation failed"));
-      else resolve(message.result?.result?.value);
+      else if (message.result?.exceptionDetails) {
+        const failure = message.result.exceptionDetails;
+        reject(new Error(failure.exception?.description ?? failure.text ?? "CDP evaluation threw"));
+      } else resolve(message.result?.result?.value);
     };
     socket.addEventListener("message", onMessage);
   });
@@ -375,6 +378,7 @@ async function openPanelWebViewDebugger(
         keepForward = true;
         return {
           socket,
+          target: { id: target.id, title: target.title, url: target.url },
           close: async () => {
             socket.close();
             if (localPort) {
@@ -638,7 +642,7 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
       returnedDocument?.timeOrigin !== originalDocument.timeOrigin
     ) {
       const packet = path.join(screenshotDir, "personal-document-retention.json");
-      await fsp.writeFile(packet, JSON.stringify({ originalDocument, returnedDocument }, null, 2), {
+      await fsp.writeFile(packet, JSON.stringify({ target: personal.target, originalDocument, returnedDocument }, null, 2), {
         mode: 0o600,
       });
       throw new Error(
