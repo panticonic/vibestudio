@@ -89,7 +89,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   setWorkspaceAppTrust({ chromeApps: ["apps/shell"] });
   edges.partition.mockResolvedValue("persist:workspace-test");
-  edges.personal.mockResolvedValue({ publishedServices: [], onNotificationAction: vi.fn() });
+  edges.personal.mockResolvedValue({ publishedServices: [] });
 });
 afterEach(async () => {
   await Promise.allSettled(closing.splice(0).map((runtime) => runtime.close()));
@@ -145,17 +145,16 @@ function fixture(workspaceId: string, personal = false) {
     getWorkspacePanelView: vi.fn((id: string) => (id === workspaceId ? ownPanel : null)),
     attachWorkspaceServices: vi.fn(),
     detachWorkspace: vi.fn(),
+    handleWebsiteNotificationAction: vi.fn(),
     viewManager: { getViewInfo: vi.fn((): unknown => null) },
   };
   const events = {
     onNotificationAction: vi.fn(async () => undefined),
     onAttentionRequired: vi.fn(),
   };
-  const personalAction = vi.fn();
   if (personal)
     edges.personal.mockResolvedValueOnce({
       publishedServices: [],
-      onNotificationAction: personalAction,
     });
   const openShellSurface = vi.fn();
   const runtime = createDesktopWorkspaceRuntime({
@@ -197,7 +196,6 @@ function fixture(workspaceId: string, personal = false) {
     release,
     directEvents,
     events,
-    personalAction,
     openShellSurface,
   };
 }
@@ -306,36 +304,46 @@ describe("workspace runtime ownership", () => {
     expect(releaseTopics).toHaveBeenCalledOnce();
   });
 
-  it("handles direct notification actions and native attention without duplicating UI events", async () => {
-    const owner = fixture("personal", true);
-    await owner.runtime.start();
-    const emit = vi.spyOn(owner.runtime.eventService, "emit");
-    owner.directEvents.get("notification:action")!({
-      id: "website-notification",
-      actionId: "open",
-    });
-    expect(owner.personalAction).toHaveBeenCalledWith("website-notification", "open");
-    expect(owner.events.onNotificationAction).toHaveBeenCalledWith("website-notification", "open");
-    owner.directEvents.get("notification:action")!({
-      id: "oauth-notification",
-      actionId: "oauth-cancel:own-transaction",
-    });
-    await vi.waitFor(() =>
-      expect(owner.serverClient.call).toHaveBeenCalledWith("credentials", "cancelOAuth", [
-        { transactionId: "own-transaction" },
-      ])
-    );
-    owner.directEvents.get("notification:show")!({ id: "ordinary-toast", title: "Ordinary" });
-    expect(owner.events.onAttentionRequired).not.toHaveBeenCalled();
-    owner.directEvents.get("notification:show")!({
-      id: "chat-attention:owned",
-      title: "Attention",
-      message: "Owned message",
-    });
-    expect(owner.events.onAttentionRequired).toHaveBeenCalledOnce();
-    expect(owner.events.onAttentionRequired).toHaveBeenCalledWith("Attention", "Owned message");
-    expect(emit).not.toHaveBeenCalled();
-  });
+  it.each(["personal", "system", "shared"])(
+    "handles %s notification actions and native attention without duplicating UI events",
+    async (workspaceId) => {
+      const owner = fixture(workspaceId, workspaceId === "personal");
+      await owner.runtime.start();
+      const emit = vi.spyOn(owner.runtime.eventService, "emit");
+      owner.directEvents.get("notification:action")!({
+        id: "website-notification",
+        actionId: "open",
+      });
+      expect(owner.window.handleWebsiteNotificationAction).toHaveBeenCalledWith(
+        workspaceId,
+        "website-notification",
+        "open"
+      );
+      expect(owner.events.onNotificationAction).toHaveBeenCalledWith(
+        "website-notification",
+        "open"
+      );
+      owner.directEvents.get("notification:action")!({
+        id: "oauth-notification",
+        actionId: "oauth-cancel:own-transaction",
+      });
+      await vi.waitFor(() =>
+        expect(owner.serverClient.call).toHaveBeenCalledWith("credentials", "cancelOAuth", [
+          { transactionId: "own-transaction" },
+        ])
+      );
+      owner.directEvents.get("notification:show")!({ id: "ordinary-toast", title: "Ordinary" });
+      expect(owner.events.onAttentionRequired).not.toHaveBeenCalled();
+      owner.directEvents.get("notification:show")!({
+        id: "chat-attention:owned",
+        title: "Attention",
+        message: "Owned message",
+      });
+      expect(owner.events.onAttentionRequired).toHaveBeenCalledOnce();
+      expect(owner.events.onAttentionRequired).toHaveBeenCalledWith("Attention", "Owned message");
+      expect(emit).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(["system", "personal", "shared"])(
     "owns the same ordinary lifecycle for %s",

@@ -51,9 +51,6 @@ export async function registerPersonalBrowserServices(deps: {
     | import("./services/browserFaviconObserver.js").BrowserFaviconObserver
     | null = null;
   let releaseBrowserAdBlocking: (() => void) | null = null;
-  let websiteNotificationBridge:
-    | import("./services/websiteNotificationBridge.js").WebsiteNotificationBridge
-    | null = null;
   let browserImportHostProvider:
     | import("./services/browserImportHostProvider.js").BrowserImportHostProvider
     | null = null;
@@ -139,12 +136,8 @@ export async function registerPersonalBrowserServices(deps: {
           releaseBrowserAdBlocking?.();
           releaseBrowserAdBlocking = adBlockManager.attachToSession(browserSession);
 
-          // Browser views need the session partition and nothing else. The
-          // subsystems below enrich the environment — site permissions, web
-          // notifications, download tracking — and each can fail on its own
-          // without making the browser unusable. Letting one rejection escape
-          // marked the whole environment unavailable, which left every
-          // browser panel with no view at all and an empty pane.
+          // Download history enriches Personal's imported browser data; a
+          // projection failure must not prevent otherwise healthy browser views.
           const attach = async (label: string, start: () => Promise<void> | void) => {
             try {
               await start();
@@ -158,23 +151,8 @@ export async function registerPersonalBrowserServices(deps: {
           };
 
           await attach("download history", () => deps.downloads.attachHistory(browserDataClient));
-
-          await attach("site permissions", async () => {
-            // The notification bridge routes through permission decisions, so
-            // it only exists when those are available.
-            const { WebsiteNotificationBridge } =
-              await import("./services/websiteNotificationBridge.js");
-            websiteNotificationBridge = new WebsiteNotificationBridge({
-              permissions: browserPermissions,
-              eventService,
-              getViewManager,
-            });
-            websiteNotificationBridge.start();
-          });
         },
         async onStopped() {
-          websiteNotificationBridge?.stop();
-          websiteNotificationBridge = null;
           releaseBrowserAdBlocking?.();
           releaseBrowserAdBlocking = null;
           browserCookieProjection = null;
@@ -221,9 +199,6 @@ export async function registerPersonalBrowserServices(deps: {
     },
     get cookieProjection() {
       return browserCookieProjection;
-    },
-    onNotificationAction(id: string, actionId: string) {
-      websiteNotificationBridge?.handleAction(id, actionId);
     },
   };
 }

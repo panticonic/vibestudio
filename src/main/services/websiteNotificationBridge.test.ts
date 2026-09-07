@@ -65,15 +65,19 @@ function fixture() {
     ownsContents: vi.fn((value: WebContents) => contents.includes(value as never)),
   };
   const eventService = { emit: vi.fn() };
-  const manager = {
-    findViewIdByWebContentsId: vi.fn((id: number) =>
-      contents.some((entry) => entry.id === id) ? `panel-${id}` : null
-    ),
-  };
+  const owners = new Map(
+    contents.map((entry) => [
+      entry.id,
+      {
+        workspaceId: "workspace",
+        panelId: `panel-${entry.id}`,
+        permissions: permissions as never,
+        eventService: eventService as never,
+      },
+    ])
+  );
   const bridge = new WebsiteNotificationBridge({
-    permissions: permissions as never,
-    eventService: eventService as never,
-    getViewManager: () => manager,
+    resolveOwner: (contents) => owners.get(contents.id) ?? null,
   });
   bridge.start();
   const show = (event = first.event(), options: unknown = {}) =>
@@ -84,7 +88,7 @@ function fixture() {
     ) as Promise<string>;
   const close = (event: IpcMainInvokeEvent, id: string) =>
     handlers.get("vibestudio:website-notification:close")!(event, id);
-  return { first, second, permissions, eventService, manager, bridge, show, close };
+  return { first, second, permissions, eventService, owners, bridge, show, close };
 }
 const bridges: WebsiteNotificationBridge[] = [];
 beforeEach(() => {
@@ -101,6 +105,53 @@ function setup() {
 }
 
 describe("website notification document ownership", () => {
+  it("routes independent workspace notifications without Personal, even with identical panel IDs and tags", async () => {
+    const { first, second, owners, bridge, show, eventService } = setup();
+    const otherEvents = { emit: vi.fn() };
+    const otherPermissions = {
+      refresh: vi.fn(async () => undefined),
+      isGranted: vi.fn(() => true),
+      ownsContents: vi.fn(
+        (contents: WebContents) => contents === (second.contents as unknown as WebContents)
+      ),
+    };
+    owners.set(second.contents.id, {
+      workspaceId: "shared",
+      panelId: "panel-10",
+      permissions: otherPermissions as never,
+      eventService: otherEvents as never,
+    });
+    const firstId = await show(first.event(), { tag: "same" });
+    const secondId = await show(second.event(), { tag: "same" });
+    expect(otherPermissions.refresh).toHaveBeenCalledOnce();
+    expect(otherEvents.emit).toHaveBeenCalledWith(
+      "notification:show",
+      expect.objectContaining({ id: secondId, sourcePanelId: "panel-10" })
+    );
+    expect(eventService.emit).not.toHaveBeenCalledWith("notification:dismiss", expect.anything());
+    bridge.handleAction("workspace", secondId, "website-open");
+    expect(second.frame.send).not.toHaveBeenCalled();
+    bridge.detachWorkspace("workspace");
+    expect(eventService.emit).toHaveBeenCalledWith("notification:dismiss", { id: firstId });
+    expect(otherEvents.emit).not.toHaveBeenCalledWith("notification:dismiss", expect.anything());
+    bridge.handleAction("shared", secondId, "website-open");
+    expect(second.frame.send.mock.calls.map(([, event]) => event.type)).toEqual(["click", "close"]);
+  });
+
+  it("rejects late publication when the owning workspace session is replaced", async () => {
+    const { first, owners, show, permissions, eventService } = setup();
+    const pending = deferred<void>();
+    permissions.refresh.mockReturnValueOnce(pending.promise);
+    const result = show();
+    owners.set(first.contents.id, {
+      ...owners.get(first.contents.id)!,
+      eventService: { emit: vi.fn() } as never,
+    });
+    pending.resolve();
+    await expect(result).rejects.toThrow("document is no longer active");
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
   it("accepts only the actual owned main frame with a matching nonopaque native origin", async () => {
     const { first, show, permissions } = setup();
     await expect(show(first.event({ ...first.frame }))).rejects.toThrow("main-frame document");
@@ -130,7 +181,7 @@ describe("website notification document ownership", () => {
         ],
       })
     );
-    bridge.handleAction(id, "website-open");
+    bridge.handleAction("workspace", id, "website-open");
     expect(first.frame.send.mock.calls.map(([, payload]) => payload.type)).toEqual([
       "click",
       "close",
@@ -222,11 +273,11 @@ describe("website notification document ownership", () => {
       first.frame.detached = true;
       throw new Error("Frame disposed");
     });
-    expect(() => bridge.handleAction(id, "website-open")).not.toThrow();
+    expect(() => bridge.handleAction("workspace", id, "website-open")).not.toThrow();
     expect(first.contents.listenerCount("did-start-navigation")).toBe(0);
     expect(eventService.emit).toHaveBeenCalledWith("notification:dismiss", { id });
     const calls = first.frame.send.mock.calls.length;
-    bridge.handleAction(id, "website-open");
+    bridge.handleAction("workspace", id, "website-open");
     expect(first.frame.send).toHaveBeenCalledTimes(calls);
   });
 
@@ -250,7 +301,7 @@ describe("website notification document ownership", () => {
     const { first, bridge, show, eventService } = setup();
     const id = await show();
     first.navigate();
-    bridge.handleAction(id, "website-open");
+    bridge.handleAction("workspace", id, "website-open");
     expect(eventService.emit).toHaveBeenCalledWith("notification:dismiss", { id });
     expect(first.frame.send).not.toHaveBeenCalled();
   });
@@ -265,7 +316,7 @@ describe("website notification document ownership", () => {
       type: "close",
     });
     eventService.emit.mockClear();
-    bridge.handleAction(old, "website-open");
+    bridge.handleAction("workspace", old, "website-open");
     close(first.event(), old);
     close(first.event(), replacement);
     close(second.event({ ...second.frame }), replacement);

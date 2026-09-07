@@ -8,7 +8,6 @@ import {
 } from "electron";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { BrowserPermissionController } from "./browserPermissionController.js";
-import type { ViewManager } from "../viewManager.js";
 
 const SHOW_CHANNEL = "vibestudio:website-notification:show";
 const CLOSE_CHANNEL = "vibestudio:website-notification:close";
@@ -23,9 +22,15 @@ type WebsiteNotificationOptions = {
   iconUrl?: string;
 };
 
-type LiveNotification = {
-  id: string;
+export interface WebsiteNotificationOwner {
+  workspaceId: string;
   panelId: string;
+  permissions: BrowserPermissionController;
+  eventService: EventService;
+}
+
+type LiveNotification = WebsiteNotificationOwner & {
+  id: string;
   origin: string;
   contents: WebContents;
   frame: WebFrameMain;
@@ -45,9 +50,7 @@ export class WebsiteNotificationBridge {
 
   constructor(
     private readonly deps: {
-      permissions: BrowserPermissionController;
-      eventService: EventService;
-      getViewManager(): Pick<ViewManager, "findViewIdByWebContentsId"> | null;
+      resolveOwner(contents: WebContents): WebsiteNotificationOwner | null;
     }
   ) {}
 
@@ -67,9 +70,15 @@ export class WebsiteNotificationBridge {
     this.rate.clear();
   }
 
-  handleAction(id: string, actionId: string): void {
+  detachWorkspace(workspaceId: string): void {
+    for (const notification of this.owned) {
+      if (notification.workspaceId === workspaceId) this.retire(notification, false);
+    }
+  }
+
+  handleAction(workspaceId: string, id: string, actionId: string): void {
     const notification = this.live.get(id);
-    if (!notification) return;
+    if (!notification || notification.workspaceId !== workspaceId) return;
     try {
       if (actionId === "website-open") this.sendLifecycle(notification, "click");
     } finally {
@@ -90,7 +99,9 @@ export class WebsiteNotificationBridge {
     const notification: LiveNotification = {
       ...attribution,
       id: notificationId(attribution.origin),
-      tag: options.tag ? JSON.stringify([attribution.origin, options.tag]) : null,
+      tag: options.tag
+        ? JSON.stringify([attribution.workspaceId, attribution.origin, options.tag])
+        : null,
       abort: new AbortController(),
       cleanup: () => {
         attribution.contents.off("destroyed", onRetire);
@@ -112,25 +123,25 @@ export class WebsiteNotificationBridge {
     attribution.contents.on("render-process-gone", onRetire);
     attribution.contents.on("did-start-navigation", onNavigation);
     try {
-      await this.deps.permissions.refresh();
+      await notification.permissions.refresh();
       this.assertCurrent(notification);
-      if (!this.deps.permissions.isGranted(attribution.origin, "notifications")) {
+      if (!notification.permissions.isGranted(attribution.origin, "notifications")) {
         throw new Error("Website notifications are not allowed for this site");
       }
       const iconDataUrl = options.iconUrl
         ? await this.fetchIcon(notification, options.iconUrl).catch(() => undefined)
         : undefined;
       this.assertCurrent(notification);
-      if (!this.deps.permissions.isGranted(attribution.origin, "notifications")) {
+      if (!notification.permissions.isGranted(attribution.origin, "notifications")) {
         throw new Error("Website notifications are not allowed for this site");
       }
-      this.consumeRateLimit(attribution.origin);
+      this.consumeRateLimit(JSON.stringify([attribution.workspaceId, attribution.origin]));
       const prior = notification.tag ? this.tagged.get(notification.tag) : undefined;
       if (prior) this.retire(prior);
       this.assertCurrent(notification);
       this.live.set(notification.id, notification);
       if (notification.tag) this.tagged.set(notification.tag, notification);
-      this.deps.eventService.emit("notification:show", {
+      notification.eventService.emit("notification:show", {
         id: notification.id,
         type: "info",
         title,
@@ -165,6 +176,8 @@ export class WebsiteNotificationBridge {
     if (
       !notification ||
       !sender ||
+      notification.workspaceId !== sender.workspaceId ||
+      notification.panelId !== sender.panelId ||
       notification.contents !== sender.contents ||
       notification.frame !== sender.frame
     )
@@ -174,7 +187,10 @@ export class WebsiteNotificationBridge {
 
   private attribute(
     event: IpcMainInvokeEvent
-  ): Pick<LiveNotification, "panelId" | "origin" | "pageUrl" | "contents" | "frame"> | null {
+  ):
+    | (WebsiteNotificationOwner &
+        Pick<LiveNotification, "origin" | "pageUrl" | "contents" | "frame">)
+    | null {
     const contents = event.sender;
     const frame = event.senderFrame;
     if (
@@ -185,18 +201,19 @@ export class WebsiteNotificationBridge {
       frame !== contents.mainFrame
     )
       return null;
-    const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
-    if (!panelId || !this.deps.permissions.ownsContents(contents)) return null;
+    const owner = this.deps.resolveOwner(contents);
+    if (!owner || !owner.permissions.ownsContents(contents)) return null;
     const url = webUrl(frame.url);
     if (!url || frame.origin !== url.origin || webUrl(contents.getURL())?.href !== url.href)
       return null;
-    return { panelId, origin: url.origin, pageUrl: url.href, contents, frame };
+    return { ...owner, origin: url.origin, pageUrl: url.href, contents, frame };
   }
 
   private isCurrent(notification: LiveNotification): boolean {
     if (!this.started || !this.owned.has(notification) || notification.abort.signal.aborted)
       return false;
     const { contents, frame } = notification;
+    const owner = this.deps.resolveOwner(contents);
     return (
       !contents.isDestroyed() &&
       !frame.isDestroyed() &&
@@ -205,8 +222,11 @@ export class WebsiteNotificationBridge {
       frame.origin === notification.origin &&
       webUrl(frame.url)?.href === notification.pageUrl &&
       webUrl(contents.getURL())?.href === notification.pageUrl &&
-      this.deps.permissions.ownsContents(contents) &&
-      this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id) === notification.panelId
+      owner?.workspaceId === notification.workspaceId &&
+      owner.panelId === notification.panelId &&
+      owner.permissions === notification.permissions &&
+      owner.eventService === notification.eventService &&
+      owner.permissions.ownsContents(contents)
     );
   }
 
@@ -271,7 +291,7 @@ export class WebsiteNotificationBridge {
         this.tagged.delete(notification.tag);
       if (published) {
         this.live.delete(notification.id);
-        this.deps.eventService.emit("notification:dismiss", { id: notification.id });
+        notification.eventService.emit("notification:dismiss", { id: notification.id });
       }
     }
   }

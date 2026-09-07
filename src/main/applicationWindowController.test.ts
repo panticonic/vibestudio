@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { ipcMain } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PanelView } from "./panelView.js";
 import { AppOrchestrator } from "./appOrchestrator.js";
@@ -20,6 +22,8 @@ interface MockWindow {
 }
 
 interface MockViewManager {
+  findViewIdByWebContentsId: ReturnType<typeof vi.fn>;
+  getViewInfo: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
   getShellWebContents: ReturnType<typeof vi.fn>;
   onNativeSlotFocused: ReturnType<typeof vi.fn>;
@@ -61,6 +65,8 @@ const mocks = vi.hoisted(() => {
 
   const ViewManager = vi.fn(() => {
     const viewManager = {
+      findViewIdByWebContentsId: vi.fn(),
+      getViewInfo: vi.fn(),
       destroy: vi.fn(() => lifecycleEvents.push("view:destroy")),
       onNativeSlotFocused: vi.fn(),
       onViewCrashed: vi.fn(),
@@ -95,6 +101,8 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   app: { setBadgeCount: mocks.setBadgeCount },
+  ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  nativeImage: {},
   BaseWindow: mocks.BaseWindow,
   nativeTheme: { shouldUseDarkColors: false },
 }));
@@ -161,6 +169,74 @@ describe("ApplicationWindowController window lifetime", () => {
     mocks.lifecycleEvents.length = 0;
     mocks.windows.length = 0;
     mocks.viewManagers.length = 0;
+  });
+
+  it("routes browser notification IPC through native workspace ownership without Personal", async () => {
+    const harness = createHarness();
+    harness.controller.create();
+    const manager = mocks.viewManagers[0]!;
+    const sources = ["system", "shared"].map((workspaceId, id) => {
+      const frame = {
+        url: "https://site.test/",
+        origin: "https://site.test",
+        detached: false,
+        isDestroyed: () => false,
+        send: vi.fn(),
+      };
+      const contents = Object.assign(new EventEmitter(), {
+        id,
+        mainFrame: frame,
+        isDestroyed: () => false,
+        getURL: () => frame.url,
+      });
+      const eventService = { emit: vi.fn() };
+      const permissions = {
+        refresh: vi.fn(async () => undefined),
+        isGranted: vi.fn(() => true),
+        ownsContents: (candidate: unknown) => candidate === contents,
+      };
+      harness.controller.attachWorkspaceServices({
+        serverSession: { workspaceId },
+        eventService,
+        getBrowserPermissionController: () => permissions,
+      } as unknown as WorkspaceWindowServices);
+      return { workspaceId, frame, contents, eventService, permissions };
+    });
+    manager.findViewIdByWebContentsId.mockImplementation((id: number) => `native-${id}`);
+    manager.getViewInfo.mockImplementation((id: string) => ({
+      workspaceIdentity: {
+        workspaceId: sources[Number(id.slice(7))]!.workspaceId,
+        runtimeId: "same-panel",
+      },
+    }));
+    const show = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find(([name]) => name === "vibestudio:website-notification:show")![1];
+    for (const source of sources) {
+      const id = await show(
+        { sender: source.contents, senderFrame: source.frame } as never,
+        "Hello",
+        {}
+      );
+      expect(source.permissions.refresh).toHaveBeenCalledOnce();
+      expect(source.eventService.emit).toHaveBeenCalledWith(
+        "notification:show",
+        expect.objectContaining({ id, sourcePanelId: "same-panel" })
+      );
+      harness.controller.handleWebsiteNotificationAction("absent", id, "website-open");
+      expect(source.frame.send).not.toHaveBeenCalled();
+      harness.controller.handleWebsiteNotificationAction(source.workspaceId, id, "website-open");
+      expect(source.frame.send).toHaveBeenCalledTimes(2);
+    }
+    mocks.windows[0]!.emit("closed");
+    expect(ipcMain.removeHandler).toHaveBeenCalledWith("vibestudio:website-notification:show");
+    harness.controller.create();
+    expect(
+      vi
+        .mocked(ipcMain.handle)
+        .mock.calls.filter(([name]) => name === "vibestudio:website-notification:show")
+    ).toHaveLength(2);
+    mocks.windows[1]!.emit("closed");
   });
 
   it("keeps panel link failures with their originating workspace", () => {

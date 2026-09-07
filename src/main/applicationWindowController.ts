@@ -12,6 +12,7 @@ import type { BrowserFaviconObserver } from "./services/browserFaviconObserver.j
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import type { ApprovalAttention } from "./approvalAttention.js";
 import type { SessionConnection, WorkspaceSessionConnection } from "./serverSession.js";
+import { WebsiteNotificationBridge } from "./services/websiteNotificationBridge.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
 import { AppOrchestrator } from "./appOrchestrator.js";
 import {
@@ -64,6 +65,7 @@ interface ApplicationWindowLifetime {
   viewManager: ViewManager;
   panelViews: Map<string, PanelView>;
   appOrchestrator: AppOrchestrator | null;
+  websiteNotifications: WebsiteNotificationBridge;
   closed: boolean;
 }
 
@@ -111,6 +113,7 @@ export class ApplicationWindowController {
 
   detachWorkspace(workspaceId: string): void {
     const lifetime = this.currentLifetime;
+    lifetime?.websiteNotifications.detachWorkspace(workspaceId);
     if (workspaceId === this.deps.getSystemWorkspaceId()) {
       this.deps.stopElectronHostTargetLaunchLoop();
       if (lifetime) lifetime.appOrchestrator = null;
@@ -128,6 +131,11 @@ export class ApplicationWindowController {
       lifetime.viewManager.setWorkspaceProtectedViews(workspaceId, new Set());
     }
     if (this.focusedWorkspaceId === workspaceId) this.focusedWorkspaceId = null;
+  }
+
+  handleWebsiteNotificationAction(workspaceId: string, id: string, actionId: string): void {
+    if (!this.workspaceServices.has(workspaceId)) return;
+    this.currentLifetime?.websiteNotifications.handleAction(workspaceId, id, actionId);
   }
 
   get appOrchestrator(): AppOrchestrator | null {
@@ -203,14 +211,34 @@ export class ApplicationWindowController {
     });
     if (this.deps.onCodeIdentityChanged)
       viewManager.onCodeIdentityChanged(this.deps.onCodeIdentityChanged);
+    const websiteNotifications = new WebsiteNotificationBridge({
+      resolveOwner: (contents) => {
+        const nativeId = viewManager.findViewIdByWebContentsId(contents.id);
+        const identity = nativeId
+          ? viewManager.getViewInfo(nativeId)?.workspaceIdentity
+          : undefined;
+        if (!identity) return null;
+        const owner = this.workspaceServices.get(identity.workspaceId);
+        const permissions = owner?.getBrowserPermissionController();
+        if (!owner || !permissions) return null;
+        return {
+          workspaceId: identity.workspaceId,
+          panelId: identity.runtimeId,
+          permissions,
+          eventService: owner.eventService,
+        };
+      },
+    });
     const lifetime: ApplicationWindowLifetime = {
       window,
       viewManager,
       panelViews: new Map(),
       appOrchestrator: null,
+      websiteNotifications,
       closed: false,
     };
     this.currentLifetime = lifetime;
+    websiteNotifications.start();
     // Native→shell focus feedback (§5.2): surface native view focus
     // transitions so the shell's layout focus follows every route, not just
     // shell-initiated clicks. Cleared with the viewManager on window teardown.
@@ -466,6 +494,7 @@ export class ApplicationWindowController {
   private teardownLifetime(lifetime: ApplicationWindowLifetime): void {
     if (lifetime.closed) return;
     lifetime.closed = true;
+    lifetime.websiteNotifications.stop();
     for (const releases of this.workspaceViewReleases.values())
       for (const release of releases) release();
     this.workspaceViewReleases.clear();

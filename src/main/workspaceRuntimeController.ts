@@ -136,7 +136,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     ReturnType<typeof import("./personalBrowserServices.js").registerPersonalBrowserServices>
   > | null = null;
   const handleNotificationAction = async (id: string, actionId: string) => {
-    personalBrowser?.onNotificationAction(id, actionId);
+    deps.window.handleWebsiteNotificationAction(connection.workspaceId, id, actionId);
     if (actionId.startsWith("oauth-cancel:")) {
       await connection.serverClient.call("credentials", "cancelOAuth", [
         { transactionId: actionId.slice("oauth-cancel:".length) },

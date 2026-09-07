@@ -67,12 +67,41 @@ CDP coverage (`8be57b927`, 24 tests) proves bounded screenshots remain available
 raw mutable endpoint acquisition is rejected. The debug workflow documents that
 distinction; this does not establish an unrestricted read-only DOM automation API.
 
-A separate owned agentic sweep is running toward at least 50 distinct scenarios.
-Its early directory-operation failures exposed missing discoverability of scoped
-runtime filesystem operations, not grounds to pre-authorize native shell execution.
-Startup performance profiling uses another owned instance and coordinates measurement
-windows with the sweep. Neither activity is complete; record final run IDs, failures,
-repairs, measurements and cleanup before claiming their acceptance gates passed.
+The owned agentic sweep has completed 50 distinct scenarios: 44 clean passes,
+five failures and one semantic pass with an unexpected recovered tool failure.
+Fresh repaired directory-operation and worker-environment cases pass; the remaining
+failed cases and atomic generated-app/store acceptance are still being repaired and
+verified. Directory failures exposed missing discoverability of scoped runtime
+filesystem operations. The remove scenario asks only for a temporary tree; the agent
+invented an OS `/tmp` path after reading terminal guidance. Repair that owning guidance
+and preserve the scoped filesystem validator, rather than granting native shell access.
+The sweep's owned instance remains active; final cleanup is required.
+
+A wider notification audit found that the multi-workspace refactor retained the old
+Personal-only bridge lifecycle. Every browser page exposes the notification API, but
+its sole native handler started only when Personal cookie projection became ready,
+and attributed every request through Personal's permission controller. Thus other
+workspaces could not use their own granted website notifications, and a Personal
+browser-data outage disabled the unrelated feature. Single-workspace document tests
+missed the integration defect. The bridge now belongs to the application window and
+resolves the actual native view's workspace through the existing workspace-service
+registry. Permissions, event delivery, panel IDs, actions and tag replacement stay
+with that captured owner; workspace detach and window close retire their notifications.
+Focused tests cover System/ordinary workspaces without Personal, identical panel IDs
+and tags, session replacement, cross-workspace actions and window recreation, retaining
+the prior document-lifetime cases. All 42 focused tests and host typechecks pass;
+native acceptance of this change remains outstanding. Mobile has no website
+Notification bridge yet; its app/server notifications are a different feature, so
+this desktop correction does not establish mobile website-notification parity.
+
+The latest native replay on host `9f7258c79` / Base `37efea3` passes cold onboarding,
+reconnect and strict renderer diagnostics, but fails at the bounded wait for the
+owner's member-removal approval card. The harness used ambient workspace selection
+for browser creation and removal; captured workspace/panel targeting is being repaired.
+GC retention failures also lacked their already-captured provider identity/error in
+logs; diagnostics must preserve that evidence without suppressing failure. The failed
+run's owned applications, hub and temporary state were cleaned up. No shared-member
+revocation acceptance is claimed yet.
 
 The broad sweep also exposed host rebuild cleanup deleting the Node executable and
 MXC launcher used by already-running instances. Host `7a5d36dc8` and `71a6d1fde`
