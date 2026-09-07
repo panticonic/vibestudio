@@ -876,11 +876,9 @@ async function dismissConnectionDialog(app) {
       try {
         return await contents.executeJavaScript(
           `(() => {
-              const dialog = document.querySelector('[role="dialog"]');
-              const text = dialog?.textContent ?? "";
-              if (!/paired devices/i.test(text)) return false;
-              const close = Array.from(dialog.querySelectorAll("button"))
-                .find((button) => button.textContent?.trim() === "Close");
+              const close = document.querySelector(
+                '[role="dialog"] button[aria-label="Close settings"]'
+              );
               if (!(close instanceof HTMLButtonElement) || close.disabled) return false;
               close.click();
               return true;
@@ -1216,8 +1214,9 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
     }
     await sleep(250);
   }
+  const failureScreenshot = await saveScreenshot(app).catch(() => null);
   throw new Error(
-    `Personal ${expectedSource} did not complete its native experience within the acceptance deadline: ${JSON.stringify(latestObservation)}`
+    `Personal ${expectedSource} did not complete its native experience within the acceptance deadline: ${JSON.stringify(latestObservation)}; screenshot: ${failureScreenshot}`
   );
 }
 
