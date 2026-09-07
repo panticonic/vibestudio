@@ -1,6 +1,8 @@
-/** Presentation only: each request's authority and handlers remain with its workspace. */
+import { rpcDestinationKey, type RpcDestination } from "@vibestudio/rpc";
+
+/** Presentation only: authority and decision handlers remain with the RPC owner. */
 export interface ApprovalPresentationItem {
-  workspaceId: string;
+  owner: RpcDestination;
   approvalId: string;
   actionable: boolean;
 }
@@ -12,9 +14,9 @@ export interface ApprovalPresentationState {
 }
 
 export function approvalPresentationKey(
-  item: Pick<ApprovalPresentationItem, "workspaceId" | "approvalId">
+  item: Pick<ApprovalPresentationItem, "owner" | "approvalId">
 ): string {
-  return JSON.stringify([item.workspaceId, item.approvalId]);
+  return JSON.stringify([rpcDestinationKey(item.owner), item.approvalId]);
 }
 
 export function createApprovalPresentationState(): ApprovalPresentationState {

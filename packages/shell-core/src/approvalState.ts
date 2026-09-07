@@ -69,7 +69,7 @@ export function createApprovalStateController(
       }
       return filter(pending);
     } catch (error) {
-      deps.onError?.(error, `refresh:${reason}`);
+      if (!disposed && seq === refreshSeq) deps.onError?.(error, `refresh:${reason}`);
       return [];
     }
   };

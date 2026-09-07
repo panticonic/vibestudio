@@ -127,7 +127,7 @@ export function createApprovalAttention(deps: {
     );
     const key = (entry: (typeof runtimePending)[number]) =>
       approvalPresentationKey({
-        workspaceId: entry.workspaceId,
+        owner: { kind: "workspace", workspaceId: entry.workspaceId },
         approvalId: entry.approval.approvalId,
       });
     const fresh = runtimePending.filter((entry) => !knownIds.has(key(entry)));

@@ -7,10 +7,27 @@ import {
   stepApprovalPresentation as step,
 } from "./approvalPresentation";
 
-const personal = { workspaceId: "personal", approvalId: "same-id", actionable: true };
-const system = { workspaceId: "system", approvalId: "same-id", actionable: true };
+const personal = {
+  owner: { kind: "workspace" as const, workspaceId: "personal" },
+  approvalId: "same-id",
+  actionable: true,
+};
+const system = {
+  owner: { kind: "workspace" as const, workspaceId: "system" },
+  approvalId: "same-id",
+  actionable: true,
+};
 
 describe("shared approval presentation", () => {
+  it("distinguishes a server request from a workspace named hub", () => {
+    const hub = { owner: { kind: "hub" as const }, approvalId: "same-id", actionable: true };
+    const workspace = { ...hub, owner: { kind: "workspace" as const, workspaceId: "hub" } };
+    const state = reconcile(createApprovalPresentationState(), [hub, workspace]);
+    expect(key(hub)).not.toBe(key(workspace));
+    expect(state.actionableKeys.size).toBe(2);
+    expect(step(state, [hub, workspace], 1).selectedKey).toBe(key(workspace));
+    expect(reconcile(state, [workspace]).selectedKey).toBe(key(workspace));
+  });
   it("keeps colliding IDs separate and retains the answer being composed when another workspace asks", () => {
     const first = reconcile(createApprovalPresentationState(), [personal]);
     const next = reconcile(first, [personal, system]);

@@ -22,6 +22,59 @@ function approval(approvalId: string): PendingApproval {
 }
 
 describe("approvalState", () => {
+  it.each(["event", "stop"] as const)(
+    "does not report an obsolete refresh failure after %s supersedes it",
+    async (superseding) => {
+      let rejectPending!: (error: Error) => void;
+      let listener!: (payload: unknown) => void;
+      const onError = vi.fn();
+      const onChange = vi.fn();
+      const controller = createApprovalStateController({
+        listPending: () =>
+          new Promise((_, reject) => {
+            rejectPending = reject;
+          }),
+        subscribePendingChanged: async () => {},
+        onPendingChanged: (next) => {
+          listener = next;
+          return () => {};
+        },
+        onChange,
+        onError,
+      });
+      controller.start();
+      await vi.waitFor(() => expect(rejectPending).toBeDefined());
+      const pending = [approval("current")];
+      if (superseding === "event") listener({ pending });
+      else controller.stop();
+      rejectPending(new Error("Old connection closed"));
+      await Promise.resolve();
+      expect(onError).not.toHaveBeenCalled();
+      if (superseding === "event") expect(onChange).toHaveBeenLastCalledWith(pending, "event");
+      else expect(onChange).not.toHaveBeenCalled();
+      controller.stop();
+    }
+  );
+
+  it("reports a current refresh failure without replacing the queue with an empty snapshot", async () => {
+    const error = new Error("Approval service unavailable");
+    const onError = vi.fn();
+    const onChange = vi.fn();
+    const controller = createApprovalStateController({
+      listPending: async () => {
+        throw error;
+      },
+      subscribePendingChanged: async () => {},
+      onPendingChanged: () => () => {},
+      onChange,
+      onError,
+    });
+    await controller.refresh();
+    expect(onError).toHaveBeenCalledWith(error, "refresh:manual");
+    expect(onChange).not.toHaveBeenCalled();
+    controller.stop();
+  });
+
   it("parses pending snapshots and signatures", () => {
     const pending = [approval("a1"), approval("a2")];
     expect(pendingApprovalsFromEventPayload({ pending })).toBe(pending);
