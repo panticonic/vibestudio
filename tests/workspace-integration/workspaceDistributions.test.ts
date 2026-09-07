@@ -71,6 +71,7 @@ describe("the shipped workspace source boundaries", () => {
       const files = new Set(prepared.files.map((file) => file.path));
       expect(files.has("meta/vibestudio.yml")).toBe(true);
       expect(files.has("about/new/index.tsx")).toBe(true);
+      expect(files.has("about/help/index.tsx")).toBe(true);
       expect(files.has("skills/templates/SKILL.md")).toBe(true);
       expect(prepared.repositories).not.toContain("extensions/template-composer");
       expect(prepared.repositories).not.toContain("packages/template-composer");

@@ -7,7 +7,7 @@ import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceD
 import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ApprovalTargetIdentity } from "@vibestudio/shared/approvals";
-import { callerHasAppCapability } from "./chromeTrust.js";
+import { isInteractiveChrome } from "./chromeTrust.js";
 import { prepareContextBoundarySelection, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
@@ -155,7 +155,7 @@ export async function preparePanelAccessAuthority(
   op: PanelAccessOperation,
   target: PanelAccessPermissionTarget
 ): Promise<PreparedAuthoritySelection[]> {
-  if (isOpenPanelOperation(op) || callerHasAppCapability(ctx.caller, "panel-hosting", deps)) {
+  if (isOpenPanelOperation(op) || isInteractiveChrome(ctx.caller, deps)) {
     return [];
   }
   const isAgentCaller = ctx.caller.runtime.kind === "agent";

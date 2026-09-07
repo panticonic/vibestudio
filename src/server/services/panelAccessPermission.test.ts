@@ -71,6 +71,44 @@ describe("preparePanelAccessAuthority", () => {
     ).resolves.toEqual([]);
   });
 
+  it.each(["shell", "electron-main", "shell:paired-device"])(
+    "keeps admitted interactive chrome %s as the initiator of panel creation",
+    async (id) => {
+      const resolveSubjectCaller = vi.fn(() => caller);
+      const chrome = createVerifiedCaller(id, "shell");
+      await expect(
+        preparePanelAccessAuthority(
+          deps({ resolveSubjectCaller }),
+          { caller: chrome },
+          "openPanel",
+          { id: "parent", runtimeEntityId: "parent-runtime", requestedContextId: "ctx-new-panel" }
+        )
+      ).resolves.toEqual([]);
+      expect(resolveSubjectCaller).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["server", "server"],
+    ["headless-host", "shell"],
+    ["untrusted-ui", "shell"],
+  ] as const)("retains the initiating panel boundary for non-interactive %s", async (id, kind) => {
+    const resolveSubjectCaller = vi.fn(() => caller);
+    await expect(
+      preparePanelAccessAuthority(
+        deps({ resolveSubjectCaller }),
+        { caller: createVerifiedCaller(id, kind) },
+        "openPanel",
+        { id: "parent", runtimeEntityId: "parent-runtime", requestedContextId: "ctx-new-panel" }
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        resourceKey: contextBoundaryResourceKey("ctx-new-panel", "panel:requester"),
+      }),
+    ]);
+    expect(resolveSubjectCaller).toHaveBeenCalledWith("parent-runtime");
+  });
+
   it("selects a gated exact context leaf for ordinary foreign targets", async () => {
     await expect(
       preparePanelAccessAuthority(deps(), ctx, "cdp", {
