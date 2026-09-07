@@ -84,17 +84,6 @@ async function visibleCard(app, approvalId) {
   return (await visibleCards(app, approvalId))[0] ?? null;
 }
 
-async function visibleApprovalCardMatching(app, pattern) {
-  for (const page of app.context().pages()) {
-    if (page.isClosed()) continue;
-    for (const card of await page.locator("[data-approval-card]").all()) {
-      if (!(await card.isVisible())) continue;
-      if (pattern.test((await card.innerText()).replace(/\s+/g, " "))) return card;
-    }
-  }
-  return null;
-}
-
 /** Additional native acceptance using the smoke's existing launch/cleanup owner.
  * launchMember must isolate both profile and native credential-store state and
  * register the application for teardown before waiting for its readiness.
@@ -124,7 +113,7 @@ export async function runSharedMemberRevocation({
   ]);
   const memberApp = await launchMember(invitation.pairing.deepLink);
   const member = await chromePage(memberApp, deadline);
-  await prepareWorkspace(memberApp, workspace);
+  const memberWorkspace = await prepareWorkspace(memberApp, workspace);
   const membership = await nativeRpc(owner, undefined, "hubControl.listWorkspaceMembers", [
     { workspace: workspaceName },
   ]);
@@ -142,11 +131,11 @@ export async function runSharedMemberRevocation({
         })),
       })}`
     );
-  const panel = await memberApp.evaluate(async () => {
+  const panel = await memberApp.evaluate(async (parentId) => {
     const testApi = globalThis.__testApi;
     if (!testApi) throw new Error("Native test API is unavailable");
-    return testApi.createBrowserPanel(null, "https://example.com", { focus: true });
-  });
+    return testApi.createBrowserPanel(parentId, "https://example.com", { focus: true });
+  }, memberWorkspace.panelId);
   const epoch = randomUUID();
   let settledRequest;
   const requestOutcome = nativeRpc(
@@ -243,9 +232,24 @@ export async function runSharedMemberRevocation({
       `Removing a workspace member did not require explicit owner approval: ${removalChallenge ?? "call succeeded"}`
     );
   }
+  const removalPending = await until(
+    async () => {
+      const workspaces = await nativeRpc(owner, undefined, "hubControl.listWorkspaces", []);
+      for (const candidate of workspaces) {
+        const rows = await nativeRpc(owner, candidate.workspaceId, "shellApproval.listPending", []);
+        const pending = rows.find(
+          (entry) => entry.kind === "capability" && entry.title === "Remove a workspace member"
+        );
+        if (pending) return { pending, workspaceId: candidate.workspaceId };
+      }
+      return null;
+    },
+    "waiting for the owner's member-removal approval",
+    deadline
+  );
   const removalCard = await until(
     async () => {
-      const displayed = await visibleApprovalCardMatching(ownerApp, /Remove a workspace member/i);
+      const displayed = await visibleCard(ownerApp, removalPending.pending.approvalId);
       if (displayed) return displayed;
       for (const page of ownerApp.context().pages()) {
         if (page.isClosed()) continue;
@@ -331,6 +335,7 @@ export async function runSharedMemberRevocation({
     workspaceId: workspace.workspaceId,
     memberUserId: invitation.user.userId,
     approvalId: pending.approvalId,
+    removalApprovalWorkspaceId: removalPending.workspaceId,
     visibleBeforeRevocation: true,
     ordinaryMember: true,
     ownerCouldNotSeePrivateApproval: true,

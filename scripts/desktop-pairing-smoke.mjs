@@ -2011,7 +2011,12 @@ async function main() {
             );
             if (state.status === "resolved" || state.status === "not-required") {
               await waitForShellOverlayCleared(app, Math.max(1000, deadlineMs - Date.now()));
-              return;
+              const panelIds = await workspaceTreeIds(
+                app,
+                workspace.name,
+                Math.max(1000, deadlineMs - Date.now())
+              );
+              return { panelId: panelIds[0] };
             }
             if (state.status === "failed") throw new Error(state.error);
             await clickDesktopButton(app, /^Add to workspace$/i);

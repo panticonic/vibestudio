@@ -62,8 +62,11 @@ export class GcEpochCoordinator {
       const buildPreparation = await this.deps.buildSystem.prepareGc({ epoch });
       const retention = buildPreparation.report;
       if (!retention.complete) {
+        const providerFailures = retention.providerFailures
+          .map(({ provider, error }) => `${provider}: ${error}`)
+          .join("; ");
         throw new Error(
-          `build retention root snapshot is incomplete (${retention.providerFailures.length} provider failure${retention.providerFailures.length === 1 ? "" : "s"}, ${retention.unresolvedAuthoritativeRootBuildKeys.length} unresolved authoritative root${retention.unresolvedAuthoritativeRootBuildKeys.length === 1 ? "" : "s"})`
+          `build retention root snapshot is incomplete (${retention.providerFailures.length} provider failure${retention.providerFailures.length === 1 ? "" : "s"}, ${retention.unresolvedAuthoritativeRootBuildKeys.length} unresolved authoritative root${retention.unresolvedAuthoritativeRootBuildKeys.length === 1 ? "" : "s"})${providerFailures ? `: ${providerFailures}` : ""}`
         );
       }
       if (retention.unresolvedAuthoritativeRootBuildKeys.length > 0) {

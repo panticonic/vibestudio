@@ -71,6 +71,25 @@ describe("GcEpochCoordinator", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it("reports the provider identity and error when a retention snapshot is incomplete", async () => {
+    const logger = { warn: vi.fn() };
+    const coordinator = new GcEpochCoordinator({
+      buildSystem: {
+        prepareGc: vi.fn(async () => preparedBuild(retention([], false))),
+        peekBuildByKey: vi.fn(),
+      } as never,
+      workspaceVcs: { attached: true, prepareGc: vi.fn() } as never,
+      publicationJournal: publicationJournal(),
+      logger,
+    });
+
+    await expect(coordinator.runOnce()).resolves.toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[GcEpochCoordinator] GC run failed",
+      expect.objectContaining({ message: expect.stringContaining("app-registry: offline") })
+    );
+  });
+
   it("snapshots rooted build metadata before preserving its source composition root", async () => {
     const key = "build:retained";
     const content = preparedContent();
