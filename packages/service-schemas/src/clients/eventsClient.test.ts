@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RpcCaller } from "@vibestudio/rpc";
+import { RemoteRpcError, type RpcCaller } from "@vibestudio/rpc";
 import {
   encodeEventWatchRecord,
   type EventName,
@@ -231,6 +231,33 @@ describe("EventsClient", () => {
     ]);
     await client.unsubscribeAll();
   });
+
+  it.each(["transport", "access"] as const)(
+    "keeps desired topics while reporting a %s retry appropriately",
+    async (kind) => {
+      vi.useFakeTimers();
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const failure = new RemoteRpcError("temporarily unavailable", kind, "CONNECTION_LOST");
+      fixture.stream.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+      try {
+        await expect(client.subscribe("panel-tree-invalidated")).rejects.toBe(failure);
+        await vi.advanceTimersByTimeAsync(250);
+        if (kind === "transport") expect(warning).not.toHaveBeenCalled();
+        else
+          expect(warning).toHaveBeenCalledWith(
+            "[EventsClient] event watch recovery failed:",
+            failure
+          );
+        await vi.advanceTimersByTimeAsync(500);
+        expect(fixture.stream).toHaveBeenCalledTimes(3);
+        expect(fixture.stream.mock.calls[2]?.[2]?.[0]).toEqual(["panel-tree-invalidated"]);
+      } finally {
+        await client.unsubscribeAll();
+        warning.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("reopens desired topics after an unexpected terminal close", async () => {
     await client.subscribe("panel-tree-invalidated");

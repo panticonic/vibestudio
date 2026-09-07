@@ -44,7 +44,13 @@ export type {
   RpcErrorKind,
   RpcErrorData,
 } from "./types.js";
-export { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
+export {
+  RemoteRpcError,
+  RpcBoundaryError,
+  rpcErrorDataOf,
+  rpcErrorKindOf,
+  isRpcConnectionLost,
+} from "./errors.js";
 export type {
   AuthorizationContext,
   AuthorizationOrigin,

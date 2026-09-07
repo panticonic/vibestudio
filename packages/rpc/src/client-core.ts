@@ -31,7 +31,7 @@ import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
-import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
+import { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import {
   bindExecutionSession,
   executionSessionNonceFor,
@@ -398,10 +398,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     }, entry.bodyIdleTimeoutMs);
   }
 
-  function makeConnectionLostError(): ErrorWithCode {
-    const err = new Error(CONNECTION_LOST_MESSAGE) as ErrorWithCode;
-    err.code = SESSION_CONNECTION_LOST_CODE;
-    return err;
+  function makeConnectionLostError(): RpcBoundaryError {
+    return new RpcBoundaryError(CONNECTION_LOST_MESSAGE, "transport", SESSION_CONNECTION_LOST_CODE);
   }
 
   // Reject + remove every pending request whose target matches `predicate`,

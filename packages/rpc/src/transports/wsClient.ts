@@ -21,6 +21,8 @@ import {
 } from "../protocol/rpcWebSocketAdmission.js";
 import { webSocketAuthProtocol } from "../protocol/webSocketAuthProtocol.js";
 import { base64ToBytes, bytesToBase64 } from "../base64.js";
+import { RpcBoundaryError } from "../errors.js";
+import { SESSION_CONNECTION_LOST_CODE } from "../protocol/remoteSession.js";
 import {
   decodeFramedStream,
   encodeFrame,
@@ -57,8 +59,8 @@ function randomId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function errorWithCode(message: string, code: string): Error {
-  return Object.assign(new Error(message), { code });
+function connectionLostError(message: string): RpcBoundaryError {
+  return new RpcBoundaryError(message, "transport", SESSION_CONNECTION_LOST_CODE);
 }
 
 function asError(error: unknown): Error {
@@ -128,7 +130,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   const sendWireMessage = (message: WsClientMessage): void => {
     const current = socket;
     if (!current || current.readyState !== OPEN || !authenticated) {
-      throw errorWithCode("Not connected to server", "CONNECTION_LOST");
+      throw connectionLostError("Not connected to server");
     }
     current.send(JSON.stringify(message));
   };
@@ -586,11 +588,11 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         ? new Set(config.terminalCloseCodes)
         : TERMINAL_CLOSE_CODES;
       if (closed || terminalCodes.has(event.code ?? 0) || config.reconnect === false) {
-        failNativeStreams(errorWithCode("Connection lost during streaming RPC", "CONNECTION_LOST"));
+        failNativeStreams(connectionLostError("Connection lost during streaming RPC"));
         setStatus("disconnected");
         return;
       }
-      failNativeStreams(errorWithCode("Connection lost during streaming RPC", "CONNECTION_LOST"));
+      failNativeStreams(connectionLostError("Connection lost during streaming RPC"));
       scheduleReconnect(socketGeneration);
     };
   };
@@ -641,7 +643,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     },
     async close(): Promise<void> {
       closed = true;
-      failNativeStreams(errorWithCode("RPC client closed", "CONNECTION_LOST"));
+      failNativeStreams(connectionLostError("RPC client closed"));
       clearReconnectTimer();
       admissionAbortController?.abort();
       admissionAbortController = null;

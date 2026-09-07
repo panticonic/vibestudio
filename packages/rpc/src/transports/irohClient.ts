@@ -133,6 +133,8 @@ export interface IrohClientSessionOptions {
 export interface IrohClientSession extends EnvelopeRpcTransport {
   callerId(): string | null;
   isClosed(): boolean;
+  status(): RpcConnectionStatus;
+  onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;
   close(): Promise<void>;
 }
 

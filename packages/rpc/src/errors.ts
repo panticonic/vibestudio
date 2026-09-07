@@ -1,4 +1,14 @@
 import type { RpcErrorData, RpcErrorKind } from "./types.js";
+import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
+
+/** Routine logical-session loss; callers still own recovery and mutation policy. */
+export function isRpcConnectionLost(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  return (
+    error.code === SESSION_CONNECTION_LOST_CODE &&
+    (!("errorKind" in error) || error.errorKind === "transport")
+  );
+}
 
 /** Locally categorized failure ready to cross an RPC boundary. */
 export class RpcBoundaryError extends Error {

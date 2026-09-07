@@ -1152,6 +1152,7 @@ describe("createRpcClient — pending-call policy (§3.4)", () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toBe("Connection lost before the response arrived");
     expect(err.code).toBe("CONNECTION_LOST");
+    expect(err).toMatchObject({ errorKind: "transport" });
   });
 
   it("rejects direct-server pendings as soon as a reconnecting transport leaves connected", async () => {

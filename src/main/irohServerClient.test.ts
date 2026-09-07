@@ -37,6 +37,10 @@ class FakeSession implements IrohClientSession {
     return "connected";
   }
 
+  onStatusChange(_handler: (status: RpcConnectionStatus) => void): () => void {
+    return () => undefined;
+  }
+
   send(_envelope: RpcEnvelope): Promise<void> {
     return Promise.resolve();
   }

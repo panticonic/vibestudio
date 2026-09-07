@@ -6,7 +6,7 @@
  * Direct-address events are delivered by the authenticated RPC transport and
  * broadcast events are delivered by the owned watch response.
  */
-import type { RpcCaller, RpcClient } from "@vibestudio/rpc";
+import { isRpcConnectionLost, type RpcCaller, type RpcClient } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
@@ -239,7 +239,8 @@ export class EventsClient {
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.queueRefresh().catch((error: unknown) => {
-        console.warn("[EventsClient] event watch recovery failed:", error);
+        if (!isRpcConnectionLost(error))
+          console.warn("[EventsClient] event watch recovery failed:", error);
       });
     }, delayMs);
     (this.retryTimer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
