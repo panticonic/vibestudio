@@ -1,5 +1,5 @@
 import { readWorkspacePushScope } from "./workspacePushScope.js";
-import type { ChannelInvite } from "./channelInvites.js";
+import { ChannelInviteSchema, type ChannelInvite } from "./channelInvites.js";
 
 /**
  * Durable, account-scoped userland notification.
@@ -54,6 +54,7 @@ export const AGENT_MESSAGE_NOTIFICATION_KIND = "agent.message";
 
 export interface AgentMessageNotificationData {
   channelId: string;
+  channelTargetId: string;
   /**
    * The sender's message id — deliberately the correlation key the channel's
    * read receipts already use, so "the user read it" and "the entry retires"
@@ -69,8 +70,9 @@ export interface AgentMessageNotificationData {
 /**
  * FCM data payload for a pushed inbox entry (messaging plan §4.5 step 5,
  * §4.10.9). Values are strings because FCM data maps are string-only. The
- * device deep-links to `{channelId, messageId}` and, on open, acknowledges
- * `notificationId` — the same acknowledgement any other surface would make.
+ * device deep-links to the producer-owned channel target and envelope, then
+ * acknowledges `notificationId` — the same acknowledgement any other surface
+ * would make.
  */
 export type PushUserInboxDataPayload = import("./workspacePushScope.js").WorkspacePushScope & {
   kind: "user-inbox";
@@ -80,6 +82,7 @@ export type PushUserInboxDataPayload = import("./workspacePushScope.js").Workspa
   body?: string;
   priority: "normal" | "high";
   channelId?: string;
+  channelTargetId?: string;
   messageId?: string;
   senderParticipantId?: string;
   senderHandle?: string;
@@ -88,11 +91,15 @@ export type PushUserInboxDataPayload = import("./workspacePushScope.js").Workspa
 export function isPushUserInboxDataPayload(value: unknown): value is PushUserInboxDataPayload {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return (
+  const base =
     readWorkspacePushScope(record) !== null &&
     record["kind"] === "user-inbox" &&
     typeof record["notificationId"] === "string" &&
-    typeof record["title"] === "string"
+    typeof record["title"] === "string";
+  if (!base) return false;
+  return (
+    record["inboxKind"] !== AGENT_MESSAGE_NOTIFICATION_KIND ||
+    (typeof record["channelTargetId"] === "string" && record["channelTargetId"].trim().length > 0)
   );
 }
 
@@ -110,10 +117,13 @@ export function agentMessageNotificationData(
   if (!data || typeof data !== "object") return null;
   const record = data as Record<string, unknown>;
   const channelId = record["channelId"];
+  const channelTargetId = record["channelTargetId"];
   const messageId = record["messageId"];
   const senderParticipantId = record["senderParticipantId"];
   if (
     typeof channelId !== "string" ||
+    typeof channelTargetId !== "string" ||
+    !channelTargetId.trim() ||
     typeof messageId !== "string" ||
     typeof senderParticipantId !== "string"
   ) {
@@ -122,6 +132,7 @@ export function agentMessageNotificationData(
   const handle = record["senderHandle"];
   return {
     channelId,
+    channelTargetId,
     messageId,
     senderParticipantId,
     ...(typeof handle === "string" ? { senderHandle: handle } : {}),
@@ -154,24 +165,6 @@ export function channelInviteFromNotification(
 ): ChannelInvite | null {
   if (notification.kind !== CHANNEL_INVITE_NOTIFICATION_KIND) return null;
   const value = notification.data;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  if (
-    typeof row["channelId"] !== "string" ||
-    typeof row["userId"] !== "string" ||
-    typeof row["memberId"] !== "string" ||
-    typeof row["handle"] !== "string" ||
-    typeof row["addedBy"] !== "string" ||
-    typeof row["addedAt"] !== "number"
-  ) {
-    return null;
-  }
-  return {
-    channelId: row["channelId"],
-    userId: row["userId"],
-    memberId: row["memberId"],
-    handle: row["handle"],
-    addedBy: row["addedBy"],
-    addedAt: row["addedAt"],
-  };
+  const parsed = ChannelInviteSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }

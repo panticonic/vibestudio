@@ -52,6 +52,7 @@ export function userInboxPushData(
     ...(request.body ? { body: request.body } : {}),
     priority: request.priority ?? "normal",
     ...(request.channelId ? { channelId: request.channelId } : {}),
+    ...(request.channelTargetId ? { channelTargetId: request.channelTargetId } : {}),
     ...(request.messageId ? { messageId: request.messageId } : {}),
     ...(request.senderParticipantId ? { senderParticipantId: request.senderParticipantId } : {}),
     ...(request.senderHandle ? { senderHandle: request.senderHandle } : {}),

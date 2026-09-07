@@ -36,8 +36,9 @@ export const UserInboxPushRequestSchema = z
     body: z.string().optional(),
     /** `high` marks the sender's `interrupt` rung; `normal` is the `inbox` rung. */
     priority: z.enum(["normal", "high"]).default("normal"),
-    /** Deep-link facts. `channelId` + `messageId` land the device on the envelope. */
+    /** The producer-owned channel target and message identify the conversation entry. */
     channelId: z.string().min(1).optional(),
+    channelTargetId: z.string().min(1).optional(),
     messageId: z.string().min(1).optional(),
     senderParticipantId: z.string().optional(),
     senderHandle: z.string().optional(),

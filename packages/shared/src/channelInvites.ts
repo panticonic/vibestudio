@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * Canonical workspace-wide channel invitation contracts.
  *
@@ -6,18 +8,23 @@
  * `channel.invite` notifications without enumerating channel DOs.
  */
 
-export interface ChannelInvite {
-  channelId: string;
-  /** Bare workspace account id. */
-  userId: string;
-  /** Canonical channel participant id (`user:<userId>`). */
-  memberId: string;
-  /** Invite-time display snapshot; live account profiles remain authoritative. */
-  handle: string;
-  /** Canonical acting participant id, or the verified runtime caller id. */
-  addedBy: string;
-  addedAt: number;
-}
+export const ChannelInviteSchema = z
+  .object({
+    channelId: z.string().min(1),
+    channelTargetId: z.string().min(1),
+    /** Bare workspace account id. */
+    userId: z.string().min(1),
+    /** Canonical channel participant id (`user:<userId>`). */
+    memberId: z.string().min(1),
+    /** Invite-time display snapshot; live account profiles remain authoritative. */
+    handle: z.string().min(1),
+    /** Canonical acting participant id, or the verified runtime caller id. */
+    addedBy: z.string().min(1),
+    addedAt: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type ChannelInvite = z.infer<typeof ChannelInviteSchema>;
 
 /**
  * A channel-local, monotonically increasing projection revision. GAD retains

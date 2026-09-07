@@ -13,6 +13,7 @@ import {
   ChannelEnvelopePageRequestSchema,
 } from "@vibestudio/shared/channelEnvelopePaging";
 import type { GadRuntimeMethodName } from "@vibestudio/shared/gadRuntimeMethods";
+import { ChannelInviteSchema } from "@vibestudio/shared/channelInvites";
 import {
   defineServiceMethods,
   type MethodSchema,
@@ -1589,16 +1590,6 @@ const forkLogResultSchema = z
     inherited: z.number().int().nonnegative(),
   })
   .strict();
-const channelInviteSchema = z
-  .object({
-    channelId: nonemptyText,
-    userId: nonemptyText,
-    memberId: nonemptyText,
-    handle: nonemptyText,
-    addedBy: nonemptyText,
-    addedAt: z.number().int().nonnegative(),
-  })
-  .strict();
 const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonemptyText }).strict();
 
 const gadInternalWireMethods = defineServiceMethods({
@@ -1992,7 +1983,7 @@ const gadInternalWireMethods = defineServiceMethods({
   },
   putChannelMembership: {
     description: "Project one versioned channel membership and invite.",
-    args: z.tuple([channelInviteSchema.extend({ revision: z.number().int().nonnegative() })]),
+    args: z.tuple([ChannelInviteSchema.extend({ revision: z.number().int().nonnegative() })]),
     returns: z
       .object({ applied: z.boolean(), currentRevision: z.number().int().nonnegative() })
       .strict(),
@@ -2031,7 +2022,7 @@ const gadInternalWireMethods = defineServiceMethods({
   getChannelInvite: {
     description: "Read one pending channel invite.",
     args: z.tuple([channelInviteKeySchema]),
-    returns: channelInviteSchema.nullable(),
+    returns: ChannelInviteSchema.nullable(),
     agentFacing: false,
   },
   rebuildTrajectoryProjections: {
