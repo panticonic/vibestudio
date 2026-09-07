@@ -172,6 +172,34 @@ async function dispatchCdp(
 }
 
 describe("panelCdpService", () => {
+  it("allows a bounded screenshot in read-only eval without granting a raw CDP connection", async () => {
+    const shot = { data: "aGk=", mimeType: "image/png" as const, width: 800, height: 600 };
+    const screenshot = vi.fn(async () => shot);
+    const getEndpoint = vi.fn(async () => ({ wsEndpoint: "ws://unused" }));
+    const service = cdpService({
+      getTarget: () => ({
+        id: "panel:target",
+        title: "Task board",
+        kind: "workspace",
+        source: "panels/task-board",
+        contextId: "ctx-caller",
+        runtimeEntityId: "panel:entity-target",
+      }),
+      getEndpoint,
+      screenshot,
+    });
+    const context: ServiceContext = { ...ctx(), readOnly: true };
+    await expect(
+      dispatchCdp(service, context, "getCdpEndpoint", ["panel:target"])
+    ).rejects.toMatchObject({ code: "EVAL_READ_ONLY" });
+    expect(getEndpoint).not.toHaveBeenCalled();
+    await expect(
+      dispatchCdp(service, context, "screenshot", ["panel:target", { format: "png" }])
+    ).resolves.toEqual(shot);
+    expect(screenshot).toHaveBeenCalledTimes(1);
+    expect(getEndpoint).not.toHaveBeenCalled();
+  });
+
   it("reports CDP reload itself when a read-only eval attempts mutation", async () => {
     const reload = vi.fn(async () => undefined);
     const service = cdpService({
