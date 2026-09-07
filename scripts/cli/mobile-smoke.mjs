@@ -665,6 +665,29 @@ async function waitForOnboardingChatRendered(device, packageName, deadlineMs) {
   );
 }
 
+async function waitForOnboardingOverview(device, packageName, deadlineMs) {
+  const page = await openPanelWebViewDebugger(device, packageName, "/panels/chat/", deadlineMs);
+  try {
+    while (Date.now() < deadlineMs) {
+      const overview = await cdpEvaluate(
+        page.socket,
+        `(() => {
+        const error = document.querySelector('[data-inline-ui-error="onboarding-setup-overview"]');
+        const frames = Array.from(document.querySelectorAll('.inline-ui-frame'));
+        return { error: error?.textContent ?? null,
+          ready: frames.some(frame => frame.textContent?.includes('Explore workspaces')) };
+      })()`
+      );
+      if (overview?.error) throw new Error(`Onboarding overview failed: ${overview.error}`);
+      if (overview?.ready) return;
+      await sleep(100);
+    }
+    throw new Error("The automatic onboarding setup overview did not render");
+  } finally {
+    await page.close();
+  }
+}
+
 function runCommandBuffer(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -1714,6 +1737,7 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   }
   await ensureDeviceInteractive(device);
   const healthyDeadlineMs = Date.now() + Math.min(agentTimeoutMs, 30_000);
+  await waitForOnboardingOverview(device, options.packageName ?? defaultPackage, healthyDeadlineMs);
   let panelXml = "";
   while (Date.now() < healthyDeadlineMs) {
     panelXml = await dumpWindowXml(device);
@@ -2285,7 +2309,11 @@ async function main() {
       options.device,
       options.agentTimeoutMs,
       readyInfo,
-      { realModel: options.realModel, checkAgentTurn: !options.skipAgentTurn }
+      {
+        packageName: options.packageName,
+        realModel: options.realModel,
+        checkAgentTurn: !options.skipAgentTurn,
+      }
     );
 
     if (!options.noTap) {
@@ -2412,6 +2440,7 @@ async function main() {
       throw new Error("Warm server recovery fetched panel artifact bytes over the Iroh pipe");
     }
     await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, readyInfo, {
+      packageName: options.packageName,
       realModel: false,
       // If the deliberately bounded initial probe moved on while a turn was
       // still running, the server restart can durably close that turn as a
