@@ -5,7 +5,10 @@ import {
   type VcsProvenanceEdge,
   type VcsSemanticNodeRef,
 } from "@vibestudio/service-schemas/vcs";
-import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import {
+  channelTrajectoryFor,
+  commandIdForTrajectoryInvocation,
+} from "@vibestudio/trajectory-identity";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import { createVcsService } from "./vcsService.js";
 
@@ -657,6 +660,55 @@ describe("canonical vcsService", () => {
       { node: { kind: "trajectory", logId: trajectory.logId, head: trajectory.head } },
     ]);
 
+    expect(semanticCall).toHaveBeenCalledOnce();
+  });
+
+  it("lets an agent inspect only the command derived from its live causal invocation", async () => {
+    const trajectory = channelTrajectoryFor("channel:own");
+    const parent = {
+      kind: "trajectory-invocation" as const,
+      logId: trajectory.logId,
+      head: trajectory.head,
+      invocationId: "invocation:read",
+    };
+    const ctx = agentContext("channel:own");
+    ctx.causalParent = parent;
+    const { definition, semanticCall } = service({ referencesReachable: false });
+    const ownCommand = commandIdForTrajectoryInvocation(parent);
+
+    await definition.handler(ctx, "inspect", [
+      { node: { kind: "command", commandId: ownCommand } },
+    ]);
+    await expect(
+      definition.handler(agentContext("channel:own"), "inspect", [
+        { node: { kind: "command", commandId: ownCommand } },
+      ])
+    ).rejects.toThrow(/unavailable from the caller's reachable context graph/);
+
+    const foreign = channelTrajectoryFor("channel:foreign");
+    const foreignParent = {
+      kind: "trajectory-invocation" as const,
+      logId: foreign.logId,
+      head: foreign.head,
+      invocationId: "invocation:read",
+    };
+    const mismatchedParent = agentContext("channel:own");
+    mismatchedParent.causalParent = foreignParent;
+    await expect(
+      definition.handler(mismatchedParent, "inspect", [
+        {
+          node: {
+            kind: "command",
+            commandId: commandIdForTrajectoryInvocation(foreignParent),
+          },
+        },
+      ])
+    ).rejects.toThrow(/unavailable from the caller's reachable context graph/);
+    await expect(
+      definition.handler(ctx, "inspect", [
+        { node: { kind: "command", commandId: "command:trajectory-invocation:foreign" } },
+      ])
+    ).rejects.toThrow(/unavailable from the caller's reachable context graph/);
     expect(semanticCall).toHaveBeenCalledOnce();
   });
 

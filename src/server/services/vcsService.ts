@@ -19,7 +19,10 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { RpcCausalParent } from "@vibestudio/rpc";
-import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import {
+  channelTrajectoryFor,
+  commandIdForTrajectoryInvocation,
+} from "@vibestudio/trajectory-identity";
 import {
   parseVcsSemanticRequest,
   vcsMethods,
@@ -175,7 +178,19 @@ function isCallerTrajectoryRoot(
   reference: { kind: string; value: unknown }
 ): boolean {
   if (reference.kind !== "node" || !isRecord(reference.value)) return false;
+  const binding = verifiedAgentBinding(ctx, deps);
+  if (!binding) return false;
+  const own = channelTrajectoryFor(binding.channelId);
   const rootKind = reference.value["kind"];
+  if (rootKind === "command") {
+    const parent = ctx.causalParent;
+    return (
+      parent?.kind === "trajectory-invocation" &&
+      parent.logId === own.logId &&
+      parent.head === own.head &&
+      reference.value["commandId"] === commandIdForTrajectoryInvocation(parent)
+    );
+  }
   if (
     rootKind !== "trajectory" &&
     rootKind !== "trajectory-invocation" &&
@@ -184,9 +199,6 @@ function isCallerTrajectoryRoot(
   ) {
     return false;
   }
-  const binding = verifiedAgentBinding(ctx, deps);
-  if (!binding) return false;
-  const own = channelTrajectoryFor(binding.channelId);
   return reference.value["logId"] === own.logId && reference.value["head"] === own.head;
 }
 
