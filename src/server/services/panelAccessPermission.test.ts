@@ -76,17 +76,50 @@ describe("preparePanelAccessAuthority", () => {
     async (id) => {
       const resolveSubjectCaller = vi.fn(() => caller);
       const chrome = createVerifiedCaller(id, "shell");
-      await expect(
-        preparePanelAccessAuthority(
-          deps({ resolveSubjectCaller }),
-          { caller: chrome },
-          "openPanel",
-          { id: "parent", runtimeEntityId: "parent-runtime", requestedContextId: "ctx-new-panel" }
-        )
-      ).resolves.toEqual([]);
+      for (const target of [
+        { id: "workspace-root", requestedContextId: "ctx-new-panel" },
+        { id: "parent", runtimeEntityId: "parent-runtime", requestedContextId: "ctx-new-panel" },
+      ]) {
+        await expect(
+          preparePanelAccessAuthority(
+            deps({ resolveSubjectCaller }),
+            { caller: chrome },
+            "openPanel",
+            target
+          )
+        ).resolves.toEqual([]);
+      }
       expect(resolveSubjectCaller).not.toHaveBeenCalled();
     }
   );
+
+  it("retains a headless host as the subject of an existing-context root creation", async () => {
+    const resolveSubjectCaller = vi.fn(() => caller);
+    await expect(
+      preparePanelAccessAuthority(
+        deps({ resolveSubjectCaller }),
+        { caller: createVerifiedCaller("headless-host", "shell") },
+        "openPanel",
+        { id: "workspace-root", requestedContextId: "ctx-existing" }
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        resourceKey: contextBoundaryResourceKey("ctx-existing", "headless-host"),
+      }),
+    ]);
+    expect(resolveSubjectCaller).not.toHaveBeenCalled();
+  });
+
+  it("keeps a headless host's fresh-context root creation open", async () => {
+    await expect(
+      preparePanelAccessAuthority(
+        deps({ contextExists: () => false }),
+        { caller: createVerifiedCaller("headless-host", "shell") },
+        "openPanel",
+        { id: "workspace-root", requestedContextId: "ctx-fresh" }
+      )
+    ).resolves.toEqual([]);
+  });
 
   it.each([
     ["server", "server"],

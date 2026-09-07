@@ -163,8 +163,11 @@ export async function preparePanelAccessAuthority(
   if (!ctx.caller.code && !isAgentCaller) {
     const anchorId = anchorEntityId(target);
     const anchor = anchorId ? deps.resolveSubjectCaller(anchorId) : null;
-    if (!anchor) return [];
-    subjectCaller = anchor;
+    // Host-mediated panel operations inherit a concrete panel's code identity
+    // when one exists. Root operations have no such anchor, so retain the
+    // authenticated host identity and let the ordinary destination boundary
+    // decide whether the context is fresh or requires authority.
+    if (anchor) subjectCaller = anchor;
   }
   if (
     target.runtimeEntityId &&
