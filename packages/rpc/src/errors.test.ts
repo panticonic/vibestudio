@@ -1,5 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { isRpcConnectionLost, RemoteRpcError, RpcBoundaryError } from "./errors.js";
+import {
+  isAuthorityDecisionDenied,
+  isTerminalAuthorityFailure,
+  isRpcConnectionLost,
+  RemoteRpcError,
+  RpcBoundaryError,
+} from "./errors.js";
+
+describe("isAuthorityDecisionDenied", () => {
+  it("requires the structured user decision instead of denial prose", () => {
+    expect(
+      isAuthorityDecisionDenied({
+        errorData: { authorityFailure: { reasonCode: "user-denied" } },
+      })
+    ).toBe(true);
+    expect(isAuthorityDecisionDenied(new Error("Credential approval denied"))).toBe(false);
+  });
+});
+
+describe("isTerminalAuthorityFailure", () => {
+  it("classifies structured audience rejection but leaves acquisition recoverable", () => {
+    const failure = (reasonCode: string) => ({
+      errorData: { authorityFailure: { reasonCode } },
+    });
+    expect(isTerminalAuthorityFailure(failure("receiver-rejected"))).toBe(true);
+    expect(isTerminalAuthorityFailure(failure("user-denied"))).toBe(true);
+    expect(isTerminalAuthorityFailure(failure("approval-required"))).toBe(false);
+    expect(isTerminalAuthorityFailure(failure("invalid-session"))).toBe(false);
+    expect(isTerminalAuthorityFailure(new Error("receiver rejected"))).toBe(false);
+  });
+});
 
 describe("isRpcConnectionLost", () => {
   it("recognizes reserved session loss across local and remote carriers", () => {

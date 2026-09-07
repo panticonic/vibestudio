@@ -1,4 +1,22 @@
 import type { ApprovalDecision } from "@vibestudio/shared/approvals";
+import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
+import { RpcBoundaryError } from "@vibestudio/rpc";
+
+export function credentialApprovalDeniedError(credentialId: string): RpcBoundaryError {
+  const capability = "credentials.use";
+  return new RpcBoundaryError("Credential approval denied", "access", "EACCES", undefined, {
+    denied: true,
+    authorityFailure: authorityFailureForDecision(
+      {
+        allowed: false,
+        code: "user-denied",
+        reason: "Credential approval denied",
+        requirement: { kind: "capability", principal: "code", capability },
+      },
+      { capability, resourceKey: `credential:${credentialId}`, tier: "critical" }
+    ),
+  });
+}
 
 export type CredentialGrantIdentity = {
   repoPath: string;

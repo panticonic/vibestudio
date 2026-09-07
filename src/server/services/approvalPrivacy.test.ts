@@ -21,6 +21,67 @@ const context = (userId: string) => ({
 });
 
 describe("approval audience", () => {
+  it("rejects private approvals with no eligible member before they enter the queue", () => {
+    const events = new EventService();
+    const queue = createApprovalQueue({ eventService: events, workspaceAccess: access });
+    const capabilityAttempt = (requestedByUserId?: string) => () =>
+      queue.request({
+        kind: "capability",
+        callerId: "system-owned-agent",
+        callerKind: "do",
+        repoPath: "agents/system-owned",
+        effectiveVersion: "v1",
+        capability: "credentials.use",
+        title: "Use credential",
+        ...(requestedByUserId ? { requestedByUserId } : {}),
+      });
+    const attempts = [
+      capabilityAttempt(),
+      capabilityAttempt("system"),
+      capabilityAttempt("not-a-member"),
+      () =>
+        queue.requestCredentialInput({
+          kind: "credential-input",
+          callerId: "system-owned-agent",
+          callerKind: "do",
+          repoPath: "agents/system-owned",
+          effectiveVersion: "v1",
+          title: "Add credential",
+          credentialLabel: "Provider",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+          accountIdentity: { providerUserId: "provider" },
+          scopes: [],
+          fields: [{ name: "token", label: "Token", type: "secret", required: true }],
+          requestedByUserId: "system",
+        }),
+    ];
+
+    for (const attempt of attempts) {
+      let failure: unknown;
+      try {
+        void attempt();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({
+        code: "EACCES",
+        errorKind: "access",
+        errorData: {
+          authorityFailure: {
+            reasonCode: "receiver-rejected",
+            remediation: { kind: "use-admitted-principal" },
+          },
+        },
+      });
+      expect(queue.listPending()).toEqual([]);
+      expect(pendingApprovalCounts(queue.listPending())).toEqual({
+        pendingApprovals: [],
+        workspaceApprovalCount: 0,
+      });
+    }
+  });
+
   it("counts ready workspace creation reviews while leaving native bootstrap decisions to their owner", async () => {
     const queue = createApprovalQueue({
       eventService: new EventService(),

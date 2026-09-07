@@ -12,10 +12,13 @@ import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
 import {
+  approvalAudience,
   approvalVisibleToUser,
   isHostApprovalObserver,
   type ApprovalWorkspaceAccess,
 } from "@vibestudio/shared/approvalVisibility";
+import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
+import { RpcBoundaryError } from "@vibestudio/rpc";
 import type {
   UnitAuthorityRequest,
   UserlandCapabilityDefinition,
@@ -772,6 +775,33 @@ export function createApprovalQueue(deps: {
   const preparationsByProducerKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
   const workspaceAccess = deps.workspaceAccess ?? { isMember: () => false, isAdmin: () => false };
+  const assertAnswerableAudience = (approval: PendingApproval): void => {
+    const audience = approvalAudience(approval);
+    // Source admission is deliberately a workspace-administrator decision. All
+    // other approvals are private and require a current workspace member.
+    if (audience?.kind === "workspace-admin") return;
+    if (audience?.kind === "user" && workspaceAccess.isMember(audience.userId)) return;
+    const reason =
+      audience?.kind === "user"
+        ? "Approval requester is not a member of this workspace"
+        : "Approval has no eligible workspace audience";
+    const authorityFailure = authorityFailureForDecision(
+      {
+        allowed: false,
+        code: "receiver-rejected",
+        reason,
+        requirement: { kind: "relationship", name: "workspace-member" },
+      },
+      {
+        capability: `approvals.${approval.kind}`,
+        resourceKey: `approval:${approval.approvalId}`,
+        tier: "critical",
+      }
+    );
+    throw new RpcBoundaryError(reason, "access", "EACCES", undefined, {
+      authorityFailure,
+    });
+  };
   const assertResolutionAccess = (entry: QueueEntry | undefined, resolver?: ApprovalResolver) => {
     if (
       entry &&
@@ -1454,6 +1484,7 @@ export function createApprovalQueue(deps: {
     let newEntry = false;
     if (!entry) {
       const approval = createPendingApproval(req);
+      assertAnswerableAudience(approval);
       entry = {
         approval,
         dedupKey,
@@ -1614,6 +1645,7 @@ export function createApprovalQueue(deps: {
     if (entry?.approval.lifecycle?.state === "preparing") {
       const prepared = entry.approval;
       const ready = createPendingApproval(req);
+      assertAnswerableAudience(ready);
       entry.approval = {
         ...ready,
         approvalId: prepared.approvalId,
@@ -1632,6 +1664,7 @@ export function createApprovalQueue(deps: {
     }
     if (!entry) {
       const approval = createPendingApproval(req);
+      assertAnswerableAudience(approval);
       entry = {
         approval,
         dedupKey,
@@ -1878,6 +1911,7 @@ export function createApprovalQueue(deps: {
     presentDeviceCode(req) {
       const dedupKey = dedupKeyFor(req);
       const approval = createPendingApproval(req) as PendingDeviceCodeApproval;
+      assertAnswerableAudience(approval);
       const entry: QueueEntry = {
         approval,
         dedupKey,

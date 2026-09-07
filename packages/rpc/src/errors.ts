@@ -1,6 +1,24 @@
 import type { RpcErrorData, RpcErrorKind } from "./types.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/remoteSession.js";
 
+/** True only for a structured authority decision made by the user. */
+export function isAuthorityDecisionDenied(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (
+    (error as { errorData?: { authorityFailure?: { reasonCode?: unknown } } }).errorData
+      ?.authorityFailure?.reasonCode === "user-denied"
+  );
+}
+
+/** True for a structured authority refusal that cannot be repaired by retrying. */
+export function isTerminalAuthorityFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const reasonCode = (
+    error as { errorData?: { authorityFailure?: { reasonCode?: unknown } } }
+  ).errorData?.authorityFailure?.reasonCode;
+  return reasonCode === "user-denied" || reasonCode === "receiver-rejected";
+}
+
 /** Routine logical-session loss; callers still own recovery and mutation policy. */
 export function isRpcConnectionLost(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;

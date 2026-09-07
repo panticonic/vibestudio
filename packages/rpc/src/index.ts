@@ -49,6 +49,8 @@ export {
   RpcBoundaryError,
   rpcErrorDataOf,
   rpcErrorKindOf,
+  isAuthorityDecisionDenied,
+  isTerminalAuthorityFailure,
   isRpcConnectionLost,
 } from "./errors.js";
 export type {

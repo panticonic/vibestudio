@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
   assertCredentialApprovalDecision,
+  credentialApprovalDeniedError,
   credentialApprovalDecisions,
 } from "./credentialApprovalDecisions.js";
 
 describe("credentialApprovalDecisions", () => {
+  it("preserves explicit user denial as a structured terminal authority decision", () => {
+    expect(credentialApprovalDeniedError("credential-1")).toMatchObject({
+      message: "Credential approval denied",
+      code: "EACCES",
+      errorKind: "access",
+      errorData: {
+        denied: true,
+        authorityFailure: {
+          reasonCode: "user-denied",
+          resourceKey: "credential:credential-1",
+        },
+      },
+    });
+  });
+
   it("offers the exact installed version for code and the stable agent for agent-owned eval", () => {
     expect(
       credentialApprovalDecisions({

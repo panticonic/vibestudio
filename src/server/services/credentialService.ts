@@ -60,6 +60,7 @@ import {
   type ResolveCredentialParams,
   type StoreUrlBoundCredentialParams,
 } from "@vibestudio/service-schemas/credentials";
+
 import type { EgressProxy } from "./egressProxy.js";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
@@ -73,6 +74,7 @@ import {
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import {
   assertCredentialApprovalDecision,
+  credentialApprovalDeniedError,
   credentialApprovalDecisions,
 } from "./credentialApprovalDecisions.js";
 import { assertPresent } from "../../lintHelpers";
@@ -1037,7 +1039,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       replacementCredentialLabel: params.replacementCredentialLabel,
     });
     if (decision === "deny" || decision === "dismiss") {
-      throw new Error("Credential approval denied");
+      throw credentialApprovalDeniedError(params.credentialId);
     }
     assertCredentialApprovalDecision(approvalIdentity, decision, decisionOptions);
     return decision;
@@ -1241,7 +1243,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ]),
     });
     if (decision === "deny" || decision === "dismiss") {
-      throw new Error("Credential approval denied");
+      throw credentialApprovalDeniedError(credentialId);
     }
     assertCredentialApprovalDecision(identity, decision, {
       onceOnly: usage.gitOperation?.force === true,

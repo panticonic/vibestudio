@@ -33,7 +33,7 @@ export function approvalVisibleToUser(
     : audience?.kind === "workspace-admin" && access.isAdmin(userId);
 }
 
-function approvalAudience(
+export function approvalAudience(
   approval: PendingApproval
 ): { kind: "user"; userId: string } | { kind: "workspace-admin" } | null {
   const requester = approval.requestedByUserId;
