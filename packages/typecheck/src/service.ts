@@ -106,6 +106,8 @@ export interface TypeCheckServiceConfig {
   tsconfigSearchBoundary?: string;
   /** Use this exact source tsconfig instead of discovery. */
   tsconfigPath?: string;
+  /** Source files that the executable/build contract requires as program roots. */
+  requiredRootFiles?: readonly string[];
   /** Collect native compiler request and transport timings. */
   collectTiming?: boolean;
 }
@@ -416,6 +418,19 @@ export class TypeCheckService {
   }
 
   private synchronizeGeneratedConfig(): void {
+    const configuredRoots = this.sourceConfigPath
+      ? [
+          ...this.api.parseConfigFile(this.sourceConfigPath).fileNames,
+          ...(this.config.requiredRootFiles ?? []).map((file) => path.resolve(file)),
+          ...this.getFileNames().filter((file) => {
+            const relative = path.relative(this.panelPath, file);
+            return relative === ".." || relative.startsWith(`..${path.sep}`);
+          }),
+        ]
+      : [
+          ...this.getFileNames(),
+          ...(this.config.requiredRootFiles ?? []).map((file) => path.resolve(file)),
+        ];
     const compilerOptions: Record<string, unknown> = this.sourceConfigPath
       ? {
           skipLibCheck: true,
@@ -462,7 +477,7 @@ export class TypeCheckService {
       {
         ...(this.sourceConfigPath ? { extends: this.sourceConfigPath } : {}),
         compilerOptions,
-        files: this.getFileNames(),
+        files: [...new Set(configuredRoots)].sort(),
       },
       null,
       2

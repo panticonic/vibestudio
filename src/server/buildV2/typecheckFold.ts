@@ -122,6 +122,16 @@ export async function typecheckUnit(
     }
     const { TypeCheckService, USERLAND_TYPECHECK_BASELINE, createDiskFileSource, loadSourceFiles } =
       await import("@vibestudio/typecheck");
+    const requiredRootFiles = (authority?.executableModules ?? [])
+      .filter((module) => module.package.kind === "first-party")
+      .map((module) => {
+        const absolute = path.resolve(sourceRoot, module.moduleId);
+        const relative = path.relative(unitDir, absolute);
+        if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
+          throw new Error(`Executable module is outside ${unitRelativePath}: ${module.moduleId}`);
+        }
+        return absolute;
+      });
     const packages = new Map<string, WorkspacePackageInfo>();
     for (const dep of internalDeps) {
       const dir = path.join(sourceRoot, dep.relativePath);
@@ -147,6 +157,7 @@ export async function typecheckUnit(
       // tsconfig may describe its environment or add stricter checks, but it
       // cannot weaken the checks required for code admitted to main.
       compilerOptions: USERLAND_TYPECHECK_BASELINE,
+      requiredRootFiles,
       // Repository-view builds are hermetic at the unit/dependency closure.
       // A unit without its own config uses deterministic defaults; it must not
       // walk into a broader checkout and inherit unrelated workspace settings.

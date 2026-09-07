@@ -29,6 +29,65 @@ afterEach(() => {
 });
 
 describe("TypeCheckService workspace resolution", () => {
+  it("keeps a files-only tsconfig as the configured program root set", () => {
+    const root = createTempDir("typecheck-service-files-roots-");
+    const kept = path.join(root, "kept.ts");
+    const excluded = path.join(root, "excluded.ts");
+    writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ files: ["kept.ts"] }));
+    writeFile(kept, `export const kept: number = "wrong";`);
+    writeFile(excluded, `export const excluded: number = "wrong";`);
+    const service = new TypeCheckService({ panelPath: root, workspaceContext: null });
+    try {
+      service.updateFile(kept, fs.readFileSync(kept, "utf8"));
+      service.updateFile(excluded, fs.readFileSync(excluded, "utf8"));
+      const diagnostics = service.check().diagnostics;
+      expect(diagnostics.some((diagnostic) => diagnostic.file === kept)).toBe(true);
+      expect(diagnostics.some((diagnostic) => diagnostic.file === excluded)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("preserves files inherited from an extended tsconfig", () => {
+    const root = createTempDir("typecheck-service-extended-files-");
+    const kept = path.join(root, "kept.ts");
+    const excluded = path.join(root, "excluded.ts");
+    writeFile(path.join(root, "base.json"), JSON.stringify({ files: ["kept.ts"] }));
+    writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ extends: "./base.json" }));
+    writeFile(kept, `export const kept: number = "wrong";`);
+    writeFile(excluded, `export const excluded: number = "wrong";`);
+    const service = new TypeCheckService({ panelPath: root, workspaceContext: null });
+    try {
+      service.updateFile(kept, fs.readFileSync(kept, "utf8"));
+      service.updateFile(excluded, fs.readFileSync(excluded, "utf8"));
+      const diagnostics = service.check().diagnostics;
+      expect(diagnostics.some((diagnostic) => diagnostic.file === kept)).toBe(true);
+      expect(diagnostics.some((diagnostic) => diagnostic.file === excluded)).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("incrementally admits new overlay files matched by a configured include", () => {
+    const root = createTempDir("typecheck-service-included-overlay-");
+    const sourceFile = path.join(root, "src/new.ts");
+    writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ include: ["src/**/*.ts"] }));
+    const service = new TypeCheckService({ panelPath: root, workspaceContext: null });
+    try {
+      service.updateFile(sourceFile, `export const value: number = "wrong";`);
+      expect(service.check().diagnostics.some((diagnostic) => diagnostic.file === sourceFile)).toBe(
+        true
+      );
+
+      service.updateFile(sourceFile, `export const value: number = 1;`);
+      expect(service.check().diagnostics.some((diagnostic) => diagnostic.file === sourceFile)).toBe(
+        false
+      );
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("honors an exact tsconfig search boundary instead of adopting parent workspace config", () => {
     const root = createTempDir("typecheck-service-config-boundary-");
     const unitDir = path.join(root, "packages", "unit");

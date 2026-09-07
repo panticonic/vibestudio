@@ -140,6 +140,105 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     }
   });
 
+  it("honors configured roots while checking excluded files reached by imports", async () => {
+    const unitDir = path.join(sourceRoot, "panels/configured");
+    await fsp.mkdir(path.join(unitDir, "src"), { recursive: true });
+    await fsp.mkdir(path.join(unitDir, "support"), { recursive: true });
+    await fsp.mkdir(path.join(sourceRoot, "configs"), { recursive: true });
+    await fsp.writeFile(
+      path.join(sourceRoot, "configs/base.json"),
+      JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext" } })
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "package.json"),
+      JSON.stringify({ name: "@workspace-panels/configured", type: "module" })
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "tsconfig.json"),
+      JSON.stringify({
+        extends: "../../configs/base.json",
+        include: ["src/**/*.ts"],
+        exclude: ["**/*.test.ts", "support"],
+      })
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "src/index.ts"),
+      `import { imported } from "../support/imported.js"; export { imported };`
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "support/imported.ts"),
+      `export const imported: number = "imported-error";`
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "ignored.test.ts"),
+      `export const ignored: number = "excluded-error";`
+    );
+    try {
+      const diagnostics = await typecheckUnit(
+        "panels/configured",
+        sourceRoot,
+        [{ name: "@workspace-panels/configured", relativePath: "panels/configured" }],
+        []
+      );
+      expect(diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file: "panels/configured/support/imported.ts" }),
+        ])
+      );
+      expect(diagnostics.some((diagnostic) => diagnostic.file.endsWith("ignored.test.ts"))).toBe(
+        false
+      );
+    } finally {
+      await fsp.rm(unitDir, { recursive: true, force: true });
+      await fsp.rm(path.join(sourceRoot, "configs"), { recursive: true, force: true });
+    }
+  });
+
+  it("checks executable source even when a repository config omits it", async () => {
+    const unitDir = path.join(sourceRoot, "panels/executable-root");
+    await fsp.mkdir(unitDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(unitDir, "package.json"),
+      JSON.stringify({ name: "@workspace-panels/executable-root", type: "module" })
+    );
+    await fsp.writeFile(
+      path.join(unitDir, "tsconfig.json"),
+      JSON.stringify({ files: ["helper.ts"] })
+    );
+    await fsp.writeFile(path.join(unitDir, "helper.ts"), `export const helper = true;`);
+    await fsp.writeFile(
+      path.join(unitDir, "runtime.ts"),
+      `export const runtimeValue: number = "runtime-error";`
+    );
+    try {
+      const diagnostics = await typecheckUnit(
+        "panels/executable-root",
+        sourceRoot,
+        [{ name: "@workspace-panels/executable-root", relativePath: "panels/executable-root" }],
+        [],
+        {
+          manifest: { authority: { requests: [], provides: [] } },
+          executableModules: [
+            {
+              moduleId: "panels/executable-root/runtime.ts",
+              contentDigest: "runtime-digest",
+              package: { kind: "first-party" },
+              format: "ts",
+              source: `export const runtimeValue: number = "runtime-error";`,
+            },
+          ],
+        }
+      );
+      expect(diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file: "panels/executable-root/runtime.ts" }),
+        ])
+      );
+    } finally {
+      await fsp.rm(unitDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps ambient product-source defects out of an exact unit report", async () => {
     const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
     expect(diags.some((diagnostic) => diagnostic.file.includes("leaky-host"))).toBe(false);
