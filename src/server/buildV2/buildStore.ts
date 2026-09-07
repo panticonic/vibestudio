@@ -353,9 +353,14 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
-async function linkBuildTree(sourceDir: string, targetDir: string): Promise<void> {
+async function linkBuildTree(
+  sourceDir: string,
+  targetDir: string,
+  excludedEntries: ReadonlySet<string> = new Set()
+): Promise<void> {
   await fs.promises.mkdir(targetDir, { recursive: true });
   for (const entry of await fs.promises.readdir(sourceDir, { withFileTypes: true })) {
+    if (excludedEntries.has(entry.name)) continue;
     const sourcePath = path.join(sourceDir, entry.name);
     const targetPath = path.join(targetDir, entry.name);
     if (entry.isDirectory()) {
@@ -890,16 +895,13 @@ export async function getOrHydrate(
       const tmpDir = `${localDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
       try {
         await fs.promises.mkdir(path.dirname(localDir), { recursive: true });
-        await linkBuildTree(sharedDir, tmpDir);
-        if (sharedMetadata !== shared.metadata) {
-          await fs.promises.writeFile(
-            path.join(tmpDir, "metadata.json"),
-            `${JSON.stringify(sharedMetadata, null, 2)}\n`
-          );
-        }
+        await linkBuildTree(sharedDir, tmpDir, new Set(["metadata.json", "executions"]));
+        await fs.promises.writeFile(
+          path.join(tmpDir, "metadata.json"),
+          `${JSON.stringify(sharedMetadata, null, 2)}\n`
+        );
         // Execution metadata is workspace-owned provenance. Shared caches supply
         // reusable bytes, never another workspace's semantic execution variants.
-        await fs.promises.rm(path.join(tmpDir, "executions"), { recursive: true, force: true });
         const executionDigest = sharedMetadata.execution?.executionDigest;
         if (executionDigest) {
           const target = executionMetadataPath(tmpDir, executionDigest);
@@ -908,11 +910,33 @@ export async function getOrHydrate(
           await fs.promises.mkdir(path.dirname(target), { recursive: true });
           await fs.promises.writeFile(target, `${JSON.stringify(variant, null, 2)}\n`);
         }
+        let promoted = true;
         try {
           await fs.promises.rename(tmpDir, localDir);
         } catch (error) {
           if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
+          promoted = false;
           await fs.promises.rm(tmpDir, { recursive: true, force: true });
+        }
+        if (promoted) {
+          const materialized: BuildResult = {
+            dir: localDir,
+            buildKey: key,
+            sourceStateHash: sharedMetadata.sourceStateHash,
+            metadata: sharedMetadata,
+            artifacts: shared.artifacts.map((artifact) =>
+              lazyArtifactContent(localDir, {
+                path: artifact.path,
+                role: artifact.role,
+                contentType: artifact.contentType,
+                encoding: artifact.encoding,
+                byteLength: artifact.byteLength,
+                ...(artifact.platform ? { platform: artifact.platform } : {}),
+                ...(artifact.integrity ? { integrity: artifact.integrity } : {}),
+              })
+            ),
+          };
+          rememberVerifiedLocalBuild(materialized);
         }
       } catch (error) {
         try {
@@ -923,8 +947,7 @@ export async function getOrHydrate(
         throw error;
       }
     }
-    const materialized = readBuildDir(localDir, key);
-    if (materialized) rememberVerifiedLocalBuild(materialized);
+    const materialized = readVerifiedLocalBuild(key);
     if (materialized && !reportedSharedBuildHits.has(key)) {
       reportedSharedBuildHits.add(key);
       console.info(
