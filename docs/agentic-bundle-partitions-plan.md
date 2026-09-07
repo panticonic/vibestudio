@@ -157,6 +157,13 @@ owners now use the existing retained-execution lookup, and the common build-key
 provider rejects a resolver that substitutes another build or requested execution.
 The focused provider, retained-build/restart and GC tests pass together (35). This
 correction does not resolve the optional development-service dependency above.
+Tracing the complete collection path then exposed a second loss of identity:
+the build collector reduced provider roots to build keys before semantic source
+preflight. It now carries every authoritative execution's source content roots
+alongside quarantine roots in preparation and commit reports. Distinct executions
+sharing bytes therefore retain both source histories. Missing artifacts still make
+the census incomplete, and product-seed roots stay outside workspace collection.
+The startup/retention and semantic-preflight tests pass together (28).
 
 The broad sweep also exposed host rebuild cleanup deleting the Node executable and
 MXC launcher used by already-running instances. Host `7a5d36dc8` and `71a6d1fde`

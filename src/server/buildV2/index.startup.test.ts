@@ -452,6 +452,58 @@ describe("BuildSystemV2 startup", () => {
     );
   });
 
+  it("keeps every authoritative source identity when executions share a build key", async () => {
+    const { initBuildSystemV2 } = await import("./index.js");
+    const { REQUIRED_EXECUTION_ROOT_PROVIDER_IDS } = await import("../executionRootProviders.js");
+    const artifacts = ["first", "second"].map((name) => {
+      const contentRoots = [{ repoPath: "workers/store", stateHash: `state:${sha256(name)}` }];
+      const unsigned = {
+        ...productSeedArtifact(),
+        sourceState: {
+          kind: "workspace" as const,
+          workspaceId: "workspace:test",
+          effectiveVersion: sha256("same-source-bytes"),
+          state: { kind: "event" as const, eventId: `event:${name}` },
+          contentRoots,
+          sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+        },
+      };
+      return verifyExecutionArtifactRef({
+        ...unsigned,
+        executionDigest: executionArtifactDigest(unsigned),
+      });
+    });
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      ...buildRoots(workspaceRoot),
+      executionRootProviders: REQUIRED_EXECUTION_ROOT_PROVIDER_IDS.map((id) => ({
+        id,
+        mandatory: true,
+        async snapshotRoots() {
+          return id === "runtime-entity"
+            ? artifacts.map((artifact) => ({
+                owner: "runtime-entity" as const,
+                ownerId: artifact.executionDigest,
+                reason: "active" as const,
+                artifact,
+              }))
+            : [];
+        },
+      })),
+    });
+
+    const preparation = await buildSystem.prepareGc({ epoch: 1 });
+    expect(preparation.report.rootBuildKeys).toEqual([artifacts[0]!.buildKey]);
+    expect(preparation.report.retainedSourceRoots).toEqual(
+      expect.arrayContaining(artifacts.flatMap((artifact) => artifact.sourceState.contentRoots))
+    );
+    // Missing bytes still prevent collection; retaining their exact source facts
+    // must not convert a broken artifact census into a successful one.
+    expect(preparation.report.complete).toBe(false);
+    expect(preparation.report.unresolvedAuthoritativeRootBuildKeys).toEqual([
+      artifacts[0]!.buildKey,
+    ]);
+  });
+
   it("keeps product-seed roots outside the workspace BuildStore census", async () => {
     const { initBuildSystemV2 } = await import("./index.js");
     const source = fakeWorkspaceSource(workspaceRoot);

@@ -41,8 +41,15 @@ export async function nativeRpc(page, workspaceId, method, args, timeoutMs = 30_
           if (message.type !== "response" || message.requestId !== requestId) return;
           clearTimeout(timer);
           off();
-          if ("error" in message) reject(new Error(message.error));
-          else resolve(message.result);
+          if ("error" in message) {
+            reject(
+              Object.assign(new Error(message.error), {
+                code: message.errorCode,
+                errorKind: message.errorKind,
+                errorData: message.errorData,
+              })
+            );
+          } else resolve(message.result);
         });
         const caller = {
           callerId: bridge.identity.runtimeId,
@@ -131,11 +138,15 @@ export async function runSharedMemberRevocation({
         })),
       })}`
     );
-  const panel = await memberApp.evaluate(async (parentId) => {
-    const testApi = globalThis.__testApi;
-    if (!testApi) throw new Error("Native test API is unavailable");
-    return testApi.createBrowserPanel(parentId, "https://example.com", { focus: true });
-  }, memberWorkspace.panelId);
+  const panel = await memberApp.evaluate(
+    async ({ workspaceId, parentId }) => {
+      const testApi = globalThis.__testApi;
+      if (!testApi) throw new Error("Native test API is unavailable");
+      const workspaceApi = await testApi.forWorkspace(workspaceId);
+      return workspaceApi.createBrowserPanel(parentId, "https://example.com", { focus: true });
+    },
+    { workspaceId: workspace.workspaceId, parentId: memberWorkspace.panelId }
+  );
   const epoch = randomUUID();
   let settledRequest;
   const requestOutcome = nativeRpc(
@@ -222,14 +233,20 @@ export async function runSharedMemberRevocation({
   try {
     await nativeRpc(owner, undefined, "hubControl.removeWorkspaceMember", removalArgs);
   } catch (error) {
-    removalChallenge = error.message;
+    removalChallenge = error;
   }
-  if (
-    !removalChallenge ||
-    !/approval-required|authority acquisition required/.test(removalChallenge)
-  ) {
+  if (!removalChallenge || removalChallenge.code !== "EACQUIRE") {
     throw new Error(
-      `Removing a workspace member did not require explicit owner approval: ${removalChallenge ?? "call succeeded"}`
+      `Removing a workspace member did not require explicit owner approval: ${removalChallenge?.message ?? "call succeeded"}`
+    );
+  }
+  const removalAcquisition = removalChallenge.errorData?.acquisition;
+  console.log(
+    `[desktop-smoke] Member-removal authority challenge: code=${removalChallenge.code}; pending=${String(removalAcquisition?.pending === true)}`
+  );
+  if (!removalAcquisition || removalAcquisition.pending !== true) {
+    throw new Error(
+      "The member-removal authority challenge was not entered into an approval queue"
     );
   }
   const removalPending = await until(
@@ -246,6 +263,9 @@ export async function runSharedMemberRevocation({
     },
     "waiting for the owner's member-removal approval",
     deadline
+  );
+  console.log(
+    `[desktop-smoke] Located member-removal approval ${removalPending.pending.approvalId} in workspace ${removalPending.workspaceId}`
   );
   const removalCard = await until(
     async () => {
@@ -264,6 +284,7 @@ export async function runSharedMemberRevocation({
     "displaying the owner's member-removal approval",
     deadline
   );
+  console.log("[desktop-smoke] Member-removal approval card is visible in owner chrome");
   const approveRemoval = removalCard.locator('[data-approval-decision="once"]');
   if (!(await approveRemoval.isEnabled())) {
     throw new Error("The member-removal approval has no enabled one-time decision");

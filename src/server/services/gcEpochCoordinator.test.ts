@@ -140,6 +140,31 @@ describe("GcEpochCoordinator", () => {
     );
   });
 
+  it("preflights retained execution sources as well as the latest build metadata", async () => {
+    const retainedSourceRoots = [
+      { repoPath: "workers/store", stateHash: state("b") },
+      { repoPath: "workers/store", stateHash: state("c") },
+    ];
+    const build = preparedBuild({ ...retention(["shared-bytes"]), retainedSourceRoots });
+    const prepareGc = vi.fn(async () => preparedContent());
+    const coordinator = new GcEpochCoordinator({
+      buildSystem: {
+        prepareGc: vi.fn(async () => build),
+        peekBuildByKey: vi.fn(() => rootedBuild("shared-bytes")),
+      } as never,
+      workspaceVcs: { attached: true, prepareGc } as never,
+      publicationJournal: publicationJournal(),
+    });
+
+    await expect(coordinator.runOnce()).resolves.toBe(true);
+    expect(prepareGc).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionSourceRoots: expect.arrayContaining(retainedSourceRoots),
+      })
+    );
+    expect(build.commit).toHaveBeenCalledOnce();
+  });
+
   it("suppresses the content sweep when a mandatory root provider fails", async () => {
     const prepareGc = vi.fn(async () => preparedContent());
     const build = preparedBuild(retention([], false));

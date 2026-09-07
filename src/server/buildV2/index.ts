@@ -2934,6 +2934,7 @@ export async function initBuildSystemV2(
       const { graph, evMap } = currentState();
       const roots = new Set<string>();
       const authoritativeRoots = new Set<string>();
+      const authoritativeSourceRoots = new Map<string, ExecutionSourceContentRoot>();
       const providerSnapshot = await executionRootProviders.snapshot(epoch);
 
       for (const node of graph.allNodes()) {
@@ -2948,6 +2949,12 @@ export async function initBuildSystemV2(
         if (root.artifact.sourceState.kind === "product-seed") continue;
         roots.add(root.artifact.buildKey);
         authoritativeRoots.add(root.artifact.buildKey);
+        for (const contentRoot of root.artifact.sourceState.contentRoots) {
+          authoritativeSourceRoots.set(
+            JSON.stringify([contentRoot.repoPath, contentRoot.stateHash]),
+            contentRoot
+          );
+        }
       }
 
       const collect = async (options: {
@@ -3002,7 +3009,13 @@ export async function initBuildSystemV2(
           notReconstructibleDetails: collection.notReconstructible,
           providerFailures,
           cleanupFailures: collection.cleanupFailures,
-          retainedSourceRoots: collection.retainedSourceRoots,
+          retainedSourceRoots: [
+            ...new Map(
+              [...collection.retainedSourceRoots, ...authoritativeSourceRoots.values()].map(
+                (root) => [JSON.stringify([root.repoPath, root.stateHash]), root]
+              )
+            ).values(),
+          ],
         };
         if (
           report.providerFailures.length > 0 ||
