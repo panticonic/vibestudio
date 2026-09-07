@@ -13,7 +13,7 @@ import {
   clearableRequests,
   heldClearanceRowKeys,
   mintUnitClearanceGrants,
-  retireUnitClearanceGrants,
+  retireUnitClearanceGrantIds,
 } from "./unitClearanceGrants.js";
 
 let root: string;
@@ -294,25 +294,42 @@ describe("install clearance", () => {
     expect(issued).toEqual([]);
   });
 
-  it("retires the outgoing version's clearance without touching another unit's", () => {
-    mint({ authority: authority([{ capability: "workspace.files.write" }]) });
+  it("retires only captured outgoing grants", () => {
+    const [outgoing] = mint({ authority: authority([{ capability: "workspace.files.write" }]) });
+    const [replacement] = mint({ authority: authority([{ capability: "notifications" }]) });
     mint({
       repoPath: "panels/chat",
       authority: authority([{ capability: "workspace.files.write" }]),
     });
+    const unrelated = grantStore.issue({
+      effect: "allow",
+      capability: "notifications",
+      resource: { kind: "exact", key: "notifications" },
+      subject: outgoing!.subject,
+      scope: "version",
+      constraints: { lineageAtConsent: [] },
+      issuedBy: "user:test",
+      provenance: "acquisition",
+      decidedBy: "user:test",
+      decisionSurface: "approval",
+      createdAt: Date.now(),
+    });
 
     expect(
-      retireUnitClearanceGrants({
+      retireUnitClearanceGrantIds({
         grantStore,
-        units: [{ repoPath: "panels/news", effectiveVersion: "ev-1" }],
+        grantIds: [outgoing!.id!],
       })
     ).toBe(1);
     expect(
-      heldClearanceRowKeys({ grantStore, repoPath: "panels/news", effectiveVersion: "ev-1" }).size
-    ).toBe(0);
+      heldClearanceRowKeys({ grantStore, repoPath: "panels/news", effectiveVersion: "ev-1" })
+    ).toEqual(new Set([rowKey("notifications")]));
     expect(
       heldClearanceRowKeys({ grantStore, repoPath: "panels/chat", effectiveVersion: "ev-1" }).size
     ).toBe(1);
+    expect(grantStore.listActiveAuthorityGrants().map((grant) => grant.id)).toEqual(
+      expect.arrayContaining([replacement!.id, unrelated.id])
+    );
   });
 
   it("carries an earlier decision into the next version instead of re-granting everything", () => {

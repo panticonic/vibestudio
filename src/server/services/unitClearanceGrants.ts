@@ -131,32 +131,6 @@ export function mintUnitClearanceGrants(input: MintUnitClearanceInput): Authorit
   });
 }
 
-/**
- * Revoke every standing clearance a unit version holds.
- *
- * Used when an operation removes a part, and when an update re-mints against a
- * new version: grants are version-bound, so the old version's grants are dead
- * weight the moment its version changes, and leaving them behind would let a
- * reverted unit silently regain authority the user had moved on from.
- */
-export function retireUnitClearanceGrants(input: {
-  grantStore: CapabilityGrantStore;
-  units: readonly { repoPath: string; effectiveVersion: string }[];
-  now?: number;
-}): number {
-  const subjects = new Set<string>(input.units.map((unit) => codePrincipal(unit)));
-  if (subjects.size === 0) return 0;
-  const now = input.now ?? Date.now();
-  return input.grantStore.transaction(() => {
-    let revoked = 0;
-    for (const grant of input.grantStore.listActiveAuthorityGrants(now)) {
-      if (grant.provenance !== "install" || !subjects.has(grant.subject)) continue;
-      if (grant.id && input.grantStore.revoke(grant.id, now)) revoked += 1;
-    }
-    return revoked;
-  });
-}
-
 /** Revoke the exact outgoing grants captured before replacement began. */
 export function retireUnitClearanceGrantIds(input: {
   grantStore: CapabilityGrantStore;
