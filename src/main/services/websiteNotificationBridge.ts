@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { ipcMain, nativeImage, type IpcMainInvokeEvent, type WebContents } from "electron";
+import {
+  ipcMain,
+  nativeImage,
+  type IpcMainInvokeEvent,
+  type WebContents,
+  type WebFrameMain,
+} from "electron";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { BrowserPermissionController } from "./browserPermissionController.js";
 import type { ViewManager } from "../viewManager.js";
@@ -22,12 +28,18 @@ type LiveNotification = {
   panelId: string;
   origin: string;
   contents: WebContents;
+  frame: WebFrameMain;
+  pageUrl: string;
+  tag: string | null;
+  abort: AbortController;
   cleanup: () => void;
 };
 
 /** Narrow, sender-attributed bridge from document Notifications to shell chrome. */
 export class WebsiteNotificationBridge {
   private readonly live = new Map<string, LiveNotification>();
+  private readonly owned = new Set<LiveNotification>();
+  private readonly tagged = new Map<string, LiveNotification>();
   private readonly rate = new Map<string, number[]>();
   private started = false;
 
@@ -51,20 +63,18 @@ export class WebsiteNotificationBridge {
     this.started = false;
     ipcMain.removeHandler(SHOW_CHANNEL);
     ipcMain.removeHandler(CLOSE_CHANNEL);
-    for (const notification of this.live.values()) {
-      notification.cleanup();
-      this.sendLifecycle(notification, "close");
-      this.deps.eventService.emit("notification:dismiss", { id: notification.id });
-    }
-    this.live.clear();
+    for (const notification of this.owned) this.retire(notification, false);
     this.rate.clear();
   }
 
   handleAction(id: string, actionId: string): void {
     const notification = this.live.get(id);
     if (!notification) return;
-    if (actionId === "website-open") this.sendLifecycle(notification, "click");
-    this.close(notification);
+    try {
+      if (actionId === "website-open") this.sendLifecycle(notification, "click");
+    } finally {
+      this.retire(notification);
+    }
   }
 
   private readonly onShow = async (
@@ -73,83 +83,136 @@ export class WebsiteNotificationBridge {
     rawOptions: unknown
   ): Promise<string> => {
     const attribution = this.attribute(event);
-    if (!attribution) throw new Error("Website notification sender is not a browser panel");
-    await this.deps.permissions.refresh();
-    if (!this.deps.permissions.isGranted(attribution.origin, "notifications")) {
-      throw new Error("Website notifications are not allowed for this site");
-    }
-
+    if (!this.started || !attribution)
+      throw new Error("Website notification sender is not a browser main-frame document");
     const title = boundedString(rawTitle, "title", 1, 160);
     const options = notificationOptions(rawOptions);
-    const iconDataUrl = options.iconUrl
-      ? await this.fetchIcon(attribution.contents, options.iconUrl).catch(() => undefined)
-      : undefined;
-    this.consumeRateLimit(attribution.origin);
-    const id = notificationId(attribution.origin, options.tag);
-    const prior = this.live.get(id);
-    if (prior) this.close(prior);
-    const onDestroyed = () => this.close(notification);
+    const notification: LiveNotification = {
+      ...attribution,
+      id: notificationId(attribution.origin),
+      tag: options.tag ? JSON.stringify([attribution.origin, options.tag]) : null,
+      abort: new AbortController(),
+      cleanup: () => {
+        attribution.contents.off("destroyed", onRetire);
+        attribution.contents.off("render-process-gone", onRetire);
+        attribution.contents.off("did-start-navigation", onNavigation);
+      },
+    };
+    const onRetire = () => this.retire(notification, false);
     const onNavigation = (
       _event: Electron.Event,
       _url: string,
       _isInPlace: boolean,
       isMainFrame: boolean
     ) => {
-      if (isMainFrame) this.close(notification);
+      if (isMainFrame) onRetire();
     };
-    const notification: LiveNotification = {
-      id,
-      ...attribution,
-      cleanup: () => {
-        if (attribution.contents.isDestroyed()) return;
-        attribution.contents.off("destroyed", onDestroyed);
-        attribution.contents.off("did-start-navigation", onNavigation);
-      },
-    };
-    this.live.set(id, notification);
-    attribution.contents.once("destroyed", onDestroyed);
+    this.owned.add(notification);
+    attribution.contents.once("destroyed", onRetire);
+    attribution.contents.on("render-process-gone", onRetire);
     attribution.contents.on("did-start-navigation", onNavigation);
-
-    this.deps.eventService.emit("notification:show", {
-      id,
-      type: "info",
-      title,
-      ...(options.body ? { message: options.body } : {}),
-      ttl: 0,
-      sourcePanelId: attribution.panelId,
-      ...(iconDataUrl ? { iconDataUrl } : {}),
-      details: [
-        { label: "Origin", value: attribution.origin, mono: true },
-        { label: "Page", value: attribution.contents.getURL(), mono: true },
-      ],
-      actions: [
-        {
-          id: "website-open",
-          label: "Open",
-          variant: "solid",
-          command: { type: "panel.focus", panelId: attribution.panelId },
-        },
-      ],
-    });
-    return id;
+    try {
+      await this.deps.permissions.refresh();
+      this.assertCurrent(notification);
+      if (!this.deps.permissions.isGranted(attribution.origin, "notifications")) {
+        throw new Error("Website notifications are not allowed for this site");
+      }
+      const iconDataUrl = options.iconUrl
+        ? await this.fetchIcon(notification, options.iconUrl).catch(() => undefined)
+        : undefined;
+      this.assertCurrent(notification);
+      if (!this.deps.permissions.isGranted(attribution.origin, "notifications")) {
+        throw new Error("Website notifications are not allowed for this site");
+      }
+      this.consumeRateLimit(attribution.origin);
+      const prior = notification.tag ? this.tagged.get(notification.tag) : undefined;
+      if (prior) this.retire(prior);
+      this.assertCurrent(notification);
+      this.live.set(notification.id, notification);
+      if (notification.tag) this.tagged.set(notification.tag, notification);
+      this.deps.eventService.emit("notification:show", {
+        id: notification.id,
+        type: "info",
+        title,
+        ...(options.body ? { message: options.body } : {}),
+        ttl: 0,
+        sourcePanelId: attribution.panelId,
+        ...(iconDataUrl ? { iconDataUrl } : {}),
+        details: [
+          { label: "Origin", value: attribution.origin, mono: true },
+          { label: "Page", value: attribution.pageUrl, mono: true },
+        ],
+        actions: [
+          {
+            id: "website-open",
+            label: "Open",
+            variant: "solid",
+            command: { type: "panel.focus", panelId: attribution.panelId },
+          },
+        ],
+      });
+      return notification.id;
+    } catch (error) {
+      this.retire(notification, false);
+      throw error;
+    }
   };
 
   private readonly onClose = (event: IpcMainInvokeEvent, id: unknown): void => {
     if (typeof id !== "string") return;
     const notification = this.live.get(id);
-    if (!notification || notification.contents.id !== event.sender.id) return;
-    this.close(notification);
+    const sender = this.attribute(event);
+    if (
+      !notification ||
+      !sender ||
+      notification.contents !== sender.contents ||
+      notification.frame !== sender.frame
+    )
+      return;
+    this.retire(notification);
   };
 
   private attribute(
     event: IpcMainInvokeEvent
-  ): { panelId: string; origin: string; contents: WebContents } | null {
-    const manager = this.deps.getViewManager();
-    const panelId = manager?.findViewIdByWebContentsId(event.sender.id);
-    if (!panelId || !this.deps.permissions.ownsContents(event.sender)) return null;
-    const url = webUrl(event.sender.getURL());
-    if (!url) return null;
-    return { panelId, origin: url.origin, contents: event.sender };
+  ): Pick<LiveNotification, "panelId" | "origin" | "pageUrl" | "contents" | "frame"> | null {
+    const contents = event.sender;
+    const frame = event.senderFrame;
+    if (
+      contents.isDestroyed() ||
+      !frame ||
+      frame.isDestroyed() ||
+      frame.detached ||
+      frame !== contents.mainFrame
+    )
+      return null;
+    const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
+    if (!panelId || !this.deps.permissions.ownsContents(contents)) return null;
+    const url = webUrl(frame.url);
+    if (!url || frame.origin !== url.origin || webUrl(contents.getURL())?.href !== url.href)
+      return null;
+    return { panelId, origin: url.origin, pageUrl: url.href, contents, frame };
+  }
+
+  private isCurrent(notification: LiveNotification): boolean {
+    if (!this.started || !this.owned.has(notification) || notification.abort.signal.aborted)
+      return false;
+    const { contents, frame } = notification;
+    return (
+      !contents.isDestroyed() &&
+      !frame.isDestroyed() &&
+      !frame.detached &&
+      frame === contents.mainFrame &&
+      frame.origin === notification.origin &&
+      webUrl(frame.url)?.href === notification.pageUrl &&
+      webUrl(contents.getURL())?.href === notification.pageUrl &&
+      this.deps.permissions.ownsContents(contents) &&
+      this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id) === notification.panelId
+    );
+  }
+
+  private assertCurrent(notification: LiveNotification): void {
+    if (!this.isCurrent(notification))
+      throw new Error("Website notification document is no longer active");
   }
 
   private consumeRateLimit(origin: string): void {
@@ -162,41 +225,65 @@ export class WebsiteNotificationBridge {
     this.rate.set(origin, recent);
   }
 
-  private async fetchIcon(contents: WebContents, rawUrl: string): Promise<string> {
-    const url = new URL(rawUrl, contents.getURL());
+  private async fetchIcon(notification: LiveNotification, rawUrl: string): Promise<string> {
+    const url = new URL(rawUrl, notification.pageUrl);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("Website notification icon must use HTTP(S)");
     }
-    const response = await contents.session.fetch(url.href);
-    if (!response.ok) throw new Error(`Website notification icon returned HTTP ${response.status}`);
-    const mime = response.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
-    if (!mime.startsWith("image/")) throw new Error("Website notification icon is not an image");
-    const declared = Number(response.headers.get("content-length") ?? "0");
-    if (Number.isFinite(declared) && declared > MAX_ICON_BYTES) {
-      throw new Error("Website notification icon is too large");
+    const signal = notification.abort.signal;
+    signal.throwIfAborted();
+    const response = await notification.contents.session.fetch(url.href, { signal });
+    try {
+      signal.throwIfAborted();
+      if (!response.ok)
+        throw new Error(`Website notification icon returned HTTP ${response.status}`);
+      const mime = response.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
+      if (!mime.startsWith("image/")) throw new Error("Website notification icon is not an image");
+      const declared = Number(response.headers.get("content-length") ?? "0");
+      if (Number.isFinite(declared) && declared > MAX_ICON_BYTES) {
+        throw new Error("Website notification icon is too large");
+      }
+      const bytes = await readBoundedBody(response, MAX_ICON_BYTES, signal);
+      signal.throwIfAborted();
+      const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+      if (image.isEmpty()) throw new Error("Website notification icon could not be decoded");
+      const size = image.getSize();
+      if (size.width > 4096 || size.height > 4096) {
+        throw new Error("Website notification icon dimensions are too large");
+      }
+      return image.resize({ width: 32, height: 32, quality: "best" }).toDataURL();
+    } finally {
+      // We own the acquired response even when headers reject it before a reader exists.
+      await response.body?.cancel().catch(() => undefined);
     }
-    const bytes = await readBoundedBody(response, MAX_ICON_BYTES);
-    const image = nativeImage.createFromBuffer(Buffer.from(bytes));
-    if (image.isEmpty()) throw new Error("Website notification icon could not be decoded");
-    const size = image.getSize();
-    if (size.width > 4096 || size.height > 4096) {
-      throw new Error("Website notification icon dimensions are too large");
-    }
-    return image.resize({ width: 32, height: 32, quality: "best" }).toDataURL();
   }
 
-  private close(notification: LiveNotification): void {
-    if (this.live.get(notification.id) !== notification) return;
-    this.live.delete(notification.id);
-    notification.cleanup();
-    this.deps.eventService.emit("notification:dismiss", { id: notification.id });
-    this.sendLifecycle(notification, "close");
+  private retire(notification: LiveNotification, notifyDocument = true): void {
+    if (!this.owned.has(notification)) return;
+    const published = this.live.get(notification.id) === notification;
+    try {
+      if (published && notifyDocument) this.sendLifecycle(notification, "close");
+    } finally {
+      this.owned.delete(notification);
+      notification.abort.abort();
+      notification.cleanup();
+      if (notification.tag && this.tagged.get(notification.tag) === notification)
+        this.tagged.delete(notification.tag);
+      if (published) {
+        this.live.delete(notification.id);
+        this.deps.eventService.emit("notification:dismiss", { id: notification.id });
+      }
+    }
   }
 
-  private sendLifecycle(notification: LiveNotification, type: "show" | "click" | "close"): void {
-    if (notification.contents.isDestroyed()) return;
-    if (webUrl(notification.contents.getURL())?.origin !== notification.origin) return;
-    notification.contents.send(EVENT_CHANNEL, { id: notification.id, type });
+  private sendLifecycle(notification: LiveNotification, type: "click" | "close"): void {
+    if (!this.isCurrent(notification)) return;
+    try {
+      notification.frame.send(EVENT_CHANNEL, { id: notification.id, type });
+    } catch (error) {
+      // Native frame disposal can race the synchronous preflight check.
+      if (this.isCurrent(notification)) throw error;
+    }
   }
 }
 
@@ -225,12 +312,9 @@ function boundedString(value: unknown, label: string, minimum: number, maximum: 
   return value;
 }
 
-function notificationId(origin: string, tag: string | undefined): string {
+function notificationId(origin: string): string {
   const originHash = createHash("sha256").update(origin).digest("base64url").slice(0, 16);
-  const suffix = tag
-    ? createHash("sha256").update(tag).digest("base64url").slice(0, 16)
-    : randomUUID();
-  return `website:${originHash}:${suffix}`;
+  return `website:${originHash}:${randomUUID()}`;
 }
 
 function webUrl(value: string): URL | null {
@@ -242,26 +326,41 @@ function webUrl(value: string): URL | null {
   }
 }
 
-async function readBoundedBody(response: Response, limit: number): Promise<Uint8Array> {
+async function readBoundedBody(
+  response: Response,
+  limit: number,
+  signal: AbortSignal
+): Promise<Uint8Array> {
   if (!response.body) return new Uint8Array();
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    length += value.byteLength;
-    if (length > limit) {
-      await reader.cancel();
-      throw new Error("Website notification icon is too large");
+  const cancel = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) {
+        await reader.cancel();
+        throw new Error("Website notification icon is too large");
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
   }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
