@@ -243,6 +243,7 @@ interface NativePanelSlotModel {
   latestOperations: Map<string, { bindingSequence: number; operationSequence: number }>;
   desiredRevision: number;
   desiredFingerprint: string | null;
+  focusedWorkspaceId: string | null;
   hostGeneration: string;
   shellGeneration: string | null;
   observationRevision: number;
@@ -305,6 +306,7 @@ export class ViewManager {
     latestOperations: new Map(),
     desiredRevision: 0,
     desiredFingerprint: null,
+    focusedWorkspaceId: null,
     hostGeneration: `electron:${randomUUID()}`,
     shellGeneration: null,
     observationRevision: 0,
@@ -1108,7 +1110,7 @@ export class ViewManager {
         return { accepted: false, reason: "invalid-desired-state" };
       }
     }
-    const fingerprint = JSON.stringify(normalized);
+    const fingerprint = JSON.stringify([snapshot.focusedWorkspaceId, normalized]);
     if (snapshot.revision === this.nativePanelSlots.desiredRevision) {
       return this.nativePanelSlots.desiredFingerprint === fingerprint
         ? { accepted: true, observation: this.observeNativePanelSurfaces(ownerViewId) }
@@ -1142,6 +1144,7 @@ export class ViewManager {
       // error produced noisy warnings on every cold panel creation.
       if (this.views.has(panelId)) this.setViewVisible(panelId, surface.visible);
     }
+    this.nativePanelSlots.focusedWorkspaceId = snapshot.focusedWorkspaceId;
     this.nativePanelSlots.desiredFingerprint = fingerprint;
     this.nativePanelSlots.observationRevision += 1;
     return { accepted: true, observation: this.observeNativePanelSurfaces(ownerViewId) };
@@ -1183,6 +1186,7 @@ export class ViewManager {
       shellGeneration: this.nativePanelSlots.shellGeneration ?? "unclaimed",
       desiredRevision: this.nativePanelSlots.desiredRevision,
       observationRevision: this.nativePanelSlots.observationRevision,
+      focusedWorkspaceId: this.nativePanelSlots.focusedWorkspaceId,
       surfaces,
     };
   }
@@ -1240,6 +1244,7 @@ export class ViewManager {
       );
       this.clearAllPanelSlots();
       this.nativePanelSlots.desiredRevision = 0;
+      this.nativePanelSlots.focusedWorkspaceId = null;
       this.nativePanelSlots.desiredFingerprint = null;
       this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
       this.nativePanelSlots.activeHostedShellInstanceId = rendererInstanceId ?? null;
@@ -1280,6 +1285,7 @@ export class ViewManager {
     this.nativePanelSlots.hostedShellReady = false;
     this.clearAllPanelSlots();
     this.nativePanelSlots.desiredRevision = 0;
+    this.nativePanelSlots.focusedWorkspaceId = null;
     this.nativePanelSlots.desiredFingerprint = null;
     this.nativePanelSlots.shellGeneration = null;
     this.nativePanelSlots.activeHostedShellInstanceId = null;

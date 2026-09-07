@@ -12,6 +12,7 @@ export function createViewService(
     workspaceId: string;
     getViewManager: () => ViewManager;
     authorizeWorkspaceMaterialization?(workspaceId: string): Promise<void>;
+    onFocusedWorkspaceChanged?(workspaceId: string | null): void;
     onNativeSlotChanged?(nativeId: string, declared: boolean): void;
   } & Partial<Omit<PanelViewMethodDeps, "getViewManager">>
 ): ServiceDefinition {
@@ -119,6 +120,7 @@ export function createViewService(
       const workspaceIds = new Set(
         snapshot.surfaces.map((surface) => surface.materialization.workspaceId)
       );
+      if (snapshot.focusedWorkspaceId) workspaceIds.add(snapshot.focusedWorkspaceId);
       for (const workspaceId of workspaceIds) {
         if (deps.authorizeWorkspaceMaterialization)
           await deps.authorizeWorkspaceMaterialization(workspaceId);
@@ -128,6 +130,7 @@ export function createViewService(
       const previousPanelIds = new Set(vm.getDeclaredPanelSlotIds());
       const result = await vm.applyNativePanelSurfaces(ctx.caller.runtime.id, snapshot);
       if (result.accepted) {
+        deps.onFocusedWorkspaceChanged?.(result.observation.focusedWorkspaceId);
         const currentPanelIds = new Set(vm.getDeclaredPanelSlotIds());
         for (const panelId of previousPanelIds) {
           if (!currentPanelIds.has(panelId)) deps.onNativeSlotChanged?.(panelId, false);

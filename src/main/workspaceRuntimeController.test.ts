@@ -506,6 +506,8 @@ describe("workspace runtime ownership", () => {
       new Error("lease release failed")
     );
     await expect(owner.runtime.close()).rejects.toThrow("Workspace runtime cleanup failed");
+    await owner.runtime.close();
+    expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledTimes(2);
     expect(owner.managedStop).toHaveBeenCalledOnce();
     expect(owner.download.stop).toHaveBeenCalledOnce();
     expect(owner.cdp.stop).toHaveBeenCalledOnce();

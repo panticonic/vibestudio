@@ -62,6 +62,7 @@ export type EventName =
   | "workspace-presence-changed"
   | "open-workspace-switcher"
   | "workspace-focused"
+  | "hub:workspace-catalog-changed"
   | "open-settings"
   | "open-command-palette"
   | "open-command-agent"
@@ -199,6 +200,17 @@ export interface NotificationPayload {
  * Event payloads for type safety.
  */
 export interface EventPayloads {
+  "hub:workspace-catalog-changed": {
+    workspaces: Array<{
+      workspaceId: string;
+      name: string;
+      lastOpened: number;
+      running: boolean;
+      pendingApprovalCount: number;
+      ephemeral?: boolean;
+      privateRole?: "personal" | "system";
+    }>;
+  };
   "development:run-event": {
     runId: string;
     sessionId: string;
@@ -528,6 +540,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel:snapshot",
   "open-workspace-switcher",
   "workspace-focused",
+  "hub:workspace-catalog-changed",
   "open-settings",
   "open-command-palette",
   "open-command-agent",

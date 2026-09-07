@@ -274,7 +274,7 @@ export class ServiceContainer {
     if (!this.started) return;
 
     log.info(`Stopping ${this.startOrder.length} services...`);
-
+    const failures: unknown[] = [];
     for (const name of [...this.startOrder].reverse()) {
       const service = this.services.get(name);
       if (service?.stop) {
@@ -283,13 +283,15 @@ export class ServiceContainer {
           await service.stop(this.instances.get(name));
         } catch (e) {
           console.error(`[ServiceContainer] Stop error for "${name}":`, e);
+          failures.push(e);
+          continue;
         }
       }
+      this.instances.delete(name);
+      this.startOrder = this.startOrder.filter((startedName) => startedName !== name);
     }
-
-    this.instances.clear();
-    this.startOrder = [];
-    this.started = false;
+    if (failures.length) throw new AggregateError(failures, "Service container cleanup failed");
+    this.started = this.startOrder.length > 0;
   }
 
   /**

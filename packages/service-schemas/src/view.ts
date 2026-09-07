@@ -12,7 +12,7 @@ import { panelMethods } from "./panel.js";
 
 /** Electron-local shell to native WebContents projection. Cross-client runtime
  * ownership remains exclusively in panelRuntime. */
-export const NATIVE_PANEL_SURFACE_PROTOCOL_VERSION = 1 as const;
+export const NATIVE_PANEL_SURFACE_PROTOCOL_VERSION = 2 as const;
 const nativeSurfaceIdentity = z.string().min(1);
 const nativeSurfaceRevision = z.number().int().nonnegative();
 export const NativePanelAdapterHelloSchema = z
@@ -42,7 +42,11 @@ export const DesiredNativePanelSurfaceSchema = z
   .object({
     surfaceId: nativeSurfaceIdentity,
     materialization: z
-      .object({ workspaceId: nativeSurfaceIdentity, runtimeEntityId: nativeSurfaceIdentity, leaseConnectionId: nativeSurfaceIdentity })
+      .object({
+        workspaceId: nativeSurfaceIdentity,
+        runtimeEntityId: nativeSurfaceIdentity,
+        leaseConnectionId: nativeSurfaceIdentity,
+      })
       .strict(),
     visible: z.boolean(),
     focused: z.boolean(),
@@ -62,6 +66,7 @@ export const NativePanelDesiredSnapshotSchema = z
     hostGeneration: nativeSurfaceIdentity,
     shellGeneration: nativeSurfaceIdentity,
     revision: nativeSurfaceRevision,
+    focusedWorkspaceId: nativeSurfaceIdentity.nullable(),
     surfaces: z.array(DesiredNativePanelSurfaceSchema),
   })
   .strict();
@@ -73,6 +78,7 @@ export const NativePanelObservedSnapshotSchema = z
     shellGeneration: nativeSurfaceIdentity,
     desiredRevision: nativeSurfaceRevision,
     observationRevision: nativeSurfaceRevision,
+    focusedWorkspaceId: nativeSurfaceIdentity.nullable(),
     surfaces: z.array(
       z
         .object({

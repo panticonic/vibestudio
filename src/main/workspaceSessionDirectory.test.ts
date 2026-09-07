@@ -81,6 +81,98 @@ describe("desktop workspace session ownership", () => {
     await directory.close();
   });
 
+  it("retires only sessions absent from an authoritative catalog and deduplicates cleanup", async () => {
+    const personal = session("personal");
+    const project = session("project");
+    const directory = new WorkspaceSessionDirectory(personal, async () => project);
+    await directory.get("project");
+    const beforeRelease = vi.fn(async () => {});
+    await Promise.all([
+      directory.reconcile(new Set(["personal"]), beforeRelease),
+      directory.reconcile(new Set(["personal"]), beforeRelease),
+    ]);
+    expect(beforeRelease).toHaveBeenCalledTimes(1);
+    expect(beforeRelease).toHaveBeenCalledWith("project");
+    expect(project.close).toHaveBeenCalledTimes(1);
+    expect(personal.close).not.toHaveBeenCalled();
+    await directory.close();
+  });
+
+  it("does not open a workspace absent from the authoritative catalog", async () => {
+    const connect = vi.fn(async () => session("project"));
+    const directory = new WorkspaceSessionDirectory(session("personal"), connect);
+    await directory.reconcile(new Set(["personal"]));
+
+    await expect(directory.get("project")).rejects.toThrow("access was removed");
+    expect(connect).not.toHaveBeenCalled();
+    await directory.close();
+  });
+
+  it("does not let a delayed bootstrap snapshot overwrite a catalog event", async () => {
+    const connect = vi.fn(async () => session("project"));
+    const directory = new WorkspaceSessionDirectory(session("personal"), connect);
+    await directory.reconcile(new Set(["personal"]));
+    directory.initializeCatalog(new Set(["personal", "project"]));
+
+    expect(directory.hasAuthoritativeCatalog).toBe(true);
+    await expect(directory.get("project")).rejects.toThrow("access was removed");
+    expect(connect).not.toHaveBeenCalled();
+    await directory.close();
+  });
+
+  it("retires a connection removed while opening and admits a later re-add", async () => {
+    const opening = deferred<ReturnType<typeof session>>();
+    const first = session("project");
+    const replacement = session("project");
+    const connect = vi.fn().mockReturnValueOnce(opening.promise).mockResolvedValue(replacement);
+    const directory = new WorkspaceSessionDirectory(session("personal"), connect);
+    await directory.reconcile(new Set(["personal", "project"]));
+    const pending = directory.get("project");
+
+    const removal = directory.reconcile(new Set(["personal"]));
+    await expect(directory.get("project")).rejects.toThrow("closing");
+    opening.resolve(first);
+    await expect(pending).rejects.toThrow("access was removed during connection");
+    await removal;
+    expect(first.close).toHaveBeenCalledTimes(1);
+
+    await directory.reconcile(new Set(["personal", "project"]));
+    await expect(directory.get("project")).resolves.toBe(replacement);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await directory.close();
+  });
+
+  it("establishes retirement ownership before running cleanup callbacks", async () => {
+    const project = session("project");
+    const directory = new WorkspaceSessionDirectory(session("personal"), async () => project);
+    await directory.get("project");
+    let reentrant!: Promise<void>;
+    const beforeRelease = vi.fn(async (id: string) => {
+      await expect(directory.get(id)).rejects.toThrow("closing");
+      reentrant = directory.reconcile(new Set(["personal"]));
+    });
+    await directory.reconcile(new Set(["personal"]), beforeRelease);
+    await reentrant;
+    expect(beforeRelease).toHaveBeenCalledTimes(1);
+    expect(project.close).toHaveBeenCalledTimes(1);
+    await directory.close();
+  });
+
+  it("retains a failed catalog retirement and retries it on the next snapshot", async () => {
+    const project = session("project");
+    project.close.mockRejectedValueOnce(new Error("Still attached"));
+    const directory = new WorkspaceSessionDirectory(session("personal"), async () => project);
+    await directory.get("project");
+    await expect(directory.reconcile(new Set(["personal"]))).rejects.toThrow(
+      "Workspace membership cleanup failed"
+    );
+    expect(project.close).toHaveBeenCalledTimes(1);
+    await expect(directory.get("project")).rejects.toThrow("closing");
+    await directory.reconcile(new Set(["personal"]));
+    expect(project.close).toHaveBeenCalledTimes(2);
+    await directory.close();
+  });
+
   it("reports cleanup failures and does not abandon other owned sessions", async () => {
     const personal = session("personal");
     personal.close.mockRejectedValue(new Error("Still attached"));
@@ -93,11 +185,12 @@ describe("desktop workspace session ownership", () => {
   });
   it("retains a rejected identity when its physical connection fails to close", async () => {
     const wrong = session("wrong");
-    wrong.close.mockRejectedValue(new Error("Native transport still attached"));
+    wrong.close.mockRejectedValueOnce(new Error("Native transport still attached"));
     const directory = new WorkspaceSessionDirectory(session("personal"), async () => wrong);
     await expect(directory.get("project")).rejects.toThrow("still attached");
     await expect(directory.get("project")).rejects.toThrow("closing");
-    await expect(directory.close()).rejects.toThrow("Workspace session cleanup failed");
-    expect(wrong.close).toHaveBeenCalledTimes(1);
+    await directory.reconcile(new Set(["personal"]));
+    expect(wrong.close).toHaveBeenCalledTimes(2);
+    await directory.close();
   });
 });

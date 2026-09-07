@@ -54,7 +54,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   >;
   view?: Pick<
     Parameters<typeof createViewService>[0],
-    "authorizeWorkspaceMaterialization" | "onNativeSlotChanged"
+    "authorizeWorkspaceMaterialization" | "onNativeSlotChanged" | "onFocusedWorkspaceChanged"
   >;
   app?: Pick<
     Parameters<typeof createAppService>[0],
@@ -227,56 +227,66 @@ export function createDesktopWorkspaceRuntime(deps: {
   });
   let closing: Promise<void> | null = null;
   let disposing: Promise<void> | null = null;
+  let disposed = false;
   let closed = false;
   const assertOpen = () => {
     if (closed) throw new Error("Workspace runtime is closed");
   };
-  const dispose = () =>
-    (disposing ??= (async () => {
+  type CleanupStep = { done: boolean; run: () => unknown };
+  const producerCleanup: CleanupStep[] = [
+    stopDirectEvents,
+    stopAttention,
+    stopNotificationAction,
+    stopCapture,
+    stopRecovery,
+    stopStatus,
+    () => browserPermissions.stop(),
+    () => cdp?.stop(),
+    () => {
+      if (panelLogFlushTimer) clearTimeout(panelLogFlushTimer);
+    },
+  ].map((run) => ({ done: false, run }));
+  const resourceCleanup: CleanupStep[] = [
+    () => watch.close(),
+    () => controller.orchestrator.unregisterRuntimeClient(),
+    () => container.stopAll(),
+    () => downloads?.stop(),
+    () => flushPanelLog(),
+  ].map((run) => ({ done: false, run }));
+  const ownerCleanup: CleanupStep[] = [
+    () => controller.core.shutdown(),
+    () => window.detachWorkspace(workspaceId),
+  ].map((run) => ({ done: false, run }));
+  const runCleanup = async (steps: CleanupStep[]): Promise<unknown[]> => {
+    const results = await Promise.allSettled(
+      steps
+        .filter((step) => !step.done)
+        .map(async (step) => {
+          await step.run();
+          step.done = true;
+        })
+    );
+    return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  };
+  const dispose = () => {
+    if (disposed) return Promise.resolve();
+    if (disposing) return disposing;
+    const operation = (async () => {
       const errors: unknown[] = [];
       // Stop every producer even when one teardown fails, then drain work before
       // retiring the core and native owner. Connection lifetime is the caller's.
-      for (const stop of [
-        stopDirectEvents,
-        stopAttention,
-        stopNotificationAction,
-        stopCapture,
-        stopRecovery,
-        stopStatus,
-        () => browserPermissions.stop(),
-        () => cdp?.stop(),
-        () => {
-          if (panelLogFlushTimer) clearTimeout(panelLogFlushTimer);
-        },
-      ]) {
-        try {
-          stop();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      const results = await Promise.allSettled(
-        [
-          () => watch.close(),
-          () => controller.orchestrator.unregisterRuntimeClient(),
-          () => container.stopAll(),
-          () => downloads?.stop(),
-          () => flushPanelLog(),
-        ].map((stop) => Promise.resolve().then(stop))
-      );
-      for (const result of results) if (result.status === "rejected") errors.push(result.reason);
-      for (const stop of [
-        () => controller.core.shutdown(),
-        () => window.detachWorkspace(workspaceId),
-      ]) {
-        try {
-          stop();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
+      errors.push(...(await runCleanup(producerCleanup)));
+      errors.push(...(await runCleanup(resourceCleanup)));
+      errors.push(...(await runCleanup(ownerCleanup)));
       if (errors.length) throw new AggregateError(errors, "Workspace runtime cleanup failed");
-    })());
+      disposed = true;
+    })();
+    disposing = operation;
+    void operation.catch(() => {
+      if (disposing === operation) disposing = null;
+    });
+    return operation;
+  };
   const panelLogClient = createTypedServiceClient(
     "panelLog",
     panelLogMethods,
@@ -339,10 +349,16 @@ export function createDesktopWorkspaceRuntime(deps: {
   let starting: Promise<void> | null = null;
   const close = () => {
     closed = true;
-    return (closing ??= (async () => {
+    if (closing) return closing;
+    const operation = (async () => {
       await starting?.catch(() => undefined);
       await dispose();
-    })());
+    })();
+    closing = operation;
+    void operation.catch(() => {
+      if (closing === operation) closing = null;
+    });
+    return operation;
   };
   const start = () =>
     (starting ??= (async () => {

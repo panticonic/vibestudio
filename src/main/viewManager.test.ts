@@ -948,15 +948,16 @@ describe("ViewManager", () => {
       });
       const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
         sealedLaunchIdentity: "@workspace-apps/shell",
-        supportedProtocolVersions: [1],
+        supportedProtocolVersions: [2],
       });
       expect(connected.accepted).toBe(true);
       if (!connected.accepted) throw new Error("expected Electron panel host handshake");
       const desired = {
-        protocolVersion: 1 as const,
+        protocolVersion: 2 as const,
         hostGeneration: connected.handshake.hostGeneration,
         shellGeneration: connected.handshake.shellGeneration,
         revision: 1,
+        focusedWorkspaceId: null,
         surfaces: [
           {
             surfaceId: "slot-1",
@@ -981,6 +982,12 @@ describe("ViewManager", () => {
           surfaces: [{ surfaceId: "slot-1" }],
         },
       });
+      await expect(
+        vm.applyNativePanelSurfaces("@workspace-apps/shell", {
+          ...desired,
+          focusedWorkspaceId: "other-workspace",
+        })
+      ).resolves.toEqual({ accepted: false, reason: "revision-conflict" });
       expect(panelView.webContents.focus).not.toHaveBeenCalled();
       await expect(
         vm.applyNativePanelSurfaces("@workspace-apps/shell", desired)
@@ -995,7 +1002,7 @@ describe("ViewManager", () => {
 
       const replacement = vm.connectNativePanelAdapter("@workspace-apps/shell", {
         sealedLaunchIdentity: "@workspace-apps/shell",
-        supportedProtocolVersions: [1],
+        supportedProtocolVersions: [2],
       });
       expect(replacement.accepted).toBe(true);
       await expect(vm.applyNativePanelSurfaces("@workspace-apps/shell", desired)).resolves.toEqual({
@@ -1014,17 +1021,18 @@ describe("ViewManager", () => {
       });
       const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
         sealedLaunchIdentity: "@workspace-apps/shell",
-        supportedProtocolVersions: [1],
+        supportedProtocolVersions: [2],
       });
       if (!connected.accepted) throw new Error("expected Electron panel host handshake");
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
       await expect(
         vm.applyNativePanelSurfaces("@workspace-apps/shell", {
-          protocolVersion: 1,
+          protocolVersion: 2,
           hostGeneration: connected.handshake.hostGeneration,
           shellGeneration: connected.handshake.shellGeneration,
           revision: 1,
+          focusedWorkspaceId: null,
           surfaces: [
             {
               surfaceId: "slot-new",

@@ -422,6 +422,30 @@ describe("ServiceContainer", () => {
     expect(stoppedInstances).toEqual([{ id: "instance-a" }]);
   });
 
+  it("retries only service owners whose teardown failed", async () => {
+    const container = new ServiceContainer();
+    const stopA = vi.fn(async () => {});
+    const stopB = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("still stopping"))
+      .mockResolvedValue(undefined);
+    container.registerManaged({ name: "a", start: async () => "a", stop: stopA });
+    container.registerManaged({
+      name: "b",
+      dependencies: ["a"],
+      start: async () => "b",
+      stop: stopB,
+    });
+    await container.startAll();
+    await expect(container.stopAll()).rejects.toThrow("Service container cleanup failed");
+    expect(container.has("a")).toBe(false);
+    expect(container.has("b")).toBe(true);
+    await container.stopAll();
+    expect(stopA).toHaveBeenCalledTimes(1);
+    expect(stopB).toHaveBeenCalledTimes(2);
+    expect(container.has("b")).toBe(false);
+  });
+
   it("registerRpc() registers the RPC definition with the dispatcher", async () => {
     const registerService = vi.fn();
     const dispatcher = { registerService } as any;

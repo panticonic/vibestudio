@@ -346,6 +346,28 @@ describe("PanelOrchestrator.closePanel", () => {
     ).toHaveLength(1);
   });
 
+  it("retains runtime registration ownership until unregister succeeds", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "host-session",
+        platform: "headless",
+        loadOnLeaseAssignment: true,
+        label: "Headless",
+        supportsCdp: true,
+      },
+    });
+    await orchestrator.registerRuntimeClient();
+    serverClient.call.mockRejectedValueOnce(new Error("transport closing"));
+    await expect(orchestrator.unregisterRuntimeClient()).rejects.toThrow("transport closing");
+    await orchestrator.unregisterRuntimeClient();
+    expect(
+      serverClient.call.mock.calls.filter(
+        ([service, method]) => service === "panelRuntime" && method === "unregisterClient"
+      )
+    ).toHaveLength(2);
+  });
+
   it("navigates away when closing a root that contains the focused panel", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const closingRoot = makePanel("panel:tree/closing-root");

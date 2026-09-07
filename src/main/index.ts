@@ -1,3 +1,4 @@
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
 import {
   app,
@@ -376,6 +377,7 @@ let electronHostLaunchLastStatusKey: string | null = null;
 let activeIpcDispatcher: import("./ipcDispatcher.js").IpcDispatcher | null = null;
 type DesktopUiWorkspaceRuntime = import("./workspaceRuntimeController.js").DesktopWorkspaceRuntime;
 const desktopWorkspaceRuntimes = new Map<string, Promise<DesktopUiWorkspaceRuntime>>();
+let closeWorkspaceCatalogWatch: (() => Promise<void>) | null = null;
 const openNativeControllers = new Map<string, DesktopUiWorkspaceRuntime>();
 const adBlockManager = new AdBlockManager();
 
@@ -2136,7 +2138,29 @@ app.on("ready", async () => {
       nativeNotification.show();
     }
   };
-  const ensureDesktopWorkspace = (id: string): Promise<DesktopUiWorkspaceRuntime> => {
+  let workspaceCatalogBootstrap: Promise<void> | null = null;
+  const ensureDesktopWorkspace = async (id: string): Promise<DesktopUiWorkspaceRuntime> => {
+    const sessions = assertPresent(serverSession).workspaceSessions;
+    if (!sessions.hasAuthoritativeCatalog) {
+      workspaceCatalogBootstrap ??= (async () => {
+        const members = (await assertPresent(serverSession).hubControlClient.call(
+          "hubControl",
+          "listWorkspaces",
+          []
+        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+        // A catalog event received while this read was in flight wins.
+        sessions.initializeCatalog(new Set(members.map((entry) => entry.workspaceId)));
+      })();
+      try {
+        await workspaceCatalogBootstrap;
+      } catch (error) {
+        workspaceCatalogBootstrap = null;
+        throw error;
+      }
+    }
+    // Catalog admission is checked even for a cached native runtime. A removal
+    // cannot be bypassed by a stale UI selection or delayed list response.
+    await sessions.get(id);
     const existing = desktopWorkspaceRuntimes.get(id);
     if (existing) return existing;
     const opening = Promise.resolve().then(async () => {
@@ -2203,20 +2227,6 @@ app.on("ready", async () => {
       if (desktopWorkspaceRuntimes.get(id) === opening) desktopWorkspaceRuntimes.delete(id);
     });
     return opening;
-  };
-  let routeGeneration = 0;
-  const handleWorkspaceRoute = async (
-    route: import("@vibestudio/service-schemas/hubControl").HubWorkspaceRoute
-  ) => {
-    const generation = ++routeGeneration;
-    await ensureDesktopWorkspace(route.workspaceId);
-    if (generation !== routeGeneration) return;
-    applicationWindow.focusWorkspace(route.workspaceId);
-    activeIpcDispatcher?.sendEventToShell(
-      assertPresent(serverSession).workspaceId,
-      "workspace-focused",
-      { workspaceId: route.workspaceId }
-    );
   };
   const systemEvents: NonNullable<
     Parameters<
@@ -2435,6 +2445,7 @@ app.on("ready", async () => {
         workspaceConnection.transport("connected");
       },
       view: {
+        onFocusedWorkspaceChanged: (workspaceId) => applicationWindow.focusWorkspace(workspaceId),
         authorizeWorkspaceMaterialization: async (workspaceId) => {
           const members = await conn.hubControlClient.call("hubControl", "listWorkspaces", []);
           if (
@@ -2619,46 +2630,56 @@ app.on("ready", async () => {
     const electronContainer = workspaceController.container;
     const { serverClient: sc } = conn;
 
-    // Account-host services belong to the System workspace.
-    const { createHubControlHostService } = await import("./services/hubControlService.js");
-    electronContainer.registerRpc(
-      createHubControlHostService({
-        client: conn.hubControlClient,
-        getViewManager,
-        onWorkspaceRoute: handleWorkspaceRoute,
-        onWorkspaceCatalog: async (entries) => {
-          const members = new Set(entries.map((entry) => entry.workspaceId));
-          const retiring = [...desktopWorkspaceRuntimes].filter(
-            ([id]) => id !== conn.workspaceId && !members.has(id)
-          );
-          for (const [id] of retiring) {
-            desktopWorkspaceRuntimes.delete(id);
+    // Native workspace lifetime follows the authenticated catalog, independently
+    // of which UI happens to list or select workspaces.
+    const catalogEvents = new EventsClient({
+      stream: (_target, method, args, options) => {
+        const separator = method.indexOf(".");
+        return conn.hubControlClient.stream(
+          method.slice(0, separator),
+          method.slice(separator + 1),
+          args,
+          options
+        );
+      },
+    });
+    let catalogClosed = false;
+    let catalogTail = Promise.resolve();
+    const stopCatalog = catalogEvents.on("hub:workspace-catalog-changed", ({ workspaces }) => {
+      const reconcile = async () => {
+        if (catalogClosed) return;
+        await conn.workspaceSessions.reconcile(
+          new Set(workspaces.map((entry) => entry.workspaceId)),
+          async (id) => {
+            const opening = desktopWorkspaceRuntimes.get(id);
+            // Remove admission before awaiting cleanup. The session directory
+            // retains failed retirement ownership and blocks reuse.
             openNativeControllers.delete(id);
             approvalAttention?.removeWorkspace(id);
+            applicationWindow.detachWorkspace(id);
             if (personalWorkspaceId === id) {
               personalWorkspaceId = null;
               personalBrowserServices = null;
             }
+            if (opening) {
+              await (await opening).close();
+              if (desktopWorkspaceRuntimes.get(id) === opening) desktopWorkspaceRuntimes.delete(id);
+            }
           }
-          const retired = await Promise.allSettled(
-            retiring.map(async ([id, opening]) => {
-              try {
-                await (await opening).close();
-              } finally {
-                await conn.workspaceSessions.release(id);
-              }
-            })
-          );
-          const errors = retired.flatMap((result) =>
-            result.status === "rejected" ? [result.reason] : []
-          );
-          if (errors.length) throw new AggregateError(errors, "Workspace removal cleanup failed");
-        },
-      })
-    );
-    // Current-workspace operations route to the selected child. Server-wide
-    // catalog/account control routes to the stable hub through the host service
-    // above; the child is never a control-plane deputy.
+        );
+      };
+      catalogTail = catalogTail.then(reconcile, reconcile).catch((error: unknown) => {
+        console.error("Workspace membership cleanup failed:", error);
+      });
+    });
+    closeWorkspaceCatalogWatch = async () => {
+      catalogClosed = true;
+      stopCatalog();
+      await catalogEvents.unsubscribeAll();
+      await catalogTail;
+    };
+    await catalogEvents.subscribe("hub:workspace-catalog-changed");
+
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.registerRpc(
       createRemoteCredService({
@@ -2956,6 +2977,10 @@ app.on("ready", async () => {
 
     // Fail-fast: clean up all partial state, show error, and exit.
     const cleanupPromises: Promise<void>[] = [];
+    const closeCatalog = closeWorkspaceCatalogWatch;
+    closeWorkspaceCatalogWatch = null;
+    if (closeCatalog)
+      await closeCatalog().catch((error) => console.error("Catalog cleanup failed", error));
     const runtimes = [...desktopWorkspaceRuntimes.values()];
     desktopWorkspaceRuntimes.clear();
     openNativeControllers.clear();
@@ -3102,6 +3127,10 @@ app.on("will-quit", (event) => {
   console.log("[App] Shutting down...");
 
   const stopPromises: Promise<void>[] = [];
+  const closeCatalog = closeWorkspaceCatalogWatch;
+  closeWorkspaceCatalogWatch = null;
+  const catalogClose = closeCatalog?.();
+  if (catalogClose) stopPromises.push(catalogClose);
   let developmentExecutorClose: Promise<void> | null = null;
 
   if (activeIpcDispatcher) {
@@ -3136,6 +3165,7 @@ app.on("will-quit", (event) => {
       // Exit receipts are server RPCs too. Let the executor finish them before
       // the session is closed, otherwise an in-flight heartbeat/receipt races
       // teardown and reports a misleading connection failure.
+      await catalogClose;
       await developmentExecutorClose;
 
       const runtimes = [...desktopWorkspaceRuntimes.values()];

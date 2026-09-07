@@ -117,6 +117,7 @@ export class PanelPresentationController {
   private readonly loadOnLeaseAssignment: boolean;
   private readonly resources: PanelResourcePolicy;
   private clientRegistered = false;
+  private resourcesStopped = false;
   private readonly connectionBySlot = new Map<
     string,
     { runtimeEntityId: string; connectionId: string; ownerToken?: object }
@@ -436,6 +437,7 @@ export class PanelPresentationController {
   async registerClient(): Promise<void> {
     await this.ensureClientRegistered();
     this.resources.start();
+    this.resourcesStopped = false;
     await this.repairLeasesForExistingViews();
   }
 
@@ -451,10 +453,13 @@ export class PanelPresentationController {
   }
 
   async unregisterClient(): Promise<void> {
-    this.resources.stop();
+    if (!this.resourcesStopped) {
+      this.resources.stop();
+      this.resourcesStopped = true;
+    }
     if (!this.clientRegistered) return;
-    this.clientRegistered = false;
     await this.panelRuntime.unregisterClient(this.clientSessionId);
+    this.clientRegistered = false;
   }
 
   async syncLeaseSnapshot(): Promise<void> {

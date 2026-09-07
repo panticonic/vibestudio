@@ -1061,10 +1061,41 @@ describe("hub RPC pairing surfacing (§5)", () => {
       pairing: CHILD_REACH,
       rpcServer: {} as never,
       grantStore: { close: vi.fn() } as never,
+      eventService: { emitProjected: vi.fn() } as never,
       inviteExpiryTimers: new Map(),
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
+
+  it("publishes an owner-projected full catalog after membership removal", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    state.membershipStore.add(rootUserId, runtime.workspaceId, rootUserId, "admin");
+    const member = state.userStore.inviteUser({
+      handle: "catalog_member",
+      displayName: "Catalog member",
+      role: "member",
+      createdBy: rootUserId,
+    });
+    state.membershipStore.add(member.id, runtime.workspaceId, rootUserId);
+    await executeHubControl(
+      state,
+      { userId: rootUserId, handle: "root", role: "root" },
+      "removeWorkspaceMember",
+      [{ workspace: runtime.advertisedName, userId: member.id }],
+      vi.fn()
+    );
+    const emit = vi.mocked(state.controlTransport!.eventService.emitProjected);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0]?.[0]).toBe("hub:workspace-catalog-changed");
+    const project = emit.mock.calls[0]?.[1];
+    expect(project?.({ userId: member.id, callerId: "member", callerKind: "shell" })).toEqual({
+      workspaces: [],
+    });
+    expect(project?.({ userId: rootUserId, callerId: "root", callerKind: "shell" })).toEqual({
+      workspaces: [expect.objectContaining({ workspaceId: runtime.workspaceId })],
+    });
+  });
 
   it("uses workspace administration for RPC policy independently of account role", async () => {
     const runtime = fakeRuntime(9, {});

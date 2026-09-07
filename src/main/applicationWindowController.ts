@@ -105,8 +105,8 @@ export class ApplicationWindowController {
     return this.currentLifetime?.panelViews.get(workspaceId) ?? null;
   }
 
-  focusWorkspace(workspaceId: string): void {
-    if (!this.workspaceServices.has(workspaceId))
+  focusWorkspace(workspaceId: string | null): void {
+    if (workspaceId !== null && !this.workspaceServices.has(workspaceId))
       throw new Error(`Workspace is not open: ${workspaceId}`);
     this.focusedWorkspaceId = workspaceId;
   }

@@ -58,6 +58,7 @@ import {
 import {
   hubControlMethods,
   HubReadyPayloadSchema,
+  type HubWorkspaceEntry,
   type HubPairingInvite,
   type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
@@ -230,6 +231,7 @@ interface HubControlTransport {
   pairing: IrohReach;
   rpcServer: import("./rpcServer.js").RpcServer;
   grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
+  eventService: EventService;
   inviteExpiryTimers: Map<string, NodeJS.Timeout>;
 }
 
@@ -738,10 +740,7 @@ function workspacePendingApprovalCount(
     : 0;
 }
 
-function listHubWorkspaces(
-  state: HubRuntimeState,
-  viewer: HubSubject | null
-): Array<Record<string, unknown>> {
+function listHubWorkspaces(state: HubRuntimeState, viewer: HubSubject | null): HubWorkspaceEntry[] {
   const registered = state.centralData.listWorkspaces();
   // The ready file has no human subject. It may advertise ordinary entries
   // needed by process bootstrap, but private designations are owner-only.
@@ -750,7 +749,7 @@ function listHubWorkspaces(
       (viewer && state.membershipStore.has(viewer.userId, entry.workspaceId)) ||
       (!viewer && entry.privateRole === undefined)
   );
-  const entries: Array<Record<string, unknown>> = visible.map((entry) => {
+  const entries: HubWorkspaceEntry[] = visible.map((entry) => {
     return {
       name: entry.name,
       workspaceId: entry.workspaceId,
@@ -767,6 +766,24 @@ function listHubWorkspaces(
     };
   });
   return entries;
+}
+
+function workspaceCatalogForUser(state: HubRuntimeState, userId: string) {
+  const user = state.userStore.getUser(userId);
+  if (!user || user.revokedAt !== undefined) return undefined;
+  return {
+    workspaces: listHubWorkspaces(state, {
+      userId: user.id,
+      handle: user.handle,
+      role: user.role,
+    }),
+  };
+}
+
+function emitWorkspaceCatalogChanged(state: HubRuntimeState): void {
+  state.controlTransport?.eventService.emitProjected("hub:workspace-catalog-changed", (owner) =>
+    owner.userId ? workspaceCatalogForUser(state, owner.userId) : undefined
+  );
 }
 
 function hubUserPresence(
@@ -1493,8 +1510,13 @@ export async function executeHubControl(
 
   if (method === "ensureUserWorkspaces") {
     const templates = readDefaultWorkspaceTemplates(state.appRoot);
+    const before = new Set(
+      listHubWorkspaces(state, subject).map((workspace) => workspace.workspaceId)
+    );
     const pair = state.centralData.ensurePrivateWorkspaces(subject.userId, templates);
     bindDevelopmentWritebackWorkspace(state);
+    if (!before.has(pair.personal.workspaceId) || !before.has(pair.system.workspaceId))
+      emitWorkspaceCatalogChanged(state);
     respond({
       personal: {
         ...pair.personal,
@@ -1602,6 +1624,7 @@ export async function executeHubControl(
       deleteAndUnregisterWorkspace(name, state.centralData, nativeWorkspaceCleanup(state.appRoot));
       throw error;
     }
+    emitWorkspaceCatalogChanged(state);
     respond({ ...entry, running: false, pendingApprovalCount: 0 });
     return;
   }
@@ -1636,6 +1659,7 @@ export async function executeHubControl(
       selectWorkspaceCreationRootTemplate({ appRoot: state.appRoot })
     );
     state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
+    emitWorkspaceCatalogChanged(state);
     respond({
       workspaceId: entry.workspaceId,
       name: entry.name,
@@ -1672,6 +1696,7 @@ export async function executeHubControl(
           state.centralData,
           nativeWorkspaceCleanup(state.appRoot)
         );
+    if (removedWorkspaceId) emitWorkspaceCatalogChanged(state);
     respond({ deleted: removedWorkspaceId !== null, workspaceId: removedWorkspaceId });
     return;
   }
@@ -1705,6 +1730,7 @@ export async function executeHubControl(
       else state.identityDb.removeMembership(target.id, workspaceId);
       throw error;
     }
+    emitWorkspaceCatalogChanged(state);
     respond({ ...membership, workspace: name, handle: target.handle });
     return;
   }
@@ -1730,6 +1756,7 @@ export async function executeHubControl(
         throw error;
       }
     }
+    if (removed) emitWorkspaceCatalogChanged(state);
     const active = state.runtimes.get(name);
     const closedSessions =
       removed && active && !("promise" in active)
@@ -1823,6 +1850,7 @@ export async function executeHubControl(
       throw error;
     }
     if (!pairing) throw new Error("Invite pairing was not created");
+    emitWorkspaceCatalogChanged(state);
     respond({
       user: {
         userId: invited.id,
@@ -1864,12 +1892,12 @@ export async function executeHubControl(
   }
   if (method === "revokeUser") {
     const opts = asRecord(args[0]) ?? {};
-    respond(
-      await revokeHubUser(state, subject, {
-        userId: opts["userId"],
-        handle: opts["handle"],
-      })
-    );
+    const result = await revokeHubUser(state, subject, {
+      userId: opts["userId"],
+      handle: opts["handle"],
+    });
+    if (result.revoked) emitWorkspaceCatalogChanged(state);
+    respond(result);
     return;
   }
   if (method === "setRole") {
@@ -2062,6 +2090,10 @@ async function startHubControlTransport(
   dispatcher.registerService(
     createEventsServiceDefinition(eventService, {
       snapshots: {
+        "hub:workspace-catalog-changed": (ctx) => {
+          const owner = eventWatchOwner(ctx);
+          return owner.userId ? workspaceCatalogForUser(state, owner.userId) : undefined;
+        },
         "shell-approval:pending-changed": (ctx) => {
           const owner = eventWatchOwner(ctx);
           const pending = approvalQueue.listPending();
@@ -2155,6 +2187,7 @@ async function startHubControlTransport(
     },
     rpcServer,
     grantStore,
+    eventService,
     inviteExpiryTimers: new Map(),
   };
   state.controlTransport = transport;
