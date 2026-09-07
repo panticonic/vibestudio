@@ -1189,7 +1189,7 @@ const GROUP_DESCRIPTIONS: Record<string, string> = {
   agent: "sessions, diagnostics, services, and workspace skills",
   fs: "read and edit files in the active agent context",
   vcs: "inspect, commit, merge, and push workspace repositories",
-  templates: "inspect, add, update, remove, and suggest workspace templates",
+  templates: "discover, inspect, author, and publish workspace templates",
   workspace: "maintain checked-in workspace source declarations",
   eval: "run sandboxed code in the active agent context",
   channel: "list, read, send, and follow conversation channels",

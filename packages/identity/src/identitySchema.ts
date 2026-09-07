@@ -2,10 +2,24 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 13 is the only current schema. The explicitly enumerated final
+ * Version 14 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 13;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 14;
+
+const USER_WORKSPACES_SQL = `CREATE TABLE user_workspaces (
+  user_id TEXT NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL CHECK(role IN ('personal', 'system')),
+  workspace_id TEXT NOT NULL UNIQUE REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, role)
+)`;
+
+const WORKSPACE_RPC_POLICY_SQL = `CREATE TABLE workspace_rpc_policy (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+  policy_json TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+)`;
 
 export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: IDENTITY_DATABASE_SCHEMA_VERSION,
@@ -88,6 +102,7 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
         workspace_id TEXT NOT NULL,
         added_by TEXT NOT NULL,
         added_at INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
         PRIMARY KEY (user_id, workspace_id)
       )`,
     },
@@ -121,6 +136,16 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       type: "index",
       name: "workspaces_by_last_opened",
       sql: "CREATE INDEX workspaces_by_last_opened ON workspaces(last_opened DESC, name)",
+    },
+    {
+      type: "table",
+      name: "user_workspaces",
+      sql: USER_WORKSPACES_SQL,
+    },
+    {
+      type: "table",
+      name: "workspace_rpc_policy",
+      sql: WORKSPACE_RPC_POLICY_SQL,
     },
     {
       type: "table",
@@ -166,12 +191,40 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
 };
 
 /**
- * Version 11 is the final shipped pre-cutover identity schema. Version 12 was never
- * shipped. Preserve account/workspace state, discard obsolete signaling rooms
- * and pending links, and make every old unbound device loopback-only. A fresh
- * Iroh pairing is then required to bind a remote credential to an Endpoint ID.
+ * Version 13 is the immediate predecessor. Its single workspace cutover adds
+ * private designations and hard RPC policies, records legacy root access as
+ * explicit membership, and seeds workspace roles from existing account roles.
+ * Later account-role changes do not confer workspace membership or administration.
+ * The existing shipped v11 -> v13 migration still retires obsolete signaling
+ * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 13,
+    toVersion: 14,
+    migrate(db) {
+      db.exec(`${USER_WORKSPACES_SQL}; ${WORKSPACE_RPC_POLICY_SQL};
+        ALTER TABLE membership RENAME TO membership_v13;
+        CREATE TABLE membership (
+          user_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          added_at INTEGER NOT NULL,
+          role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
+          PRIMARY KEY (user_id, workspace_id)
+        );
+        INSERT INTO membership (user_id, workspace_id, added_by, added_at, role)
+          SELECT m.user_id, m.workspace_id, m.added_by, m.added_at,
+            CASE WHEN u.role IN ('root', 'admin') THEN 'admin' ELSE 'member' END
+          FROM membership_v13 m JOIN users u ON u.id = m.user_id;
+        DROP TABLE membership_v13;
+        CREATE INDEX membership_by_workspace ON membership(workspace_id);
+        INSERT OR IGNORE INTO membership (user_id, workspace_id, added_by, added_at, role)
+          SELECT u.id, w.workspace_id, u.id, u.created_at, 'admin'
+          FROM users u CROSS JOIN workspaces w
+          WHERE u.role = 'root' AND u.revoked_at IS NULL`);
+    },
+  },
   {
     fromVersion: 11,
     toVersion: 13,

@@ -6,6 +6,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { IdentityDb } from "./identityDb.js";
 
+function restoreV13Membership(db: DatabaseSync): void {
+  db.exec(`DROP INDEX membership_by_workspace;
+    ALTER TABLE membership RENAME TO membership_current;
+    CREATE TABLE membership (
+      user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+      added_by TEXT NOT NULL, added_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, workspace_id));
+    INSERT INTO membership (user_id, workspace_id, added_by, added_at)
+      SELECT user_id, workspace_id, added_by, added_at FROM membership_current;
+    DROP TABLE membership_current;
+    CREATE INDEX membership_by_workspace ON membership(workspace_id)`);
+}
+
 describe("identity package schema cut", () => {
   const roots: string[] = [];
 
@@ -43,11 +56,11 @@ describe("identity package schema cut", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => new IdentityDb({ path: databasePath, readOnly: false })).toThrow(
-      /schema version is 0, expected 13/
+      /schema version is 0, expected 14/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     expect(() => new IdentityDb({ path: databasePath, readOnly: true })).toThrow(
-      /schema version is 0, expected 13/
+      /schema version is 0, expected 14/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
 
@@ -82,7 +95,10 @@ describe("identity package schema cut", () => {
     identity.close();
 
     const old = new DatabaseSync(databasePath);
+    restoreV13Membership(old);
     old.exec(`
+      DROP TABLE user_workspaces;
+      DROP TABLE workspace_rpc_policy;
       DROP INDEX devices_by_endpoint;
       DROP INDEX devices_by_user;
       ALTER TABLE devices RENAME TO devices_v13;
@@ -126,11 +142,110 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
     verified.close();
+  });
+
+  it("upgrades v13 by adding private designations without changing existing hub state", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-v13-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const identity = new IdentityDb({ path: databasePath, readOnly: false });
+    identity.insertUser({
+      id: "usr_kept",
+      handle: "kept",
+      displayName: "Kept User",
+      role: "member",
+      createdAt: 1,
+    });
+    identity.close();
+
+    const central = new CentralDataManager({ databasePath, now: () => 20 });
+    const workspace = central.addWorkspace("kept-workspace", "ws_kept");
+    central.setLastWorkspaceForUser("usr_kept", workspace.name);
+    central.setKeepServerOnQuit(true);
+    central.close();
+    const membership = new IdentityDb({ path: databasePath, readOnly: false });
+    membership.addMembership({
+      userId: "usr_kept",
+      workspaceId: workspace.workspaceId,
+      addedBy: "usr_kept",
+      addedAt: 10,
+      role: "member",
+    });
+    membership.close();
+
+    const old = new DatabaseSync(databasePath);
+    restoreV13Membership(old);
+    old.exec(
+      "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; PRAGMA user_version = 13"
+    );
+    old.close();
+
+    const migrated = new IdentityDb({ path: databasePath, readOnly: false });
+    expect(migrated.getUserByHandle("kept")?.id).toBe("usr_kept");
+    expect(migrated.listWorkspacesForUser("usr_kept")).toEqual(["ws_kept"]);
+    expect(migrated.getPrivateWorkspaceOwner("ws_kept")).toBeNull();
+    migrated.close();
+    const reopened = new CentralDataManager({ databasePath });
+    expect(reopened.listWorkspaces()).toEqual([workspace]);
+    expect(reopened.getLastWorkspaceForUser("usr_kept")).toEqual(workspace);
+    expect(reopened.getKeepServerOnQuit()).toBe(true);
+    reopened.close();
+
+    const verified = new DatabaseSync(databasePath);
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+    expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
+    expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
+    verified.close();
+  });
+
+  it("records old root access once without inheriting later private workspaces or restoring removed access", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-root-cutover-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const identity = new IdentityDb({ path: databasePath, readOnly: false });
+    for (const [id, role] of [
+      ["usr_root", "root"],
+      ["usr_member", "member"],
+    ] as const) {
+      identity.insertUser({ id, handle: id, displayName: id, role, createdAt: 1 });
+    }
+    identity.close();
+    const central = new CentralDataManager({ databasePath });
+    central.addWorkspace("project", "ws_project");
+    central.close();
+    const old = new DatabaseSync(databasePath);
+    restoreV13Membership(old);
+    old.exec(
+      "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; PRAGMA user_version = 13"
+    );
+    old.close();
+
+    const migrated = new IdentityDb({ path: databasePath, readOnly: false });
+    expect(migrated.listWorkspacesForUser("usr_root")).toEqual(["ws_project"]);
+    expect(migrated.getMembership("usr_root", "ws_project")?.role).toBe("admin");
+    migrated.removeMembership("usr_root", "ws_project");
+    migrated.close();
+    const afterCutover = new CentralDataManager({ databasePath });
+    const pin = {
+      url: "git+https://example.test/workspace.git",
+      ref: "refs/tags/v1",
+      commit: "a".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+    };
+    const pair = afterCutover.ensurePrivateWorkspaces("usr_member", { personal: pin, system: pin });
+    afterCutover.close();
+    const reopened = new IdentityDb({ path: databasePath, readOnly: false });
+    expect(reopened.listWorkspacesForUser("usr_root")).toEqual([]);
+    expect(reopened.getPrivateWorkspaceOwner(pair.personal.workspaceId)).toEqual({
+      userId: "usr_member",
+      role: "personal",
+    });
+    reopened.close();
   });
 
   it("rejects a missing canonical identity table without recreating it", () => {

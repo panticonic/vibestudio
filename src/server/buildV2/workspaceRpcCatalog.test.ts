@@ -30,6 +30,27 @@ describe("workspace RPC build catalog", () => {
     ).toEqual([expect.objectContaining({ name: "getNote" })]);
   });
 
+  it("keeps local methods closed and derives explicit exports from their existing declaration", () => {
+    const root = mkdtempSync(join(tmpdir(), "workspace-rpc-exports-"));
+    writeFileSync(
+      join(root, "provider.ts"),
+      `class NotesDO {
+      @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+      async local(): Promise<void> {}
+      @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read", crossWorkspace: true })
+      async shared(): Promise<void> {}
+    }`
+    );
+    const catalog = collectWorkspaceRpcCatalog(root, {
+      provider: "workers/notes",
+      authority: { requests: [], provides: [] },
+    });
+    expect(
+      catalog.find((method) => method.name === "local")?.access?.crossWorkspace
+    ).toBeUndefined();
+    expect(catalog.find((method) => method.name === "shared")?.access?.crossWorkspace).toBe(true);
+  });
+
   it("derives documented receiver methods from the exact worker source", async () => {
     const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-catalog-"));
     mkdirSync(join(root, "nested"));
@@ -149,6 +170,7 @@ describe("workspace RPC build catalog", () => {
       rpcSchemas: {
         NotesDO: defineServiceMethods({
           deleteNote: {
+            crossWorkspace: true,
             args: z.tuple([z.string()]),
             returns: z.void(),
             capability: "notes.delete",
@@ -167,6 +189,7 @@ describe("workspace RPC build catalog", () => {
     expect(catalog[0]).toMatchObject({
       name: "deleteNote",
       access: {
+        crossWorkspace: true,
         principals: ["host", "code"],
         tier: "critical",
         sensitivity: "destructive",

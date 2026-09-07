@@ -416,8 +416,20 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         const envelope: RpcEnvelope = {
           from: msg.targetId,
           target: config.selfId,
-          delivery: { caller: { callerId: msg.targetId, callerKind: "unknown" } },
-          provenance: [{ callerId: msg.targetId, callerKind: "unknown" }],
+          delivery: {
+            caller: {
+              callerId: msg.targetId,
+              callerKind: "unknown",
+              ...(msg.targetWorkspaceId ? { workspaceId: msg.targetWorkspaceId } : {}),
+            },
+          },
+          provenance: [
+            {
+              callerId: msg.targetId,
+              callerKind: "unknown",
+              ...(msg.targetWorkspaceId ? { workspaceId: msg.targetWorkspaceId } : {}),
+            },
+          ],
           message: errorMessage,
         };
         for (const listener of messageListeners) listener(envelope);

@@ -41,6 +41,15 @@ describe("invocation snapshot", () => {
     expect(invocationSnapshotDigest(left)).toBe(invocationSnapshotDigest(right));
   });
 
+  it("seals both workspace addresses into approval retry identity", () => {
+    const snapshot = { ...base(), sourceWorkspaceId: "project", workspaceId: "personal" };
+    const digest = invocationSnapshotDigest(snapshot);
+    expect(
+      invocationSnapshotDigest({ ...snapshot, sourceWorkspaceId: "another-project" })
+    ).not.toBe(digest);
+    expect(invocationSnapshotDigest({ ...snapshot, workspaceId: "shared" })).not.toBe(digest);
+  });
+
   it("changes when receiver, prepared state, mission, or code-lineage facts change", () => {
     const snapshot = base();
     const digest = invocationSnapshotDigest(snapshot);

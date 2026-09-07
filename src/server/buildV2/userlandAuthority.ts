@@ -17,7 +17,7 @@ import { collectTransitiveInternalDeps } from "./buildSource.js";
 import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
 import { unknownWorkspaceRpcSchemaError, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 
-export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v2";
+export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v3";
 
 export interface ExactWorkspaceServiceBinding {
   name: string;
@@ -49,6 +49,7 @@ export interface EffectiveMethodAccess {
   principals: readonly PrincipalKind[];
   codeOnly: boolean;
   codeReachable: boolean;
+  crossWorkspace?: boolean;
 }
 
 export type UserlandMethodAuthority =
@@ -188,6 +189,7 @@ function methodAccess(
   return {
     principals,
     codeOnly: doc.access?.codeOnly === true,
+    ...(doc.access?.crossWorkspace === true ? { crossWorkspace: true } : {}),
     codeReachable: binding.principals.includes("code") && principals.includes("code"),
   };
 }

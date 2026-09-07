@@ -41,7 +41,9 @@ export interface NotificationServiceDeps {
 }
 
 /** Turn one inbox push request into the string-only FCM data map. */
-export function userInboxPushData(request: UserInboxPushRequest): PushUserInboxDataPayload {
+export function userInboxPushData(
+  request: UserInboxPushRequest
+): Omit<PushUserInboxDataPayload, "workspaceId" | "serverId" | "userId"> {
   return {
     kind: "user-inbox",
     notificationId: request.notificationId,

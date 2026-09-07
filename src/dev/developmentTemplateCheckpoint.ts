@@ -1,14 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import type { GitClient } from "@vibestudio/git";
 
 function git(directory: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync("git", ["-C", directory, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...(env ? { env } : {}),
-  }).trim();
+  });
 }
 
 function copyWorktreePath(sourceRoot: string, targetRoot: string, relativePath: string): void {
@@ -48,24 +47,27 @@ export interface DevelopmentTemplateCheckpoint {
   checkout: string;
   sourceCheckout: string;
   changedPaths: readonly string[];
-  temporary: boolean;
 }
 
 /** Seal the visible worktree into an instance-owned immutable Git commit. */
 export async function prepareDevelopmentTemplateCheckpoint(input: {
   checkout: string;
   target: string;
-  gitClient: GitClient;
 }): Promise<DevelopmentTemplateCheckpoint> {
   const sourceCheckout = fs.realpathSync(path.resolve(input.checkout));
-  const status = await input.gitClient.status(sourceCheckout);
-  if (!status.commit) throw new Error(`Local template checkout ${sourceCheckout} has no commit`);
-  if (!status.dirty) {
-    return { checkout: sourceCheckout, sourceCheckout, changedPaths: [], temporary: false };
-  }
-
-  const changedPaths = status.files
-    .map((file) => file.path)
+  // Native Git owns developer checkouts, including linked/detached worktrees.
+  // Always seal a private clone, so downstream exact readers never observe a
+  // live checkout or need to interpret its .git indirection.
+  const commit = git(sourceCheckout, ["rev-parse", "--verify", "HEAD"]).trim();
+  const changedPaths = [
+    ...new Set([
+      ...git(sourceCheckout, ["diff", "--no-renames", "--name-only", "-z", "HEAD", "--"]).split(
+        "\0"
+      ),
+      ...git(sourceCheckout, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+    ]),
+  ]
+    .filter(Boolean)
     .filter((relativePath) => !isDependencyArtifactPath(relativePath))
     .sort();
   const target = path.resolve(input.target);
@@ -78,7 +80,7 @@ export async function prepareDevelopmentTemplateCheckpoint(input: {
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
-  git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", status.commit]);
+  git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", commit]);
   for (const relativePath of changedPaths) copyWorktreePath(sourceCheckout, target, relativePath);
   git(target, ["add", "-A"]);
   try {
@@ -95,5 +97,5 @@ export async function prepareDevelopmentTemplateCheckpoint(input: {
       GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
     });
   }
-  return { checkout: target, sourceCheckout, changedPaths, temporary: true };
+  return { checkout: target, sourceCheckout, changedPaths };
 }

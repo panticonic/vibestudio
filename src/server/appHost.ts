@@ -323,6 +323,8 @@ export interface AppHostDeps {
   statePath: string;
   workspacePath: string;
   workspaceId: string;
+  /** Protected hub designation, never workspace-authored app or trust configuration. */
+  isSystemWorkspace(): boolean;
   readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
   describeCapability?: CapabilityPresentationResolver;
   buildSystem: BuildSystemLike;
@@ -573,8 +575,8 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     declared: WorkspaceAppDeclaration[],
     opts: UnitReconcileOptions = {}
   ): Promise<void> {
-    this.lastDeclared = declared.map((decl) => ({ ...decl }));
-    await this.unitHost.reconcileDeclared(declared, opts);
+    this.lastDeclared = this.hostedDeclarations(declared);
+    await this.unitHost.reconcileDeclared(this.lastDeclared, opts);
     this.emitDevStatusDiagnostic(opts.trigger ?? "startup");
   }
 
@@ -582,7 +584,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     declared: WorkspaceAppDeclaration[],
     opts: { trigger?: UnitReconcileTrigger } = {}
   ): void {
-    this.lastDeclared = declared.map((decl) => ({ ...decl }));
+    this.lastDeclared = this.hostedDeclarations(declared);
     this.emitDevStatusDiagnostic(opts.trigger ?? "startup");
   }
 
@@ -591,13 +593,22 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     units: ReviewedUnit[];
     identityKeys: string[];
   } {
-    const review = this.unitHost.approvalForDeclarations(declared);
+    const review = this.unitHost.approvalForDeclarations(this.hostedDeclarations(declared));
     return { units: review.entries, identityKeys: review.identityKeys };
   }
 
   /** Declared apps that ship in the host build, for the server to admit. */
   seedTrustedDeclared(declared: WorkspaceAppDeclaration[] = this.lastDeclared): ReviewedUnit[] {
-    return this.unitHost.seedTrustedDeclarations(declared);
+    return this.unitHost.seedTrustedDeclarations(this.hostedDeclarations(declared));
+  }
+
+  private hostedDeclarations(declared: WorkspaceAppDeclaration[]): WorkspaceAppDeclaration[] {
+    return this.deps.isSystemWorkspace() ? declared.map((decl) => ({ ...decl })) : [];
+  }
+
+  private assertAppHosting(): void {
+    if (!this.deps.isSystemWorkspace())
+      throw new Error("Native apps can run only in a designated System workspace");
   }
 
   async whenSettled(): Promise<void> {
@@ -860,6 +871,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   listHostTargetCandidates(target: HostTarget): HostTargetCandidate[] {
+    if (!this.deps.isSystemWorkspace()) return [];
     const declaredNames = new Set(
       this.lastDeclared
         .map((decl) => this.tryFindAppNode(decl.source)?.name)
@@ -1079,6 +1091,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   hasAppCapability(callerId: string, capability: AppCapability): boolean {
+    if (!this.deps.isSystemWorkspace()) return false;
     const entry =
       this.registry.get(callerId) ??
       this.registry.list().find((candidate) => {
@@ -1542,6 +1555,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   private async buildAndActivate(node: AppGraphNode, decl: WorkspaceAppDeclaration): Promise<void> {
+    this.assertAppHosting();
     const previous = this.registry.get(node.name) ?? null;
     const diagnostic: AppUpdateErrorDiagnostic = { phase: "build", source: node.relativePath };
     try {
@@ -1718,6 +1732,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     target: WorkspaceAppTarget,
     build: Awaited<ReturnType<BuildSystemLike["getBuild"]>>
   ): void {
+    this.assertAppHosting();
     if (target === "terminal") {
       const details = build.metadata.details;
       if (!isAppBuildDetailsLike(details) || details.target !== "terminal") {
@@ -2044,6 +2059,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     build: AppBuildResultLike;
     identity: ActiveExecutionIdentity;
   } {
+    this.assertAppHosting();
     if (!entry.activeEv) {
       throw new Error(`Cannot activate app ${entry.name} without an effective version`);
     }
@@ -2261,6 +2277,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     declared: WorkspaceAppDeclaration,
     opts: { waitForApproval?: boolean } = {}
   ): Promise<void> {
+    this.assertAppHosting();
     await this.unitHost.reconcileDeclared([{ ...declared }], {
       trigger: "startup",
       removeUndeclared: false,
@@ -2408,6 +2425,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   }
 
   private async readDeclaredAppsFromState(stateHash: string): Promise<WorkspaceAppDeclaration[]> {
+    if (!this.deps.isSystemWorkspace()) return [];
     try {
       return resolveDeclaredApps(
         await readWorkspaceConfig(

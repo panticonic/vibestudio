@@ -499,7 +499,7 @@ function makeManagerDeps(workspacePath: string) {
 
 describe("PanelManager", () => {
   it("opens panels installed into exact workspace state without requiring a disk checkout", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/path/with/no/installed/panels");
     const getPanelMetadata = vi.fn(async (source: string, _ref?: string) =>
       source === "panels/hello-svelte"
@@ -547,7 +547,7 @@ describe("PanelManager", () => {
   });
 
   it("queries durable roots by source without depending on the local registry mirror", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
     await manager.create("panels/existing", { isRoot: true, addAsRoot: true });
@@ -558,7 +558,7 @@ describe("PanelManager", () => {
   });
 
   it("creates a slot with the title it already knows, so the tree never shows a slot id", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
 
@@ -578,7 +578,7 @@ describe("PanelManager", () => {
   });
 
   it("carries the destination title through a navigation, as creation does", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
     const created = await manager.create("panels/existing", { isRoot: true, addAsRoot: true });
@@ -602,7 +602,7 @@ describe("PanelManager", () => {
   });
 
   it("creates browser panels for disposable document URLs", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({
       registry,
@@ -637,7 +637,7 @@ describe("PanelManager", () => {
   });
 
   it("projects one root when concurrent first reads resolve together", async () => {
-    const sourceRegistry = new PanelRegistry({});
+    const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const sourceManager = new PanelManager({
       registry: sourceRegistry,
@@ -648,7 +648,7 @@ describe("PanelManager", () => {
       addAsRoot: true,
     });
 
-    const projectedRegistry = new PanelRegistry({});
+    const projectedRegistry = new PanelRegistry({ workspaceId: "workspace-test",});
     const projectedManager = new PanelManager({
       registry: projectedRegistry,
       ...deps,
@@ -676,7 +676,7 @@ describe("PanelManager", () => {
   });
 
   it("does not consume product presentation from raw workspace-state detail", async () => {
-    const sourceRegistry = new PanelRegistry({});
+    const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const sourceManager = new PanelManager({
       registry: sourceRegistry,
@@ -690,7 +690,7 @@ describe("PanelManager", () => {
       return detail ? { ...detail, icon: "💬" } : detail;
     });
 
-    const projectedRegistry = new PanelRegistry({});
+    const projectedRegistry = new PanelRegistry({ workspaceId: "workspace-test",});
     const projectedManager = new PanelManager({
       registry: projectedRegistry,
       ...deps,
@@ -702,7 +702,7 @@ describe("PanelManager", () => {
   });
 
   it("projects the durable explicit title when refreshing a panel", async () => {
-    const sourceRegistry = new PanelRegistry({});
+    const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const sourceManager = new PanelManager({
       registry: sourceRegistry,
@@ -721,7 +721,7 @@ describe("PanelManager", () => {
         : detail;
     });
 
-    const projectedRegistry = new PanelRegistry({});
+    const projectedRegistry = new PanelRegistry({ workspaceId: "workspace-test",});
     const projectedManager = new PanelManager({
       registry: projectedRegistry,
       ...deps,
@@ -733,7 +733,7 @@ describe("PanelManager", () => {
   });
 
   it("places an external panel in an explicitly shared orchestration context", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({
       registry,
@@ -753,7 +753,7 @@ describe("PanelManager", () => {
   });
 
   it("rejects unsupported browser URL schemes", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({
       registry,
@@ -767,7 +767,7 @@ describe("PanelManager", () => {
   });
 
   it("passes stable-neighbor placement to the durable tree", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({
       registry,
@@ -808,7 +808,7 @@ describe("PanelManager", () => {
       path.join(aboutDir, "package.json"),
       JSON.stringify({ name: "about-new", vibestudio: { title: "New Panel" } })
     );
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     return { registry, manager: new PanelManager({ registry, ...deps }) };
   };
@@ -897,7 +897,7 @@ describe("PanelManager", () => {
       })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1016,7 +1016,7 @@ describe("PanelManager", () => {
       JSON.stringify({ name: "example", vibestudio: { title: "Example Panel" } })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const reserveEntity = vi.spyOn(deps.runtime, "reserveEntity");
     const activateReservedEntity = vi.spyOn(deps.runtime, "activateReservedEntity");
@@ -1063,7 +1063,7 @@ describe("PanelManager", () => {
       })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1095,7 +1095,7 @@ describe("PanelManager", () => {
       })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1123,7 +1123,7 @@ describe("PanelManager", () => {
       })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1149,7 +1149,7 @@ describe("PanelManager", () => {
       JSON.stringify({ name: "plain", vibestudio: { title: "Plain" } })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1168,7 +1168,7 @@ describe("PanelManager", () => {
       JSON.stringify({ name: "browserish", vibestudio: { title: "Initial Title" } })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1213,7 +1213,7 @@ describe("PanelManager", () => {
 
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({
-      registry: new PanelRegistry({}),
+      registry: new PanelRegistry({ workspaceId: "workspace-test",}),
       ...deps,
       serverInfo: { gatewayConfig: { serverUrl: "https://vibestudio.example.com" } },
     });
@@ -1255,7 +1255,7 @@ describe("PanelManager", () => {
     }
 
     const { mem, deps } = makeManagerDeps(workspacePath);
-    const manager = new PanelManager({ registry: new PanelRegistry({}), ...deps });
+    const manager = new PanelManager({ registry: new PanelRegistry({ workspaceId: "workspace-test",}), ...deps });
 
     const root = await manager.create("panels/root", { isRoot: true, addAsRoot: true });
     const child = await manager.create("panels/child", { parentId: root.panelId });
@@ -1281,7 +1281,7 @@ describe("PanelManager", () => {
       );
     }
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1301,7 +1301,7 @@ describe("PanelManager", () => {
   });
 
   it("drains recursive close cleanup across multiple bounded pages", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
     const root = await manager.createBrowser(null, "https://root.example", {
@@ -1321,7 +1321,7 @@ describe("PanelManager", () => {
   });
 
   it("archives more than one page of owned roots without retaining their roster", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
     for (let index = 0; index < 450; index += 1) {
@@ -1352,7 +1352,7 @@ describe("PanelManager", () => {
   });
 
   it("strictly reports runtime cleanup failure after atomically archiving only one owner's tree", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
     const aliceRoot = await manager.createBrowser(null, "https://alice.example", {
@@ -1395,7 +1395,7 @@ describe("PanelManager", () => {
       );
     }
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
 
@@ -1440,7 +1440,7 @@ describe("PanelManager", () => {
       );
     }
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
@@ -1486,7 +1486,7 @@ describe("PanelManager", () => {
       JSON.stringify({ name: "first", vibestudio: { title: "First Panel" } })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const commitDesiredState = vi.spyOn(deps.workspaceState, "commitPreparedNavigation");
     const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
@@ -1522,7 +1522,7 @@ describe("PanelManager", () => {
       JSON.stringify({ name: "first", vibestudio: { title: "First Panel" } })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
     const manager = new PanelManager({
@@ -1556,7 +1556,7 @@ describe("PanelManager", () => {
       );
     }
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
@@ -1605,7 +1605,7 @@ describe("PanelManager", () => {
       );
     }
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
@@ -1637,7 +1637,7 @@ describe("PanelManager", () => {
       JSON.stringify({ name: "chat", vibestudio: { title: "Chat" } })
     );
 
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({ registry, ...deps });
     const created = await manager.create("panels/chat", { isRoot: true, addAsRoot: true });
@@ -1666,7 +1666,7 @@ describe("PanelManager", () => {
   });
 
   it("keeps the runtime panel cache bounded and hydrates evicted panels by address", async () => {
-    const registry = new PanelRegistry({});
+    const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({
       registry,

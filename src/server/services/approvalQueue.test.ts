@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import { createApprovalQueue, type UnitInstallReviewQueueRequest } from "./approvalQueue.js";
 
 function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0]> = {}) {
   const emit = vi.fn();
-  const queue = createApprovalQueue({ eventService: { emit } as never, ...overrides });
+  const queue = createApprovalQueue({
+    eventService: {
+      emitProjected: (event: string, project: (owner: unknown) => unknown) =>
+        emit(event, project({ callerId: "server", callerKind: "server" })),
+    } as never,
+    workspaceAccess: { isMember: () => true, isAdmin: () => true },
+    ...overrides,
+  });
   return { queue, emit };
 }
 
@@ -1004,6 +1012,155 @@ describe("approvalQueue", () => {
       ...overrides,
     });
 
+    const browserDefinitions: UserlandCapabilityDefinition[] = [
+      {
+        name: "browser-data.write",
+        title: "Change browser data",
+        action: "change persistent browser data",
+        tier: "gated",
+        sensitivity: "write",
+        resourceType: "browser-data",
+        presentation: { domain: "web", verb: "manage" },
+        notability: "everyday",
+        grantScopes: ["once", "version"],
+      },
+      {
+        name: "browser-data.delete",
+        title: "Delete browser data",
+        action: "delete persistent browser data",
+        tier: "gated",
+        sensitivity: "destructive",
+        resourceType: "browser-data",
+        presentation: { domain: "web", verb: "manage" },
+        notability: "headline",
+        grantScopes: ["once"],
+      },
+    ];
+    const browserReview = () =>
+      unitInstallReviewRequest({
+        units: [
+          {
+            unitKind: "extension",
+            unitName: "@workspace-extensions/browser-data",
+            displayName: "Browser Data",
+            source: { kind: "workspace-repo", repo: "extensions/browser-data", ref: "main" },
+            capabilities: [],
+            authority: {
+              provides: [],
+              serviceRequests: [],
+              previousServiceRequests: [],
+              previousProvides: [],
+              rows: [],
+              diff: { added: [], removed: [], unchanged: [], retiered: [] },
+              requests: browserDefinitions.map((definition) => ({
+                capability: `userland:workers/browser-data/${definition.name}#*`,
+                resource: {
+                  kind: "prefix" as const,
+                  prefix: "browser-data:do:workers/browser-data:BrowserDataDO:",
+                },
+                tier: "gated" as const,
+                evidence: "bounded-dynamic" as const,
+              })),
+            },
+          },
+        ],
+      });
+    const workspaceCapabilityDefinitions = () =>
+      browserDefinitions.map((definition) => ({
+        provider: "workers/browser-data",
+        definition,
+      }));
+
+    it("projects protected workspace receiver declarations into the actual install review", () => {
+      const { queue } = createQueue({ workspaceCapabilityDefinitions });
+      void queue.request(browserReview());
+      const review = queue.listPending()[0]!;
+      expect(review.kind).toBe("unit-install-review");
+      if (review.kind !== "unit-install-review") throw new Error("Expected install review");
+      expect(review.parts[0]?.notableRows).toEqual([
+        expect.objectContaining({
+          kind: "permission",
+          timing: "asks-when-needed",
+          selectable: false,
+          row: expect.objectContaining({
+            action: "delete persistent browser data",
+            domain: "web",
+            verb: "manage",
+            provenance: { source: "receiver" },
+          }),
+        }),
+      ]);
+      expect(review.parts[0]?.everydayRows).toEqual([
+        expect.objectContaining({
+          kind: "permission",
+          timing: "on-add",
+          selectable: true,
+          row: expect.objectContaining({
+            action: "change persistent browser data",
+            domain: "web",
+            verb: "manage",
+            provenance: { source: "receiver" },
+          }),
+        }),
+      ]);
+      for (const part of review.parts)
+        for (const row of [...part.notableRows, ...part.everydayRows]) {
+          if (row.kind === "permission") expect(row.row.unrecognized).toBeUndefined();
+        }
+    });
+
+    it("does not use old receiver declarations removed by a provider in the current review", () => {
+      const { queue } = createQueue({ workspaceCapabilityDefinitions });
+      const request = browserReview();
+      request.units.push({
+        unitKind: "worker",
+        unitName: "@workspace-workers/browser-data",
+        displayName: "Browser Data",
+        source: { kind: "workspace-repo", repo: "workers/browser-data", ref: "main" },
+        capabilities: [],
+        authority: {
+          provides: [],
+          requests: [],
+          serviceRequests: [],
+          previousServiceRequests: [],
+          previousProvides: [],
+          rows: [],
+          diff: { added: [], removed: [], unchanged: [], retiered: [] },
+        },
+      });
+      void queue.request(request);
+      const review = queue.listPending()[0]!;
+      if (review.kind !== "unit-install-review") throw new Error("Expected install review");
+      expect(review.parts[0]?.everydayRows).toEqual([]);
+      expect(review.parts[0]?.notableRows).toHaveLength(2);
+      for (const row of review.parts[0]!.notableRows) {
+        expect(row).toMatchObject({
+          timing: "asks-when-needed",
+          selectable: false,
+          row: { unrecognized: true },
+        });
+      }
+    });
+
+    it("keeps undeclared receivers unknown instead of borrowing another provider's definition", () => {
+      const { queue } = createQueue({
+        workspaceCapabilityDefinitions: () =>
+          browserDefinitions.map((definition) => ({ provider: "workers/other", definition })),
+      });
+      void queue.request(browserReview());
+      const review = queue.listPending()[0]!;
+      if (review.kind !== "unit-install-review") throw new Error("Expected install review");
+      expect(review.parts[0]?.everydayRows).toEqual([]);
+      expect(review.parts[0]?.notableRows).toHaveLength(2);
+      for (const row of review.parts[0]!.notableRows) {
+        expect(row).toMatchObject({
+          timing: "asks-when-needed",
+          selectable: false,
+          row: { unrecognized: true },
+        });
+      }
+    });
+
     it("creates a pending install review carrying the unit list", async () => {
       const { queue } = createQueue();
       void queue.request(startupInstallReviewRequest());
@@ -1198,7 +1355,7 @@ describe("approvalQueue", () => {
   });
 
   describe("WP5 provenance & settlement coordinator", () => {
-    function capabilityRequest(requestedByUserId?: string) {
+    function capabilityRequest(requestedByUserId = "usr_2") {
       return {
         kind: "capability" as const,
         callerId: "panel-1",
@@ -1221,7 +1378,7 @@ describe("approvalQueue", () => {
     it("resolving with a resolver snapshots resolvedBy, emits resolved before removal, and records provenance", async () => {
       const recordProvenance = vi.fn();
       const { queue, emit } = createQueue({ recordProvenance });
-      const handle = queue.requestWithHandle!(capabilityRequest("usr_req"));
+      const handle = queue.requestWithHandle!(capabilityRequest("usr_2"));
       const approvalId = queue.listPending()[0]!.approvalId;
 
       await queue.resolve(approvalId, "version", {
@@ -1261,7 +1418,7 @@ describe("approvalQueue", () => {
         granted: true,
         resolvedBy: { userId: "usr_2", handle: "alice", deviceId: "dev-1" },
         resolvedVia: "shell",
-        requestedBy: { callerId: "panel-1", callerKind: "panel", userId: "usr_req" },
+        requestedBy: { callerId: "panel-1", callerKind: "panel", userId: "usr_2" },
         resource: { capability: "external.open", value: "https://example.com" },
         grantScopeStored: "version",
         operationId: "acq:open-example",
@@ -1316,7 +1473,7 @@ describe("approvalQueue", () => {
         throw new Error("hub unavailable");
       });
       const { queue, emit } = createQueue({ recordProvenance });
-      const decision = queue.request(capabilityRequest("usr_req"));
+      const decision = queue.request(capabilityRequest("usr_2"));
       const approvalId = queue.listPending()[0]!.approvalId;
 
       await expect(
@@ -1342,7 +1499,7 @@ describe("approvalQueue", () => {
           })
       );
       const { queue, emit } = createQueue({ recordProvenance });
-      const decision = queue.request(capabilityRequest("usr_req"));
+      const decision = queue.request(capabilityRequest("usr_2"));
       const approvalId = queue.listPending()[0]!.approvalId;
       const resolver = {
         subject: { userId: "usr_2", handle: "alice" },
@@ -1377,7 +1534,7 @@ describe("approvalQueue", () => {
       const { queue, emit } = createQueue({ recordProvenance });
       const abort = new AbortController();
       const decision = queue.request({
-        ...capabilityRequest("usr_req"),
+        ...capabilityRequest("usr_2"),
         signal: abort.signal,
       });
       const approvalId = queue.listPending()[0]!.approvalId;

@@ -316,7 +316,11 @@ async function main(): Promise<void> {
     lifecycle: disposable ? "ephemeral" : "persistent",
     startedAt: Date.now(),
   });
-  const checkpointTarget = path.join(root, "development-base-checkpoints", instance.generationId);
+  const checkpointTarget = path.join(
+    root,
+    "development-workspace-distributions",
+    instance.generationId
+  );
   const templateCheckpointRoot = path.join(
     root,
     "development-template-checkpoints",
@@ -363,13 +367,10 @@ async function main(): Promise<void> {
     }
     if (developmentBase) {
       console.log(
-        `[instance:${id}] Base candidate: ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+        `[instance:${id}] Workspace distributions: ${Object.entries(developmentBase.pins)
+          .map(([name, pin]) => `${name}@${pin.commit}`)
+          .join(", ")} from ${developmentBase.sourceCheckout}`
       );
-      if (developmentBase.temporary) {
-        console.log(
-          `[instance:${id}] Base development checkpoint includes ${developmentBase.changedPaths.length} worktree change(s).`
-        );
-      }
       if (id === "source" && !disposable) {
         console.log(
           `[instance:${id}] Base write-back: ${developmentBase.writebackRepositories.length} Base-owned repositories -> ${developmentBase.sourceCheckout}; imported templates are read-only`
@@ -380,7 +381,7 @@ async function main(): Promise<void> {
       console.log(
         `[instance:${id}] Template candidate: ${template.pin.url}@${template.pin.commit} from ${template.sourceCheckout}`
       );
-      if (template.temporary) {
+      if (template.changedPaths.length > 0) {
         console.log(
           `[instance:${id}] Template development checkpoint includes ${template.changedPaths.length} worktree change(s).`
         );

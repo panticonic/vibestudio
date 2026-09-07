@@ -16,6 +16,7 @@ import {
 } from "./authorization.js";
 
 export interface ResolvedDirectRpcAuthority {
+  crossWorkspace?: boolean;
   tier: "open" | "gated" | "critical";
   sensitivity: "read" | "write" | "admin" | "destructive";
   effect: RpcAuthorityEffect;
@@ -25,6 +26,7 @@ export interface ResolvedDirectRpcAuthority {
 }
 
 export interface EventIntakeRule {
+  crossWorkspace?: boolean;
   /** Non-empty topic family. Empty and wildcard catch-alls are invalid. */
   topicPrefix: string;
   tier: "open" | "gated" | "critical";
@@ -52,6 +54,7 @@ export function eventIntakeAuthority(
     assertEventIntakeRule(rule);
     if (!topic.startsWith(rule.topicPrefix)) continue;
     return {
+      ...(rule.crossWorkspace === true ? { crossWorkspace: true } : {}),
       tier: rule.tier,
       sensitivity: rule.sensitivity,
       effect: rule.effect,
@@ -100,7 +103,7 @@ export interface DirectRpcCheckInput {
   kind: "call" | "event";
   method: string;
   eventTopic?: string;
-  caller: { authorization?: DirectAuthorityAttestation } | null;
+  caller: { workspaceId?: string; authorization?: DirectAuthorityAttestation } | null;
   attestation: DirectAuthorityAttestation | null;
   declaration: ResolvedDirectRpcAuthority | null;
   audience: string;
@@ -193,6 +196,12 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     };
   }
   const now = input.now ?? Date.now();
+  if (input.caller?.workspaceId &&
+      input.caller.workspaceId !== attestation.context.workspace?.workspaceId &&
+      declaration.crossWorkspace !== true) {
+    const reason = `${method}: receiver does not accept cross-workspace RPC`;
+    return { code: "EACCES", reason, failure: directRpcInvalidAttestationFailure(reason) };
+  }
   if (
     attestation.audience !== input.audience ||
     attestation.method !== method ||

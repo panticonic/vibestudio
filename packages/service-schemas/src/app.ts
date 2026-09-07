@@ -3,9 +3,11 @@
  */
 
 import { z } from "zod";
+import { SETTINGS_SECTIONS } from "@vibestudio/shared/shellSurface";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AppInfoSchema } from "@vibestudio/shared/panelContracts";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 // Access descriptors carry sensitivity metadata beside the compositional
 // principal requirements declared by the service definition.
@@ -28,12 +30,11 @@ export const ShellSurfaceTargetSchema = z.union([
   z
     .object({
       kind: z.literal("settings"),
-      section: z
-        .enum(["connection", "devices", "profile", "appearance", "apps", "hosts", "templates"])
-        .optional(),
+      section: z.enum(SETTINGS_SECTIONS).optional(),
+      workspaceId: z.string().min(1).max(512).optional(),
     })
     .strict(),
-  z.object({ kind: z.literal("workspace-chooser") }).strict(),
+  z.object({ kind: z.literal("workspace-chooser"), template: WorkspaceTemplatePinSchema.optional() }).strict(),
   z
     .object({
       kind: z.literal("command-agent"),

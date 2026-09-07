@@ -42,7 +42,7 @@ export const DesiredNativePanelSurfaceSchema = z
   .object({
     surfaceId: nativeSurfaceIdentity,
     materialization: z
-      .object({ runtimeEntityId: nativeSurfaceIdentity, leaseConnectionId: nativeSurfaceIdentity })
+      .object({ workspaceId: nativeSurfaceIdentity, runtimeEntityId: nativeSurfaceIdentity, leaseConnectionId: nativeSurfaceIdentity })
       .strict(),
     visible: z.boolean(),
     focused: z.boolean(),
@@ -80,6 +80,7 @@ export const NativePanelObservedSnapshotSchema = z
           nativeSurfaceId: nativeSurfaceIdentity,
           materialization: z
             .object({
+              workspaceId: nativeSurfaceIdentity,
               runtimeEntityId: nativeSurfaceIdentity,
               leaseConnectionId: nativeSurfaceIdentity,
             })

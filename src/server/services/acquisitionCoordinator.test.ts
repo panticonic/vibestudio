@@ -563,6 +563,53 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
+  it.each(["once", "version", "deny"] as const)(
+    "binds %s consent to the captured source workspace",
+    async (decision) => {
+      const grantStore = new CapabilityGrantStore({
+        statePath: mkdtempSync(join(tmpdir(), "authority-workspace-consent-")),
+      });
+      const request = vi.fn(async () => decision);
+      const coordinator = new AcquisitionCoordinator({
+        approvalQueue: { request } as never,
+        grantStore,
+      });
+      const codeSnapshot = {
+        ...snapshot(),
+        workspaceId: "personal",
+        sourceWorkspaceId: "project",
+        callerPrincipal: `code:workers/example@${"c".repeat(64)}` as const,
+      };
+      await coordinator.requestAndWait({
+        snapshot: codeSnapshot,
+        snapshotDigest: invocationSnapshotDigest(codeSnapshot),
+        tier: "gated",
+        caller: {
+          ...createVerifiedCaller("do:workers/example:Example:test", "do", {
+            callerId: "do:workers/example:Example:test",
+            callerKind: "do",
+            repoPath: "workers/example",
+            effectiveVersion: "ev-test",
+            executionDigest: "c".repeat(64),
+            requested: [],
+          }),
+          workspaceId: "project",
+        },
+        renderedAction: "use the personal service",
+        resource: { kind: "exact", key: codeSnapshot.resourceKey },
+        presentation: reviewedPresentation(),
+      });
+      expect(
+        grantStore.grantsForSubjects([codeSnapshot.callerPrincipal], codeSnapshot.capability)
+      ).toEqual([
+        expect.objectContaining({
+          constraints: expect.objectContaining({ sourceWorkspaceId: "project" }),
+        }),
+      ]);
+      grantStore.close();
+    }
+  );
+
   it("binds an installed-code once decision to its code principal", async () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-once-")),

@@ -12,7 +12,7 @@
  * host↔host (plan §0.0): no RPC channel, no cache replication.
  *
  * This class is a THIN TYPED DATA LAYER. Business rules (handle validation,
- * root bootstrap, implicit-root membership, role gates) live in `UserStore` /
+ * root bootstrap, membership, role gates) live in `UserStore` /
  * `MembershipStore` and the hub service layer.
  */
 
@@ -22,6 +22,11 @@ import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqli
 import type { User, UserRole } from "./types.js";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import { IDENTITY_DATABASE_MIGRATIONS, IDENTITY_DATABASE_SCHEMA } from "./identitySchema.js";
+import {
+  closedWorkspaceRpcPolicy,
+  type WorkspaceRpcPolicy,
+  WorkspaceRpcPolicySchema,
+} from "./workspaceRpcPolicy.js";
 
 /** A device credential row. Mirrors `DeviceRecord` plus the owning `userId`. */
 export type DeviceTransportBinding = { kind: "local" } | { kind: "iroh"; endpointId: string };
@@ -76,6 +81,13 @@ export interface WorkspaceMembership {
   workspaceId: string;
   addedBy: string;
   addedAt: number;
+  role: "admin" | "member";
+}
+
+/** Hub-owned designation of an ordinary, non-shareable workspace. */
+export interface PrivateWorkspaceOwner {
+  userId: string;
+  role: "personal" | "system";
 }
 
 export interface UserRevocationCleanupTask {
@@ -278,14 +290,42 @@ export class IdentityDb {
       .map(rowToMembership);
   }
 
-  /** Stored membership rows only — root's implicit membership is a store rule. */
+  getPrivateWorkspaceOwner(workspaceId: string): PrivateWorkspaceOwner | null {
+    const row = this.stmt("SELECT user_id, role FROM user_workspaces WHERE workspace_id = ?").get(
+      workspaceId
+    );
+    return row
+      ? { userId: row["user_id"] as string, role: row["role"] as PrivateWorkspaceOwner["role"] }
+      : null;
+  }
+
+  /** An existing workspace without a policy row is closed; malformed state is never coerced. */
+  getWorkspaceRpcPolicy(workspaceId: string): WorkspaceRpcPolicy {
+    const row = this.stmt(
+      `SELECT p.policy_json FROM workspaces w
+       LEFT JOIN workspace_rpc_policy p ON p.workspace_id = w.workspace_id
+       WHERE w.workspace_id = ?`
+    ).get(workspaceId);
+    if (!row) throw new Error(`Unknown workspace id "${workspaceId}"`);
+    const serialized = row["policy_json"];
+    if (serialized === null) return closedWorkspaceRpcPolicy();
+    if (typeof serialized !== "string") throw new Error("Invalid workspace RPC policy value");
+    return WorkspaceRpcPolicySchema.parse(JSON.parse(serialized));
+  }
+
+  /** Stored membership rows for every account role. */
   listWorkspacesForUser(userId: string): string[] {
     return this.stmt("SELECT workspace_id FROM membership WHERE user_id = ? ORDER BY added_at")
       .all(userId)
       .map((row) => row["workspace_id"] as string);
   }
 
-  /** Row-existence only; the implicit-root rule lives in `MembershipStore.has`. */
+  getMembership(userId: string, workspaceId: string): WorkspaceMembership | null {
+    const row = this.stmt("SELECT * FROM membership WHERE user_id = ? AND workspace_id = ?").get(userId, workspaceId);
+    return row ? rowToMembership(row) : null;
+  }
+
+  /** Row-existence only; live account and private ownership checks live in `MembershipStore.has`. */
   isMember(userId: string, workspaceId: string): boolean {
     return (
       this.stmt("SELECT 1 AS one FROM membership WHERE user_id = ? AND workspace_id = ?").get(
@@ -617,6 +657,15 @@ export class IdentityDb {
       if (!userId) {
         throw new Error("Pairing code is not bound to a user");
       }
+      if (record.intent === "root-bootstrap") {
+        this.addMembership({
+          userId,
+          workspaceId: record.workspaceId,
+          addedBy: userId,
+          addedAt: this.now(),
+          role: "admin",
+        });
+      }
       const issuance = input.createDevice(userId);
       const { device, refreshToken } = issuance;
       this.upsertDevice(device);
@@ -654,13 +703,50 @@ export class IdentityDb {
   /** Idempotent upsert on `(user_id, workspace_id)`; refreshes addedBy/addedAt. */
   addMembership(membership: WorkspaceMembership): void {
     this.assertWritable();
+    const owner = this.getPrivateWorkspaceOwner(membership.workspaceId);
+    if (owner && owner.userId !== membership.userId) {
+      throw new Error("Personal and System workspaces cannot be shared");
+    }
+    const role = membership.role ?? "member";
     this.stmt(
-      `INSERT INTO membership (user_id, workspace_id, added_by, added_at)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO membership (user_id, workspace_id, added_by, added_at, role)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(user_id, workspace_id) DO UPDATE SET
          added_by = excluded.added_by,
-         added_at = excluded.added_at`
-    ).run(membership.userId, membership.workspaceId, membership.addedBy, membership.addedAt);
+         added_at = excluded.added_at,
+         role = excluded.role`
+    ).run(membership.userId, membership.workspaceId, membership.addedBy, membership.addedAt, role);
+  }
+
+  /** Persist one complete hard-boundary policy. Authorization lives at the hub receiver. */
+  setWorkspaceRpcPolicy(
+    workspaceId: string,
+    policy: WorkspaceRpcPolicy,
+    expectedPolicy: WorkspaceRpcPolicy,
+    updatedBy: string,
+    updatedAt = this.now()
+  ): void {
+    this.assertWritable();
+    if (!updatedBy.trim()) throw new Error("Workspace RPC policy updater is required");
+    const parsed = WorkspaceRpcPolicySchema.parse(policy);
+    const expected = WorkspaceRpcPolicySchema.parse(expectedPolicy);
+    this.transaction(() => {
+      const current = this.getWorkspaceRpcPolicy(workspaceId);
+      if (JSON.stringify(current) !== JSON.stringify(expected)) {
+        throw new Error("Workspace RPC policy changed; reload before replacing it");
+      }
+      if (this.getPrivateWorkspaceOwner(workspaceId)?.role === "system" && parsed.incoming.length) {
+        throw new Error("System workspace incoming RPC policy is immutable and closed");
+      }
+      this.stmt(
+        `INSERT INTO workspace_rpc_policy (workspace_id, policy_json, updated_by, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(workspace_id) DO UPDATE SET
+           policy_json = excluded.policy_json,
+           updated_by = excluded.updated_by,
+           updated_at = excluded.updated_at`
+      ).run(workspaceId, JSON.stringify(parsed), updatedBy, updatedAt);
+    });
   }
 
   removeMembership(userId: string, workspaceId: string): boolean {
@@ -780,6 +866,7 @@ function rowToMembership(row: Row): WorkspaceMembership {
     workspaceId: row["workspace_id"] as string,
     addedBy: row["added_by"] as string,
     addedAt: row["added_at"] as number,
+    role: row["role"] as WorkspaceMembership["role"],
   };
 }
 

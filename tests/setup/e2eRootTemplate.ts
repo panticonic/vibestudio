@@ -25,7 +25,11 @@ import {
   rootRuntimeFromTemplateManifest,
 } from "@vibestudio/workspace/templateManifest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
-import { resolveDevelopmentBaseSelection } from "../../src/dev/developmentBaseSelection.js";
+import {
+  developmentBaseSelectionSources,
+  resolveDevelopmentBaseSelection,
+} from "../../src/dev/developmentBaseSelection.js";
+import type { DefaultWorkspaceTemplates } from "@vibestudio/workspace/baseTemplateRelease";
 import {
   inspectRootTemplateCheckout,
   seedRootTemplateSnapshotFromCheckout,
@@ -33,8 +37,9 @@ import {
 import { WorkspaceRootTemplateBootstrap } from "../../src/server/workspaceRootTemplateBootstrap.js";
 
 export const E2E_ROOT_TEMPLATE_ENV = "VIBESTUDIO_E2E_ROOT_TEMPLATE";
-export const DEV_ROOT_TEMPLATE_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE";
-export const DEV_ROOT_TEMPLATE_CHECKOUT_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT";
+export const DEFAULT_WORKSPACE_TEMPLATES_ENV = "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES";
+export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE";
+export const DEV_TEMPLATE_SOURCES_ENV = "VIBESTUDIO_DEV_TEMPLATE_SOURCES";
 export const DEV_ROOT_TEMPLATE_WRITEBACK_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK";
 
 export const WORKSPACE_CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
@@ -48,6 +53,8 @@ export interface E2eRootTemplate {
   checkout: string;
   /** Already-materialized source tree, ready to copy into a case workspace. */
   materializedSource: string;
+  defaultTemplates: DefaultWorkspaceTemplates;
+  sources: Array<{ pin: WorkspaceTemplatePin; checkout: string }>;
 }
 
 // The materialized tree carries no workspace identity, so one placeholder id
@@ -79,19 +86,26 @@ export async function prepareE2eRootTemplate(input: {
       "The Electron E2E suite needs a development Base checkout; select one with `vibestudio base use <path>`"
     );
   }
-  const { pin } = selection;
+  const pin = selection.pins.system;
+  const checkout = selection.checkouts.system;
   const gitClient = new GitClient();
 
   const templateRoot = path.join(input.runTempRoot, "root-template");
   const sourcePath = path.join(templateRoot, "source");
   await materializeRootTemplateSource({
     pin,
-    checkout: selection.checkout,
+    checkout,
     templateRoot,
     gitClient,
   });
 
-  return { pin, checkout: selection.checkout, materializedSource: sourcePath };
+  return {
+    pin,
+    checkout,
+    materializedSource: sourcePath,
+    defaultTemplates: selection.pins,
+    sources: developmentBaseSelectionSources(selection),
+  };
 }
 
 /**
@@ -132,13 +146,12 @@ function git(dir: string, args: readonly string[], env?: NodeJS.ProcessEnv): voi
 }
 
 /**
- * Republish `meta/vibestudio.yml` from the authored template manifest.
+ * Republish `meta/vibestudio.yml` from the authored source manifest.
  *
- * In a root checkout the runtime manifest is generated, not authored: the root
- * bootstrap refuses any tree whose `meta/vibestudio.yml` is not the canonical
- * flattening of `meta/template.yml`. A case therefore edits the authored
- * manifest and the generated one is republished from it, exactly as the
- * template tooling does.
+ * In a root checkout the runtime manifest is the canonical self-contained
+ * projection of `meta/template.yml`. A case therefore edits the source
+ * manifest and republishes the runtime from it, exactly as the template
+ * tooling does.
  */
 function regenerateRootRuntimeManifest(checkout: string): void {
   const manifestPath = path.join(checkout, "meta", "template.yml");
@@ -171,11 +184,9 @@ export async function deriveE2eRootTemplate(input: {
 }): Promise<E2eRootTemplate> {
   const checkout = path.join(input.workRoot, "checkout");
   fs.mkdirSync(path.dirname(checkout), { recursive: true, mode: 0o700 });
-  execFileSync(
-    "git",
-    ["clone", "--local", "--no-checkout", input.base.checkout, checkout],
-    { stdio: ["ignore", "pipe", "pipe"] }
-  );
+  execFileSync("git", ["clone", "--local", "--no-checkout", input.base.checkout, checkout], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   git(checkout, ["checkout", "-B", "vibestudio-e2e-case", input.base.pin.commit]);
   input.configureSource(checkout);
   regenerateRootRuntimeManifest(checkout);
@@ -205,7 +216,7 @@ export async function deriveE2eRootTemplate(input: {
     templateRoot: path.join(input.workRoot, "root-template"),
     gitClient,
   });
-  return { pin, checkout, materializedSource };
+  return { ...input.base, pin, checkout, materializedSource };
 }
 
 /**
@@ -216,8 +227,9 @@ export async function deriveE2eRootTemplate(input: {
  */
 export function publishE2eRootTemplate(template: E2eRootTemplate): void {
   process.env[E2E_ROOT_TEMPLATE_ENV] = JSON.stringify(template);
-  process.env[DEV_ROOT_TEMPLATE_ENV] = JSON.stringify(template.pin);
-  process.env[DEV_ROOT_TEMPLATE_CHECKOUT_ENV] = template.checkout;
+  process.env[DEFAULT_WORKSPACE_TEMPLATES_ENV] = JSON.stringify(template.defaultTemplates);
+  process.env[INITIAL_WORKSPACE_TEMPLATE_ENV] = JSON.stringify(template.defaultTemplates.system);
+  process.env[DEV_TEMPLATE_SOURCES_ENV] = JSON.stringify(template.sources);
   // Write-back belongs to the source development instance alone; an E2E run
   // must never publish back into the developer's Base checkout.
   delete process.env[DEV_ROOT_TEMPLATE_WRITEBACK_ENV];

@@ -49,6 +49,42 @@ function controllableTransport(): {
   };
 }
 
+function workspaceNetwork(): {
+  transport: (selfId: string, workspaceId: string) => EnvelopeRpcTransport;
+  sent: RpcEnvelope[];
+} {
+  const handlers = new Map<string, Set<(envelope: RpcEnvelope) => void>>();
+  const sent: RpcEnvelope[] = [];
+  const address = (workspaceId: string, targetId: string) => `${workspaceId}\0${targetId}`;
+  return {
+    sent,
+    transport(selfId, workspaceId) {
+      const ownAddress = address(workspaceId, selfId);
+      const listeners = new Set<(envelope: RpcEnvelope) => void>();
+      handlers.set(ownAddress, listeners);
+      return {
+        async send(envelope) {
+          sent.push(envelope);
+          const destinationWorkspaceId = envelope.targetWorkspaceId ?? workspaceId;
+          const recipients = handlers.get(address(destinationWorkspaceId, envelope.target));
+          if (!recipients?.size) {
+            throw new Error(
+              `No RPC target ${envelope.target} in workspace ${destinationWorkspaceId}`
+            );
+          }
+          queueMicrotask(() => {
+            for (const recipient of recipients) recipient(envelope);
+          });
+        },
+        onMessage(handler) {
+          listeners.add(handler);
+          return () => listeners.delete(handler);
+        },
+      };
+    },
+  };
+}
+
 /** Snapshot a promise's settlement without awaiting it (for "still pending" checks). */
 function track<T>(promise: Promise<T>): { settled: boolean; reason?: unknown; value?: T } {
   const state: { settled: boolean; reason?: unknown; value?: T } = { settled: false };
@@ -299,6 +335,300 @@ describe("createRpcClient", () => {
 
     await expect(rpc.call("self", "add", [2, 5])).resolves.toBe(7);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("routes calls, streams, and events to the same target name in exact workspaces", async () => {
+    const network = workspaceNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      workspaceId: "workspace:a",
+      callerKind: "worker",
+      transport: network.transport("caller", "workspace:a"),
+    });
+    const services = ["workspace:a", "workspace:b", "workspace:c"].map((workspaceId) => {
+      const rpc = createRpcClient({
+        selfId: "service",
+        workspaceId,
+        callerKind: "worker",
+        transport: network.transport("service", workspaceId),
+      });
+      const events: unknown[] = [];
+      rpc.expose("identify", ({ caller: inboundCaller }) => ({
+        workspaceId,
+        callerWorkspaceId: inboundCaller.workspaceId,
+      }));
+      rpc.exposeStreaming("identify-stream", async ({ caller: inboundCaller }, sink) => {
+        const bytes = new TextEncoder().encode(`${workspaceId}<-${inboundCaller.workspaceId}`);
+        await sink({
+          kind: "head",
+          status: 200,
+          statusText: "OK",
+          headerPairs: [],
+          finalUrl: "",
+        });
+        await sink({ kind: "chunk", bytes });
+        await sink({ kind: "end", bytesIn: bytes.byteLength });
+      });
+      rpc.on("notice", ({ payload }) => events.push(payload));
+      return { workspaceId, rpc, events };
+    });
+
+    await expect(caller.call("service", "identify", [])).resolves.toEqual({
+      workspaceId: "workspace:a",
+      callerWorkspaceId: "workspace:a",
+    });
+    const workspaceB = caller.peer<
+      { identify: () => unknown },
+      { reply: string },
+      { notice: string }
+    >("service", { targetWorkspaceId: "workspace:b" });
+    await expect(workspaceB.call.identify()).resolves.toEqual({
+      workspaceId: "workspace:b",
+      callerWorkspaceId: "workspace:a",
+    });
+    await expect(
+      caller.call("service", "identify", [], { targetWorkspaceId: "workspace:c" })
+    ).resolves.toEqual({
+      workspaceId: "workspace:c",
+      callerWorkspaceId: "workspace:a",
+    });
+
+    const [streamB, streamC] = await Promise.all([
+      caller.stream("service", "identify-stream", [], {
+        targetWorkspaceId: "workspace:b",
+      }),
+      caller.stream("service", "identify-stream", [], {
+        targetWorkspaceId: "workspace:c",
+      }),
+    ]);
+    await expect(streamB.text()).resolves.toBe("workspace:b<-workspace:a");
+    await expect(streamC.text()).resolves.toBe("workspace:c<-workspace:a");
+
+    await workspaceB.emit("notice", "for-b");
+    await caller.emit("service", "notice", "for-c", {
+      targetWorkspaceId: "workspace:c",
+    });
+    await flushMicrotasks();
+    expect(services.map(({ events }) => events)).toEqual([[], ["for-b"], ["for-c"]]);
+
+    const peerEvents: string[] = [];
+    workspaceB.on("reply", ({ payload }) => peerEvents.push(payload));
+    await services[1]!.rpc.emit("caller", "reply", "from-b", {
+      targetWorkspaceId: "workspace:a",
+    });
+    await services[2]!.rpc.emit("caller", "reply", "from-c", {
+      targetWorkspaceId: "workspace:a",
+    });
+    await flushMicrotasks();
+    expect(peerEvents).toEqual(["from-b"]);
+
+    const boundedReturns = network.sent.filter(
+      (envelope) =>
+        envelope.target === "caller" &&
+        envelope.delivery.caller.workspaceId !== "workspace:a" &&
+        (envelope.message.type === "response" || envelope.message.type === "stream-frame")
+    );
+    expect(boundedReturns.length).toBeGreaterThan(0);
+    expect(boundedReturns.every((envelope) => envelope.targetWorkspaceId === "workspace:a")).toBe(
+      true
+    );
+  });
+
+  it("preserves an exact workspace route on unary and stream cancellation", async () => {
+    const network = workspaceNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      workspaceId: "workspace:a",
+      transport: network.transport("caller", "workspace:a"),
+    });
+    const callee = createRpcClient({
+      selfId: "service",
+      workspaceId: "workspace:b",
+      transport: network.transport("service", "workspace:b"),
+    });
+    let unaryAbort = false;
+    let unaryEntered!: () => void;
+    const unaryStarted = new Promise<void>((resolve) => {
+      unaryEntered = resolve;
+    });
+    callee.expose("wait", async ({ signal }) => {
+      unaryEntered();
+      await new Promise<void>((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            unaryAbort = true;
+            resolve();
+          },
+          { once: true }
+        )
+      );
+      return null;
+    });
+
+    const unaryController = new AbortController();
+    const unary = caller.call("service", "wait", [], {
+      targetWorkspaceId: "workspace:b",
+      signal: unaryController.signal,
+    });
+    await unaryStarted;
+    unaryController.abort();
+    await expect(unary).rejects.toThrow(/aborted/);
+    await vi.waitFor(() => expect(unaryAbort).toBe(true));
+
+    let streamAbort = false;
+    callee.exposeStreaming("wait-stream", async ({ signal }, sink) => {
+      await sink({
+        kind: "head",
+        status: 200,
+        statusText: "OK",
+        headerPairs: [],
+        finalUrl: "",
+      });
+      await new Promise<void>((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            streamAbort = true;
+            resolve();
+          },
+          { once: true }
+        )
+      );
+    });
+    const streamed = await caller.stream("service", "wait-stream", [], {
+      targetWorkspaceId: "workspace:b",
+    });
+    await streamed.body?.cancel();
+    await vi.waitFor(() => expect(streamAbort).toBe(true));
+
+    const cancellations = network.sent.filter(
+      (envelope) =>
+        envelope.message.type === "request-cancel" || envelope.message.type === "stream-cancel"
+    );
+    expect(cancellations.map((envelope) => envelope.targetWorkspaceId)).toEqual([
+      "workspace:b",
+      "workspace:b",
+    ]);
+    expect(cancellations.map((envelope) => envelope.delivery.caller.workspaceId)).toEqual([
+      "workspace:a",
+      "workspace:a",
+    ]);
+  });
+
+  it("matches bounded responses and stream frames to the authenticated workspace", async () => {
+    const sent: RpcEnvelope[] = [];
+    let receive!: (envelope: RpcEnvelope) => void;
+    const rpc = createRpcClient({
+      selfId: "caller",
+      workspaceId: "workspace:a",
+      transport: {
+        send: async (envelope) => {
+          sent.push(envelope);
+        },
+        onMessage(handler) {
+          receive = handler;
+          return () => {};
+        },
+      },
+    });
+    const responseEnvelope = (
+      request: RpcEnvelope,
+      workspaceId: string,
+      message: RpcEnvelope["message"]
+    ): RpcEnvelope => ({
+      from: "service",
+      target: "caller",
+      targetWorkspaceId: "workspace:a",
+      delivery: { caller: { callerId: "service", callerKind: "worker", workspaceId } },
+      provenance: request.provenance,
+      message,
+    });
+
+    const wrongRoute = vi.fn();
+    rpc.on("wrong-route", wrongRoute);
+    receive({
+      from: "service",
+      target: "caller",
+      targetWorkspaceId: "workspace:other",
+      delivery: {
+        caller: {
+          callerId: "service",
+          callerKind: "worker",
+          workspaceId: "workspace:b",
+        },
+      },
+      provenance: [],
+      message: {
+        type: "event",
+        fromId: "service",
+        event: "wrong-route",
+        payload: null,
+      },
+    });
+    await flushMicrotasks();
+    expect(wrongRoute).not.toHaveBeenCalled();
+
+    const unary = rpc.call("service", "identify", [], {
+      targetWorkspaceId: "workspace:b",
+    });
+    await flushMicrotasks();
+    const request = sent.find((envelope) => envelope.message.type === "request")!;
+    const requestId = request.message.type === "request" ? request.message.requestId : "";
+    receive(
+      responseEnvelope(request, "workspace:c", {
+        type: "response",
+        requestId,
+        result: "wrong",
+      })
+    );
+    const unaryState = track(unary);
+    await flushMicrotasks();
+    expect(unaryState.settled).toBe(false);
+    receive(
+      responseEnvelope(request, "workspace:b", {
+        type: "response",
+        requestId,
+        result: "right",
+      })
+    );
+    await expect(unary).resolves.toBe("right");
+
+    const streaming = rpc.stream("service", "download", [], {
+      targetWorkspaceId: "workspace:b",
+    });
+    await flushMicrotasks();
+    const streamRequest = sent.find((envelope) => envelope.message.type === "stream-request")!;
+    const streamId =
+      streamRequest.message.type === "stream-request" ? streamRequest.message.requestId : "";
+    const head = {
+      type: "stream-frame" as const,
+      requestId: streamId,
+      fromId: "service",
+      frameType: 1,
+      payload: JSON.stringify({
+        status: 200,
+        statusText: "OK",
+        headerPairs: [],
+        finalUrl: "",
+      }),
+    };
+    receive(responseEnvelope(streamRequest, "workspace:c", head));
+    const streamState = track(streaming);
+    await flushMicrotasks();
+    expect(streamState.settled).toBe(false);
+    receive(responseEnvelope(streamRequest, "workspace:b", head));
+    const response = await streaming;
+    receive(
+      responseEnvelope(streamRequest, "workspace:b", {
+        type: "stream-frame",
+        requestId: streamId,
+        fromId: "service",
+        frameType: 3,
+        payload: JSON.stringify({ bytesIn: 0 }),
+      })
+    );
+    await expect(response.text()).resolves.toBe("");
   });
 
   it("removes host attestations from handler identity and forwarded provenance", async () => {
@@ -851,6 +1181,28 @@ describe("createRpcClient — pending-call policy (§3.4)", () => {
 
     const err = (await call.catch((e) => e)) as NodeJS.ErrnoException;
     expect(err.code).toBe("CONNECTION_LOST");
+  });
+
+  it("treats an explicitly workspace-addressed main target as routed", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      workspaceId: "workspace:a",
+      callerKind: "panel",
+      transport: fake.transport,
+      onRecovery: fake.onRecovery,
+    });
+
+    const call = rpc.call("main", "workspace.operation", [], {
+      targetWorkspaceId: "workspace:b",
+    });
+    const state = track(call);
+    fake.emitStatus("disconnected");
+    await flushMicrotasks();
+    expect(state.settled).toBe(false);
+
+    fake.emitRecovery("cold-recover");
+    await expect(call).rejects.toMatchObject({ code: "CONNECTION_LOST" });
   });
 
   it("leaves routed pendings alive on disconnect, then rejects them on cold-recover", async () => {

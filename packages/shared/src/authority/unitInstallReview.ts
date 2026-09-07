@@ -187,10 +187,10 @@ export function installRowKey(input: {
  * definition digest exists. Service facades use `workspace-service:<name>`;
  * direct receiver calls use `userland:<provider>/<name>#*`.
  *
- * A receiver-declared capability is classified when its provider is part of the
- * same reviewed set — the user is accepting the receiver and its declaration in
- * one decision. Anything else is unreviewed, and therefore contextual and
- * headline (§6.1).
+ * The host supplies receiver declarations from the protected workspace source
+ * and the same reviewed candidate set. Candidate providers replace their current
+ * declarations. A provider outside those exact sources is unreviewed, and
+ * therefore contextual and headline (§6.1).
  */
 export type UserlandDefinitions = ReadonlyMap<string, UserlandCapabilityDefinition>;
 

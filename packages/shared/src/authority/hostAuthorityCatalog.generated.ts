@@ -827,40 +827,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "baseRelease.check": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "workspace.base-release",
-      rationale:
-        "Read-only comparison of installed Base lineage with the host's verified immutable release pin.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "baseRelease.pull": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace.base-release",
-      rationale:
-        "The host supplies only its verified immutable Base pin; Composer retains ordinary semantic review, repair, and protected-main publication.",
-    },
-    capability: "workspace.update-base",
-    presentation: {
-      title: "Update Vibestudio Base",
-      action: "update Vibestudio Base",
-      description:
-        "Prepare the exact Base shipped by this Vibestudio version through the normal workspace review.",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
   "blobstore.delete": {
     tier: {
       tier: "gated",
@@ -4004,6 +3970,27 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "hubControl.ensureUserWorkspaces": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.create",
+      rationale:
+        "Idempotently ensure the authenticated account's own Personal and System workspaces.",
+    },
+    capability: "workspaces.create",
+    presentation: {
+      title: "Prepare your workspaces",
+      action: "prepare your Personal and System workspaces",
+      description: "Create either private workspace if it does not exist yet.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
   "hubControl.getProfile": {
     tier: {
       tier: "gated",
@@ -4021,6 +4008,26 @@ export const HOST_AUTHORITY_METHODS = {
       group: "accounts",
       authorityCategory: {
         domain: "accounts",
+        verb: "see",
+      },
+    },
+  },
+  "hubControl.getWorkspaceRpcPolicy": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale: "Read host-owned workspace integration settings as an authorized manager.",
+    },
+    capability: "workspaces.rpcPolicy.read",
+    presentation: {
+      title: "View workspace connections",
+      action: "view workspace connections",
+      description: "See which incoming and outgoing operations can request access.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "sharing",
         verb: "see",
       },
     },
@@ -4250,6 +4257,27 @@ export const HOST_AUTHORITY_METHODS = {
       authorityCategory: {
         domain: "people",
         verb: "manage",
+      },
+    },
+  },
+  "hubControl.setWorkspaceRpcPolicy": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.integration",
+      rationale:
+        "Change a workspace's hard integration ceilings through authenticated host management.",
+    },
+    capability: "workspaces.rpcPolicy.write",
+    presentation: {
+      title: "Change workspace connections",
+      action: "change workspace connections",
+      description: "Choose which operations may request access across this workspace boundary.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
       },
     },
   },
@@ -6654,6 +6682,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "vcs.mainState": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read-transport",
+      rationale:
+        "Workspace main event metadata; content reads retain their exact-reference authorization.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "vcs.merge": {
     tier: {
       tier: "open",
@@ -8798,10 +8838,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "files",
     verb: "act",
   },
-  "workspace.update-base": {
-    domain: "automation",
-    verb: "manage",
-  },
   "workspaces.create": {
     domain: "automation",
     verb: "act",
@@ -8817,6 +8853,14 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "workspaces.read": {
     domain: "files",
     verb: "see",
+  },
+  "workspaces.rpcPolicy.read": {
+    domain: "sharing",
+    verb: "see",
+  },
+  "workspaces.rpcPolicy.write": {
+    domain: "sharing",
+    verb: "act",
   },
 } as const satisfies Record<string, NonNullable<CapabilityPresentation["authorityCategory"]>>;
 
@@ -9704,17 +9748,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "act",
     },
   },
-  "workspace.update-base": {
-    title: "Update Vibestudio Base",
-    action: "update Vibestudio Base",
-    description:
-      "Prepare the exact Base shipped by this Vibestudio version through the normal workspace review.",
-    group: "workspace",
-    authorityCategory: {
-      domain: "automation",
-      verb: "manage",
-    },
-  },
   "workspaces.create": {
     title: "Create a workspace",
     action: "create a workspace",
@@ -9753,6 +9786,26 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "files",
       verb: "see",
+    },
+  },
+  "workspaces.rpcPolicy.read": {
+    title: "View workspace connections",
+    action: "view workspace connections",
+    description: "See which incoming and outgoing operations can request access.",
+    group: "accounts",
+    authorityCategory: {
+      domain: "sharing",
+      verb: "see",
+    },
+  },
+  "workspaces.rpcPolicy.write": {
+    title: "Change workspace connections",
+    action: "change workspace connections",
+    description: "Choose which operations may request access across this workspace boundary.",
+    group: "accounts",
+    authorityCategory: {
+      domain: "sharing",
+      verb: "act",
     },
   },
 } as const satisfies Record<string, CapabilityPresentation>;

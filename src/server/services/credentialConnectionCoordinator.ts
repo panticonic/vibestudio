@@ -202,6 +202,7 @@ type StoredOAuthCredentialParams = StoreUrlBoundCredentialParams & {
 
 export interface SessionCredentialCapture {
   captureCookies(params: {
+    userId: string;
     signInUrl: string;
     origins: string[];
     cookieNames: string[];
@@ -216,6 +217,7 @@ export interface SessionCredentialCapture {
     accountIdentity?: Partial<AccountIdentity>;
   }>;
   captureSamlSession?(params: {
+    userId: string;
     signInUrl: string;
     spAudience: string;
     cookieNames?: string[];
@@ -341,6 +343,12 @@ export interface CredentialConnectionCoordinator {
     code?: string;
     error?: string;
   }): Promise<void>;
+}
+
+function requireCaptureUser(ctx: ServiceContext): string {
+  const userId = ctx.caller.subject?.userId;
+  if (!userId) throw new Error("Browser session capture requires an authenticated user");
+  return userId;
 }
 
 export function createCredentialConnectionCoordinator(
@@ -1645,6 +1653,7 @@ export function createCredentialConnectionCoordinator(
     });
     throwIfAborted(signal);
     const captured = await sessionCredentialCapture.captureCookies({
+      userId: requireCaptureUser(ctx),
       signInUrl: request.flow.signInUrl,
       origins: request.flow.capture.origins,
       cookieNames: request.flow.capture.cookies,
@@ -1739,6 +1748,7 @@ export function createCredentialConnectionCoordinator(
     });
     throwIfAborted(signal);
     const captured = await sessionCredentialCapture.captureSamlSession({
+      userId: requireCaptureUser(ctx),
       signInUrl: request.flow.signInUrl,
       spAudience: request.flow.spAudience,
       cookieNames: request.flow.capture.cookies,

@@ -100,6 +100,8 @@ interface FirebaseMessagingClient {
 type FirebaseAdminLoader = () => Promise<FirebaseMessagingClient | null>;
 
 interface PushServiceDeps {
+  workspaceId: string;
+  serverId: string;
   databasePath?: string;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
@@ -379,7 +381,7 @@ function isInvalidTokenError(error: unknown): boolean {
   );
 }
 
-export function createPushService(deps: PushServiceDeps = {}): PushServiceResult {
+export function createPushService(deps: PushServiceDeps): PushServiceResult {
   const store = new PushRegistrationStore(deps.databasePath ?? getPushDatabasePath());
   const now = deps.now ?? (() => Date.now());
   const metrics = deps.metrics ?? pushMetrics;
@@ -421,7 +423,17 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
         };
       }
 
-      await client.send(buildFirebaseMessage(registration, opts));
+      await client.send(
+        buildFirebaseMessage(registration, {
+          ...opts,
+          data: {
+            ...opts.data,
+            workspaceId: deps.workspaceId,
+            serverId: deps.serverId,
+            userId: registration.userId,
+          },
+        })
+      );
       metrics.recordPushSend({ platform: registration.platform, category, outcome: "sent" });
       return {
         userId: registration.userId,
@@ -487,7 +499,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
           kind: "approval-cancel",
           approvalId,
           cancelKey: cancelKey ?? approvalId,
-        } satisfies PushApprovalDataPayload,
+        } satisfies Omit<PushApprovalDataPayload, "workspaceId" | "serverId" | "userId">,
       });
     },
 

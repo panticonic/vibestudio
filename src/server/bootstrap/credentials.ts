@@ -27,7 +27,8 @@ export interface CredentialBootstrapDeps {
   sessionGrantStore: NonNullable<CredentialServiceDeps["sessionGrantStore"]>;
   credentialUseGrantStore: NonNullable<CredentialServiceDeps["credentialUseGrantStore"]>;
   credentialLifecycle: NonNullable<CredentialServiceDeps["credentialLifecycle"]>;
-  hasConnectedShell(): boolean;
+  /** Live private-workspace ownership, derived from the hub identity store. */
+  isPersonalWorkspaceOwner(userId: string): boolean;
   getAuthorizingShell: NonNullable<
     CredentialServiceDeps["connectionLookup"]
   >["getAuthorizingShell"];
@@ -50,15 +51,25 @@ export function wireCredentialService(
 ): BootstrappedCredentialService {
   const captureBridge = createCredentialCaptureBridge({
     eventService: deps.eventService,
-    hasConnectedShell: deps.hasConnectedShell,
   });
   const captureSessionCredential = <T extends Record<string, unknown>>(
+    userId: string,
     payload: Record<string, unknown>,
     signal?: AbortSignal
-  ): Promise<T> => captureBridge.captureSessionCredential<T>(payload, signal);
+  ): Promise<T> => {
+    if (!deps.isPersonalWorkspaceOwner(userId)) {
+      return Promise.reject(new Error("Connect browser sessions in your Personal workspace"));
+    }
+    return captureBridge.captureSessionCredential<T>(userId, payload, signal);
+  };
 
   const credentialService = createCredentialService({
-    completeCapture: (captureId, response) => captureBridge.completeCapture(captureId, response),
+    completeCapture: (userId, captureId, response) => {
+      if (!deps.isPersonalWorkspaceOwner(userId)) {
+        throw new Error("Browser capture does not belong to this Personal workspace");
+      }
+      captureBridge.completeCapture(userId, captureId, response);
+    },
     credentialStore: deps.credentialStore,
     clientConfigStore: deps.clientConfigStore,
     auditLog: deps.auditLog,
@@ -110,6 +121,7 @@ export function wireCredentialService(
           expiresAt?: number;
           accountIdentity?: Record<string, string>;
         }>(
+          params.userId,
           {
             kind: "cookies",
             signInUrl: params.signInUrl,
@@ -139,6 +151,7 @@ export function wireCredentialService(
           expiresAt?: number;
           accountIdentity?: Record<string, string>;
         }>(
+          params.userId,
           {
             kind: "saml",
             signInUrl: params.signInUrl,

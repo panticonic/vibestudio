@@ -25,7 +25,8 @@ export const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   last_used_at INTEGER,
   decided_by TEXT,
   decision_surface TEXT,
-  task_ref TEXT
+  task_ref TEXT,
+  source_workspace_id TEXT
 )`;
 
 const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
@@ -52,7 +53,7 @@ const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   )
 )`;
 
-export const AUTHORITY_GRANTS_SCHEMA_VERSION = 7;
+export const AUTHORITY_GRANTS_SCHEMA_VERSION = 8;
 
 export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
   version: AUTHORITY_GRANTS_SCHEMA_VERSION,
@@ -81,3 +82,14 @@ export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
     },
   ],
 };
+
+/** Old consent was workspace-local; NULL preserves that meaning. */
+export const AUTHORITY_GRANTS_MIGRATIONS = [
+  {
+    fromVersion: 7,
+    toVersion: 8,
+    migrate(db: import("node:sqlite").DatabaseSync): void {
+      db.exec("ALTER TABLE authority_grants ADD COLUMN source_workspace_id TEXT");
+    },
+  },
+];

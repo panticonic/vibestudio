@@ -2,10 +2,15 @@ import {
   DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
   DEVELOPMENT_TEMPLATE_SOURCES_ENV,
 } from "@vibestudio/workspace/developmentTemplateSources";
+import {
+  DEFAULT_WORKSPACE_TEMPLATES_ENV,
+  INITIAL_WORKSPACE_TEMPLATE_ENV,
+  type DefaultWorkspaceTemplates,
+} from "@vibestudio/workspace/baseTemplateRelease";
 
 export interface DevelopmentBaseEnvironmentSelection {
-  pin: unknown;
-  checkout: string;
+  pins: DefaultWorkspaceTemplates;
+  checkouts: Record<keyof DefaultWorkspaceTemplates, string>;
   sourceCheckout: string;
   writebackRepositories: readonly string[];
 }
@@ -21,9 +26,18 @@ export function developmentInstanceEnvironment(input: {
   templates?: ReadonlyArray<{ pin: unknown; checkout: string }>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
+  const selectedBase = input.base;
+  const baseSources = selectedBase
+    ? (Object.keys(selectedBase.pins) as Array<keyof DefaultWorkspaceTemplates>).map((name) => ({
+        pin: selectedBase.pins[name],
+        checkout: selectedBase.checkouts[name],
+      }))
+    : [];
   delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE"];
   delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"];
   delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"];
+  delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
+  delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
   delete env[DEVELOPMENT_TEMPLATE_SOURCES_ENV];
   delete env[DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV];
   Object.assign(env, {
@@ -32,22 +46,25 @@ export function developmentInstanceEnvironment(input: {
     VIBESTUDIO_INSTANCE_ROOT: input.instanceRoot,
     VIBESTUDIO_INSTANCE: input.instanceId,
     VIBESTUDIO_SOURCE_INSTANCE: input.sourceCoupled ? "1" : "0",
-    ...(input.templates?.length
+    ...(selectedBase || input.templates?.length
       ? {
           [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(
-            input.templates.map(({ pin, checkout }) => ({ pin, checkout }))
+            [...baseSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
+              pin,
+              checkout,
+            }))
           ),
         }
       : {}),
-    ...(input.base
+    ...(selectedBase
       ? {
-          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(input.base.pin),
-          VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: input.base.checkout,
+          [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(selectedBase.pins),
+          [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(selectedBase.pins.system),
           ...(input.sourceCoupled
             ? {
                 VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: JSON.stringify({
-                  root: input.base.sourceCheckout,
-                  repositories: input.base.writebackRepositories,
+                  root: selectedBase.sourceCheckout,
+                  repositories: selectedBase.writebackRepositories,
                 }),
               }
             : {}),

@@ -33,6 +33,7 @@ import { createCredentialService } from "../../src/server/services/credentialSer
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { CredentialSessionGrantStore } from "../../src/server/services/credentialSessionGrants.js";
 import { createApprovalQueue } from "../../src/server/services/approvalQueue.js";
+import { EventService } from "@vibestudio/shared/eventsService";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
 
 function verifiedTestCaller(
@@ -1329,8 +1330,7 @@ describe("credentialService", () => {
         },
       ]
     )) as StoredCredentialSummary;
-    const emit = vi.fn();
-    const approvalQueue = createApprovalQueue({ eventService: { emit } as never });
+    const approvalQueue = createApprovalQueue({ eventService: new EventService() });
     const service = createCredentialService({
       credentialStore: store as never,
       approvalQueue,
@@ -4214,7 +4214,7 @@ describe("credentialService", () => {
       },
     });
     const stored = (await service.handler(
-      { caller: verifiedTestCaller("worker:test", "worker") },
+      { caller: { ...verifiedTestCaller("worker:test", "worker"), subject: { userId: "alice", handle: "alice" } } },
       "connect",
       [
         {
@@ -4268,7 +4268,7 @@ describe("credentialService", () => {
       },
     });
     const stored = (await service.handler(
-      { caller: verifiedTestCaller("worker:test", "worker") },
+      { caller: { ...verifiedTestCaller("worker:test", "worker"), subject: { userId: "alice", handle: "alice" } } },
       "connect",
       [
         {

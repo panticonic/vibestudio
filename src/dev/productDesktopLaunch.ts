@@ -1,5 +1,8 @@
 import type { DevelopmentBaseSelection } from "./developmentBaseSelection.js";
-import { INITIAL_WORKSPACE_TEMPLATE_ENV } from "@vibestudio/workspace/baseTemplateRelease";
+import {
+  DEFAULT_WORKSPACE_TEMPLATES_ENV,
+  INITIAL_WORKSPACE_TEMPLATE_ENV,
+} from "@vibestudio/workspace/baseTemplateRelease";
 import {
   DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
   DEVELOPMENT_TEMPLATE_SOURCES_ENV,
@@ -39,10 +42,18 @@ export function assertProductDesktopArguments(argv: readonly string[]): void {
 export function productDesktopEnvironment(input: {
   parent: NodeJS.ProcessEnv;
   repoRoot: string;
-  initialBase?: DevelopmentBaseSelection;
+  distributions?: DevelopmentBaseSelection;
+  bootstrapSystem?: boolean;
   templates?: ReadonlyArray<{ pin: unknown; checkout: string }>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
+  const distributions = input.distributions;
+  const distributionSources = distributions
+    ? (["base", "personal", "system"] as const).map((name) => ({
+        pin: distributions.pins[name],
+        checkout: distributions.checkouts[name],
+      }))
+    : [];
   for (const key of [
     "VIBESTUDIO_INSTANCE_ROOT",
     "VIBESTUDIO_INSTANCE",
@@ -50,6 +61,7 @@ export function productDesktopEnvironment(input: {
     "VIBESTUDIO_DEV_ROOT_TEMPLATE",
     "VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT",
     "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK",
+    DEFAULT_WORKSPACE_TEMPLATES_ENV,
     INITIAL_WORKSPACE_TEMPLATE_ENV,
     DEVELOPMENT_TEMPLATE_SOURCES_ENV,
     DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
@@ -59,19 +71,25 @@ export function productDesktopEnvironment(input: {
   Object.assign(env, {
     NODE_ENV: "production",
     VIBESTUDIO_APP_ROOT: input.repoRoot,
-    ...(input.templates?.length
+    ...(distributions || input.templates?.length
       ? {
           [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(
-            input.templates.map(({ pin, checkout }) => ({ pin, checkout }))
+            [...distributionSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
+              pin,
+              checkout,
+            }))
           ),
           [DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV]: "1",
         }
       : {}),
-    ...(input.initialBase
+    ...(distributions
       ? {
-          [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(input.initialBase.pin),
-          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(input.initialBase.pin),
-          VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: input.initialBase.checkout,
+          [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(distributions.pins),
+          ...(input.bootstrapSystem
+            ? {
+                [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(distributions.pins.system),
+              }
+            : {}),
         }
       : {}),
   });

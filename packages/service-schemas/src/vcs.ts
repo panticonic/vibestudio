@@ -2689,6 +2689,24 @@ const vcsSemanticMethods = defineVcsMethods({
     ],
     seeAlso: ["vcs.commit", "vcs.status"],
   },
+  mainState: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read-transport",
+      rationale:
+        "Workspace main event metadata; content reads retain their exact-reference authorization.",
+    },
+    description: "Read the current protected main event without creating a context.",
+    args: z.tuple([]),
+    returns: vcsEventNodeRefSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.status", "vcs.listFiles"],
+  },
   status: {
     tier: {
       tier: "open",
@@ -3044,7 +3062,9 @@ export function parseVcsSemanticRequest(
   method: VcsSemanticMethodName,
   input: unknown
 ): { input: unknown; references: VcsSemanticReference[] } {
-  const canonicalArgs = vcsSemanticMethods[method].args.parse([input]) as unknown[];
+  const canonicalArgs = vcsSemanticMethods[method].args.parse(
+    input === undefined ? [] : [input]
+  ) as unknown[];
   return {
     input: canonicalArgs[0],
     references: extractVcsSemanticReferences(method, canonicalArgs),

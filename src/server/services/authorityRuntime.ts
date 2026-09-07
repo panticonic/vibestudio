@@ -178,7 +178,9 @@ export function authorizeVerifiedCaller(
   const sessionOrigin = executionSession !== null;
   if (executionSession) {
     const mismatches = [
-      executionSession.workspaceId !== facts.workspaceId ? "workspace" : null,
+      executionSession.workspaceId !== (caller.workspaceId ?? facts.workspaceId)
+        ? "workspace"
+        : null,
       executionSession.executor.runtimeId !== caller.runtime.id ? "runtime" : null,
       executionSession.agentBinding
         ? executionSession.contextId !== caller.agentBinding?.contextId
@@ -213,6 +215,7 @@ export function authorizeVerifiedCaller(
         ? ({ kind: "code", principal: code } as const)
         : ({ kind: "user", principal: actingUser ?? (`user:anonymous` as const) } as const);
   const context: AuthorizationContext = {
+    sourceWorkspaceId: caller.workspaceId ?? facts.workspaceId,
     authorizingOrigin,
     host,
     actingUser,
@@ -299,6 +302,7 @@ export function authorizeVerifiedCaller(
     ? `do:workers/pubsub-channel:PubSubChannel:${caller.agentBinding.channelId}`
     : null;
   if (
+    (caller.workspaceId === undefined || caller.workspaceId === facts.workspaceId) &&
     facts.tier !== "critical" &&
     facts.capability === "workspace-service:channel" &&
     boundChannelResource === facts.resourceKey

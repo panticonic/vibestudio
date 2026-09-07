@@ -61,7 +61,9 @@ function startupApproval(id = "startup-1"): PendingUnitInstallReviewApproval {
 
 describe("shellApprovalService", () => {
   it("keeps trusted presenters independent of their own approval grants", async () => {
-    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const approvalQueue = createApprovalQueue({
+      eventService: { emitProjected: vi.fn() } as never,
+    });
     const service = createShellApprovalService({
       approvalQueue,
       hasAppCapability: (callerId, capability) =>
@@ -101,7 +103,9 @@ describe("shellApprovalService", () => {
   });
 
   it("returns the host-owned creation review preparation state", async () => {
-    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const approvalQueue = createApprovalQueue({
+      eventService: { emitProjected: vi.fn() } as never,
+    });
     const service = createShellApprovalService({
       approvalQueue,
       workspaceCreationReviewState: () => ({
@@ -205,7 +209,7 @@ describe("shellApprovalService", () => {
     });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller("bootstrap", "app") }, "resolveBootstrap", [
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveBootstrap", [
         ["credential-1"],
         "once",
       ])
@@ -239,11 +243,10 @@ describe("shellApprovalService", () => {
       metrics,
     });
 
-    await service.handler(
-      { caller: createVerifiedCaller("bootstrap", "app") },
-      "resolveBootstrap",
-      [["startup-1"], "once"]
-    );
+    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveBootstrap", [
+      ["startup-1"],
+      "once",
+    ]);
     // Accepting clears the full slate: the gate asks whose code this is, not
     // what it may reach, so it offers no per-permission choice to carry.
     expect(resolveInstallReview).toHaveBeenCalledWith(
@@ -253,7 +256,7 @@ describe("shellApprovalService", () => {
     );
     expect(resolve).not.toHaveBeenCalled();
     expect(metrics.snapshot().approval_resolved_total).toMatchObject({
-      "decision=once,source=app": 1,
+      "decision=once,source=shell": 1,
     });
   });
 
@@ -279,11 +282,10 @@ describe("shellApprovalService", () => {
       metrics,
     });
 
-    await service.handler(
-      { caller: createVerifiedCaller("bootstrap", "app") },
-      "resolveBootstrap",
-      [["startup-1"], "deny"]
-    );
+    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveBootstrap", [
+      ["startup-1"],
+      "deny",
+    ]);
     expect(resolveInstallReview).toHaveBeenCalledWith(
       "startup-1",
       { decision: "cancel" },
@@ -325,7 +327,7 @@ describe("shellApprovalService", () => {
         cancelForCaller: vi.fn(),
       },
     });
-    const ctx = { caller: createVerifiedCaller("bootstrap", "app") };
+    const ctx = { caller: createVerifiedCaller("shell", "shell") };
 
     await expect(
       service.handler(ctx, "resolveBootstrap", [["startup-1", "startup-2"], "once"])
@@ -344,7 +346,9 @@ describe("shellApprovalService", () => {
   });
 
   it("rejects a second verdict and records only the accepted resolution", async () => {
-    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const approvalQueue = createApprovalQueue({
+      eventService: { emitProjected: vi.fn() } as never,
+    });
     const metrics = createPushMetrics();
     const service = createShellApprovalService({ approvalQueue, metrics });
     const pendingPromise = approvalQueue.request({

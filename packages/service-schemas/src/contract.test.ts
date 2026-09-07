@@ -16,7 +16,6 @@ import { authMethods } from "./auth.js";
 import { authorityMethods } from "./authority.js";
 import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
-import { baseReleaseMethods } from "./baseRelease.js";
 import { browserDataMethods } from "./browserData.js";
 import { browserEnvironmentMethods } from "./browserEnvironment.js";
 import { browserPrivacyPresentationMethods } from "./browserPrivacyPresentation.js";
@@ -97,7 +96,6 @@ const serviceTables: ServiceTable[] = [
   { service: "auth", file: "auth.ts", methods: authMethods },
   { service: "authority", file: "authority.ts", methods: authorityMethods },
   { service: "autofill", file: "autofill.ts", methods: autofillMethods },
-  { service: "baseRelease", file: "baseRelease.ts", methods: baseReleaseMethods },
   { service: "blobstore", file: "blobstore.ts", methods: blobstoreMethods },
   { service: "browserData", file: "browserData.ts", methods: browserDataMethods },
   {

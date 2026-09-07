@@ -127,6 +127,9 @@ export class AttachedHostDecisionConsumer {
           resource: { kind: "exact", key: snapshot.resourceKey },
           subject: snapshot.callerPrincipal,
           constraints: {
+            ...(snapshot.sourceWorkspaceId
+              ? { sourceWorkspaceId: snapshot.sourceWorkspaceId }
+              : {}),
             sessionId: snapshot.sessionId,
             invocationDigest: challenge.invocationSnapshotDigest,
             ...(snapshot.agentBindingId ? { agentBindingId: snapshot.agentBindingId } : {}),

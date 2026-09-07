@@ -241,6 +241,8 @@ export interface VerifiedCodeIdentity {
  * active runtime entity when installed worker/DO code relays that agent's work.
  */
 export interface VerifiedCaller {
+  /** Ordinary workspace identity attested by the owning host, never from the RPC payload. */
+  workspaceId?: string;
   runtime: {
     /** Concrete runtime principal, e.g. a panel id or do:source:Class:objectKey. */
     id: string;
@@ -341,6 +343,7 @@ export function authenticatedCallerOf(caller: VerifiedCaller): AuthenticatedCall
   return {
     callerId: caller.runtime.id,
     callerKind: caller.runtime.kind,
+    ...(caller.workspaceId ? { workspaceId: caller.workspaceId } : {}),
     // Copy the host-verified owning user through to userland (WP4 §2.4).
     // Attribution only — never re-validated as a capability by the receiver.
     ...(caller.subject ? { userId: caller.subject.userId } : {}),
@@ -1817,6 +1820,8 @@ export class ServiceDispatcher {
       }
 
       const snapshot = createInvocationSnapshot({
+        workspaceId: resolved.context.workspace?.workspaceId,
+        sourceWorkspaceId: resolved.context.sourceWorkspaceId,
         service,
         method,
         capability,

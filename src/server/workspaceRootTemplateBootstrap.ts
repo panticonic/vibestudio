@@ -9,7 +9,7 @@ import { encodeWorktreeTree, treeHashDigest } from "@vibestudio/shared/contentTr
 import type { ExactGitSnapshot, ExactSnapshotFile } from "@vibestudio/git";
 import type { SnapshotContentSink } from "@vibestudio/git";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
-import { prepareRootTemplateMetadata } from "@vibestudio/workspace/rootTemplate";
+import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceCreationDescriptor,
@@ -133,7 +133,6 @@ export class WorkspaceRootTemplateBootstrap {
   private readonly descriptorPath: string;
   private preparedInitialization: PreparedRootTemplateInitialization | null = null;
   private acquiredSnapshot: ExactGitSnapshot | null = null;
-  private generatedSourceFiles = new Map<string, Uint8Array>();
 
   constructor(private readonly deps: WorkspaceRootTemplateBootstrapDeps) {
     this.descriptorPath = path.join(deps.statePath, CREATION_DESCRIPTOR_PATH);
@@ -153,7 +152,9 @@ export class WorkspaceRootTemplateBootstrap {
     const startedAt = performance.now();
     this.preparedInitialization = await this.acquireInitialization(descriptor.rootTemplate);
     const acquiredAt = performance.now();
-    this.materializeExactSource(this.acquiredSnapshot!);
+    const snapshot = this.acquiredSnapshot;
+    if (!snapshot) throw new Error("Root template acquisition produced no source snapshot");
+    this.materializeExactSource(snapshot);
     const materializedAt = performance.now();
     if (materializedAt - startedAt >= 100) {
       console.log("[Perf] root template preparation", {
@@ -185,12 +186,6 @@ export class WorkspaceRootTemplateBootstrap {
         `Root template acquisition returned coordinates different from the creation descriptor`
       );
     }
-    const manifestBytes = snapshot.readFile(WORKSPACE_MANIFEST_PATH);
-    if (!manifestBytes) {
-      throw new Error(`Root template is missing ${WORKSPACE_MANIFEST_PATH}`);
-    }
-    const manifest = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
-    parseWorkspaceConfigContentWithId(manifest, this.deps.workspaceId);
     const repositories = enumerateRootTemplateRepositories(snapshot);
     if (!repositories.some((repository) => repository.repoPath === "meta")) {
       throw new Error(`Root template has no importable meta repository`);
@@ -204,32 +199,13 @@ export class WorkspaceRootTemplateBootstrap {
         throw new Error(`Root release contains installed workspace state at ${file.path}`);
       }
     }
-    const metadata = prepareRootTemplateMetadata({
-      pin,
+    validateRootTemplateSource({
       workspaceId: this.deps.workspaceId,
       expectedSystemEpoch: this.deps.expectedSystemEpoch,
       readFile: (filePath) => snapshot.readFile(filePath),
       snapshotPaths: snapshot.files.map((file) => file.path),
       repositories,
     });
-    this.generatedSourceFiles = new Map([
-      ["meta/templates/workspace.yml", new TextEncoder().encode(metadata.sourceYaml)],
-      ["meta/templates.state.yml", new TextEncoder().encode(metadata.stateYaml)],
-    ]);
-    const meta = repositories.find((repository) => repository.repoPath === "meta")!;
-    for (const [filePath, bytes] of this.generatedSourceFiles) {
-      const stored = await this.deps.sink.put(bytes);
-      const relativePath = filePath.slice("meta/".length);
-      meta.files.push({
-        path: relativePath,
-        contentHash: stored.digest,
-        size: stored.size,
-        mode: 0o644,
-      });
-    }
-    meta.files.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-    meta.snapshot = repositorySnapshot(meta.files);
-    meta.contentRoot = repositoryContentTree(meta.files).stateHash as `state:${string}`;
     await publishRepositoryContentTrees(repositories, this.deps.sink);
     this.acquiredSnapshot = snapshot;
     return {
@@ -284,11 +260,6 @@ export class WorkspaceRootTemplateBootstrap {
         mode: file.mode === 0o755 ? 0o755 : 0o644,
         flag: "wx",
       });
-    }
-    for (const [filePath, bytes] of this.generatedSourceFiles) {
-      const destination = safeSnapshotDestination(staging, filePath);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(destination, bytes, { mode: 0o644, flag: "wx" });
     }
     parseWorkspaceConfigContentWithId(
       fs.readFileSync(path.join(staging, WORKSPACE_MANIFEST_PATH), "utf8"),

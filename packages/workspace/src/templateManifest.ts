@@ -2,19 +2,16 @@ import YAML from "yaml";
 import { z } from "zod";
 import { sortForCanonicalJson } from "@vibestudio/content-addressing";
 import {
-  WorkspaceConfigFragmentSchema,
   WorkspaceConfigTopLayerSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceConfig,
-  WorkspaceTemplateDeclaration,
   WorkspaceTemplatePresentation,
 } from "@vibestudio/workspace-contracts/types";
-import { normalizeTemplateGitUrl, TEMPLATE_SOURCE_MANIFEST_PATH } from "./templateCoordinates.js";
-import { composeWorkspaceConfig } from "./configComposition.js";
+import { TEMPLATE_SOURCE_MANIFEST_PATH } from "./templateCoordinates.js";
+import { normalizeRemoteUrl, validateWorkspaceGitConfig } from "./remotes.js";
 
 type ParsedTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
-export type ParsedTemplateFragment = ReturnType<typeof WorkspaceConfigFragmentSchema.parse>;
 
 export interface TemplateRepositoryInventory {
   repositories: string[];
@@ -23,12 +20,8 @@ export interface TemplateRepositoryInventory {
 
 export interface ParsedTemplateManifest {
   top: ParsedTopLayer;
-  dependencies: WorkspaceTemplateDeclaration[];
-  fragment: ParsedTemplateFragment;
-  fragmentYaml: string;
   inventory: TemplateRepositoryInventory;
   presentation?: WorkspaceTemplatePresentation;
-  excludedSuggestions: { trust?: unknown; providers?: unknown };
 }
 
 const CanonicalInventoryPathSchema = z
@@ -104,12 +97,8 @@ export function canonicalTemplateYaml(value: unknown): string {
   return YAML.stringify(sortForCanonicalJson(value), { lineWidth: 0, sortMapEntries: true });
 }
 
-export function sanitizeTemplateManifest(top: ParsedTopLayer): ParsedTemplateFragment {
+function runtimeManifest(top: ParsedTopLayer): Omit<WorkspaceConfig, "id"> {
   const {
-    templates: _templates,
-    disable: _disable,
-    trust: _trust,
-    providers: _providers,
     template: _template,
     git,
     ...accepted
@@ -132,7 +121,7 @@ export function sanitizeTemplateManifest(top: ParsedTopLayer): ParsedTemplateFra
             ),
           ])
         );
-  return WorkspaceConfigFragmentSchema.parse({
+  return {
     ...accepted,
     ...(git === undefined
       ? {}
@@ -142,40 +131,21 @@ export function sanitizeTemplateManifest(top: ParsedTopLayer): ParsedTemplateFra
             ...(upstreams === undefined ? {} : { upstreams }),
           },
         }),
-  });
+  } as Omit<WorkspaceConfig, "id">;
 }
 
-/** Flatten one dependency-free root manifest into the exact host runtime form. */
+/** Project one self-contained source manifest into its runtime form. */
 export function rootRuntimeFromTemplateManifest(
   manifest: ParsedTemplateManifest
 ): Omit<WorkspaceConfig, "id"> {
-  if (manifest.dependencies.length > 0) {
-    throw new Error("A root runtime cannot be generated from a template with dependencies");
+  const projected = structuredClone(runtimeManifest(manifest.top));
+  validateWorkspaceGitConfig(projected.git);
+  for (const repositories of Object.values(projected.git?.remotes ?? {})) {
+    for (const remotes of Object.values(repositories)) {
+      for (const remote of Object.values(remotes)) remote.url = normalizeRemoteUrl(remote.url);
+    }
   }
-  const authoredUpstreams = Object.fromEntries(
-    Object.entries(manifest.top.git?.upstreams ?? {}).flatMap(([section, repositories]) => {
-      const authored = Object.fromEntries(
-        Object.entries(repositories).filter(
-          ([, upstream]) => upstream.authorName !== undefined || upstream.authorEmail !== undefined
-        )
-      );
-      return Object.keys(authored).length > 0 ? [[section, authored]] : [];
-    })
-  );
-  const composed = composeWorkspaceConfig(
-    WorkspaceConfigTopLayerSchema.parse({
-      systemEpoch: manifest.top.systemEpoch,
-      ...(manifest.top.providers ? { providers: manifest.top.providers } : {}),
-      ...(manifest.top.trust ? { trust: manifest.top.trust } : {}),
-      ...(Object.keys(authoredUpstreams).length > 0
-        ? { git: { upstreams: authoredUpstreams } }
-        : {}),
-    }),
-    [{ nodeId: "root", alias: "root", ancestors: [], config: manifest.fragment }],
-    "root"
-  );
-  const { id: _id, ...runtime } = composed;
-  return runtime;
+  return projected;
 }
 
 export function parseTemplateManifestContent(
@@ -209,28 +179,10 @@ export function parseTemplateManifestContent(
       `systemEpoch ${top.systemEpoch} is incompatible with workspace epoch ${expectedSystemEpoch}`
     );
   }
-  if (top.templates?.overrides && Object.keys(top.templates.overrides).length > 0) {
-    throw new Error("template manifests cannot impose exact template overrides");
-  }
-  const dependencies = (top.templates?.use ?? []).map((declaration) => ({
-    ...declaration,
-    url: normalizeTemplateGitUrl(declaration.url),
-  }));
-  if (top.templates?.registry && dependencies.length > 0) {
-    throw new Error("template manifests cannot replace the workspace template registry");
-  }
-  const fragment = sanitizeTemplateManifest(top);
   return {
     top,
-    dependencies,
-    fragment,
-    fragmentYaml: canonicalTemplateYaml(fragment),
     inventory: { repositories, files },
     ...(top.template === undefined ? {} : { presentation: top.template }),
-    excludedSuggestions: {
-      ...(top.trust === undefined ? {} : { trust: top.trust }),
-      ...(top.providers === undefined ? {} : { providers: top.providers }),
-    },
   };
 }
 

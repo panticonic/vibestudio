@@ -74,6 +74,8 @@ export type RpcAuthorityPolicy = (
       principals?: never;
     }
 ) & {
+  /** Deliberate eligibility for cross-workspace boundary admission; never a grant. */
+  crossWorkspace?: boolean;
   /** No default: omitting a tier is a registration/build error. */
   tier: "open" | "gated" | "critical";
   sensitivity: "read" | "write" | "admin" | "destructive";
@@ -255,6 +257,7 @@ function createConnectionlessRpcClientCore(
     transport,
     authorityAcquisition: "wait",
     ...(config.callerKind ? { callerKind: config.callerKind } : {}),
+    ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
     ...(config.authorityParentNonce ? { authorityParentNonce: config.authorityParentNonce } : {}),
     ...(config.onOutboundOperation ? { onOutboundOperation: config.onOutboundOperation } : {}),
   });

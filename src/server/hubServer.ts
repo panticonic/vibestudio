@@ -14,9 +14,7 @@ import {
 } from "@vibestudio/workspace/loader";
 import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
-  readDevelopmentWorkspaceTemplate,
-  readWorkspaceCreationTemplate,
-  sameWorkspaceTemplatePin,
+  readDefaultWorkspaceTemplates,
 } from "@vibestudio/workspace/baseTemplateRelease";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -96,6 +94,9 @@ import {
   WorkspaceChildPresenceReportInputSchema,
   WorkspaceChildCreationCompleteInputSchema,
 } from "./workspaceChildHubPort.js";
+import { receiveHubWorkspaceRpcHttp } from "./workspaceRpcHubTransport.js";
+import { WORKSPACE_RPC_INTERNAL_ROUTE } from "./workspaceRpcTransport.js";
+import { assertWorkspaceRpcAccess } from "./workspaceRpcAccess.js";
 import { shellCallerId } from "./hostCore/auth/model.js";
 import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
@@ -166,9 +167,12 @@ export interface WorkspaceRuntime {
 }
 
 interface HubWorkspacePresenceSnapshot {
+  runtimeToken: string;
   serverBootId: string;
   revision: number;
   users: Map<string, number>;
+  pendingApprovals: Map<string, number>;
+  workspaceApprovalCount: number;
 }
 
 interface PendingWorkspaceRuntime {
@@ -179,6 +183,8 @@ interface PendingWorkspaceRuntime {
 export interface HubRuntimeState {
   appRoot: string;
   args: HubServerArgs;
+  /** Startup preparation targets this source workspace, never every child. */
+  bootstrapWorkspaceId: string;
   centralData: CentralDataManager;
   deviceAuthStore: DeviceAuthStore;
   /** Hub-owned identity DB, opened READ-WRITE — the hub is the sole writer (WP0 §2). */
@@ -227,6 +233,9 @@ interface HubControlTransport {
 }
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const DEVELOPMENT_WRITEBACK_ENV = "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK";
+const DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV =
+  "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID";
 
 const HubPairingCredentialBodySchema = z
   .object({
@@ -333,15 +342,6 @@ export interface HubSubject {
   deviceId?: string;
 }
 
-/**
- * The local operator's viewer for hub-internal surfaces that have no acting
- * user (startup ready file). It SEES like
- * root but is not a user identity — every human-facing RPC resolves a real
- * subject via `hubSubjectFor` instead (the admin machine token was retired as
- * a human root, WP1 / plan §2.2).
- */
-const LOCAL_OPERATOR_VIEW: HubSubject = { userId: "", handle: "local-operator", role: "root" };
-
 const SHELL_CALLER_PREFIX = "shell:";
 
 /**
@@ -386,32 +386,56 @@ function requireWorkspaceName(state: HubRuntimeState, workspaceId: string): stri
 export function selectWorkspaceCreationRootTemplate(input: {
   appRoot: string;
   requested?: WorkspaceTemplatePin;
+  initial?: boolean;
   environment?: NodeJS.ProcessEnv;
 }): WorkspaceTemplatePin {
   const environment = input.environment ?? process.env;
-  if (!input.requested) return readWorkspaceCreationTemplate(input.appRoot, environment);
-
-  const developmentRoot = readDevelopmentWorkspaceTemplate(environment);
-  if (developmentRoot) {
-    if (!sameWorkspaceTemplatePin(input.requested, developmentRoot)) {
-      throw new Error("Requested workspace template does not match the selected development Base");
+  if (input.requested) return input.requested;
+  if (input.initial) {
+    const configured = environment[INITIAL_WORKSPACE_TEMPLATE_ENV]?.trim();
+    if (configured) {
+      return WorkspaceTemplatePinSchema.parse(JSON.parse(configured)) as WorkspaceTemplatePin;
     }
   }
-  return input.requested;
+  return readDefaultWorkspaceTemplates(input.appRoot, environment).base;
 }
 
 /**
  * Hub-side membership pre-filter (WP2 §4) — a UX short-circuit so a non-member
  * never spawns a child; the AUTHORITATIVE gate is the child's `has()` check on
- * connect. Root is implicitly a member of everything; a workspace the registry
- * does not know yet (first `--init` spawn, the ephemeral `dev` alias) can have
- * no membership rows, so it is reachable only by root.
+ * connect. Server roles do not replace membership, and an unknown name is
+ * indistinguishable from an inaccessible one.
  */
-function assertMember(state: HubRuntimeState, subject: HubSubject, workspaceName: string): void {
-  const workspaceId = requireWorkspaceId(state, workspaceName);
-  if (subject.role === "root") return;
+function requireMemberWorkspaceId(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  workspaceName: string
+): string {
+  const workspaceId = state.centralData.getWorkspaceIdByName(workspaceName);
+  if (workspaceId && state.membershipStore.has(subject.userId, workspaceId)) return workspaceId;
+  // Unknown and private-to-someone-else names are intentionally indistinguishable.
+  throw authError("EACCES", "Not a member of workspace", 403);
+}
+
+function requireWorkspaceAdmin(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  workspaceName: string
+): string {
+  const workspaceId = requireMemberWorkspaceId(state, subject, workspaceName);
+  if (!state.membershipStore.isAdmin(subject.userId, workspaceId))
+    throw authError("EACCES", "Requires workspace administrator role", 403);
+  return workspaceId;
+}
+
+/** Check opaque-ID routing before resolving any private workspace metadata. */
+function assertWorkspaceMember(
+  state: HubRuntimeState,
+  subject: HubSubject,
+  workspaceId: string
+): void {
   if (state.membershipStore.has(subject.userId, workspaceId)) return;
-  throw authError("EACCES", `Not a member of workspace "${workspaceName}"`, 403);
+  throw authError("EACCES", "Not a member of workspace", 403);
 }
 
 /** Resolve a management-target user by `userId` or `handle` (live users only). */
@@ -528,7 +552,7 @@ async function processUserRevocationCleanup(
   teardownLastWorkspaceId?: string
 ): Promise<RevokedUserCleanupResult[]> {
   const completed: RevokedUserCleanupResult[] = [];
-  const failures: string[] = [];
+  let failureCount = 0;
   const workspaces = state.centralData.listWorkspaces();
   const tasks = state.identityDb
     .listUserRevocationCleanup(userId)
@@ -553,11 +577,13 @@ async function processUserRevocationCleanup(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       state.identityDb.failUserRevocationCleanup(userId, task.workspaceId, message);
-      failures.push(`${workspace.name}: ${message}`);
+      failureCount += 1;
     }
   }
-  if (failures.length > 0) {
-    throw new Error(`Revocation cleanup is pending: ${failures.join("; ")}`);
+  if (failureCount > 0) {
+    throw new Error(
+      `Revocation cleanup is pending for ${failureCount} workspace${failureCount === 1 ? "" : "s"}`
+    );
   }
   return completed;
 }
@@ -689,26 +715,53 @@ function responseForCredential(
   };
 }
 
-/**
- * Membership-filtered workspace listing (WP2 §4): root sees the full registry,
- * everyone else only the workspaces they hold a membership row for. This is a
- * UX filter — the authoritative entry gate is the child's `has()` on connect.
- */
+/** Membership-filtered registry projection; child admission remains authoritative. */
+function workspacePendingApprovalCount(
+  state: HubRuntimeState,
+  workspaceId: string,
+  name: string,
+  viewer: HubSubject | null
+): number {
+  const runtime = state.runtimes.get(name);
+  const snapshot = state.workspacePresence.get(workspaceId);
+  return viewer &&
+    state.membershipStore.has(viewer.userId, workspaceId) &&
+    runtime &&
+    !("promise" in runtime) &&
+    isRuntimeRunning(state, name) &&
+    snapshot?.runtimeToken === runtime.runtimeToken
+    ? (snapshot.pendingApprovals.get(viewer.userId) ?? 0) +
+        (state.membershipStore.isAdmin(viewer.userId, workspaceId)
+          ? snapshot.workspaceApprovalCount
+          : 0)
+    : 0;
+}
+
 function listHubWorkspaces(
   state: HubRuntimeState,
-  viewer: HubSubject
+  viewer: HubSubject | null
 ): Array<Record<string, unknown>> {
   const registered = state.centralData.listWorkspaces();
-  const visible =
-    viewer.role === "root"
-      ? registered
-      : registered.filter((entry) => state.membershipStore.has(viewer.userId, entry.workspaceId));
+  // The ready file has no human subject. It may advertise ordinary entries
+  // needed by process bootstrap, but private designations are owner-only.
+  const visible = registered.filter(
+    (entry) =>
+      (viewer && state.membershipStore.has(viewer.userId, entry.workspaceId)) ||
+      (!viewer && entry.privateRole === undefined)
+  );
   const entries: Array<Record<string, unknown>> = visible.map((entry) => {
     return {
       name: entry.name,
       workspaceId: entry.workspaceId,
       lastOpened: entry.lastOpened,
       running: isRuntimeRunning(state, entry.name),
+      pendingApprovalCount: workspacePendingApprovalCount(
+        state,
+        entry.workspaceId,
+        entry.name,
+        viewer
+      ),
+      ...(entry.privateRole ? { privateRole: entry.privateRole } : {}),
       ...(isWorkspaceEphemeral(state, entry.name) ? { ephemeral: true } : {}),
     };
   });
@@ -746,11 +799,17 @@ function hubUserPresence(
 export function applyHubWorkspacePresenceReport(
   state: HubRuntimeState,
   workspaceId: string,
-  rawReport: unknown
+  rawReport: unknown,
+  runtimeToken: string
 ): boolean {
+  if (state.workspaceChildTokens.get(runtimeToken) !== workspaceId) return false;
   const report = WorkspaceChildPresenceReportInputSchema.parse(rawReport);
   const previous = state.workspacePresence.get(workspaceId);
-  if (previous?.serverBootId === report.serverBootId && report.revision <= previous.revision) {
+  if (
+    previous?.runtimeToken === runtimeToken &&
+    previous.serverBootId === report.serverBootId &&
+    report.revision <= previous.revision
+  ) {
     return false;
   }
   const users = new Map<string, number>();
@@ -759,15 +818,23 @@ export function applyHubWorkspacePresenceReport(
     if (
       user &&
       user.revokedAt === undefined &&
-      (user.role === "root" || state.membershipStore.has(entry.userId, workspaceId))
+      state.membershipStore.has(entry.userId, workspaceId)
     ) {
       users.set(entry.userId, entry.endpoints);
     }
   }
+  const pendingApprovals = new Map(
+    report.pendingApprovals
+      .filter((entry) => state.membershipStore.has(entry.userId, workspaceId))
+      .map((entry) => [entry.userId, entry.count])
+  );
   state.workspacePresence.set(workspaceId, {
+    runtimeToken,
     serverBootId: report.serverBootId,
     revision: report.revision,
     users,
+    pendingApprovals,
+    workspaceApprovalCount: report.workspaceApprovalCount,
   });
   return true;
 }
@@ -788,7 +855,13 @@ export function buildHubReadyPayload(
     pid,
     version: state.version,
     buildId: state.buildId,
-    workspaces: listHubWorkspaces(state, LOCAL_OPERATOR_VIEW),
+    workspaces: listHubWorkspaces(state, null).map((entry) => ({
+      workspaceId: entry["workspaceId"],
+      name: entry["name"],
+      lastOpened: entry["lastOpened"],
+      running: entry["running"],
+      ...(entry["ephemeral"] !== undefined ? { ephemeral: entry["ephemeral"] } : {}),
+    })),
   });
 }
 
@@ -1144,6 +1217,52 @@ async function handleInternalRoute(
       sendJson(res, 401, { error: "Unauthorized", code: "UNAUTHORIZED" });
       return;
     }
+    if (route === "workspace-rpc") {
+      await receiveHubWorkspaceRpcHttp(req, res, {
+        authenticateSource() {
+          if (!token || state.workspaceChildTokens.get(token) !== boundWorkspaceId) {
+            throw authError("EACCES", "Workspace child runtime expired", 403);
+          }
+          return boundWorkspaceId;
+        },
+        assertAccess(invocation) {
+          const access = {
+            destinationWorkspaceId: invocation.envelope.targetWorkspaceId!,
+            target: invocation.envelope.target,
+            operation: invocation.operation,
+            purpose: invocation.purpose,
+            identity: state.identityDb,
+            membership: state.membershipStore,
+          };
+          assertWorkspaceRpcAccess({ ...access, caller: invocation.caller });
+          // Delegation keeps the initiating origin's restrictions as well as
+          // the immediate source host's egress policy.
+          assertWorkspaceRpcAccess({ ...access, caller: invocation.authorizingCaller });
+        },
+        async resolveDestination(workspaceId) {
+          const name = requireWorkspaceName(state, workspaceId);
+          const runtime = await ensureWorkspaceRuntime(state, name);
+          const controlToken = runtime.ready["adminToken"];
+          if (typeof controlToken !== "string" || !controlToken) {
+            throw authError("EACCES", "Workspace receiver is unavailable", 403);
+          }
+          return {
+            url: `http://127.0.0.1:${runtime.port}${WORKSPACE_RPC_INTERNAL_ROUTE}`,
+            runtimeToken: controlToken,
+            assertLive() {
+              if (
+                state.runtimes.get(name) !== runtime ||
+                workspaceChildExited(runtime.child) ||
+                state.workspaceChildTokens.get(runtime.runtimeToken) !== workspaceId
+              ) {
+                throw authError("EACCES", "Workspace receiver runtime expired", 403);
+              }
+            },
+          };
+        },
+      });
+      return;
+    }
     const rawBody = await readJson(req);
     // A child can exit while a request body is being read. Re-check the scoped
     // runtime/process token so a delayed report from the retired process cannot
@@ -1180,7 +1299,7 @@ async function handleInternalRoute(
       if (!user || user.revokedAt !== undefined) {
         throw authError("EACCES", "Development client owner is unavailable", 403);
       }
-      if (user.role !== "root" && !state.membershipStore.has(user.id, boundWorkspaceId)) {
+      if (!state.membershipStore.has(user.id, boundWorkspaceId)) {
         throw authError("EACCES", "Development client owner is not a workspace member", 403);
       }
       const workspace = requireWorkspaceName(state, boundWorkspaceId);
@@ -1203,7 +1322,7 @@ async function handleInternalRoute(
       return;
     }
     if (route === "presence/report") {
-      const updated = applyHubWorkspacePresenceReport(state, boundWorkspaceId, rawBody);
+      const updated = applyHubWorkspacePresenceReport(state, boundWorkspaceId, rawBody, token);
       sendJson(res, 200, { updated });
       return;
     }
@@ -1294,7 +1413,12 @@ export async function revokeHubUser(
   if (target.role === "root") state.userStore.revokeUser(target.id);
 
   const deviceIds = state.identityDb.listDevicesForUser(target.id).map((device) => device.deviceId);
-  const workspaceIds = state.centralData.listWorkspaces().map((entry) => entry.workspaceId);
+  // Capture the target's authorized set while the account is still live. A
+  // revocation must not start or inspect private workspaces the user never had.
+  const workspaceIds = state.centralData
+    .listWorkspaces()
+    .filter((entry) => state.membershipStore.has(target.id, entry.workspaceId))
+    .map((entry) => entry.workspaceId);
   const revoked = state.userStore.revokeUser(target.id, workspaceIds);
   for (const deviceId of deviceIds) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
@@ -1333,7 +1457,7 @@ export async function revokeHubDevice(
 }
 
 /** One semantic hub-control dispatcher for the hub-owned RPC ingress. */
-async function executeHubControl(
+export async function executeHubControl(
   state: HubRuntimeState,
   subject: HubSubject,
   method: string,
@@ -1342,6 +1466,52 @@ async function executeHubControl(
 ): Promise<void> {
   if (state.shuttingDown) throw new Error("Hub is shutting down");
 
+  if (method === "ensureUserWorkspaces") {
+    const templates = readDefaultWorkspaceTemplates(state.appRoot);
+    const pair = state.centralData.ensurePrivateWorkspaces(subject.userId, templates);
+    respond({
+      personal: {
+        ...pair.personal,
+        running: isRuntimeRunning(state, pair.personal.name),
+        pendingApprovalCount: workspacePendingApprovalCount(
+          state,
+          pair.personal.workspaceId,
+          pair.personal.name,
+          subject
+        ),
+      },
+      system: {
+        ...pair.system,
+        running: isRuntimeRunning(state, pair.system.name),
+        pendingApprovalCount: workspacePendingApprovalCount(
+          state,
+          pair.system.workspaceId,
+          pair.system.name,
+          subject
+        ),
+      },
+    });
+    return;
+  }
+  if (method === "getWorkspaceRpcPolicy" || method === "setWorkspaceRpcPolicy") {
+    const opts = asRecord(args[0]) ?? {};
+    const workspaceId = typeof opts["workspaceId"] === "string" ? opts["workspaceId"] : "";
+    assertWorkspaceMember(state, subject, workspaceId);
+    const workspaceName = requireWorkspaceName(state, workspaceId);
+    const owner = state.identityDb.getPrivateWorkspaceOwner(workspaceId);
+    if (!owner) requireWorkspaceAdmin(state, subject, workspaceName);
+    if (method === "setWorkspaceRpcPolicy") {
+      const { policy, expectedPolicy } =
+        hubControlMethods.setWorkspaceRpcPolicy.args.parse(args)[0];
+      state.identityDb.setWorkspaceRpcPolicy(workspaceId, policy, expectedPolicy, subject.userId);
+    }
+    respond({
+      workspaceId,
+      policy: state.identityDb.getWorkspaceRpcPolicy(workspaceId),
+      incomingLocked: owner?.role === "system",
+    });
+    return;
+  }
   if (method === "listWorkspaces") {
     respond(listHubWorkspaces(state, subject));
     return;
@@ -1361,8 +1531,8 @@ async function executeHubControl(
     // directly — the hub never relays RPC (the child owns its Iroh endpoint).
     const opts = asRecord(args[0]) ?? {};
     const workspaceId = typeof opts["workspaceId"] === "string" ? opts["workspaceId"] : "";
+    assertWorkspaceMember(state, subject, workspaceId);
     const name = requireWorkspaceName(state, workspaceId);
-    assertMember(state, subject, name);
     const runtime = await ensureWorkspaceRuntime(state, name);
     if (!subject.deviceId) throw new Error("Workspace routing requires a paired device");
     const workspaceReach = await armChildReach(runtime, { deviceId: subject.deviceId });
@@ -1384,7 +1554,6 @@ async function executeHubControl(
     return;
   }
   if (method === "createWorkspace") {
-    requireRole(subject, "admin");
     const opts = asRecord(args[0]) ?? {};
     const name = normalizeWorkspaceName(opts["workspace"]);
     const rootTemplate = opts["rootTemplate"]
@@ -1396,20 +1565,18 @@ async function executeHubControl(
     });
     const entry = state.centralData.addWorkspaceCreation(name, selectedRoot);
     try {
-      if (subject.role !== "root") {
-        state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
-        await recordMembershipOp(state, {
-          op: "add-member",
-          actor: subject,
-          target: { userId: subject.userId, handle: subject.handle },
-          workspaceId: entry.workspaceId,
-        });
-      }
+      state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId, "admin");
+      await recordMembershipOp(state, {
+        op: "add-member",
+        actor: subject,
+        target: { userId: subject.userId, handle: subject.handle },
+        workspaceId: entry.workspaceId,
+      });
     } catch (error) {
       deleteAndUnregisterWorkspace(name, state.centralData, nativeWorkspaceCleanup(state.appRoot));
       throw error;
     }
-    respond({ ...entry, running: false });
+    respond({ ...entry, running: false, pendingApprovalCount: 0 });
     return;
   }
   if (method === "ensureEphemeralWorkspace") {
@@ -1427,6 +1594,12 @@ async function executeHubControl(
         name: existing.name,
         lastOpened: existing.lastOpened,
         running: isRuntimeRunning(state, existing.name),
+        pendingApprovalCount: workspacePendingApprovalCount(
+          state,
+          existing.workspaceId,
+          existing.name,
+          subject
+        ),
         ephemeral: true,
       });
       return;
@@ -1436,20 +1609,21 @@ async function executeHubControl(
       state.serverBootId,
       selectWorkspaceCreationRootTemplate({ appRoot: state.appRoot })
     );
+    state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId);
     respond({
       workspaceId: entry.workspaceId,
       name: entry.name,
       lastOpened: entry.lastOpened,
       running: false,
+      pendingApprovalCount: 0,
       ephemeral: true,
     });
     return;
   }
   if (method === "deleteWorkspace") {
-    requireRole(subject, "admin");
     const opts = asRecord(args[0]) ?? {};
     const name = normalizeWorkspaceName(opts["workspace"]);
-    const workspaceId = requireWorkspaceId(state, name);
+    const workspaceId = requireWorkspaceAdmin(state, subject, name);
     const active = state.runtimes.get(name);
     if (active) {
       const runtime = "promise" in active ? await active.promise : active;
@@ -1476,15 +1650,19 @@ async function executeHubControl(
     return;
   }
   if (method === "addWorkspaceMember") {
-    requireRole(subject, "admin");
     const opts = asRecord(args[0]) ?? {};
     const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
     const name = normalizeWorkspaceName(opts["workspace"]);
-    const workspaceId = requireWorkspaceId(state, name);
+    const workspaceId = requireWorkspaceAdmin(state, subject, name);
     const priorMembership = state.identityDb
       .listMembers(workspaceId)
       .find((existing) => existing.userId === target.id);
-    const membership = state.membershipStore.add(target.id, workspaceId, subject.userId);
+    const membership = state.membershipStore.add(
+      target.id,
+      workspaceId,
+      subject.userId,
+      opts["role"] === "admin" ? "admin" : "member"
+    );
     try {
       await recordMembershipOp(state, {
         op: "add-member",
@@ -1505,11 +1683,10 @@ async function executeHubControl(
     return;
   }
   if (method === "removeWorkspaceMember") {
-    requireRole(subject, "admin");
     const opts = asRecord(args[0]) ?? {};
     const target = requireTargetUser(state, { userId: opts["userId"], handle: opts["handle"] });
     const name = normalizeWorkspaceName(opts["workspace"]);
-    const workspaceId = requireWorkspaceId(state, name);
+    const workspaceId = requireWorkspaceAdmin(state, subject, name);
     const priorMembership = state.identityDb
       .listMembers(workspaceId)
       .find((membership) => membership.userId === target.id);
@@ -1536,34 +1713,17 @@ async function executeHubControl(
     return;
   }
   if (method === "listWorkspaceMembers") {
-    requireRole(subject, "admin");
     const opts = asRecord(args[0]) ?? {};
     const name = normalizeWorkspaceName(opts["workspace"]);
-    const workspaceId = requireWorkspaceId(state, name);
+    const workspaceId = requireMemberWorkspaceId(state, subject, name);
     const storedMembers = state.membershipStore.listMembers(workspaceId);
-    const root = state.userStore
-      .listUsers()
-      .find((user) => user.role === "root" && user.revokedAt === undefined);
-    const membershipRows =
-      root && !storedMembers.some((row) => row.userId === root.id)
-        ? [
-            {
-              userId: root.id,
-              workspaceId,
-              addedBy: root.id,
-              addedAt: root.createdAt,
-              implicit: true,
-            },
-            ...storedMembers,
-          ]
-        : storedMembers;
-    const members = membershipRows.map((row) => {
+    const members = storedMembers.map((row) => {
       const user = state.userStore.getUser(row.userId);
       return {
         ...row,
         handle: user?.handle ?? null,
         displayName: user?.displayName ?? null,
-        role: user?.role ?? null,
+        accountRole: user?.role ?? null,
       };
     });
     respond({ workspace: name, workspaceId, members });
@@ -1591,7 +1751,7 @@ async function executeHubControl(
     if (!primaryWorkspaceName) throw new Error("hubControl.inviteUser requires a workspace");
     // Resolve every workspace to its opaque id BEFORE creating the user so
     // an unknown name fails the whole invite, not half of it.
-    const workspaceIds = workspaceNames.map((name) => requireWorkspaceId(state, name));
+    const workspaceIds = workspaceNames.map((name) => requireWorkspaceAdmin(state, subject, name));
     const ttlMs = pairingTtl(opts["ttlMs"]);
     const invited = state.userStore.inviteUser({
       handle,
@@ -1655,8 +1815,7 @@ async function executeHubControl(
     const opts = asRecord(args[0]) ?? {};
     const ttlMs = pairingTtl(opts["ttlMs"]);
     const workspace = resolveInviteWorkspace(state, subject, opts["workspace"]);
-    assertMember(state, subject, workspace);
-    const workspaceId = requireWorkspaceId(state, workspace);
+    const workspaceId = requireMemberWorkspaceId(state, subject, workspace);
     const pairing = state.deviceAuthStore.createPairingInvite(ttlMs, {
       workspaceId,
       userId: subject.userId,
@@ -1991,7 +2150,7 @@ async function runtimeForProxyRequest(
   // Spawn-through-refresh honors the same membership pre-filter as
   // workspace.route: a non-member request never starts a child (WP2 §4).
   const subject = subjectForDeviceCredential(state, payload);
-  assertMember(state, subject, parsed.name);
+  requireMemberWorkspaceId(state, subject, parsed.name);
   const runtime = await ensureWorkspaceRuntime(state, parsed.name);
   return { runtime, body };
 }
@@ -2218,7 +2377,22 @@ export function buildWorkspaceChildEnv(input: {
     VIBESTUDIO_CURRENT_SYSTEM_EPOCH: String(WORKSPACE_SYSTEM_EPOCH),
   };
   delete env["VIBESTUDIO_GATEWAY_PORT"];
+  // Readiness belongs to the explicit bootstrap launch arguments. Inheriting
+  // it would require ordinary Personal/app workspaces to contain native apps.
+  delete env["VIBESTUDIO_REQUIRE_MOBILE_READY"];
+  delete env["VIBESTUDIO_REQUIRE_ELECTRON_READY"];
   delete env["VIBESTUDIO_WORKSPACE_DIR"];
+  const rawWriteback = env[DEVELOPMENT_WRITEBACK_ENV]?.trim();
+  const writebackWorkspaceId = env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV]?.trim();
+  delete env[DEVELOPMENT_WRITEBACK_ENV];
+  delete env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV];
+  if (rawWriteback && writebackWorkspaceId === input.workspaceId) {
+    const descriptor = JSON.parse(rawWriteback) as Record<string, unknown>;
+    env[DEVELOPMENT_WRITEBACK_ENV] = JSON.stringify({
+      ...descriptor,
+      workspaceId: input.workspaceId,
+    });
+  }
   if (input.creationIntent) {
     env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"] = JSON.stringify(input.creationIntent);
   } else {
@@ -2398,8 +2572,9 @@ async function startWorkspaceRuntime(
     appRoot: launchSet.appRoot,
     readyFile,
     logLevel: state.args.logLevel,
-    requireMobileReady: state.args.requireMobileReady,
-    requireElectronReady: state.args.requireElectronReady,
+    requireMobileReady: workspaceId === state.bootstrapWorkspaceId && state.args.requireMobileReady,
+    requireElectronReady:
+      workspaceId === state.bootstrapWorkspaceId && state.args.requireElectronReady,
   });
 
   const childEnv = buildWorkspaceChildEnv({
@@ -2977,17 +3152,26 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     centralData.addEphemeralWorkspace(
       bootstrapWorkspace,
       serverBootId,
-      selectWorkspaceCreationRootTemplate({ appRoot })
+      selectWorkspaceCreationRootTemplate({ appRoot, initial: true })
     );
   } else if (bootstrap.lifecycle === "register") {
     centralData.addWorkspaceCreation(
       bootstrapWorkspace,
-      selectWorkspaceCreationRootTemplate({ appRoot })
+      selectWorkspaceCreationRootTemplate({ appRoot, initial: true })
     );
   }
   const bootstrapWorkspaceId = centralData.getWorkspaceIdByName(bootstrapWorkspace);
   if (!bootstrapWorkspaceId) {
     throw new Error(`Bootstrap workspace "${bootstrapWorkspace}" is not registered`);
+  }
+  if (bootstrap.lifecycle !== "existing") {
+    const creator = userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
+    if (creator) membershipStore.add(creator.id, bootstrapWorkspaceId, creator.id);
+  }
+  if (process.env[DEVELOPMENT_WRITEBACK_ENV]) {
+    process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV] = bootstrapWorkspaceId;
+  } else {
+    delete process.env[DEVELOPMENT_WRITEBACK_WORKSPACE_ID_ENV];
   }
   // Membership-governance records land in the host governance log (WP5 §5.1),
   // the same SQLite governance database that carries approval provenance.
@@ -3004,6 +3188,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   state = {
     appRoot,
     args,
+    bootstrapWorkspaceId,
     centralData,
     deviceAuthStore,
     identityDb,

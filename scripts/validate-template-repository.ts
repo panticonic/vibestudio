@@ -97,30 +97,26 @@ export function validateTemplateRepository(
     const units = [...new Set(undeclared.map((p) => p.split("/").slice(0, 2).join("/")))];
     throw new Error(
       `${message}\n\n` +
-        `Add these to the \`inventory.units\` list in meta/template.yml (keep it sorted):\n` +
+        `Add these to the \`template.repositories\` list in meta/template.yml (keep it sorted):\n` +
         units.map((unit) => `    - ${unit}`).join("\n") +
         `\nOr delete the paths if they are scratch files.`
     );
   }
   if (!options.bootOnly) validateExternalDependencySpecifiers(root, files);
   const runtimePath = path.join(root, "meta/vibestudio.yml");
-  if (manifest.dependencies.length === 0) {
-    if (!fs.existsSync(runtimePath))
-      throw new Error("Dependency-free root is missing meta/vibestudio.yml");
-    const expected = canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest));
-    if (fs.readFileSync(runtimePath, "utf8") !== expected) {
-      if (!options.fix) {
-        throw new Error(
-          "meta/vibestudio.yml is not the canonical flattened root runtime — " +
-            "it is generated from meta/template.yml and compared by exact text. " +
-            "Re-run with --fix to regenerate it."
-        );
-      }
-      fs.writeFileSync(runtimePath, expected);
-      repaired.push("meta/vibestudio.yml");
+  if (!fs.existsSync(runtimePath))
+    throw new Error("Standalone workspace is missing meta/vibestudio.yml");
+  const expected = canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest));
+  if (fs.readFileSync(runtimePath, "utf8") !== expected) {
+    if (!options.fix) {
+      throw new Error(
+        "meta/vibestudio.yml is not the canonical self-contained root runtime — " +
+          "it is generated from meta/template.yml and compared by exact text. " +
+          "Re-run with --fix to regenerate it."
+      );
     }
-  } else if (fs.existsSync(runtimePath)) {
-    throw new Error("Contribution template must not contain a root runtime manifest");
+    fs.writeFileSync(runtimePath, expected);
+    repaired.push("meta/vibestudio.yml");
   }
   return { repaired };
 }
@@ -144,10 +140,8 @@ function main(): void {
       {
         root,
         epoch: WORKSPACE_SYSTEM_EPOCH,
-        dependencies: manifest.dependencies,
         repositories: manifest.inventory.repositories,
         files: files.length,
-        rootCapable: manifest.dependencies.length === 0,
       },
       null,
       2

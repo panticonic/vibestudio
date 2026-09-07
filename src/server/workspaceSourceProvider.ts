@@ -100,6 +100,7 @@ export interface WorkspaceSemanticPort {
   ): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsPush(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsStatus(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
+  vcsMainState(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsCompare(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsInspect(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsNeighbors(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
@@ -199,6 +200,7 @@ export function createWorkspaceSemanticPort(
     vcsFinalizeExternalDelta: (input) => invoke("vcsFinalizeExternalDelta", input),
     vcsPush: (input) => invoke("vcsPush", input),
     vcsStatus: (input) => invoke("vcsStatus", input),
+    vcsMainState: (input) => invoke("vcsMainState", input),
     vcsCompare: (input) => invoke("vcsCompare", input),
     vcsInspect: (input) => invoke("vcsInspect", input),
     vcsNeighbors: (input) => invoke("vcsNeighbors", input),

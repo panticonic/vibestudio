@@ -28,13 +28,13 @@ export type PanelAccessOperation =
 export interface PanelAccessRequester {
   id: string;
   kind: CallerKind | string;
-  /** True when the caller is authorized chrome or a privileged shell/about panel. */
+  /** True when the caller is authorized chrome or a shell/about panel classified for protected control operations. */
   privileged?: boolean;
 }
 
 export interface PanelAccessTarget {
   id: string;
-  /** Privilege flag copied from PanelSnapshot (derived from about/ location or an explicit opt-in). */
+  /** Protection flag copied from PanelSnapshot; it drives severe control/approval handling. */
   privileged?: boolean;
 }
 
@@ -54,5 +54,7 @@ export function isOpenPanelOperation(op: PanelAccessOperation): boolean {
 }
 
 export function panelAccessSeverityForTarget(target: PanelAccessTarget): PanelAccessSeverity {
+  // This is approval/control severity only. It does not grant the target any
+  // host capability.
   return target.privileged === true ? "severe" : "standard";
 }

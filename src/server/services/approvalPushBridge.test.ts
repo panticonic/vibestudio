@@ -31,7 +31,7 @@ const USER_1_TARGETS = [DELIVERED_TARGETS[0]!];
 const MEMBER_USER_IDS = ["user-1", "user-2"];
 
 function createQueue() {
-  return createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+  return createApprovalQueue({ eventService: { emitProjected: vi.fn() } as never });
 }
 
 function createPushMock(): PushServiceInternal & { triggerRegistrationsChanged(): void } {
@@ -81,6 +81,7 @@ function requestCapability(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "capability",
     callerId: "panel-1",
+    requestedByUserId: "user-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
@@ -98,6 +99,7 @@ function requestAppSourceChange(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "unit-install-review",
     callerId: "panel-1",
+    requestedByUserId: "user-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
@@ -124,6 +126,7 @@ function requestUnitManagement(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "unit-install-review",
     callerId: "panel-1",
+    requestedByUserId: "user-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
@@ -176,6 +179,7 @@ function requestDoCapability(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "capability",
     callerId: "do:workers/example:ExampleDO:agent-1",
+    requestedByUserId: "user-1",
     callerKind: "do",
     repoPath: "workers/example",
     effectiveVersion: "hash-1",
@@ -234,6 +238,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -247,7 +252,7 @@ describe("approvalPushBridge", () => {
 
     expect(push.sendToTargets).toHaveBeenCalledTimes(1);
     expect(push.sendToTargets).toHaveBeenCalledWith(
-      DELIVERED_TARGETS,
+      USER_1_TARGETS,
       expect.objectContaining({
         category: APPROVAL_CATEGORY_DECIDE,
         data: expect.objectContaining({
@@ -270,6 +275,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -283,7 +289,7 @@ describe("approvalPushBridge", () => {
     queue.resolve(approvalId, "once");
     await flush();
 
-    expect(push.cancel).toHaveBeenCalledWith(DELIVERED_TARGETS, approvalId);
+    expect(push.cancel).toHaveBeenCalledWith(USER_1_TARGETS, approvalId);
     await expect(promise).resolves.toBe("once");
   });
 
@@ -295,6 +301,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => members,
+      workspaceAccess: { isMember: (id) => members.includes(id), isAdmin: () => false },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -321,6 +328,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -352,6 +360,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => active,
         markActive: vi.fn(),
@@ -382,6 +391,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -411,6 +421,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -421,6 +432,7 @@ describe("approvalPushBridge", () => {
     const promise = queue.requestClientConfig({
       kind: "client-config",
       callerId: "panel-1",
+      requestedByUserId: "user-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -433,7 +445,7 @@ describe("approvalPushBridge", () => {
     await flush();
 
     expect(push.sendToTargets).toHaveBeenCalledWith(
-      DELIVERED_TARGETS,
+      USER_1_TARGETS,
       expect.objectContaining({
         category: APPROVAL_CATEGORY_INPUT_REQUIRED,
         data: expect.objectContaining({
@@ -453,6 +465,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -464,7 +477,7 @@ describe("approvalPushBridge", () => {
     await flush();
 
     expect(push.sendToTargets).toHaveBeenCalledWith(
-      DELIVERED_TARGETS,
+      USER_1_TARGETS,
       expect.objectContaining({
         data: expect.objectContaining({
           approvalKind: "unit-install-review",
@@ -489,6 +502,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -500,7 +514,7 @@ describe("approvalPushBridge", () => {
     await flush();
 
     expect(push.sendToTargets).toHaveBeenCalledWith(
-      DELIVERED_TARGETS,
+      USER_1_TARGETS,
       expect.objectContaining({
         data: expect.objectContaining({
           approvalKind: "unit-install-review",
@@ -525,6 +539,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -552,6 +567,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -563,7 +579,7 @@ describe("approvalPushBridge", () => {
     await flush();
 
     expect(push.sendToTargets).toHaveBeenCalledWith(
-      DELIVERED_TARGETS,
+      USER_1_TARGETS,
       expect.objectContaining({
         body: expect.stringContaining("example"),
       })
@@ -581,6 +597,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -600,7 +617,7 @@ describe("approvalPushBridge", () => {
     queue.resolve(approvalId, "deny");
     await flush();
 
-    expect(push.cancel).toHaveBeenCalledWith(DELIVERED_TARGETS, approvalId);
+    expect(push.cancel).toHaveBeenCalledWith(USER_1_TARGETS, approvalId);
     await expect(promise).resolves.toBe("deny");
   });
 
@@ -608,11 +625,20 @@ describe("approvalPushBridge", () => {
     const queue = createQueue();
     const push = createPushMock();
     const timers = createTimerHarness();
+    // Both retry targets belong to the same owner; another workspace member
+    // must never receive this private approval.
+    const ownerTargets = [
+      { userId: "user-1", clientId: "mobile-1" },
+      { userId: "user-1", clientId: "mobile-2" },
+    ];
+    vi.mocked(push.listRegistrations).mockReturnValue(
+      push.listRegistrations().map((registration) => ({ ...registration, userId: "user-1" }))
+    );
     vi.mocked(push.sendToTargets)
       .mockResolvedValueOnce([
         SENT_PUSH_RESULT,
         {
-          userId: "user-2",
+          userId: "user-1",
           clientId: "mobile-2",
           platform: "ios",
           sent: false,
@@ -622,7 +648,7 @@ describe("approvalPushBridge", () => {
       ])
       .mockResolvedValueOnce([
         {
-          userId: "user-2",
+          userId: "user-1",
           clientId: "mobile-2",
           platform: "ios",
           sent: true,
@@ -633,6 +659,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -645,20 +672,20 @@ describe("approvalPushBridge", () => {
 
     const promise = requestCapability(queue);
     await flush();
-    expect(push.sendToTargets).toHaveBeenNthCalledWith(1, DELIVERED_TARGETS, expect.any(Object));
+    expect(push.sendToTargets).toHaveBeenNthCalledWith(1, ownerTargets, expect.any(Object));
 
     timers.advanceByTime(100);
     await flush();
     expect(push.sendToTargets).toHaveBeenNthCalledWith(
       2,
-      [{ userId: "user-2", clientId: "mobile-2" }],
+      [{ userId: "user-1", clientId: "mobile-2" }],
       expect.any(Object)
     );
 
     const approvalId = queue.listPending()[0]!.approvalId;
     queue.resolve(approvalId, "deny");
     await flush();
-    expect(push.cancel).toHaveBeenCalledWith(DELIVERED_TARGETS, approvalId);
+    expect(push.cancel).toHaveBeenCalledWith(ownerTargets, approvalId);
     await expect(promise).resolves.toBe("deny");
   });
 
@@ -671,6 +698,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -687,7 +715,7 @@ describe("approvalPushBridge", () => {
 
     timers.advanceByTime(100);
     await flush();
-    expect(push.sendToTargets).toHaveBeenCalledWith(DELIVERED_TARGETS, expect.any(Object));
+    expect(push.sendToTargets).toHaveBeenCalledWith(USER_1_TARGETS, expect.any(Object));
 
     const approvalId = queue.listPending()[0]!.approvalId;
     queue.resolve(approvalId, "deny");
@@ -702,6 +730,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -741,6 +770,7 @@ describe("approvalPushBridge", () => {
       approvalQueue: queue,
       push,
       workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      workspaceAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),

@@ -108,8 +108,13 @@ function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
     workspaceId: row["workspace_id"] as string,
     name: row["name"] as string,
     lastOpened: row["last_opened"] as number,
+    ...(row["private_role"] ? { privateRole: row["private_role"] as "personal" | "system" } : {}),
   };
 }
+
+const WORKSPACE_ENTRY_SELECT = `SELECT w.*, p.role AS private_role
+  FROM workspaces w
+  LEFT JOIN user_workspaces p ON p.workspace_id = w.workspace_id`;
 
 function parseWorkspaceCreationIntent(value: SQLOutputValue): WorkspaceCreationDescriptor | null {
   if (value === null) return null;
@@ -172,9 +177,52 @@ export class CentralDataManager {
   }
 
   listWorkspaces(): WorkspaceEntry[] {
-    return this.stmt("SELECT * FROM workspaces ORDER BY last_opened DESC, name")
+    return this.stmt(
+      `${WORKSPACE_ENTRY_SELECT}
+      ORDER BY w.last_opened DESC, w.name`
+    )
       .all()
       .map(rowToWorkspace);
+  }
+
+  /**
+   * Reserve both private workspaces atomically. Existing designations win even
+   * when their child is stopped or creation is incomplete; never replace state
+   * in response to a startup failure. SQLite serializes competing clients.
+   */
+  ensurePrivateWorkspaces(
+    userId: string,
+    templates: Record<"personal" | "system", WorkspaceTemplatePin>
+  ): Record<"personal" | "system", WorkspaceEntry> {
+    return this.transaction(() => {
+      const user = this.stmt("SELECT revoked_at FROM users WHERE id = ?").get(userId);
+      if (!user || user["revoked_at"] !== null)
+        throw new Error("Private workspace owner is not a live user");
+      const ensure = (role: "personal" | "system"): WorkspaceEntry => {
+        const existing = this.stmt(
+          `SELECT w.*, p.role AS private_role FROM user_workspaces p
+          JOIN workspaces w ON w.workspace_id = p.workspace_id
+          WHERE p.user_id = ? AND p.role = ?`
+        ).get(userId, role);
+        if (existing) return rowToWorkspace(existing);
+        const workspaceId = createWorkspaceId();
+        const entry = this.addWorkspaceCreation(
+          `${role}-${workspaceId}`,
+          templates[role],
+          workspaceId
+        );
+        this.stmt("INSERT INTO user_workspaces (user_id, role, workspace_id) VALUES (?, ?, ?)").run(
+          userId,
+          role,
+          workspaceId
+        );
+        this.stmt(
+          "INSERT INTO membership (user_id, workspace_id, added_by, added_at, role) VALUES (?, ?, ?, ?, 'admin')"
+        ).run(userId, workspaceId, userId, this.now());
+        return { ...entry, privateRole: role };
+      };
+      return { personal: ensure("personal"), system: ensure("system") };
+    });
   }
 
   hasWorkspace(name: string): boolean {
@@ -513,12 +561,14 @@ export class CentralDataManager {
   }
 
   getWorkspaceEntry(name: string): WorkspaceEntry | null {
-    const row = this.stmt("SELECT * FROM workspaces WHERE name = ?").get(name);
+    const row = this.stmt(`${WORKSPACE_ENTRY_SELECT} WHERE w.name = ?`).get(name);
     return row ? rowToWorkspace(row) : null;
   }
 
   getLastOpenedWorkspace(): WorkspaceEntry | null {
-    const row = this.stmt("SELECT * FROM workspaces ORDER BY last_opened DESC, name LIMIT 1").get();
+    const row = this.stmt(
+      `${WORKSPACE_ENTRY_SELECT} ORDER BY w.last_opened DESC, w.name LIMIT 1`
+    ).get();
     return row ? rowToWorkspace(row) : null;
   }
 
@@ -539,8 +589,9 @@ export class CentralDataManager {
 
   getLastWorkspaceForUser(userId: string): WorkspaceEntry | null {
     const row = this.stmt(
-      `SELECT w.* FROM user_workspace_targets t
+      `SELECT w.*, p.role AS private_role FROM user_workspace_targets t
        JOIN workspaces w ON w.workspace_id = t.workspace_id
+       LEFT JOIN user_workspaces p ON p.workspace_id = w.workspace_id
        WHERE t.user_id = ?`
     ).get(userId);
     return row ? rowToWorkspace(row) : null;

@@ -1296,12 +1296,21 @@ async function main() {
       explicitCheckout: options.baseCheckout,
     });
     if (developmentBase) {
-      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
-      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
+      serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentBase.pins);
+      serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(developmentBase.pins.system);
+      serverEnv.VIBESTUDIO_DEV_TEMPLATE_SOURCES = JSON.stringify(
+        Object.keys(developmentBase.pins).map((name) => ({
+          pin: developmentBase.pins[name],
+          checkout: developmentBase.checkouts[name],
+        }))
+      );
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
-      await assertBaseCheckoutBootable({ repoRoot, checkout: developmentBase.checkout });
+      await assertBaseCheckoutBootable({
+        repoRoot,
+        checkout: developmentBase.checkouts.system,
+      });
       console.log(
-        `[desktop-smoke] Base: ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+        `[desktop-smoke] System: ${developmentBase.pins.system.commit} from ${developmentBase.sourceCheckout}`
       );
     } else {
       delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;

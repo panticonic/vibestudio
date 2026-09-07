@@ -24,7 +24,7 @@ function makePanel(id: string, overrides?: Partial<Panel>): Panel {
 }
 
 function makeRegistry(onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void) {
-  return new PanelRegistry({
+  return new PanelRegistry({ workspaceId: "workspace-test",
     onTreeUpdated: onTreeUpdated ?? vi.fn(),
   });
 }
@@ -597,7 +597,7 @@ describe("PanelRegistry", () => {
 
     it("coalesces exact presentation deltas without requiring a tree snapshot", async () => {
       const onPresentationUpdated = vi.fn();
-      registry = new PanelRegistry({ onPresentationUpdated });
+      registry = new PanelRegistry({ workspaceId: "workspace-test", onPresentationUpdated });
       registry.addPanel(makePanel("panel:tree/root"), null, { addAsRoot: true });
       registry.addPanel(makePanel("panel:tree/child"), "panel:tree/root");
       registry.updateTitle("panel:tree/child", "Child");

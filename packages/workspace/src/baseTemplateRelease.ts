@@ -7,17 +7,28 @@ import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types
 
 export const BASE_TEMPLATE_RELEASE_ARTIFACT = "base-template-release.json" as const;
 export const INITIAL_WORKSPACE_TEMPLATE_ENV = "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE" as const;
+export const DEFAULT_WORKSPACE_TEMPLATES_ENV = "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES" as const;
+
+export const DefaultWorkspaceTemplatesSchema = z.object({
+  base: WorkspaceTemplatePinSchema,
+  personal: WorkspaceTemplatePinSchema,
+  system: WorkspaceTemplatePinSchema,
+}).strict();
+
+export type DefaultWorkspaceTemplates = z.infer<typeof DefaultWorkspaceTemplatesSchema>;
 
 const BaseTemplateReleaseArtifactSchema = z
   .object({
     format: z.literal("vibestudio-base-release/1"),
     baseTemplate: WorkspaceTemplatePinSchema,
+    workspaceTemplates: DefaultWorkspaceTemplatesSchema.optional(),
   })
   .strict();
 
 export interface BaseTemplateReleaseArtifact {
   format: "vibestudio-base-release/1";
   baseTemplate: WorkspaceTemplatePin;
+  workspaceTemplates?: DefaultWorkspaceTemplates;
 }
 
 export type ParsedBaseTemplateRelease = BaseTemplateReleaseArtifact;
@@ -53,6 +64,20 @@ export function readBaseTemplateRelease(appRoot: string): ParsedBaseTemplateRele
     return parseBaseTemplateReleaseArtifact(JSON.parse(fs.readFileSync(candidate, "utf8")));
   }
   throw new Error("This host build has no exact external Base release pointer");
+}
+
+/** Default distributions are exact source pins, never live workspace dependencies. */
+export function readDefaultWorkspaceTemplates(
+  appRoot: string,
+  environment: NodeJS.ProcessEnv = process.env
+): DefaultWorkspaceTemplates {
+  const configured = environment[DEFAULT_WORKSPACE_TEMPLATES_ENV]?.trim();
+  if (configured) return DefaultWorkspaceTemplatesSchema.parse(JSON.parse(configured));
+  const templates = readBaseTemplateRelease(appRoot).workspaceTemplates;
+  if (!templates) {
+    throw new Error("This host build has no exact Base, Personal and System distribution pins");
+  }
+  return templates;
 }
 
 /**

@@ -155,7 +155,7 @@ export interface CredentialServiceDeps {
    * Completes a pending server→shell capture roundtrip (the
    * `credential:capture-request` event). Wired from credentialCaptureBridge.
    */
-  completeCapture?: (captureId: string, response: Record<string, unknown>) => void;
+  completeCapture?: (userId: string, captureId: string, response: Record<string, unknown>) => void;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   runtimeInspector?: CredentialRuntimeInspector;
   /**
@@ -1433,13 +1433,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       proxyGitHttp: (ctx, [input]) => proxyGitHttp(ctx, input),
       completeCapture: (ctx, [captureId, response]) => {
         // Only the attached desktop shell may answer a capture request.
-        if (ctx.caller.runtime.kind !== "shell") {
+        if (ctx.caller.runtime.kind !== "shell" || !ctx.caller.subject?.userId) {
           throw new Error("credentials.completeCapture is shell-only");
         }
         if (!deps.completeCapture) {
           throw new Error("Session credential capture is not configured on this server");
         }
-        deps.completeCapture(captureId, response);
+        deps.completeCapture(ctx.caller.subject.userId, captureId, response);
       },
       audit: (_ctx, [input]) => audit(input),
     }),

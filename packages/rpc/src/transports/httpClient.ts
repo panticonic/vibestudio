@@ -1,4 +1,5 @@
 import type { EnvelopeRpcTransport, RpcEnvelope, RpcRequest } from "../types.js";
+import { responseEnvelopeFor } from "../envelope.js";
 import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
 
 // Do not capture ambient network authority at module evaluation time. Library
@@ -15,6 +16,7 @@ const ambientRpcFetch: typeof fetch = (input, init) => {
 
 export interface HttpClientTransportConfig {
   selfId: string;
+  workspaceId?: string;
   serverUrl: string;
   authToken: string;
   fetch?: typeof fetch;
@@ -220,19 +222,23 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
                   `[httpClientTransport:${config.selfId}] respond() timed out after ${timeoutMs}ms ` +
                     `for "${(message as RpcRequest).method}" (requestId=${requestId})`
                 );
-                resolve({
-                  from: inbound.target,
-                  target: inbound.from,
-                  delivery: { caller: { callerId: inbound.target, callerKind: "unknown" } },
-                  provenance: inbound.provenance ?? [],
-                  message: {
-                    type: "response",
-                    requestId,
-                    error: `Handler timed out after ${timeoutMs}ms`,
-                    errorKind: "transport",
-                    errorCode: "RESPOND_TIMEOUT",
-                  },
-                });
+                resolve(
+                  responseEnvelopeFor(
+                    inbound,
+                    {
+                      callerId: inbound.target,
+                      callerKind: "unknown",
+                      ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
+                    },
+                    {
+                      type: "response",
+                      requestId,
+                      error: `Handler timed out after ${timeoutMs}ms`,
+                      errorKind: "transport",
+                      errorCode: "RESPOND_TIMEOUT",
+                    }
+                  )
+                );
               }, timeoutMs)
             : null;
         captures.set(requestId, (responseEnvelope) => {

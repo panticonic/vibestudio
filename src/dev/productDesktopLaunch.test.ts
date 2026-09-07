@@ -4,18 +4,24 @@ import {
   productDesktopEnvironment,
 } from "./productDesktopLaunch.js";
 
+const systemPin = {
+  url: "git+https://example.test/base.git",
+  ref: "refs/heads/distributions/system",
+  commit: "a".repeat(40),
+  snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+};
 const base = {
-  pin: {
-    url: "git+https://example.test/base.git",
-    ref: "refs/heads/main",
-    commit: "a".repeat(40),
-    snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+  pins: {
+    base: { ...systemPin, ref: "refs/heads/distributions/base" },
+    personal: { ...systemPin, ref: "refs/heads/distributions/personal" },
+    system: systemPin,
   },
-  checkout: "/temporary/checkpoint",
+  checkouts: {
+    base: "/temporary/base",
+    personal: "/temporary/personal",
+    system: "/temporary/system",
+  },
   sourceCheckout: "/visible/base",
-  temporary: true,
-  changedPaths: [],
-  untrackedPaths: [],
   writebackRepositories: ["meta", "packages/base"],
 };
 const templates = [{ pin: { commit: "template" }, checkout: "/private/template" }];
@@ -49,15 +55,15 @@ describe("product desktop source launch", () => {
         VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: "/visible/base",
       },
       repoRoot: "/host",
-      initialBase: base,
+      distributions: base,
+      bootstrapSystem: true,
     });
 
     expect(env).toMatchObject({
       NODE_ENV: "production",
       VIBESTUDIO_APP_ROOT: "/host",
-      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(base.pin),
-      VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(base.pin),
-      VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: base.checkout,
+      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(base.pins.system),
+      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(base.pins),
     });
     expect(env["VIBESTUDIO_INSTANCE_ROOT"]).toBeUndefined();
     expect(env["VIBESTUDIO_INSTANCE"]).toBeUndefined();
@@ -65,7 +71,7 @@ describe("product desktop source launch", () => {
     expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]).toBeUndefined();
   });
 
-  it("carries no Base selectors when the profile already has a workspace", () => {
+  it("clears ambient selectors when no source distributions are provided", () => {
     const env = productDesktopEnvironment({
       parent: {
         VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: "stale",

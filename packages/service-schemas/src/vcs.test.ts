@@ -92,6 +92,7 @@ const expectedMethods = [
   "merge",
   "listDirectory",
   "listFiles",
+  "mainState",
   "move",
   "neighbors",
   "push",
@@ -108,6 +109,17 @@ const expectedMethods = [
 ] as const;
 
 describe("minimal semantic VCS surface", () => {
+  it("reads main without a context or manufactured argument", () => {
+    expect(vcsMethods.mainState.args.parse([])).toEqual([]);
+    expect(vcsMethods.mainState.args.safeParse([{}]).success).toBe(false);
+    expect(parseVcsSemanticRequest("mainState", undefined)).toEqual({
+      input: undefined,
+      references: [],
+    });
+    expect(() => parseVcsSemanticRequest("mainState", {})).toThrow();
+    expect(vcsMethods.mainState.returns.parse(event)).toEqual(event);
+    expect(vcsMethods.mainState.returns.safeParse(application).success).toBe(false);
+  });
   it("has exactly the canonical methods", () => {
     expect(Object.keys(vcsMethods).sort()).toEqual([...expectedMethods].sort());
 

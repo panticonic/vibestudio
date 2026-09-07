@@ -1,8 +1,5 @@
-/**
- * Convert a Vibestudio contextId into the Electron session partition used by
- * app panels. Panels with the same contextId share browser storage; panels
- * with different contextIds are isolated.
- */
-export function contextIdToPartition(contextId: string): string {
-  return `persist:panel:${contextId}`;
+/** Native app storage belongs to one context in one authenticated workspace. */
+export function contextIdToPartition(workspaceId: string, contextId: string): string {
+  if (!workspaceId || !contextId) throw new Error("Workspace and context identities are required");
+  return `persist:panel:${encodeURIComponent(workspaceId)}:${encodeURIComponent(contextId)}`;
 }

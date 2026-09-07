@@ -152,6 +152,7 @@ export type ThemeMode = "light" | "dark" | "system";
 export type ThemeAppearance = "light" | "dark";
 
 export interface AppInfo {
+  initialFocusedWorkspaceId?: string;
   version: string;
   /** Connection mode: "local" (child process) or "remote" (standalone server) */
   connectionMode: "local" | "remote";
@@ -446,6 +447,8 @@ export interface WorkspaceEntry {
   workspaceId: string;
   name: string;
   lastOpened: number;
+  /** Hub registry designation; user-facing projections must expose it only to its owner. */
+  privateRole?: "personal" | "system";
 }
 
 /** Actions available in panel context menus */

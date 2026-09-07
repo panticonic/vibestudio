@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { GitClient } from "@vibestudio/git";
 import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
 
 function git(directory: string, args: string[]): string {
@@ -39,20 +38,37 @@ function repository(): string {
 }
 
 describe("development template checkpoint", () => {
-  it("uses a clean checkout directly", async () => {
+  it("captures a detached linked worktree through native Git without mutating its checkout", async () => {
+    const original = repository();
+    const checkout = `${original}-linked`;
+    const target = `${original}-checkpoint`;
+    temporaryRoots.add(checkout);
+    temporaryRoots.add(target);
+    git(original, ["worktree", "add", "--detach", checkout, "HEAD"]);
+    expect(fs.statSync(path.join(checkout, ".git")).isFile()).toBe(true);
+    fs.writeFileSync(path.join(checkout, " leading space.txt"), "visible edit\n");
+    const result = await prepareDevelopmentTemplateCheckpoint({ checkout, target });
+    expect(result.changedPaths).toEqual([" leading space.txt"]);
+    expect(fs.statSync(path.join(target, ".git")).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(target, " leading space.txt"), "utf8")).toBe("visible edit\n");
+    expect(git(checkout, ["rev-parse", "HEAD"])).toBe(git(original, ["rev-parse", "HEAD"]));
+  });
+  it("seals a clean checkout independently of later source edits", async () => {
     const checkout = repository();
+    const target = `${checkout}-checkpoint`;
+    temporaryRoots.add(target);
     const result = await prepareDevelopmentTemplateCheckpoint({
       checkout,
-      target: path.join(checkout, "..", "unused-checkpoint"),
-      gitClient: new GitClient(),
+      target,
     });
 
     expect(result).toEqual({
-      checkout,
+      checkout: target,
       sourceCheckout: checkout,
       changedPaths: [],
-      temporary: false,
     });
+    fs.writeFileSync(path.join(checkout, "tracked.txt"), "later edit\n");
+    expect(fs.readFileSync(path.join(target, "tracked.txt"), "utf8")).toBe("committed\n");
   });
 
   it("commits visible tracked and untracked edits only in the instance-owned clone", async () => {
@@ -68,10 +84,8 @@ describe("development template checkpoint", () => {
     const result = await prepareDevelopmentTemplateCheckpoint({
       checkout,
       target,
-      gitClient: new GitClient(),
     });
 
-    expect(result.temporary).toBe(true);
     expect(result.changedPaths).toEqual([".gitignore", "new.txt", "tracked.txt"]);
     expect(fs.readFileSync(path.join(target, "tracked.txt"), "utf8")).toBe("edited\n");
     expect(fs.readFileSync(path.join(target, "new.txt"), "utf8")).toBe("new\n");
@@ -92,7 +106,6 @@ describe("development template checkpoint", () => {
     const result = await prepareDevelopmentTemplateCheckpoint({
       checkout,
       target,
-      gitClient: new GitClient(),
     });
 
     expect(result.changedPaths).toEqual(["source.ts"]);

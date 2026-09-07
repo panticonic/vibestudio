@@ -88,6 +88,7 @@ export const serializedServiceMethodSchema = z.object({
   seeAlso: z.array(z.string()).optional(),
   /** Author-facing parameter names, positionally matching the args tuple. */
   argumentNames: z.array(z.string()).optional(),
+  crossWorkspace: z.boolean().optional(),
   argsSchema: z.record(z.unknown()),
   returnsSchema: z.record(z.unknown()).optional(),
 });

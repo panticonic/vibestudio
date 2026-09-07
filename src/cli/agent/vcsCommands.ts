@@ -459,6 +459,13 @@ export const vcsCommands: CliCommand[] = [
   vcsGitCommand,
   {
     group: "vcs",
+    name: "main-state",
+    summary: "Read the protected main event without creating a context",
+    flags: common,
+    run: (inv) => run(inv, (vcs) => vcs.mainState()),
+  },
+  {
+    group: "vcs",
     name: "status",
     summary: "Inspect committed and working state",
     flags: common,

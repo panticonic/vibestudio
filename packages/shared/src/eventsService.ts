@@ -269,6 +269,22 @@ export class EventService {
     }
   }
 
+  /** Project sensitive watched data for each authenticated account. Undefined omits delivery. */
+  emitProjected<E extends EventName>(
+    event: E,
+    project: (owner: {
+      userId?: string;
+      callerId: string;
+      callerKind: CallerKind;
+    }) => EventPayloads[E] | undefined
+  ): void {
+    const sequence = ++this.sequence;
+    for (const watch of [...(this.watchesByEvent.get(event) ?? [])]) {
+      const data = project(watch);
+      if (data !== undefined) watch.sendEvent(event, data, sequence);
+    }
+  }
+
   /**
    * Emit only to watched responses owned by one authenticated caller. This is
    * the canonical watched transport for owner-scoped live data: subscribers
@@ -307,12 +323,18 @@ export class EventService {
   }
 
   /** Direct-address every live transport belonging to one verified account. */
-  emitToUser<E extends EventName>(userId: string, event: E, data?: EventPayloads[E]): boolean {
+  emitToUser<E extends EventName>(
+    userId: string,
+    event: E,
+    data?: EventPayloads[E],
+    callerKinds?: readonly CallerKind[]
+  ): boolean {
     const sessions = this.sessionsByUserId.get(userId);
     if (!sessions || sessions.size === 0) return false;
 
     let delivered = false;
     for (const session of [...sessions]) {
+      if (callerKinds && !callerKinds.includes(session.callerKind)) continue;
       session.send(event, data);
       delivered = true;
     }

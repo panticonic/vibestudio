@@ -167,7 +167,6 @@ async function pairWithInvite(
   input: {
     gatewayUrl: string;
     serverId: string;
-    expectedWorkspaceIds?: ReadonlySet<string>;
     invite: HubPairingInvite;
   },
   credentialFile: string | undefined,
@@ -177,11 +176,6 @@ async function pairWithInvite(
     throw new Error("Development CLI invite targets a different hub");
   }
   const device = await postPairing(input.gatewayUrl, input.invite, deps.fetch);
-  if (input.expectedWorkspaceIds && !input.expectedWorkspaceIds.has(device.workspaceId)) {
-    throw new Error(
-      `Development pairing selected unknown workspace ${JSON.stringify(device.workspaceId)}`
-    );
-  }
   const route = await routeWorkspace(
     {
       gatewayUrl: input.gatewayUrl,
@@ -191,6 +185,9 @@ async function pairWithInvite(
     },
     deps
   );
+  if (route.serverId !== input.serverId || route.workspaceId !== device.workspaceId) {
+    throw new Error("Development hub routed a different workspace than the pairing selected");
+  }
 
   const credentials: CliCredentials = {
     schemaVersion: 5,
@@ -223,17 +220,14 @@ export async function bootstrapInstanceCli(
   const ready = HubReadyPayloadSchema.parse(rawReady);
   const existing = existingCredential(ready.serverId, options.credentialFile);
   if (existing) {
-    const workspace = ready.workspaces.find((entry) => entry.name === existing.workspaceName);
-    if (!workspace) {
-      throw new Error(
-        `Instance CLI workspace ${JSON.stringify(existing.workspaceName)} is not available`
-      );
-    }
+    // Public readiness deliberately omits private workspaces. Authenticate and
+    // route the saved identity; neither a public listing nor a reused display
+    // name may retarget this device's workspace.
     return reconcileExistingCredential(
       {
         gatewayUrl: ready.gatewayUrl,
         serverId: ready.serverId,
-        workspaceId: workspace.workspaceId,
+        workspaceId: existing.workspaceId,
       },
       existing,
       options.credentialFile,
@@ -241,14 +235,10 @@ export async function bootstrapInstanceCli(
     );
   }
   if (!ready.rootInvite) return { status: "invite-required" };
-  if (ready.workspaces.length === 0) {
-    throw new Error("The development hub has no workspace for its CLI");
-  }
   return pairWithInvite(
     {
       gatewayUrl: ready.gatewayUrl,
       serverId: ready.serverId,
-      expectedWorkspaceIds: new Set(ready.workspaces.map((workspace) => workspace.workspaceId)),
       invite: ready.rootInvite,
     },
     options.credentialFile,

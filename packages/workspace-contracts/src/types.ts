@@ -139,20 +139,6 @@ export interface WorkspaceTemplateRegistryDeclaration {
   credential?: string;
 }
 
-export interface WorkspaceTemplatesConfig {
-  /** Direct URL-only roots. Transitive relationships are read from their manifests. */
-  use: WorkspaceTemplateDeclaration[];
-  /** Exact root-level resolution overrides keyed by normalized template URL. */
-  overrides?: Record<string, WorkspaceTemplatePin>;
-  /** Presentation/promotion registry source; never part of installed relationship state. */
-  registry?: WorkspaceTemplateRegistryDeclaration;
-  /** Reviewed exact excluded-section decisions keyed by `<nodeId>:<section>`. */
-  suggestionDecisions?: Record<
-    string,
-    { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }
-  >;
-}
-
 /**
  * What a template calls itself: a name and one sentence, as the template's own
  * manifest states them.
@@ -167,51 +153,6 @@ export interface WorkspaceTemplatePresentation {
   description?: string;
 }
 
-export interface WorkspaceTemplateStateNode {
-  nodeId: string;
-  alias: string;
-  pin: WorkspaceTemplatePin;
-  /** Direct parent node ids. Parents precede children in `nodes`. */
-  parents: string[];
-  /** Complete sanitized installed layer used for future semantic recomposition. */
-  fragment: string;
-  /**
-   * What this template says it is called and what it says it does — sanitized,
-   * self-asserted, and unverified. It may head a card as a title; it is never
-   * identity, which stays `pin.url`.
-   */
-  presentation?: WorkspaceTemplatePresentation;
-  /** Exact excluded authority suggestions proven by this node's pinned manifest. */
-  suggestions: {
-    trust?: { digest: `v1-sha256:${string}`; value: unknown };
-    providers?: { digest: `v1-sha256:${string}`; value: unknown };
-  };
-}
-
-export interface WorkspaceTemplateStateContribution {
-  nodeId: string;
-  subtreeDigest: `v1-sha256:${string}`;
-}
-
-export interface WorkspaceTemplateStateRepository {
-  /** Every template layer contributing changes to this repository. */
-  contributions: WorkspaceTemplateStateContribution[];
-}
-
-/**
- * Descriptive installed-template relationships committed in
- * `meta/templates.state.yml`. This is merge context, never an integrity or
- * admission boundary: the current workspace remains authoritative.
- */
-export interface WorkspaceTemplateState {
-  version: 1;
-  /** Normalized URL-only roots from the workspace-authored layer. */
-  roots: WorkspaceTemplateDeclaration[];
-  /** Normalized workspace-authored source selections. */
-  overrides: Record<string, WorkspaceTemplatePin>;
-  nodes: WorkspaceTemplateStateNode[];
-  repositories: Record<string, WorkspaceTemplateStateRepository>;
-}
 
 /** Host-owned bootstrap intent for a workspace created from an external root. */
 export interface WorkspaceCreationDescriptor {
@@ -486,6 +427,8 @@ export interface WorkspaceConfig {
   id: string;
   /** Semantic storage, host projections, and workspace runtime ABI epoch. */
   systemEpoch: number;
+  /** Optional verified catalog for discovering upstream workspace snapshots. */
+  templateRegistry?: WorkspaceTemplateRegistryDeclaration;
   /**
    * Repo used as the base for bare VCS file paths such as `notes.md`.
    * This is workspace policy, not a host convention: omit it to require every
@@ -558,10 +501,7 @@ export interface WorkspaceConfig {
  * by the host.
  */
 export type WorkspaceConfigTopLayer = Omit<WorkspaceConfig, "id"> & {
-  /** Direct semantic template relationships. */
-  templates?: WorkspaceTemplatesConfig;
-  /** Canonical inherited declaration keys disabled by the workspace layer. */
-  disable?: string[];
+  template?: WorkspaceTemplatePresentation;
 };
 
 /**

@@ -11,7 +11,15 @@ import { randomUUID } from "node:crypto";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
-import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import {
+  approvalVisibleToUser,
+  isHostApprovalObserver,
+  type ApprovalWorkspaceAccess,
+} from "@vibestudio/shared/approvalVisibility";
+import type {
+  UnitAuthorityRequest,
+  UserlandCapabilityDefinition,
+} from "@vibestudio/shared/authorityManifest";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
 import type {
@@ -211,7 +219,11 @@ function installReviewParts(
    * knows the answer may still say so, and wins.
    */
   historicalOriginFor?: (repoPath: string) => string | null,
-  presentationFor?: CapabilityPresentationResolver
+  presentationFor?: CapabilityPresentationResolver,
+  workspaceDefinitions: readonly {
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }[] = []
 ): InstallReviewPart[] {
   // One review can coalesce several producers — declared extensions and the ones
   // a host target requires, apps staged by more than one reconcile pass — and
@@ -222,14 +234,27 @@ function installReviewParts(
   for (const unit of req.units) {
     units.set(`${unit.source.repo}\0${unit.ev ?? ""}`, unit);
   }
-  // Receiver definitions carried by the same operation, so a service declared by
-  // one part is classified rather than unknown for the part that calls it.
-  const userlandDefinitions = reviewedUserlandDefinitions(
+  // Protected workspace receivers include ordinary workers that do not need a
+  // privileged startup review. Their declarations still govern consumers in
+  // this review. Candidate providers replace the corresponding current metadata.
+  const reviewedProviders = new Set([...units.values()].map((unit) => unit.source.repo));
+  const userlandDefinitions = new Map<string, UserlandCapabilityDefinition>(
+    workspaceDefinitions
+      // A provider being changed in this review replaces its previous declarations,
+      // including removals. Current workspace metadata never overrides the candidate.
+      .filter(({ provider }) => !reviewedProviders.has(provider))
+      .map(
+        ({ provider, definition }) =>
+          [`userland:${provider}/${definition.name}#*`, definition] as const
+      )
+  );
+  for (const [capability, definition] of reviewedUserlandDefinitions(
     [...units.values()].map((unit) => ({
       repoPath: unit.source.repo,
       authority: unit.authority ?? { requests: [], provides: [] },
     }))
-  );
+  ))
+    userlandDefinitions.set(capability, definition);
   return [...units.values()].map((unit) => {
     const repoPath = unit.source.repo;
     const previousRequests = req.previousRequests?.get(repoPath);
@@ -692,6 +717,7 @@ export type SensitiveActionQueue = ApprovalQueue;
 
 export function createApprovalQueue(deps: {
   eventService: EventService;
+  workspaceAccess?: ApprovalWorkspaceAccess;
   /**
    * Carries what the user checked from the review that accepted it to the
    * admission that mints it. Absent only in tests that never accept a review.
@@ -731,6 +757,11 @@ export function createApprovalQueue(deps: {
    * the honest failure.
    */
   originallyInstalledFrom?: (repoPath: string) => string | null;
+  /** Receiver declarations from the current protected workspace source graph. */
+  workspaceCapabilityDefinitions?: () => readonly {
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }[];
   /** Exact workspace-owned review metadata for dynamic service envelopes. */
   presentationFor?: CapabilityPresentationResolver;
 }): ApprovalQueueWithListeners {
@@ -740,6 +771,15 @@ export function createApprovalQueue(deps: {
   const entriesByDedupKey = new Map<string, QueueEntry>();
   const preparationsByProducerKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
+  const workspaceAccess = deps.workspaceAccess ?? { isMember: () => false, isAdmin: () => false };
+  const assertResolutionAccess = (entry: QueueEntry | undefined, resolver?: ApprovalResolver) => {
+    if (
+      entry &&
+      resolver &&
+      !approvalVisibleToUser(entry.approval, resolver.subject.userId, workspaceAccess)
+    )
+      throw new Error("This approval is not available to this account");
+  };
 
   function emitPendingChanged(): void {
     const pending = Array.from(entriesById.values()).map((e) => e.approval);
@@ -750,7 +790,15 @@ export function createApprovalQueue(deps: {
         console.warn("[ApprovalQueue] pending listener failed:", error);
       }
     }
-    eventService.emit("shell-approval:pending-changed", { pending });
+    eventService.emitProjected("shell-approval:pending-changed", (owner) => {
+      if (isHostApprovalObserver(owner)) return { pending };
+      if (!owner.userId) return undefined;
+      return {
+        pending: pending.filter((approval) =>
+          approvalVisibleToUser(approval, owner.userId!, workspaceAccess)
+        ),
+      };
+    });
   }
 
   /**
@@ -823,12 +871,13 @@ export function createApprovalQueue(deps: {
    * view so the queue compiles independently of that registration. Until the
    * name is registered `emit` simply finds no subscribers and returns — no crash.
    */
-  function emitResolved(event: ApprovalResolvedEvent): void {
-    (
-      eventService as unknown as {
-        emit(name: "shell-approval:resolved", data: ApprovalResolvedEvent): void;
-      }
-    ).emit("shell-approval:resolved", event);
+  function emitResolved(event: ApprovalResolvedEvent, approval: PendingApproval): void {
+    eventService.emitProjected("shell-approval:resolved", (owner) =>
+      isHostApprovalObserver(owner) ||
+      (owner.userId && approvalVisibleToUser(approval, owner.userId, workspaceAccess))
+        ? event
+        : undefined
+    );
   }
 
   function buildRequestedBy(entry: QueueEntry): ApprovalRequestedBy {
@@ -917,6 +966,7 @@ export function createApprovalQueue(deps: {
     },
     settleWaiters: (entry: QueueEntry) => void
   ): Promise<void> {
+    assertResolutionAccess(entry, resolution.resolver);
     if (entry.settlement) {
       throw new Error(`Approval ${entry.approval.approvalId} is already being resolved`);
     }
@@ -977,7 +1027,7 @@ export function createApprovalQueue(deps: {
       if (event) await deps.recordProvenance?.(event);
 
       // (3) Emit the live resolved surface BEFORE removal (the §6 fix).
-      if (event) emitResolved(event);
+      if (event) emitResolved(event, entry.approval);
 
       // (4) Remove the entry + settle coalesced waiters.
       settleWaiters(entry);
@@ -1047,6 +1097,8 @@ export function createApprovalQueue(deps: {
       ]);
     }
     if (req.kind === "browser-permission") {
+      if (req.requestedByUserId && req.requestedByUserId !== req.ownerUserId)
+        throw new Error("Browser approval owner and requester disagree");
       return canonicalKey([
         "browser-permission",
         req.ownerUserId,
@@ -1072,6 +1124,7 @@ export function createApprovalQueue(deps: {
     if (req.kind === "client-config") {
       return canonicalKey([
         "client-config",
+        req.requestedByUserId ?? null,
         req.repoPath,
         req.effectiveVersion,
         req.configId,
@@ -1099,6 +1152,7 @@ export function createApprovalQueue(deps: {
     }
     return canonicalKey([
       "credential",
+      req.requestedByUserId ?? null,
       req.callerId,
       req.repoPath,
       req.effectiveVersion,
@@ -1244,6 +1298,7 @@ export function createApprovalQueue(deps: {
       repoPath: req.repoPath,
       effectiveVersion: req.effectiveVersion,
       requestedAt: Date.now(),
+      ...(req.requestedByUserId ? { requestedByUserId: req.requestedByUserId } : {}),
       ...(req.operationId ? { operationId: req.operationId } : {}),
       ...(req.taskSubject ? { taskSubject: req.taskSubject } : {}),
       ...(req.taskTitle ? { taskTitle: req.taskTitle } : {}),
@@ -1294,7 +1349,12 @@ export function createApprovalQueue(deps: {
       } satisfies PendingBrowserPermissionApproval;
     }
     if (req.kind === "unit-install-review") {
-      const parts = installReviewParts(req, deps.originallyInstalledFrom, deps.presentationFor);
+      const parts = installReviewParts(
+        req,
+        deps.originallyInstalledFrom,
+        deps.presentationFor,
+        deps.workspaceCapabilityDefinitions?.()
+      );
       const approval = {
         ...base,
         kind: "unit-install-review",
@@ -1866,6 +1926,7 @@ export function createApprovalQueue(deps: {
 
     async resolve(approvalId, decision, resolver) {
       const entry = entriesById.get(approvalId);
+      assertResolutionAccess(entry, resolver);
       if (!entry) return;
       if (entry.approval.lifecycle?.state === "preparing") {
         throw new Error("Approval is still preparing and cannot be resolved");
@@ -1929,6 +1990,7 @@ export function createApprovalQueue(deps: {
 
     async resolveTaskRules(approvalId, resolution, resolver) {
       const entry = entriesById.get(approvalId);
+      assertResolutionAccess(entry, resolver);
       if (
         !entry ||
         entry.approval.kind !== "capability" ||
@@ -1958,6 +2020,7 @@ export function createApprovalQueue(deps: {
 
     async resolveInstallReview(approvalId, resolution, resolver) {
       const entry = entriesById.get(approvalId);
+      assertResolutionAccess(entry, resolver);
       if (!entry || entry.approval.kind !== "unit-install-review") {
         // Already answered, or never here. Historically a silent no-op, and it
         // stays one — a second answer to a settled review must not resolve

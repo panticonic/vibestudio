@@ -38,7 +38,26 @@ describe("development template sources", () => {
     ).toEqual([source]);
   });
 
-  it("rejects two transports for one durable template identity", () => {
+  it("accepts distinct exact snapshots from one distribution repository", () => {
+    const next = {
+      ...source,
+      pin: {
+        ...source.pin,
+        ref: "refs/heads/distributions/personal",
+        commit: "c".repeat(40),
+        snapshot: `v1-sha256:${"d".repeat(64)}`,
+      },
+      checkout: "/private/personal",
+    };
+    expect(
+      readDevelopmentTemplateSources({
+        NODE_ENV: "development",
+        [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify([source, next]),
+      })
+    ).toEqual([source, next]);
+  });
+
+  it("rejects two transports for one exact template coordinate", () => {
     expect(() =>
       readDevelopmentTemplateSources({
         NODE_ENV: "development",

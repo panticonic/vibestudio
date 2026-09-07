@@ -190,6 +190,7 @@ export interface DurableObjectRelayDeps {
   callerPanelId?: string;
   /** Host-verified owning account projected into the userland caller envelope. */
   userId?: string;
+  callerWorkspaceId?: string;
   /** Fresh host mediation bound to this exact method and DO object. */
   authorization?: DirectAuthorityAttestation;
   /** Correlation id for this call; lets the DO match a later deferred reply. */
@@ -215,6 +216,7 @@ function callerFromDeps(deps: DurableObjectRelayDeps): AttestedCaller {
     callerKind: (deps.callerKind as CallerKind | undefined) ?? "server",
     ...(deps.callerPanelId ? { callerPanelId: deps.callerPanelId } : {}),
     ...(deps.userId ? { userId: deps.userId } : {}),
+    ...(deps.callerWorkspaceId ? { workspaceId: deps.callerWorkspaceId } : {}),
     ...(deps.authorization ? { authorization: deps.authorization } : {}),
   };
 }

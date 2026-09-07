@@ -7,7 +7,8 @@ function clientWithPanelManager(currentEntityId: string | null) {
     { call: vi.fn() },
     "http://127.0.0.1:3030",
     "Headless Test",
-    "headless-test"
+    "headless-test",
+    "workspace-test"
   );
   const panelManager = {
     refreshSlotEntity: vi.fn(async () =>

@@ -111,12 +111,49 @@ describe("pushService", () => {
     });
   });
 
+  it("stamps notification routing from the host and verified registration", async () => {
+    const send = vi.fn(async () => "message-1");
+    const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath: tempDatabasePath(),
+      firebaseAdminLoader: async () => ({ send }),
+    });
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell", null, null, PUSH_SUBJECT) },
+      "register",
+      [{ clientId: "phone", platform: "android", token: "token" }]
+    );
+    await service.internal.send(PUSH_USER_ID, {
+      clientId: "phone",
+      title: "Review",
+      data: {
+        kind: "approval-prompt",
+        approvalId: "approval-1",
+        workspaceId: "forged",
+        userId: "other",
+        serverId: "wrong-server",
+      },
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          workspaceId: "ws-test",
+          userId: PUSH_USER_ID,
+          serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+        }),
+      })
+    );
+  });
+
   it("removes invalid FCM registrations", async () => {
     const databasePath = tempDatabasePath();
     const send = vi.fn(async () => {
       throw { code: "messaging/registration-token-not-registered" };
     });
     const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
       firebaseAdminLoader: async () => ({ send }),
       metrics: createPushMetrics(),
@@ -141,6 +178,8 @@ describe("pushService", () => {
   it("notifies internal listeners when registrations change", async () => {
     const databasePath = tempDatabasePath();
     const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
       metrics: createPushMetrics(),
     });
@@ -177,6 +216,8 @@ describe("pushService", () => {
       return "message-id";
     });
     const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
       firebaseAdminLoader: async () => ({ send }),
       metrics: createPushMetrics(),
@@ -223,6 +264,8 @@ describe("pushService", () => {
   it("degrades to log-only delivery when Firebase is unavailable", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath: tempDatabasePath(),
       firebaseAdminLoader: async () => null,
       metrics: createPushMetrics(),
@@ -246,6 +289,8 @@ describe("pushService", () => {
   it("sends approval-cancel data payloads", async () => {
     const messages: unknown[] = [];
     const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath: tempDatabasePath(),
       firebaseAdminLoader: async () => ({
         send: async (message) => {
@@ -276,7 +321,12 @@ describe("pushService", () => {
 
   it("isolates client ids by verified user and only unregisters the caller's row", async () => {
     const databasePath = tempDatabasePath();
-    const service = createPushService({ databasePath, metrics: createPushMetrics() });
+    const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
     const otherSubject = { userId: "user-2", handle: "user2" };
 
     await service.definition.handler(
@@ -303,7 +353,12 @@ describe("pushService", () => {
 
   it("durably removes every revoked-user registration and is idempotent across restart", async () => {
     const databasePath = tempDatabasePath();
-    const service = createPushService({ databasePath, metrics: createPushMetrics() });
+    const service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
     await service.definition.handler(
       { caller: createVerifiedCaller("shell:one", "shell", null, null, PUSH_SUBJECT) },
       "register",
@@ -328,7 +383,12 @@ describe("pushService", () => {
     expect(service.internal.unregisterUser(PUSH_USER_ID)).toBe(2);
     expect(service.internal.unregisterUser(PUSH_USER_ID)).toBe(0);
 
-    const restarted = createPushService({ databasePath, metrics: createPushMetrics() });
+    const restarted = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
     expect(restarted.internal.listRegistrations()).toEqual([
       expect.objectContaining({ userId: "user-2", clientId: "other" }),
     ]);
@@ -336,8 +396,18 @@ describe("pushService", () => {
 
   it("preserves independent registrations written through concurrent SQLite handles", async () => {
     const databasePath = tempDatabasePath();
-    const first = createPushService({ databasePath, metrics: createPushMetrics() });
-    const second = createPushService({ databasePath, metrics: createPushMetrics() });
+    const first = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
+    const second = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
 
     await first.definition.handler(
       { caller: createVerifiedCaller("shell:one", "shell", null, null, PUSH_SUBJECT) },
@@ -361,15 +431,25 @@ describe("pushService", () => {
 
   it("rejects legacy push database structures instead of retaining them", () => {
     const databasePath = tempDatabasePath();
-    const first = createPushService({ databasePath, metrics: createPushMetrics() });
+    const first = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
     expect(first.internal.listRegistrations()).toEqual([]);
     const raw = new DatabaseSync(databasePath);
     raw.exec("CREATE TABLE push_batches (id TEXT PRIMARY KEY, payload TEXT NOT NULL)");
     raw.close();
 
-    expect(() => createPushService({ databasePath, metrics: createPushMetrics() })).toThrow(
-      /Unsupported push schema/
-    );
+    expect(() =>
+      createPushService({
+        workspaceId: "ws-test",
+        serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+        databasePath,
+        metrics: createPushMetrics(),
+      })
+    ).toThrow(/Unsupported push schema/);
   });
 
   it("rejects and does not mutate a nonempty database with an unsupported schema", () => {
@@ -389,9 +469,14 @@ describe("pushService", () => {
     raw.close();
     const before = fs.readFileSync(databasePath);
 
-    expect(() => createPushService({ databasePath, metrics: createPushMetrics() })).toThrow(
-      /schema version is 0, expected 1/
-    );
+    expect(() =>
+      createPushService({
+        workspaceId: "ws-test",
+        serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+        databasePath,
+        metrics: createPushMetrics(),
+      })
+    ).toThrow(/schema version is 0, expected 1/);
     expect(fs.readFileSync(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath);
     expect(unchanged.prepare("SELECT * FROM push_registrations").all()).toEqual([
@@ -423,9 +508,14 @@ describe("pushService", () => {
     raw.close();
     const before = fs.readFileSync(databasePath);
 
-    expect(() => createPushService({ databasePath, metrics: createPushMetrics() })).toThrow(
-      /table:push_registrations definition is not canonical/
-    );
+    expect(() =>
+      createPushService({
+        workspaceId: "ws-test",
+        serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+        databasePath,
+        metrics: createPushMetrics(),
+      })
+    ).toThrow(/table:push_registrations definition is not canonical/);
     expect(fs.readFileSync(databasePath)).toEqual(before);
   });
 

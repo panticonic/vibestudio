@@ -10,6 +10,7 @@ import {
 import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { RevokedUserCleanupResultSchema } from "@vibestudio/identity/revocationCleanup";
+import { WorkspaceRpcPolicySchema } from "@vibestudio/identity/workspaceRpcPolicy";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 const readAccess = { sensitivity: "read" as const };
@@ -23,10 +24,21 @@ export const HubWorkspaceEntrySchema = z
     name: z.string(),
     lastOpened: z.number(),
     running: z.boolean(),
+    pendingApprovalCount: z.number().int().nonnegative(),
     ephemeral: z.boolean().optional(),
+    privateRole: z.enum(["personal", "system"]).optional(),
   })
   .strict();
 export type HubWorkspaceEntry = z.infer<typeof HubWorkspaceEntrySchema>;
+
+/** Process routing handoff has no authenticated viewer or approval audience. */
+export const HubReadyWorkspaceEntrySchema = HubWorkspaceEntrySchema.pick({
+  workspaceId: true,
+  name: true,
+  lastOpened: true,
+  running: true,
+  ephemeral: true,
+});
 
 export const HubReachSchema = z
   .object({
@@ -110,7 +122,7 @@ export const HubReadyPayloadSchema = z
     pid: z.number().int().positive(),
     version: z.string().min(1),
     buildId: z.string().regex(/^[a-f0-9]{64}$/),
-    workspaces: z.array(HubWorkspaceEntrySchema),
+    workspaces: z.array(HubReadyWorkspaceEntrySchema),
   })
   .strict()
   .superRefine((ready, ctx) => {
@@ -191,6 +203,7 @@ const HubWorkspaceMembershipSchema = z
     workspaceId: z.string(),
     addedBy: z.string(),
     addedAt: z.number(),
+    role: z.enum(["admin", "member"]),
   })
   .strict();
 
@@ -198,10 +211,88 @@ const HubWorkspaceMemberSchema = HubWorkspaceMembershipSchema.extend({
   implicit: z.boolean().optional(),
   handle: z.string().nullable(),
   displayName: z.string().nullable(),
-  role: z.enum(["root", "admin", "member"]).nullable(),
+  accountRole: z.enum(["root", "admin", "member"]).nullable(),
 }).strict();
 
 export const hubControlMethods = defineServiceMethods({
+  ensureUserWorkspaces: {
+    capability: "workspaces.create",
+    tier: { tier: "gated", session: "family", residency: "identity", family: "hubControl.create", rationale: "Idempotently ensure the authenticated account's own Personal and System workspaces." },
+    presentation: {
+      title: "Prepare your workspaces", action: "prepare your Personal and System workspaces",
+      description: "Create either private workspace if it does not exist yet.",
+      group: "accounts", authorityCategory: { domain: "automation", verb: "act" },
+    },
+    description: "Ensure the authenticated user's private Personal/System pair from host-selected exact distributions. Existing IDs and incomplete creation are preserved.",
+    args: z.tuple([]),
+    returns: z.object({ personal: HubWorkspaceEntrySchema, system: HubWorkspaceEntrySchema }).strict(),
+    access: writeAccess,
+  },
+  getWorkspaceRpcPolicy: {
+    capability: "workspaces.rpcPolicy.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale: "Read host-owned workspace integration settings as an authorized manager.",
+    },
+    presentation: {
+      title: "View workspace connections",
+      action: "view workspace connections",
+      description: "See which incoming and outgoing operations can request access.",
+      group: "accounts",
+      authorityCategory: { domain: "sharing", verb: "see" },
+    },
+    description:
+      "Read hard RPC boundary policy. These permissions do not grant access to operation resources.",
+    args: z.tuple([z.object({ workspaceId: z.string().min(1) }).strict()]),
+    returns: z
+      .object({
+        workspaceId: z.string(),
+        policy: WorkspaceRpcPolicySchema,
+        incomingLocked: z.boolean(),
+      })
+      .strict(),
+    access: readAccess,
+  },
+  setWorkspaceRpcPolicy: {
+    capability: "workspaces.rpcPolicy.write",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.integration",
+      rationale:
+        "Change a workspace's hard integration ceilings through authenticated host management.",
+    },
+    presentation: {
+      title: "Change workspace connections",
+      action: "change workspace connections",
+      description: "Choose which operations may request access across this workspace boundary.",
+      group: "accounts",
+      authorityCategory: { domain: "sharing", verb: "act" },
+    },
+    description:
+      "Replace a managed workspace's hard RPC policy. System incoming calls cannot be enabled. Ordinary resource approval remains required.",
+    args: z.tuple([
+      z
+        .object({
+          workspaceId: z.string().min(1),
+          policy: WorkspaceRpcPolicySchema,
+          expectedPolicy: WorkspaceRpcPolicySchema,
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        workspaceId: z.string(),
+        policy: WorkspaceRpcPolicySchema,
+        incomingLocked: z.boolean(),
+      })
+      .strict(),
+    access: writeAccess,
+  },
   listWorkspaces: {
     capability: "workspaces.read",
     tier: {
@@ -333,7 +424,7 @@ export const hubControlMethods = defineServiceMethods({
     description: "Delete a workspace and cascade every membership row.",
     args: z.tuple([z.object({ workspace: z.string().min(1) }).strict()]),
     returns: z.object({ deleted: z.boolean(), workspaceId: z.string().nullable() }),
-    access: destructiveAccess,
+    access: writeAccess,
   },
   addWorkspaceMember: {
     capability: "workspace.members.manage",
@@ -358,7 +449,7 @@ export const hubControlMethods = defineServiceMethods({
     description: "Add an existing account to a workspace.",
     args: z.tuple([
       z
-        .object({ ...userRefFields, workspace: z.string().min(1) })
+        .object({ ...userRefFields, workspace: z.string().min(1), role: z.enum(["admin", "member"]).optional() })
         .strict()
         .refine(requireUserRef, "userId or handle is required"),
     ]),
@@ -366,7 +457,7 @@ export const hubControlMethods = defineServiceMethods({
       workspace: z.string(),
       handle: z.string(),
     }).strict(),
-    access: adminAccess,
+    access: writeAccess,
   },
   removeWorkspaceMember: {
     capability: "workspace.members.remove",
@@ -395,7 +486,7 @@ export const hubControlMethods = defineServiceMethods({
         .refine(requireUserRef, "userId or handle is required"),
     ]),
     returns: z.object({ removed: z.boolean(), closedSessions: z.number() }),
-    access: destructiveAccess,
+    access: writeAccess,
   },
   listWorkspaceMembers: {
     capability: "workspace.members.read",

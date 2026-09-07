@@ -1,6 +1,7 @@
 import {
   rpcErrorDataOf,
   rpcErrorKindOf,
+  stampEnvelopeCaller,
   type RpcCausalParent,
   type RpcEnvelope,
   type RpcStreamRequest,
@@ -18,6 +19,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { StreamFrame } from "../services/egressProxy.js";
 import type { WsClientState } from "./connectionRegistry.js";
 import type { AuthenticatedHttpRpcCaller, HttpRpcAdmission } from "./httpRpcHandler.js";
+
+import { isLocalWorkspaceTarget, WORKSPACE_RPC_NOT_ADMITTED } from "./workspaceTarget.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const STREAM_HEADERS = {
@@ -40,6 +43,7 @@ type StreamContextExtras = Omit<
 >;
 
 export interface StreamingRelayDeps {
+  workspaceId?: string;
   dispatcher: ServiceDispatcher;
   egressProxy?: EgressStreamProxy;
   authenticateHttp(req: IncomingMessage): HttpRpcAdmission;
@@ -150,12 +154,23 @@ export class StreamingRelay {
       return;
     }
 
-    const request = envelope.message as RpcStreamRequest | undefined;
+    let request = envelope?.message as RpcStreamRequest | undefined;
     const method = request?.method;
-    if (!method) {
+    if (request?.type !== "stream-request" || !method) {
       writeJson(res, 400, { error: "Missing method" });
       return;
     }
+
+    if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
+      writeJson(res, 403, { error: WORKSPACE_RPC_NOT_ADMITTED, errorCode: "EACCES" });
+      return;
+    }
+    envelope = stampEnvelopeCaller(envelope, {
+      callerId: admission.caller.callerId,
+      callerKind: admission.caller.callerKind,
+      ...(this.deps.workspaceId ? { workspaceId: this.deps.workspaceId } : {}),
+    });
+    request = envelope.message as RpcStreamRequest;
 
     const { callerId, callerKind } = admission.caller;
     let verifiedCaller: VerifiedCaller;
@@ -703,7 +718,11 @@ export class StreamingRelay {
           new Error("Streaming RPC response completed before its request body settled")
         );
       }
-      return client.ws.sendStreamFrame(envelope, frame);
+      return client.ws.sendStreamFrame(envelope, frame, {
+        callerId: "main",
+        callerKind: "server",
+        workspaceId: this.deps.workspaceId,
+      });
     };
   }
 

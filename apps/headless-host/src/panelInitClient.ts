@@ -39,7 +39,8 @@ export class PanelInitClient {
     private readonly rpc: Pick<RpcClient, "call">,
     private readonly serverUrl: string,
     private readonly clientLabel: string,
-    private readonly clientSessionId: string
+    private readonly clientSessionId: string,
+    workspaceId: string
   ) {
     const call = <T>(method: string, args: unknown[]) =>
       rpc.call<T>("main", method, args) as Promise<T>;
@@ -49,7 +50,7 @@ export class PanelInitClient {
     const runtime = createRuntimeClient(callService);
 
     this.panelManager = new PanelManager({
-      registry: new PanelRegistry({}),
+      registry: new PanelRegistry({ workspaceId }),
       workspaceState,
       runtime,
       viewState: { load: () => ({ collapsedIds: [] }), save: () => undefined },

@@ -1517,6 +1517,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: input.snapshot.callerPrincipal,
         constraints: {
+          ...(input.snapshot.sourceWorkspaceId
+            ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+            : {}),
           ...(input.snapshot.missionSubject === "-"
             ? { sessionId: input.snapshot.sessionId }
             : { missionSubject: input.snapshot.missionSubject }),
@@ -1547,6 +1550,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: onceSubject,
         constraints: {
+          ...(input.snapshot.sourceWorkspaceId
+            ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+            : {}),
           sessionId: input.snapshot.sessionId,
           invocationDigest: input.snapshotDigest,
           ...(input.snapshot.agentBindingId
@@ -1573,6 +1579,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: input.snapshot.taskAuthority,
         constraints: {
+          ...(input.snapshot.sourceWorkspaceId
+            ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+            : {}),
           ...(input.snapshot.missionSubject === "-"
             ? {}
             : { missionSubject: input.snapshot.missionSubject }),
@@ -1599,6 +1608,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: `agent:${input.snapshot.agentBindingId}`,
         constraints: {
+          ...(input.snapshot.sourceWorkspaceId
+            ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+            : {}),
           lineageAtConsent,
           agentBindingId: input.snapshot.agentBindingId,
         },
@@ -1622,6 +1634,9 @@ export class AcquisitionCoordinator {
         resource: input.resource,
         subject: input.snapshot.missionSubject,
         constraints: {
+          ...(input.snapshot.sourceWorkspaceId
+            ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+            : {}),
           missionSubject: input.snapshot.missionSubject,
           lineageAtConsent,
         },
@@ -1654,6 +1669,9 @@ export class AcquisitionCoordinator {
       resource: input.resource,
       subject: input.snapshot.callerPrincipal,
       constraints: {
+        ...(input.snapshot.sourceWorkspaceId
+          ? { sourceWorkspaceId: input.snapshot.sourceWorkspaceId }
+          : {}),
         lineageAtConsent: [],
         ...(decision === "version" && input.snapshot.providerExecutionDigest !== "-"
           ? { providerExecutionDigest: input.snapshot.providerExecutionDigest }

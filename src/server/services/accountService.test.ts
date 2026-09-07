@@ -4,7 +4,7 @@ import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { createAccountService } from "./accountService.js";
 import { updateAccountProfile } from "../hostCore/accountProfile.js";
-import { accountProfileUpdateSchema } from "@vibestudio/service-schemas/account";
+import { accountMethods, accountProfileUpdateSchema } from "@vibestudio/service-schemas/account";
 
 function makeStores() {
   const identityDb = new IdentityDb({ path: ":memory:", readOnly: false });
@@ -27,7 +27,7 @@ function createService(
   return createAccountService({
     identityDb: stores.identityDb,
     isWorkspaceMember: (userId) => memberIds.has(userId),
-    listWorkspaceMemberUserIds: () => [...memberIds],
+    listWorkspaceMemberships: () => [...memberIds].map((userId) => ({ userId, role: "member" })),
   });
 }
 
@@ -172,19 +172,35 @@ describe("accountService", () => {
     const service = createAccountService({
       identityDb: stores.identityDb,
       isWorkspaceMember: () => true,
-      listWorkspaceMemberUserIds: () => [
-        stores.root.id,
-        stores.member.id,
-        stores.member.id,
-        "usr_unknown",
+      listWorkspaceMemberships: () => [
+        { userId: stores.root.id, role: "member" },
+        { userId: stores.member.id, role: "admin" },
+        { userId: stores.member.id, role: "admin" },
+        { userId: "usr_unknown", role: "member" },
       ],
     });
 
-    await expect(
-      service.handler(ctxFor(stores.member.id), "listWorkspaceMembers", [])
-    ).resolves.toEqual([
-      expect.objectContaining({ userId: stores.root.id, handle: "werg" }),
-      expect.objectContaining({ userId: stores.member.id, handle: "mara" }),
+    const members = await service.handler(ctxFor(stores.member.id), "listWorkspaceMembers", []);
+    expect(accountMethods.listWorkspaceMembers.returns.parse(members)).toEqual([
+      expect.objectContaining({
+        userId: stores.root.id,
+        handle: "werg",
+        role: "member",
+        accountRole: "root",
+      }),
+      expect.objectContaining({
+        userId: stores.member.id,
+        handle: "mara",
+        role: "admin",
+        accountRole: "member",
+      }),
     ]);
+    await expect(service.handler(ctxFor(stores.root.id), "getProfile", [])).resolves.toMatchObject({
+      role: "root",
+    });
+    stores.userStore.revokeUser(stores.member.id);
+    await expect(
+      service.handler(ctxFor(stores.root.id), "listWorkspaceMembers", [])
+    ).resolves.toEqual([expect.objectContaining({ userId: stores.root.id, role: "member" })]);
   });
 });

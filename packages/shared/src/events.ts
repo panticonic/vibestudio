@@ -6,6 +6,7 @@
  */
 
 import type { BrowserSitePermissionCapability, PendingApproval } from "./approvals.js";
+import type { ApprovalResolvedEvent } from "./governance/types.js";
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { PanelPresentationSnapshot } from "./panel/presentation.js";
@@ -60,6 +61,7 @@ export type EventName =
   | "panel-tree-invalidated"
   | "workspace-presence-changed"
   | "open-workspace-switcher"
+  | "workspace-focused"
   | "open-settings"
   | "open-command-palette"
   | "open-command-agent"
@@ -91,6 +93,7 @@ export type EventName =
   | "remote-transport-diagnostics-changed"
   | "server-health"
   | "shell-approval:pending-changed"
+  | "shell-approval:resolved"
   | "eval:run-event"
   | "development:run-event"
   | "development:client-launch-request"
@@ -280,8 +283,11 @@ export interface EventPayloads {
   "panel-presentation-changed": { revision: number; panelIds: string[] };
   "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
-  "open-workspace-switcher": undefined;
-  "open-settings": { section: SettingsSection };
+  "open-workspace-switcher":
+    | { template?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin }
+    | undefined;
+  "workspace-focused": { workspaceId: string };
+  "open-settings": { section: SettingsSection; workspaceId?: string };
   /**
    * Open the command overlay over the focused panel. One event for one key: the
    * overlay resumes that panel's agent conversation when it has one and shows
@@ -440,6 +446,7 @@ export interface EventPayloads {
     sampledAt: number;
   };
   "shell-approval:pending-changed": { pending: PendingApproval[] };
+  "shell-approval:resolved": ApprovalResolvedEvent;
   "browser-permissions:changed": {
     environmentKey: string;
     grants: Array<{
@@ -459,6 +466,7 @@ export interface EventPayloads {
    */
   "credential:capture-request": {
     captureId: string;
+    userId: string;
     kind: "cookies" | "saml";
     signInUrl: string;
     cookieNames?: string[];
@@ -519,6 +527,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-local-presentation-changed",
   "panel:snapshot",
   "open-workspace-switcher",
+  "workspace-focused",
   "open-settings",
   "open-command-palette",
   "open-command-agent",
@@ -550,6 +559,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "remote-transport-diagnostics-changed",
   "server-health",
   "shell-approval:pending-changed",
+  "shell-approval:resolved",
   "eval:run-event",
   "workspace:revision-bumped",
   "workspace:protected-refs-changed",

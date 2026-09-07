@@ -912,11 +912,23 @@ describe("RpcServer relay behavior", () => {
         from: "panel:nav-a",
         target: "panel:nav-b",
         delivery: {
-          caller: { callerId: "panel:nav-a", callerKind: "panel", userId: "user-1" },
+          caller: {
+            callerId: "panel:nav-a",
+            callerKind: "panel",
+            userId: "user-1",
+            workspaceId: "test-workspace",
+          },
           idempotencyKey: "idem-forged-route",
           readOnly: true,
         },
-        provenance: [{ callerId: "panel:nav-a", callerKind: "panel", userId: "user-1" }],
+        provenance: [
+          {
+            callerId: "panel:nav-a",
+            callerKind: "panel",
+            userId: "user-1",
+            workspaceId: "test-workspace",
+          },
+        ],
         message: {
           type: "request",
           requestId: "req-forged-route",
@@ -927,6 +939,46 @@ describe("RpcServer relay behavior", () => {
       },
     });
   });
+
+  it.each(["ws:rpc", "ws:route"] as const)(
+    "does not dispatch a foreign workspace through %s",
+    (type) => {
+      const { server, grantPanel } = createServer();
+      const sourceWs = createTestWs();
+      testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+      sourceWs.emitMessage({
+        type,
+        envelope: {
+          from: "forged",
+          target: "main",
+          targetWorkspaceId: "foreign-workspace",
+          delivery: {
+            caller: { callerId: "forged", callerKind: "server", workspaceId: "foreign-workspace" },
+          },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "foreign-call",
+            fromId: "forged",
+            method: "workspace.getInfo",
+            args: [],
+          },
+        },
+      });
+      expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+      expect(sourceWs.send.mock.calls.map(([raw]) => JSON.parse(String(raw)))).toContainEqual(
+        expect.objectContaining({
+          type: "ws:routed",
+          envelope: expect.objectContaining({
+            delivery: {
+              caller: { callerId: "main", callerKind: "unknown", workspaceId: "foreign-workspace" },
+            },
+            message: expect.objectContaining({ requestId: "foreign-call", errorCode: "EACCES" }),
+          }),
+        })
+      );
+    }
+  );
 
   it("replaces forged WS RPC identity before service dispatch and response attribution", async () => {
     const { server, grantPanel } = createServer();

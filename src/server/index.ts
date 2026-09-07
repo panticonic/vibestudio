@@ -42,6 +42,7 @@ import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { retireAuthenticatedCallers } from "./authenticatedCallerRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
+import { assertWorkspaceRpcAccess } from "./workspaceRpcAccess.js";
 import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
 import { canonicalWorkspaceObjectContextId } from "./bootstrap/workspaceObjectIdentity.js";
 import type { PreparedCodeIncarnation, RuntimeEntityHooks } from "./services/runtimeService.js";
@@ -66,7 +67,11 @@ import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInsta
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
-import { sameWorkspaceTemplatePin } from "@vibestudio/workspace/baseTemplateRelease";
+import {
+  sameWorkspaceTemplatePin,
+  readDefaultWorkspaceTemplates,
+} from "@vibestudio/workspace/baseTemplateRelease";
+import { readDevelopmentTemplateSources } from "@vibestudio/workspace/developmentTemplateSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
@@ -80,11 +85,7 @@ import {
   parseWorkspaceSystemEpochEnvelope,
   WORKSPACE_CONFIG_PATH,
 } from "@vibestudio/workspace/configParser";
-import {
-  WorkspaceCreationDescriptorSchema,
-  WorkspaceTemplatePinSchema,
-} from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   resolveHistoricalWorkspaceHost,
@@ -96,72 +97,51 @@ console.log(`[Perf] server module evaluated at ${Math.round(process.uptime() * 1
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
 
-function developmentRootTemplateSelection(): {
-  pin: WorkspaceTemplatePin;
-  checkout: string;
-  writeback: { root: string; repositories: string[] } | null;
-} | null {
-  const rawPin = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
-  const rawCheckout = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]?.trim();
+function developmentCheckoutWriteback(
+  workspaceId: string
+): { root: string; repositories: string[] } | null {
   const rawWriteback = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]?.trim();
-  if (!rawPin && !rawCheckout && !rawWriteback) return null;
-  if (!rawPin || !rawCheckout) {
-    throw new Error("Local root-template selection requires both an exact pin and checkout path");
-  }
+  if (!rawWriteback) return null;
   if (
-    rawWriteback &&
-    (process.env["NODE_ENV"] !== "development" || process.env["VIBESTUDIO_SOURCE_INSTANCE"] !== "1")
+    process.env["NODE_ENV"] !== "development" ||
+    process.env["VIBESTUDIO_SOURCE_INSTANCE"] !== "1"
   ) {
     throw new Error("Base checkout write-back is restricted to the source development instance");
   }
-  const checkout = fs.realpathSync(path.resolve(rawCheckout));
-  let writeback: { root: string; repositories: string[] } | null = null;
-  if (rawWriteback) {
-    const descriptor = JSON.parse(rawWriteback) as unknown;
-    const descriptorRecord =
-      descriptor !== null && typeof descriptor === "object" && !Array.isArray(descriptor)
-        ? (descriptor as Record<string, unknown>)
-        : null;
-    const rawRepositories = descriptorRecord?.["repositories"];
-    if (
-      descriptorRecord === null ||
-      typeof descriptorRecord["root"] !== "string" ||
-      !Array.isArray(rawRepositories) ||
-      !rawRepositories.every(
-        (repository: unknown): repository is string =>
-          typeof repository === "string" && repository.length > 0
-      )
-    ) {
-      throw new Error("Base checkout write-back descriptor is invalid");
-    }
-    const repositories = rawRepositories;
-    if (new Set(repositories).size !== repositories.length) {
-      throw new Error("Base checkout write-back descriptor contains duplicate repositories");
-    }
-    writeback = {
-      root: fs.realpathSync(path.resolve(descriptorRecord["root"])),
-      repositories: [...repositories],
-    };
+  const descriptor = JSON.parse(rawWriteback) as unknown;
+  const descriptorRecord =
+    descriptor !== null && typeof descriptor === "object" && !Array.isArray(descriptor)
+      ? (descriptor as Record<string, unknown>)
+      : null;
+  const rawRepositories = descriptorRecord?.["repositories"];
+  if (
+    descriptorRecord === null ||
+    descriptorRecord["workspaceId"] !== workspaceId ||
+    typeof descriptorRecord["root"] !== "string" ||
+    !Array.isArray(rawRepositories) ||
+    !rawRepositories.every(
+      (repository: unknown): repository is string =>
+        typeof repository === "string" && repository.length > 0
+    )
+  ) {
+    throw new Error("Base checkout write-back descriptor is invalid for this workspace");
   }
-  if (writeback) {
-    const gitMarker = path.join(writeback.root, ".git");
-    let marker: fs.Stats;
-    try {
-      marker = fs.lstatSync(gitMarker);
-    } catch {
-      throw new Error(`Base checkout write-back target is not a Git checkout: ${writeback.root}`);
-    }
-    if (!marker.isDirectory() && !marker.isFile()) {
-      throw new Error(
-        `Base checkout write-back target has invalid Git metadata: ${writeback.root}`
-      );
-    }
+  const repositories = rawRepositories;
+  if (new Set(repositories).size !== repositories.length) {
+    throw new Error("Base checkout write-back descriptor contains duplicate repositories");
   }
-  return {
-    pin: WorkspaceTemplatePinSchema.parse(JSON.parse(rawPin)) as WorkspaceTemplatePin,
-    checkout,
-    writeback,
-  };
+  const root = fs.realpathSync(path.resolve(descriptorRecord["root"]));
+  const gitMarker = path.join(root, ".git");
+  let marker: fs.Stats;
+  try {
+    marker = fs.lstatSync(gitMarker);
+  } catch {
+    throw new Error(`Base checkout write-back target is not a Git checkout: ${root}`);
+  }
+  if (!marker.isDirectory() && !marker.isFile()) {
+    throw new Error(`Base checkout write-back target has invalid Git metadata: ${root}`);
+  }
+  return { root, repositories: [...repositories] };
 }
 
 // =============================================================================
@@ -486,7 +466,11 @@ async function main() {
   // intentionally mutable, so it must never be consulted as an identity
   // source after startup.
   const workspaceId = childWorkspaceId;
-  const developmentRootTemplate = developmentRootTemplateSelection();
+  const developmentTemplateSources = readDevelopmentTemplateSources().map((source) => ({
+    ...source,
+    checkout: fs.realpathSync(path.resolve(source.checkout)),
+  }));
+  const developmentWriteback = developmentCheckoutWriteback(workspaceId);
   const rawCreationIntent = process.env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"]?.trim();
   const creationIntent = rawCreationIntent
     ? WorkspaceCreationDescriptorSchema.parse(JSON.parse(rawCreationIntent))
@@ -494,14 +478,6 @@ async function main() {
   if (creationIntent && creationIntent.workspaceId !== workspaceId) {
     throw new Error("Workspace creation intent does not match the hub-assigned identity");
   }
-  if (
-    creationIntent &&
-    developmentRootTemplate &&
-    !sameWorkspaceTemplatePin(creationIntent.rootTemplate, developmentRootTemplate.pin)
-  ) {
-    throw new Error("Workspace creation intent does not match the selected development Base");
-  }
-
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
   let workspaceIsEphemeral = false;
@@ -513,11 +489,7 @@ async function main() {
       init: args.init,
       requireExplicitSelection: isWorkspaceServer,
       workspaceId,
-      ...(creationIntent
-        ? { rootTemplate: creationIntent.rootTemplate }
-        : developmentRootTemplate
-          ? { rootTemplate: developmentRootTemplate.pin }
-          : {}),
+      ...(creationIntent ? { rootTemplate: creationIntent.rootTemplate } : {}),
     });
     // Managed directory names are storage coordinates, not workspace
     // identities. In particular, ephemeral children use a randomized disk
@@ -893,10 +865,7 @@ async function main() {
     const explicit = membershipStore
       .listMembers(entryWorkspaceId)
       .map((membership) => membership.userId);
-    const root = userStore
-      .listUsers()
-      .find((user) => user.role === "root" && user.revokedAt === undefined)?.id;
-    return [...new Set(root ? [root, ...explicit] : explicit)];
+    return explicit.filter((userId) => membershipStore.has(userId, entryWorkspaceId));
   };
   const workspaceChildHub = createWorkspaceChildHubPort({
     hubUrl,
@@ -1094,9 +1063,17 @@ async function main() {
   };
   const { InstallReviewSelectionStore } = await import("./services/installReviewSelections.js");
   const installReviewSelections = new InstallReviewSelectionStore();
+  const approvalWorkspaceAccess = {
+    isMember: (userId: string) => membershipStore.has(userId, entryWorkspaceId),
+    isAdmin: (userId: string) => membershipStore.isAdmin(userId, entryWorkspaceId),
+  };
+  const { approvalVisibleToUser, isHostApprovalObserver, pendingApprovalCounts } =
+    await import("@vibestudio/shared/approvalVisibility");
   const approvalQueue = createApprovalQueue({
     eventService,
+    workspaceAccess: approvalWorkspaceAccess,
     installReviewSelections,
+    workspaceCapabilityDefinitions: authorityCapabilities,
     presentationFor: describeCapability,
     recordProvenance: async (record) => {
       await workspaceChildHub.appendApproval(record);
@@ -1532,37 +1509,41 @@ async function main() {
       }),
     });
   };
-  const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
-    workspaceId,
-    statePath,
-    sourcePath: workspacePath,
-    expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-    sink: {
-      put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
-    },
-    acquire: async (pin) => {
-      if (developmentRootTemplate && sameWorkspaceTemplatePin(developmentRootTemplate.pin, pin)) {
-        return seedRootTemplateSnapshotFromCheckout({
-          statePath,
-          checkout: developmentRootTemplate.checkout,
-          pin,
-          git: createRootTemplateGitClient(pin),
-          sink: {
-            put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
-          },
-        });
-      }
-      return acquireRootTemplateSnapshot({
+  const acquireWorkspaceTemplate = async (
+    pin: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin
+  ) => {
+    const developmentSource = developmentTemplateSources.find((source) =>
+      sameWorkspaceTemplatePin(source.pin, pin)
+    );
+    if (developmentSource) {
+      return seedRootTemplateSnapshotFromCheckout({
         statePath,
+        checkout: developmentSource.checkout,
         pin,
         git: createRootTemplateGitClient(pin),
         sink: {
           put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
         },
       });
-    },
+    }
+    return acquireRootTemplateSnapshot({
+      statePath,
+      pin,
+      git: createRootTemplateGitClient(pin),
+      sink: {
+        put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
+      },
+    });
+  };
+  const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
+    workspaceId,
+    statePath,
+    sourcePath: workspacePath,
+    expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    sink: { put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)) },
+    acquire: acquireWorkspaceTemplate,
   });
-  await rootTemplateBootstrap.prepareSource();
+  const workspaceRootPin = await rootTemplateBootstrap.prepareSource();
   console.log(
     `[Perf] root template source prepared at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
@@ -1616,9 +1597,7 @@ async function main() {
     workspaceId,
     extractMainToSource: false,
   });
-  // Set only by the trusted one-time import from the exact promoted Base
-  // snapshot. Protected main is mutable and must never be substituted here.
-  let productSeedStateHash: string | null = null;
+
   let trustedBootstrapStateHash: string | null = null;
   const readWorkspaceFileAtState = async (
     stateHash: string,
@@ -1636,19 +1615,12 @@ async function main() {
   {
     // Origin is the axis every unit review is organized on, and it is the one
     // relationship context every review should present consistently. It is
-    // derived here from current template state, the admission record, and the
+    // derived here from durable admission provenance and the immutable
     // creation descriptor, then handed to every review request site.
     const { UnitOriginResolver } = await import("./services/unitOriginResolver.js");
     unitOriginResolver = new UnitOriginResolver({
-      readWorkspaceFile: async (filePath) => {
-        const { stateHash } = await workspaceVcs.ensureFresh();
-        return readWorkspaceFileAtState(stateHash, filePath);
-      },
-      // What was true when a part was admitted, for a repository the live state
-      // no longer claims. Removing a template severs a relationship and deletes
-      // nothing (§U2): without this the state's disappearance would silently
-      // re-attribute every one of that template's parts to whatever answers
-      // next — for most workspaces, to the host's own build.
+      // What was true when source was admitted remains the durable attribution
+      // after later ordinary VCS integration.
       recordedSourceFor: (repoPath) => unitAdmissionStore.recordedSourceFor(repoPath),
       rootTemplatePin: () => workspaceCreationReview.rootTemplate() ?? null,
       isBootstrapRepository: async (repoPath) => {
@@ -2053,45 +2025,44 @@ async function main() {
   //  - the default pnpm dev instance persists Base-owned publications back to
   //    its configured checkout through an exact previous-state guard; imported
   //    templates and workspace-created repositories remain outside that mirror
-  const developmentCheckoutObserver = developmentRootTemplate?.writeback
-    ? createDevelopmentCheckoutPublicationObserver({
-        destinationRoot: developmentRootTemplate.writeback.root,
-        ownedRepositories: developmentRootTemplate.writeback.repositories,
-        inspectRepository: async (repoPath) => {
-          const repositoryRoot = path.join(
-            developmentRootTemplate.writeback!.root,
-            ...repoPath.split("/")
-          );
-          try {
-            const stat = await fs.promises.lstat(repositoryRoot);
-            if (!stat.isDirectory()) return { files: [], skippedPaths: [repoPath] };
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-              return { files: [], skippedPaths: [] };
+  const developmentWritebackRoot = developmentWriteback?.root;
+  const developmentCheckoutObserver =
+    developmentWritebackRoot && developmentWriteback
+      ? createDevelopmentCheckoutPublicationObserver({
+          destinationRoot: developmentWritebackRoot,
+          ownedRepositories: developmentWriteback.repositories,
+          inspectRepository: async (repoPath) => {
+            const repositoryRoot = path.join(developmentWritebackRoot, ...repoPath.split("/"));
+            try {
+              const stat = await fs.promises.lstat(repositoryRoot);
+              if (!stat.isDirectory()) return { files: [], skippedPaths: [repoPath] };
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return { files: [], skippedPaths: [] };
+              }
+              throw error;
             }
-            throw error;
-          }
-          const inspected = await workspaceVcs.contentProjection.localState(repositoryRoot, {
-            exact: true,
-          });
-          return {
-            files: inspected.files.map((file) => ({
+            const inspected = await workspaceVcs.contentProjection.localState(repositoryRoot, {
+              exact: true,
+            });
+            return {
+              files: inspected.files.map((file) => ({
+                path: file.path,
+                contentHash: file.contentHash,
+                executable: (file.mode & 0o111) !== 0,
+              })),
+              skippedPaths: inspected.skipped.map((entry) => entry.path),
+            };
+          },
+          readState: async (stateHash) =>
+            (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
               path: file.path,
-              contentHash: file.contentHash,
+              contentHash: file.content_hash,
               executable: (file.mode & 0o111) !== 0,
             })),
-            skippedPaths: inspected.skipped.map((entry) => entry.path),
-          };
-        },
-        readState: async (stateHash) =>
-          (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
-            path: file.path,
-            contentHash: file.content_hash,
-            executable: (file.mode & 0o111) !== 0,
-          })),
-        readBlob: (contentHash) => getBytes(layout.blobsDir, contentHash),
-      })
-    : null;
+          readBlob: (contentHash) => getBytes(layout.blobsDir, contentHash),
+        })
+      : null;
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
@@ -2173,7 +2144,7 @@ async function main() {
           );
         } else if (result.changedPathCount > 0) {
           console.log(
-            `[DevelopmentCheckout] Wrote ${result.changedPathCount} published path(s) back to ${developmentRootTemplate!.writeback!.root}`
+            `[DevelopmentCheckout] Wrote ${result.changedPathCount} published path(s) back to ${developmentWritebackRoot}`
           );
         } else if (result.excludedRepositories.length > 0) {
           console.log(
@@ -2743,28 +2714,29 @@ async function main() {
           },
         }
       );
-      const snapshotState = productSeedStateHash;
-      if (snapshotState) {
-        const { PRODUCT_CONDUIT_UNITS } = await import("./productConduitPolicy.js");
-        const resolutions = await buildSystem.resolveBuildUnits(
-          PRODUCT_CONDUIT_UNITS,
-          snapshotState
+      // Context attestation is product trust, independent of workspace install
+      // approval. Resolve only a configured, exact distribution receipt; an
+      // app's initial snapshot or mutable main can never bless its own code.
+      const { trustedConduitTemplate, resolveTrustedConduits } =
+        await import("./trustedConduitSnapshot.js");
+      const conduitPin = trustedConduitTemplate(
+        workspaceRootPin,
+        readDefaultWorkspaceTemplates(appRoot)
+      );
+      const conduitSnapshot = await acquireWorkspaceTemplate(conduitPin);
+      const conduitTree = await mirrorWorktreeTree(
+        layout.blobsDir,
+        conduitSnapshot.files.map((file) => ({
+          path: file.path,
+          contentHash: file.contentHash,
+          mode: file.mode === 0o755 ? 0o100755 : 0o100644,
+        }))
+      );
+      if (!conduitBlessingStore.isSeededFor(conduitTree.stateHash)) {
+        const identities = await resolveTrustedConduits(conduitTree.stateHash, (paths, state) =>
+          buildSystem.resolveBuildUnits(paths, state)
         );
-        const identities = PRODUCT_CONDUIT_UNITS.map((repoPath, index) => {
-          const resolved = resolutions[index];
-          if (!resolved || resolved.kind !== "worker") {
-            throw new Error(
-              `Product conduit policy entry ${repoPath} is absent or is not a worker in the shipped snapshot`
-            );
-          }
-          return {
-            repoPath: resolved.unitPath,
-            effectiveVersion: resolved.effectiveVersion,
-          };
-        });
-        if (!conduitBlessingStore.isSeededFor(snapshotState)) {
-          conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
-        }
+        conduitBlessingStore.seedProductSnapshot(conduitTree.stateHash, identities);
       }
       return buildSystem;
     },
@@ -2830,7 +2802,7 @@ async function main() {
       createAccountService({
         identityDb,
         isWorkspaceMember: (userId) => membershipStore.has(userId, entryWorkspaceId),
-        listWorkspaceMemberUserIds,
+        listWorkspaceMemberships: () => membershipStore.listMembers(entryWorkspaceId),
       })
     );
     const { createGovernanceService } = await import("./services/governanceService.js");
@@ -2880,14 +2852,6 @@ async function main() {
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
       getProviders: () => [...trustedUnitHosts(), buildUnitChangeApprovalProvider],
       resolveUnitOrigins,
-      // Descriptive relationship state lets the gate attribute newly arriving
-      // units to the template operation that staged them. It is not an
-      // integrity boundary; protected-main validation and VCS remain canonical.
-      readTemplateState: async (stateHash) => {
-        const at = stateHash ?? (await workspaceVcs.ensureFresh()).stateHash;
-        return readWorkspaceFileAtState(at, "meta/templates.state.yml");
-      },
-      admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
       reportInstallLandingByToken: (landingToken, report) =>
         approvalQueue.reportInstallLandingByToken?.(landingToken, report),
       heldClearanceFor: (repoPath) => {
@@ -3257,7 +3221,23 @@ async function main() {
         return undefined;
       },
       snapshots: {
-        "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
+        "shell-approval:pending-changed": (ctx) => {
+          const owner = {
+            userId: ctx.caller.subject?.userId,
+            callerId: ctx.caller.runtime.id,
+            callerKind: ctx.caller.runtime.kind,
+          };
+          const pending = approvalQueue.listPending();
+          return {
+            pending: isHostApprovalObserver(owner)
+              ? pending
+              : pending.filter(
+                  (approval) =>
+                    owner.userId &&
+                    approvalVisibleToUser(approval, owner.userId, approvalWorkspaceAccess)
+                ),
+          };
+        },
         "apps:status": () => ({
           snapshot: true,
           apps:
@@ -3290,7 +3270,10 @@ async function main() {
   // seam and the approval bridge both deliver through it) ──
   let pushForRevocation: import("./services/pushService.js").PushServiceInternal | null = null;
   const { createPushService } = await import("./services/pushService.js");
-  const pushResult = createPushService();
+  const pushResult = createPushService({
+    workspaceId: entryWorkspaceId,
+    serverId: deviceAuthStore.getServerId(),
+  });
   pushForRevocation = pushResult.internal;
   container.registerManaged({
     name: "push",
@@ -3338,6 +3321,7 @@ async function main() {
           shellPresence: shellPresence.internal,
           // Include root's implicit membership, which intentionally has no row.
           workspaceMemberUserIds: listWorkspaceMemberUserIds,
+          workspaceAccess: approvalWorkspaceAccess,
         });
       },
       stop: async (bridge: import("./services/approvalPushBridge.js").ApprovalPushBridge) => {
@@ -3351,6 +3335,7 @@ async function main() {
   container.registerRpc(
     createShellApprovalService({
       approvalQueue,
+      workspaceAccess: approvalWorkspaceAccess,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
       workspaceCreationReviewState: () => workspaceCreationReviewState,
       hasAppCapability: (callerId, capability) =>
@@ -3439,7 +3424,14 @@ async function main() {
     sessionGrantStore: credentialSessionGrantStore,
     credentialUseGrantStore,
     credentialLifecycle,
-    hasConnectedShell: () => (rpcServerForGateway?.countConnectedClients(["shell"]) ?? 0) > 0,
+    isPersonalWorkspaceOwner: (userId) => {
+      const owner = identityDb.getPrivateWorkspaceOwner(workspaceId);
+      return (
+        owner?.role === "personal" &&
+        owner.userId === userId &&
+        membershipStore.has(userId, workspaceId)
+      );
+    },
     getAuthorizingShell: (principalId) =>
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
     hasAppCapability: (callerId, capability) =>
@@ -3631,20 +3623,6 @@ async function main() {
     container.registerRpc(
       createHostLifecycleService({
         shutdown: () => requestShutdown(),
-      })
-    );
-  }
-
-  // ── exact host/Base release handshake ──
-  {
-    const { createBaseReleaseService } = await import("./services/baseReleaseService.js");
-    const { readBaseTemplateRelease } = await import("./baseTemplateRelease.js");
-    const target = readBaseTemplateRelease(appRoot).baseTemplate;
-    container.registerRpc(
-      createBaseReleaseService({
-        target,
-        dispatcher,
-        systemSubject: SYSTEM_SUBJECT,
       })
     );
   }
@@ -4848,6 +4826,13 @@ async function main() {
         // Membership entry gate (WP2 §4): refuse a non-member of this child's
         // workspace at auth time. Undefined (no-op) in local/dev/hub mode.
         membershipGate: membershipEntryGate,
+        assertWorkspaceRpcAccess: (input) =>
+          assertWorkspaceRpcAccess({
+            ...input,
+            destinationWorkspaceId: workspaceId,
+            identity: identityDb,
+            membership: membershipStore,
+          }),
         workspaceRoleResolver,
         describeCapability,
         contextIntegrityFactForSession: (sessionId, caller) =>
@@ -5130,6 +5115,7 @@ async function main() {
                   }
                 : {}),
               methodTier,
+              methodCrossWorkspace: catalogMethod?.access?.crossWorkspace === true,
               ...(catalogMethod?.execution ? { methodExecution: catalogMethod.execution } : {}),
               presentation: service.presentation,
               title: service.title ?? service.name,
@@ -5575,13 +5561,17 @@ async function main() {
       | null = null;
     let presenceReportRevision = 0;
     let presenceReportQueue: Promise<void> = Promise.resolve();
+    let onlineUsers: Array<{ userId: string; endpoints: number }> = [];
+    let stopApprovalReports: (() => void) | undefined;
     const reportOnlinePresence = (users: Array<{ userId: string; endpoints: number }>): void => {
+      onlineUsers = users;
       const revision = ++presenceReportRevision;
+      const counts = pendingApprovalCounts(approvalQueue.listPending());
       // Serialize snapshots so a slow request cannot overwrite a newer one at
       // the hub. The hub also rejects stale revisions defensively.
       presenceReportQueue = presenceReportQueue
         .then(async () => {
-          await workspaceChildHub.reportPresence({ serverBootId, revision, users });
+          await workspaceChildHub.reportPresence({ serverBootId, revision, users, ...counts });
         })
         .catch((error) => {
           console.warn(`[WorkspacePresence] Failed to report revision ${revision} to hub:`, error);
@@ -5600,9 +5590,14 @@ async function main() {
           eventService,
           onOnlineChanged: reportOnlinePresence,
         });
+        stopApprovalReports = approvalQueue.onPendingChanged(() =>
+          reportOnlinePresence(onlineUsers)
+        );
       },
       async stop() {
         workspacePresence?.dispose();
+        stopApprovalReports?.();
+        await presenceReportQueue;
       },
       getServiceDefinition() {
         if (!workspacePresence) throw new Error("workspacePresence service not initialized");
@@ -5847,6 +5842,10 @@ async function main() {
         statePath,
         workspacePath,
         workspaceId,
+        isSystemWorkspace: () => {
+          const owner = identityDb.getPrivateWorkspaceOwner(workspaceId);
+          return owner?.role === "system" && membershipStore.has(owner.userId, workspaceId);
+        },
         buildSystem: buildSystemInst,
         executionPublicationPort: executionPublicationJournal,
         eventService,
@@ -5992,12 +5991,14 @@ async function main() {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        const development = resolveWorkspaceService(workspaceDecls, "vibestudio.development.v1");
-        if (development.kind !== "durable-object") {
-          throw new Error("development service must be Durable Object-backed");
-        }
         let developmentReady: Promise<void> | null = null;
         developmentDispatch = async (method, args) => {
+          // Resolve optional userland services when their operation is used.
+          // Starting generic worker RPC must not require System's development service.
+          const development = resolveWorkspaceService(workspaceDecls, "vibestudio.development.v1");
+          if (development.kind !== "durable-object") {
+            throw new Error("development service must be Durable Object-backed");
+          }
           developmentReady ??= activateDurableObjectEntity(doDispatch, workerdManagerInst, {
             source: development.source,
             className: development.className,
@@ -6277,7 +6278,6 @@ async function main() {
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
       const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
       const activated = await vcs.activateWorkspaceFromSource();
-      if (activated.initialized) productSeedStateHash = activated.stateHash;
       contextIntegrityStore.ensureCutover(activated.stateHash);
       const launchRecord = readWorkspaceHostLaunchRecord(statePath);
       if (!launchRecord) {

@@ -97,4 +97,87 @@ describe("envelope helpers", () => {
       args: [],
     });
   });
+
+  it("keeps destination addressing caller-controlled while replacing claimed origin workspace", () => {
+    const forged = envelopeFromMessage({
+      selfId: "worker:forged",
+      from: "worker:forged",
+      target: "worker:receiver",
+      targetWorkspaceId: "workspace:destination",
+      caller: authenticatedCaller("worker:forged", "worker", "workspace:claimed-origin"),
+      message: {
+        type: "event",
+        fromId: "worker:forged",
+        event: "notice",
+        payload: null,
+      },
+    });
+
+    const stamped = stampEnvelopeCaller(
+      forged,
+      authenticatedCaller("worker:actual", "worker", "workspace:verified-origin")
+    );
+
+    expect(stamped.targetWorkspaceId).toBe("workspace:destination");
+    expect(stamped.delivery.caller.workspaceId).toBe("workspace:verified-origin");
+    expect(stamped.provenance).toEqual([
+      {
+        callerId: "worker:actual",
+        callerKind: "worker",
+        workspaceId: "workspace:verified-origin",
+      },
+    ]);
+    expect(JSON.stringify(stamped)).not.toContain("workspace:claimed-origin");
+  });
+
+  it("addresses bounded replies back to the authenticated origin workspace", () => {
+    const request = envelopeFromMessage({
+      selfId: "worker:sender",
+      from: "worker:sender",
+      target: "worker:receiver",
+      targetWorkspaceId: "workspace:destination",
+      caller: authenticatedCaller("worker:sender", "worker", "workspace:origin"),
+      message: {
+        type: "request",
+        requestId: "r-workspace",
+        fromId: "worker:sender",
+        method: "ping",
+        args: [],
+      },
+    });
+
+    const response = responseEnvelopeFor(
+      request,
+      authenticatedCaller("worker:receiver", "worker", "workspace:destination"),
+      { type: "response", requestId: "r-workspace", result: "pong" }
+    );
+
+    expect(response.target).toBe("worker:sender");
+    expect(response.targetWorkspaceId).toBe("workspace:origin");
+    expect(response.delivery.caller.workspaceId).toBe("workspace:destination");
+  });
+
+  it("refuses an unbounded reply when an explicit request lacks authenticated origin", () => {
+    const request = envelopeFromMessage({
+      selfId: "worker:sender",
+      from: "worker:sender",
+      target: "worker:receiver",
+      targetWorkspaceId: "workspace:destination",
+      message: {
+        type: "request",
+        requestId: "r-unattributed",
+        fromId: "worker:sender",
+        method: "ping",
+        args: [],
+      },
+    });
+
+    expect(() =>
+      responseEnvelopeFor(
+        request,
+        authenticatedCaller("worker:receiver", "worker", "workspace:destination"),
+        { type: "response", requestId: "r-unattributed", result: "pong" }
+      )
+    ).toThrow(/authenticated origin workspace/);
+  });
 });

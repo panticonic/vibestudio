@@ -1,3 +1,4 @@
+import { readWorkspacePushScope } from "./workspacePushScope.js";
 import type { ChannelInvite } from "./channelInvites.js";
 
 /**
@@ -71,7 +72,7 @@ export interface AgentMessageNotificationData {
  * device deep-links to `{channelId, messageId}` and, on open, acknowledges
  * `notificationId` — the same acknowledgement any other surface would make.
  */
-export type PushUserInboxDataPayload = {
+export type PushUserInboxDataPayload = import("./workspacePushScope.js").WorkspacePushScope & {
   kind: "user-inbox";
   notificationId: string;
   inboxKind: string;
@@ -88,6 +89,7 @@ export function isPushUserInboxDataPayload(value: unknown): value is PushUserInb
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return (
+    readWorkspacePushScope(record) !== null &&
     record["kind"] === "user-inbox" &&
     typeof record["notificationId"] === "string" &&
     typeof record["title"] === "string"

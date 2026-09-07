@@ -643,8 +643,8 @@ describe("initWorkspace", () => {
        VALUES (?, ?, ?, ?, ?)`
     ).run("usr_member", "member", "Member", "member", 1);
     db.prepare(
-      `INSERT INTO membership (user_id, workspace_id, added_by, added_at)
-       VALUES (?, ?, ?, ?)`
+      `INSERT INTO membership (user_id, workspace_id, added_by, added_at, role)
+       VALUES (?, ?, ?, ?, 'member')`
     ).run("usr_member", entry.workspaceId, "usr_member", 1);
     db.prepare(
       `INSERT INTO user_workspace_targets (user_id, workspace_id, last_opened)

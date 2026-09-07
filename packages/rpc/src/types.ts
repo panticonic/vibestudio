@@ -235,6 +235,13 @@ export interface AuthenticatedCaller {
   callerId: string;
   callerKind: CallerKind | "unknown";
   /**
+   * Stable identity of the workspace that owns this caller. Trust-boundary
+   * transports replace caller-supplied values with the workspace verified for
+   * the authenticated session. This is attribution, not a principal kind or
+   * an authority grant.
+   */
+  workspaceId?: string;
+  /**
    * Stable visible panel slot for panel callers whose runtime `callerId` is a
    * per-navigation entity. Only the trusted server/bridge stamps this field.
    */
@@ -298,7 +305,17 @@ export type StreamingMethodHandler = (
   abortSignal: AbortSignal
 ) => Promise<void>;
 
-export interface RpcCallOptions {
+export interface RpcTargetOptions {
+  /**
+   * Route this operation to one exact workspace. Omission means the caller's
+   * current workspace; transports must not search other workspaces by target
+   * name. This caller-selected destination is distinct from the authenticated
+   * origin at `delivery.caller.workspaceId`.
+   */
+  targetWorkspaceId?: string;
+}
+
+export interface RpcCallOptions extends RpcTargetOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   idempotencyKey?: string;
@@ -319,7 +336,7 @@ export interface RpcCallOptions {
   authorityAcquisition?: "wait" | "return";
 }
 
-export interface RpcStreamOptions {
+export interface RpcStreamOptions extends RpcTargetOptions {
   signal?: AbortSignal;
   idempotencyKey?: string;
   /** Override the transport's deadline for receiving response headers. */
@@ -379,6 +396,8 @@ export interface RpcCaller {
 export interface RpcEnvelope {
   from: string;
   target: string;
+  /** Exact destination workspace. Omission keeps routing workspace-local. */
+  targetWorkspaceId?: string;
   delivery: {
     caller: AuthenticatedCaller;
     idempotencyKey?: string;
@@ -493,6 +512,7 @@ export interface RpcPeer<
   TEmitEvents extends EventMap = TEvents,
 > {
   readonly id: string;
+  readonly targetWorkspaceId?: string;
   readonly call: TypedCallProxy<TMethods>;
   on<K extends keyof TEvents & string>(
     event: K,
@@ -520,6 +540,8 @@ export type RpcContract = Record<
 
 export interface RpcClientConfig {
   selfId: string;
+  /** Workspace identity attached to this client's caller attribution. */
+  workspaceId?: string;
   transport: EnvelopeRpcTransport;
   /**
    * Optional default deadline for the response HEAD and subsequent body-frame
@@ -576,7 +598,8 @@ export interface RpcClient {
     TEvents extends EventMap = EventMap,
     TEmitEvents extends EventMap = TEvents,
   >(
-    targetId: string
+    targetId: string,
+    options?: RpcTargetOptions
   ): RpcPeer<TMethods, TEvents, TEmitEvents>;
   status(): RpcConnectionStatus;
   ready(): Promise<void>;

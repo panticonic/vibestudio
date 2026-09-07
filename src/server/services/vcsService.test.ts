@@ -121,7 +121,26 @@ describe("canonical vcsService", () => {
   it("exposes exactly the canonical public semantic methods", () => {
     const { definition } = service();
     expect(Object.keys(definition.methods).sort()).toEqual(Object.keys(vcsMethods).sort());
-    expect(Object.keys(definition.methods)).toHaveLength(26);
+    expect(Object.keys(definition.methods)).toHaveLength(27);
+  });
+
+  it("reads current main metadata without granting access to its content", async () => {
+    const { definition, semanticCall } = service({ result: EVENT, referencesReachable: false });
+    await expect(definition.handler(agentContext(), "mainState", [])).resolves.toEqual(EVENT);
+    expect(semanticCall).toHaveBeenCalledWith("vcsMainState", {
+      input: undefined,
+      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+    });
+    await expect(
+      definition.handler(agentContext(), "readFile", [
+        {
+          state: EVENT,
+          repositoryId: "repo:private",
+          file: { kind: "path", path: "private.txt" },
+        },
+      ])
+    ).rejects.toThrow("unavailable from the caller's reachable context graph");
+    expect(semanticCall).toHaveBeenCalledTimes(1);
   });
 
   it("forwards only input and the exact per-call causal edge", async () => {

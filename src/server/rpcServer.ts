@@ -1,3 +1,4 @@
+import { isLocalWorkspaceTarget, WORKSPACE_RPC_NOT_ADMITTED } from "./rpcServer/workspaceTarget.js";
 /**
  * RPC session server — handles caller-scoped app, panel, worker, extension,
  * shell-host and server communication over loopback WebSocket or remote Iroh.
@@ -269,13 +270,15 @@ function envelopeForWsDelivery(
   fromId: string,
   fromKind: CallerKind | "unknown",
   targetId: string,
-  message: RpcMessage
+  message: RpcMessage,
+  workspaceId?: string
 ): RpcEnvelope {
   return envelopeFromMessage({
     selfId: fromId,
     from: fromId,
     target: targetId,
     callerKind: fromKind,
+    ...(workspaceId ? { caller: { callerId: fromId, callerKind: fromKind, workspaceId } } : {}),
     message,
   });
 }
@@ -714,6 +717,7 @@ export class RpcServer {
                 provider: string;
               };
               methodTier: "open" | "gated" | "critical";
+              methodCrossWorkspace?: boolean;
               methodExecution?: { harness: "attested-system-test" };
               principals: readonly import("@vibestudio/rpc").PrincipalKind[];
               presentation: {
@@ -749,6 +753,7 @@ export class RpcServer {
               provider: string;
             };
             methodTier: "open" | "gated" | "critical";
+            methodCrossWorkspace?: boolean;
             methodExecution?: { harness: "attested-system-test" };
             principals: readonly import("@vibestudio/rpc").PrincipalKind[];
             presentation: {
@@ -828,6 +833,13 @@ export class RpcServer {
        * policy; every attempt to address another runtime does.
        */
       relayAuthorization?: RelayAuthorizationPolicy;
+      /** Live membership and hard policy ceiling, before export lookup or approval. */
+      assertWorkspaceRpcAccess?: (input: {
+        caller: VerifiedCaller;
+        target: string;
+        operation: string;
+        purpose: "call" | "discover";
+      }) => void;
       connectionGrants?: ConnectionGrantService;
       resolveExtensionInvocation?: (
         extensionName: string,
@@ -892,6 +904,7 @@ export class RpcServer {
     }
     this.dispatcher = deps.dispatcher;
     this.streamingRelay = new StreamingRelay({
+      workspaceId: deps.workspaceId,
       dispatcher: deps.dispatcher,
       egressProxy: deps.egressProxy,
       authenticateHttp: (req) => this.authenticateHttpRequest(req),
@@ -928,6 +941,7 @@ export class RpcServer {
         this.relayTargetStream(caller, envelope, request, causalParent, signal),
     });
     this.httpRpc = new HttpRpcHandler({
+      workspaceId: deps.workspaceId,
       maxBodyBytes: resolveRpcMaxBodyBytes(process.env["VIBESTUDIO_RPC_MAX_BODY_BYTES"]),
       authenticate: (req) => this.authenticateHttpRequest(req),
       handleStreamingRequest: (req, res) => this.streamingRelay.handleHttpRequest(req, res),
@@ -1047,6 +1061,7 @@ export class RpcServer {
       executionSession?.taskAuthority ?? this.deps.taskAuthorityForRuntime?.(callerId);
     const withTaskAuthority = {
       ...verified,
+      ...(this.deps.workspaceId ? { workspaceId: this.deps.workspaceId } : {}),
       ...(taskAuthority ? { taskAuthority } : {}),
     };
     return code && (this.deps.isCodeApproved?.(code) ?? true)
@@ -1429,6 +1444,9 @@ export class RpcServer {
    * both of which already resolve the active entity for every request.
    */
   private withLiveRuntimeRelationships(caller: VerifiedCaller): VerifiedCaller {
+    // A peer host owns its caller's live relationships. A same-named local
+    // entity must never substitute its channel/context onto a foreign caller.
+    if (caller.workspaceId && caller.workspaceId !== this.deps.workspaceId) return caller;
     if (caller.runtime.kind !== "worker" && caller.runtime.kind !== "do") return caller;
     const active = this.deps.entityCache?.resolveActive(caller.runtime.id);
     if (!active) return caller;
@@ -2310,6 +2328,16 @@ export class RpcServer {
           return;
         }
         const envelope = stampEnvelopeCaller(inboundEnvelope, authenticatedCallerOf(client.caller));
+        if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
+          this.sendRouteError(
+            client,
+            envelope.target,
+            envelope.message,
+            createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
+            envelope.targetWorkspaceId
+          );
+          return;
+        }
         const rpcMessage = envelope.message;
         if (msg.streamBody) {
           if (rpcMessage.type !== "stream-request" || !client.uploadBodies) {
@@ -2364,6 +2392,16 @@ export class RpcServer {
           msg.envelope,
           authenticatedCallerOf(client.caller)
         );
+        if (!isLocalWorkspaceTarget(routeEnvelope, this.deps.workspaceId)) {
+          this.sendRouteError(
+            client,
+            routeEnvelope.target,
+            routeEnvelope.message,
+            createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
+            routeEnvelope.targetWorkspaceId
+          );
+          return;
+        }
         void this.handleRoute(
           client,
           routeEnvelope.target,
@@ -2445,12 +2483,16 @@ export class RpcServer {
     if (!parsed) {
       this.sendToSession(client.ws, {
         type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: request.requestId,
-          error: `Invalid method format: "${request.method}". Expected "service.method"`,
-          errorKind: "protocol",
-        }),
+        envelope: responseEnvelopeFor(
+          envelope,
+          { ...SERVER_RESPONDER, workspaceId: this.deps.workspaceId },
+          {
+            type: "response",
+            requestId: request.requestId,
+            error: `Invalid method format: "${request.method}". Expected "service.method"`,
+            errorKind: "protocol",
+          }
+        ),
       });
       return;
     }
@@ -2480,24 +2522,32 @@ export class RpcServer {
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
       this.sendToSession(client.ws, {
         type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: request.requestId,
-          result,
-        }),
+        envelope: responseEnvelopeFor(
+          envelope,
+          { ...SERVER_RESPONDER, workspaceId: this.deps.workspaceId },
+          {
+            type: "response",
+            requestId: request.requestId,
+            result,
+          }
+        ),
       });
     } catch (error) {
       const errorCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
       this.sendToSession(client.ws, {
         type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: request.requestId,
-          error: error instanceof Error ? error.message : String(error),
-          errorKind: rpcErrorKindOf(error, "internal"),
-          ...(errorCode ? { errorCode } : {}),
-          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-        }),
+        envelope: responseEnvelopeFor(
+          envelope,
+          { ...SERVER_RESPONDER, workspaceId: this.deps.workspaceId },
+          {
+            type: "response",
+            requestId: request.requestId,
+            error: error instanceof Error ? error.message : String(error),
+            errorKind: rpcErrorKindOf(error, "internal"),
+            ...(errorCode ? { errorCode } : {}),
+            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          }
+        ),
       });
     } finally {
       // `sendToSession` above synchronously queues the response. A concurrent token
@@ -2733,21 +2783,28 @@ export class RpcServer {
     client: WsClientState,
     targetId: string,
     message: RpcMessage,
-    err: unknown
+    err: unknown,
+    targetWorkspaceId?: string
   ): void {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorCode = getErrorCode(err);
     if (message.type === "request") {
       this.sendToSession(client.ws, {
         type: "ws:routed",
-        envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
-          type: "response",
-          requestId: message.requestId,
-          error: errorMessage,
-          errorKind: rpcErrorKindOf(err, "transport"),
-          ...(errorCode ? { errorCode } : {}),
-          ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-        }),
+        envelope: envelopeForWsDelivery(
+          targetId,
+          "unknown",
+          client.caller.runtime.id,
+          {
+            type: "response",
+            requestId: message.requestId,
+            error: errorMessage,
+            errorKind: rpcErrorKindOf(err, "transport"),
+            ...(errorCode ? { errorCode } : {}),
+            ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+          },
+          targetWorkspaceId ?? this.deps.workspaceId
+        ),
       });
       return;
     }
@@ -2755,19 +2812,25 @@ export class RpcServer {
     if (message.type === "stream-request") {
       this.sendToSession(client.ws, {
         type: "ws:routed",
-        envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
-          type: "stream-frame",
-          requestId: message.requestId,
-          fromId: targetId,
-          frameType: FRAME_ERROR,
-          payload: JSON.stringify({
-            status: 403,
-            message: errorMessage,
-            code: errorCode,
-            errorKind: rpcErrorKindOf(err, "transport"),
-            ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
-          }),
-        }),
+        envelope: envelopeForWsDelivery(
+          targetId,
+          "unknown",
+          client.caller.runtime.id,
+          {
+            type: "stream-frame",
+            requestId: message.requestId,
+            fromId: targetId,
+            frameType: FRAME_ERROR,
+            payload: JSON.stringify({
+              status: 403,
+              message: errorMessage,
+              code: errorCode,
+              errorKind: rpcErrorKindOf(err, "transport"),
+              ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
+            }),
+          },
+          targetWorkspaceId ?? this.deps.workspaceId
+        ),
       });
       return;
     }
@@ -2777,6 +2840,7 @@ export class RpcServer {
         callerId: client.caller.runtime.id,
         callerKind: client.caller.runtime.kind,
         targetId,
+        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
         requestId: message.requestId,
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
@@ -2785,6 +2849,7 @@ export class RpcServer {
       this.sendToSession(client.ws, {
         type: "ws:routed-response-error",
         targetId,
+        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
         requestId: message.requestId,
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
@@ -2802,6 +2867,7 @@ export class RpcServer {
         callerId: client.caller.runtime.id,
         callerKind: client.caller.runtime.kind,
         targetId,
+        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
         event: eventMessage.event,
         fromId: eventMessage.fromId,
         error: errorMessage,
@@ -2810,6 +2876,7 @@ export class RpcServer {
       this.sendToSession(client.ws, {
         type: "ws:routed-event-error",
         targetId,
+        ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
         event: eventMessage.event,
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
@@ -3559,6 +3626,19 @@ export class RpcServer {
     if (!workspaceId) {
       throw new Error("Direct DO relay requires an authority workspace identity");
     }
+    const foreign =
+      input.caller.workspaceId !== undefined && input.caller.workspaceId !== workspaceId;
+    if (foreign) {
+      if (!this.deps.assertWorkspaceRpcAccess) {
+        throw createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES");
+      }
+      this.deps.assertWorkspaceRpcAccess({
+        caller: input.caller,
+        target: `do:${input.ref.source}:${input.ref.className}:${input.ref.objectKey}`,
+        operation: input.method,
+        purpose: "call",
+      });
+    }
     const workspaceAuthorities = input.method.startsWith("__event:")
       ? []
       : await this.deps.resolveWorkspaceDirectAuthority?.({
@@ -3573,6 +3653,9 @@ export class RpcServer {
       );
     }
     const workspaceAuthority = workspaceAuthorities?.[0];
+    if (foreign && workspaceAuthority?.methodCrossWorkspace !== true) {
+      throw createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES");
+    }
     const productPolicy = productBuiltinMethodPolicy(
       input.ref.source,
       input.ref.className,
@@ -3860,6 +3943,8 @@ export class RpcServer {
     const leaves = [...staticLeaves, ...preparedLeaves];
     const snapshotFor = (leaf: (typeof leaves)[number]) =>
       createInvocationSnapshot({
+        workspaceId,
+        sourceWorkspaceId: leaf.context.sourceWorkspaceId ?? workspaceId,
         service: `direct:${input.ref.source}:${input.ref.className}`,
         method: input.method,
         capability: leaf.capability,
@@ -4258,6 +4343,9 @@ export class RpcServer {
             callerKind,
             ...(callerPanelId ? { callerPanelId } : {}),
             ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+            ...(authenticatedCaller.workspaceId
+              ? { callerWorkspaceId: authenticatedCaller.workspaceId }
+              : {}),
             authorization,
             ...(meta?.requestId ? { requestId: meta.requestId } : {}),
             ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
@@ -4390,6 +4478,9 @@ export class RpcServer {
           callerKind: caller.runtime.kind,
           ...(callerPanelId ? { callerPanelId } : {}),
           ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+          ...(authenticatedCaller.workspaceId
+            ? { callerWorkspaceId: authenticatedCaller.workspaceId }
+            : {}),
           authorization,
           requestId: request.requestId,
           ...(envelope.delivery.idempotencyKey
@@ -4572,6 +4663,9 @@ export class RpcServer {
         callerId: fromId,
         callerKind: fromKind,
         ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+        ...(authenticatedCaller.workspaceId
+          ? { callerWorkspaceId: authenticatedCaller.workspaceId }
+          : {}),
         authorization,
         onWorkReady: (queues) => this.workReadyObserver?.({ owner: ref, queues }),
       });
@@ -4697,6 +4791,24 @@ export class RpcServer {
       );
       ws.terminate();
       return;
+    }
+    if (
+      (msg.type === "ws:rpc" || msg.type === "ws:routed") &&
+      this.deps.workspaceId &&
+      !msg.envelope.delivery.caller.workspaceId
+    ) {
+      // This server owns these local deliveries. An admitted remote reply
+      // already carries its authenticated workspace and keeps that identity.
+      msg = {
+        ...msg,
+        envelope: {
+          ...msg.envelope,
+          delivery: {
+            ...msg.envelope.delivery,
+            caller: { ...msg.envelope.delivery.caller, workspaceId: this.deps.workspaceId },
+          },
+        },
+      };
     }
     ws.sendMessage(msg);
   }

@@ -30,6 +30,11 @@ import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
+import {
+  approvalVisibleToUser,
+  isHostApprovalObserver,
+  type ApprovalWorkspaceAccess,
+} from "@vibestudio/shared/approvalVisibility";
 
 /**
  * The surface a resolution arrived from (WP5 §5). Derived from the transport
@@ -76,6 +81,7 @@ export function createShellApprovalService(deps: {
   deviceLabelFor?: (deviceId: string) => string | undefined;
   workspaceCreationReviewState?: () => WorkspaceCreationReviewState;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  workspaceAccess?: ApprovalWorkspaceAccess;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
@@ -83,6 +89,19 @@ export function createShellApprovalService(deps: {
   const workspaceCreationReviewState =
     deps.workspaceCreationReviewState ?? (() => ({ status: "resolved" as const }));
   const serviceName = "shellApproval";
+  const pendingFor = (ctx: ServiceContext) => {
+    const owner = {
+      userId: ctx.caller.subject?.userId,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
+    };
+    const pending = approvalQueue.listPending();
+    if (isHostApprovalObserver(owner)) return pending;
+    if (!owner.userId || !deps.workspaceAccess) return [];
+    return pending.filter((approval) =>
+      approvalVisibleToUser(approval, owner.userId!, deps.workspaceAccess!)
+    );
+  };
   const preparePresenter = (capability: string) => (ctx: ServiceContext) => {
     if (
       isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability }) ||
@@ -107,9 +126,7 @@ export function createShellApprovalService(deps: {
     },
     handler: defineServiceHandler(serviceName, shellApprovalMethods, {
       resolve: async (ctx, [approvalId, decision]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
+        const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
         if (!pending) {
           throw new ServiceError(serviceName, "resolve", "No pending approval found", "ENOENT");
         }
@@ -127,9 +144,7 @@ export function createShellApprovalService(deps: {
         metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
       },
       resolveInstallReview: async (ctx, [approvalId, resolution]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
+        const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
         if (!pending || pending.kind !== "unit-install-review") {
           throw new ServiceError(
             serviceName,
@@ -159,9 +174,7 @@ export function createShellApprovalService(deps: {
         return result;
       },
       resolveTaskRules: async (ctx, [approvalId, resolution]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
+        const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
         if (!pending || pending.kind !== "capability" || pending.cardType !== "task.rules") {
           throw new ServiceError(
             serviceName,
@@ -208,9 +221,7 @@ export function createShellApprovalService(deps: {
         // result makes already-settled ids explicit; retrying the same snapshot
         // can therefore skip them and converge on the remaining approvals.
         for (const approvalId of approvalIds) {
-          const pending = approvalQueue
-            .listPending()
-            .find((approval) => approval.approvalId === approvalId);
+          const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
           if (!pending || !isBootstrapUnitApproval(pending)) {
             results.push({ approvalId, status: "not-pending" });
             continue;
@@ -228,9 +239,7 @@ export function createShellApprovalService(deps: {
         return results;
       },
       submitClientConfig: async (ctx, [approvalId, values]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
+        const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
         if (!pending || pending.kind !== "client-config") {
           throw new ServiceError(
             serviceName,
@@ -247,9 +256,7 @@ export function createShellApprovalService(deps: {
         metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
       },
       submitCredentialInput: async (ctx, [approvalId, values]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
+        const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
         if (!pending || pending.kind !== "credential-input") {
           throw new ServiceError(
             serviceName,
@@ -266,9 +273,7 @@ export function createShellApprovalService(deps: {
         metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
       },
       submitSecretInput: async (ctx, [approvalId, values]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
+        const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
         if (!pending || pending.kind !== "secret-input") {
           throw new ServiceError(
             serviceName,
@@ -284,7 +289,7 @@ export function createShellApprovalService(deps: {
         );
         metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
       },
-      listPending: () => approvalQueue.listPending(),
+      listPending: (ctx) => pendingFor(ctx),
       getWorkspaceCreationReviewState: () => workspaceCreationReviewState(),
     }),
   };

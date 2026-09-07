@@ -125,16 +125,19 @@ describe("events.watch", () => {
 
   it("emits state snapshots after the watch ACK", async () => {
     const events = new EventService();
+    const provideSnapshot = vi.fn((_ctx: ServiceContext) => snapshot);
     const service = createEventsServiceDefinition(events, {
-      snapshots: { [EVENT]: () => snapshot },
+      snapshots: { [EVENT]: provideSnapshot },
     });
-    const watch = await open(service, context("do:test:snapshot", "request:snapshot"));
+    const ctx = context("do:test:snapshot", "request:snapshot", { userId: "alice" });
+    const watch = await open(service, ctx);
 
     await expect(watch.records.next()).resolves.toMatchObject({ value: { kind: "watching" } });
     await expect(watch.records.next()).resolves.toEqual({
       done: false,
       value: { kind: "snapshot", event: EVENT, payload: snapshot, sequence: 0 },
     });
+    expect(provideSnapshot).toHaveBeenCalledWith(ctx);
     await watch.records.return();
   });
 

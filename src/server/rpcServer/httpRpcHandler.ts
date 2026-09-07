@@ -2,6 +2,7 @@ import {
   rpcErrorDataOf,
   rpcErrorKindOf,
   responseEnvelopeFor,
+  stampEnvelopeCaller,
   type RpcEnvelope,
   type RpcEvent,
   type RpcRequest,
@@ -10,6 +11,7 @@ import {
 import type { AgentBinding } from "@vibestudio/identity/types";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isLocalWorkspaceTarget, WORKSPACE_RPC_NOT_ADMITTED } from "./workspaceTarget.js";
 
 const DEFAULT_RPC_MAX_BODY_BYTES = 256 * 1024 * 1024;
 const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
@@ -26,6 +28,7 @@ export type HttpRpcAdmission =
   | { ok: false; status: number; body: Record<string, unknown> };
 
 export interface HttpRpcHandlerDeps {
+  workspaceId?: string;
   maxBodyBytes: number;
   authenticate(req: IncomingMessage): HttpRpcAdmission;
   handleStreamingRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
@@ -146,14 +149,29 @@ export class HttpRpcHandler {
       return;
     }
 
-    // Envelope caller fields are self-reported. Only `admission.caller`,
-    // derived at the host boundary, reaches the dispatch callbacks.
-    const message = envelope.message;
-    if (!message || typeof message !== "object" || typeof message.type !== "string") {
+    if (
+      !envelope ||
+      typeof envelope !== "object" ||
+      !envelope.message ||
+      typeof envelope.message !== "object" ||
+      typeof envelope.message.type !== "string"
+    ) {
       writeJson(res, 400, { error: "Expected an RpcEnvelope body with a message" });
       releaseTransport();
       return;
     }
+    if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
+      writeJson(res, 403, { error: WORKSPACE_RPC_NOT_ADMITTED, code: "EACCES" });
+      releaseTransport();
+      return;
+    }
+    // Caller fields are self-reported until replaced by transport admission.
+    envelope = stampEnvelopeCaller(envelope, {
+      callerId: admission.caller.callerId,
+      callerKind: admission.caller.callerKind,
+      ...(this.deps.workspaceId ? { workspaceId: this.deps.workspaceId } : {}),
+    });
+    const message = envelope.message;
 
     if (message.type === "event") {
       try {
@@ -208,15 +226,19 @@ export class HttpRpcHandler {
       writeJson(
         res,
         200,
-        responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: message.requestId,
-          // `undefined` is the in-process result of a void RPC, but JSON drops
-          // object properties whose value is undefined. The wire contract
-          // requires every successful response to carry `result`, so encode
-          // void explicitly instead of emitting a malformed success envelope.
-          result: result === undefined ? null : result,
-        })
+        responseEnvelopeFor(
+          envelope,
+          { ...SERVER_RESPONDER, workspaceId: this.deps.workspaceId },
+          {
+            type: "response",
+            requestId: message.requestId,
+            // `undefined` is the in-process result of a void RPC, but JSON drops
+            // object properties whose value is undefined. The wire contract
+            // requires every successful response to carry `result`, so encode
+            // void explicitly instead of emitting a malformed success envelope.
+            result: result === undefined ? null : result,
+          }
+        )
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -225,15 +247,19 @@ export class HttpRpcHandler {
       writeJson(
         res,
         200,
-        responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: message.requestId,
-          error: errorMessage,
-          errorKind: rpcErrorKindOf(error, "internal"),
-          ...(errorCode ? { errorCode } : {}),
-          ...(errorStack ? { errorStack } : {}),
-          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-        })
+        responseEnvelopeFor(
+          envelope,
+          { ...SERVER_RESPONDER, workspaceId: this.deps.workspaceId },
+          {
+            type: "response",
+            requestId: message.requestId,
+            error: errorMessage,
+            errorKind: rpcErrorKindOf(error, "internal"),
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorStack ? { errorStack } : {}),
+            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+          }
+        )
       );
     } finally {
       req.removeListener("aborted", abortDisconnectedTransport);

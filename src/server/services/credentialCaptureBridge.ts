@@ -24,22 +24,22 @@ export interface CredentialCaptureBridge {
    * error, or when no shell is attached (`code: "desktop-attachment-required"`).
    */
   captureSessionCredential<T extends Record<string, unknown>>(
+    userId: string,
     payload: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<T>;
   /** Shell-side completion callback (dispatched from `credentials.completeCapture`). */
-  completeCapture(captureId: string, response: Record<string, unknown>): void;
+  completeCapture(userId: string, captureId: string, response: Record<string, unknown>): void;
 }
 
 interface PendingCapture {
+  userId: string;
   resolve: (value: Record<string, unknown>) => void;
   reject: (error: Error) => void;
 }
 
 export function createCredentialCaptureBridge(deps: {
-  eventService: EventService;
-  /** Whether any shell-kind client is currently connected. */
-  hasConnectedShell: () => boolean;
+  eventService: Pick<EventService, "emitToUser">;
   timeoutMs?: number;
 }): CredentialCaptureBridge {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
@@ -47,19 +47,12 @@ export function createCredentialCaptureBridge(deps: {
 
   return {
     captureSessionCredential<T extends Record<string, unknown>>(
+      userId: string,
       payload: Record<string, unknown>,
       signal?: AbortSignal
     ): Promise<T> {
-      if (!deps.hasConnectedShell()) {
-        return Promise.reject(
-          Object.assign(
-            new Error(
-              "Session credential capture requires the desktop app to be attached to this server"
-            ),
-            { code: DESKTOP_ATTACHMENT_REQUIRED }
-          )
-        );
-      }
+      if (!userId)
+        return Promise.reject(new Error("Credential capture requires an authenticated user"));
       if (signal?.aborted) {
         return Promise.reject(new Error("Session credential capture aborted"));
       }
@@ -75,6 +68,7 @@ export function createCredentialCaptureBridge(deps: {
         };
         const onAbort = () => finish(() => reject(new Error("Session credential capture aborted")));
         pending.set(captureId, {
+          userId,
           resolve: (value) => finish(() => resolve(value as T)),
           reject: (error) => finish(() => reject(error)),
         });
@@ -84,15 +78,33 @@ export function createCredentialCaptureBridge(deps: {
         );
         timer.unref?.();
         signal?.addEventListener("abort", onAbort, { once: true });
-        deps.eventService.emit("credential:capture-request", {
-          captureId,
-          ...payload,
-        } as never);
+        const delivered = deps.eventService.emitToUser(
+          userId,
+          "credential:capture-request",
+          {
+            ...payload,
+            captureId,
+            userId,
+          } as never,
+          ["shell"]
+        );
+        if (!delivered) {
+          finish(() =>
+            reject(
+              Object.assign(
+                new Error(
+                  "Session credential capture requires your desktop app to be attached to Personal"
+                ),
+                { code: DESKTOP_ATTACHMENT_REQUIRED }
+              )
+            )
+          );
+        }
       });
     },
-    completeCapture(captureId: string, response: Record<string, unknown>): void {
+    completeCapture(userId: string, captureId: string, response: Record<string, unknown>): void {
       const entry = pending.get(captureId);
-      if (!entry) {
+      if (!entry || entry.userId !== userId) {
         throw new Error(`No pending credential capture for id ${captureId}`);
       }
       if (response["error"] != null) {

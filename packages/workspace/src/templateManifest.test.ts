@@ -54,7 +54,7 @@ template: { name: Test }
     ).toThrow(/missing path/);
   });
 
-  it("lets only a dependency-free root initialize the workspace template registry", () => {
+  it("carries the template registry into the self-contained runtime", () => {
     const registry = {
       url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
       ref: "refs/heads/main",
@@ -64,36 +64,17 @@ template: { name: Test }
 template:
   repositories: []
   files: []
-templates:
-  use: []
-  registry:
-    url: ${registry.url}
-    ref: ${registry.ref}
+templateRegistry:
+  url: ${registry.url}
+  ref: ${registry.ref}
 `,
       WORKSPACE_SYSTEM_EPOCH
     );
-    expect(root.top.templates?.registry).toEqual(registry);
-    expect(root.fragment).not.toHaveProperty("templates");
-
-    expect(() =>
-      parseTemplateManifestContent(
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
-template:
-  repositories: []
-  files: []
-templates:
-  use:
-    - url: git+https://example.test/base.git
-  registry:
-    url: ${registry.url}
-    ref: ${registry.ref}
-`,
-        WORKSPACE_SYSTEM_EPOCH
-      )
-    ).toThrow(/cannot replace the workspace template registry/u);
+    expect(root.top.templateRegistry).toEqual(registry);
+    expect(rootRuntimeFromTemplateManifest(root).templateRegistry).toEqual(registry);
   });
 
-  it("generates the flattened root through ordinary composition semantics", () => {
+  it("projects a workspace snapshot manifest directly into its runtime", () => {
     const root = parseTemplateManifestContent(
       `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
 template:
@@ -103,12 +84,37 @@ routes: []
 providers:
   evalRuntime:
     source: "@workspace/runtime"
+trust:
+  chromeApps: [apps/shell]
+git:
+  remotes:
+    projects:
+      default:
+        origin:
+          url: https://EXAMPLE.test/source
+  upstreams:
+    projects:
+      default:
+        remote: origin
+        branch: main
 `,
       WORKSPACE_SYSTEM_EPOCH
     );
 
     expect(canonicalTemplateYaml(rootRuntimeFromTemplateManifest(root))).toBe(
-      `providers:\n  evalRuntime:\n    source: \"@workspace/runtime\"\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`
+      `git:\n  remotes:\n    projects:\n      default:\n        origin:\n          url: https://example.test/source\n  upstreams:\n    projects:\n      default:\n        branch: main\n        remote: origin\nproviders:\n  evalRuntime:\n    source: "@workspace/runtime"\nroutes: []\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntrust:\n  chromeApps:\n    - apps/shell\n`
     );
+  });
+
+  it("rejects composition-only fields at manifest parsing", () => {
+    expect(() => parseTemplateManifestContent(
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
+template:
+  repositories: []
+  files: []
+disable: [routes/example]
+`,
+      WORKSPACE_SYSTEM_EPOCH
+    )).toThrow(/unrecognized key.*disable/ui);
   });
 });

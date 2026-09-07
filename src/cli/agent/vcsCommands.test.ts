@@ -160,6 +160,17 @@ describe("canonical VCS CLI", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
+  it("reads main without an input object or context mutation", async () => {
+    fixture.handler = (method, args) => {
+      expect(method).toBe("vcs.mainState");
+      expect(args).toEqual([]);
+      return { kind: "event", eventId: "event:main" };
+    };
+    const command = findCommand(vcsCommands, "vcs", "main-state")!;
+    await expect(command.run(parseInvocation(command, ["--json"]), [])).resolves.toBe(0);
+    expect(fixture.calls).toEqual([{ method: "vcs.mainState", args: [] }]);
+  });
+
   it("exposes only the reduced semantic workflows", () => {
     const names = vcsCommands
       .filter((command) => command.group === "vcs")

@@ -134,24 +134,6 @@ export const WorkspaceTemplateRegistryDeclarationSchema: z.ZodType<WorkspaceTemp
     })
     .strict();
 
-export const WorkspaceTemplatesConfigSchema = z
-  .object({
-    use: z.array(WorkspaceTemplateDeclarationSchema),
-    overrides: z.record(WorkspaceTemplatePinSchema).optional(),
-    registry: WorkspaceTemplateRegistryDeclarationSchema.optional(),
-    suggestionDecisions: z
-      .record(
-        z
-          .object({
-            digest: WorkspaceGitSnapshotSchema,
-            decision: z.enum(["accepted", "declined"]),
-          })
-          .strict()
-      )
-      .optional(),
-  })
-  .strict();
-
 // A template's name and one-sentence description, as the template says them.
 //
 // These two strings are the only self-asserted text this system carries about a
@@ -315,6 +297,7 @@ export const WorkspaceConfigSchema = z
   .object({
     id: z.string(),
     systemEpoch: z.number().int().nonnegative(),
+    templateRegistry: WorkspaceTemplateRegistryDeclarationSchema.optional(),
     defaultRepo: z.string().optional(),
     git: z
       .object({
@@ -408,10 +391,8 @@ export const WorkspaceConfigSchema = z
 
 const WorkspaceConfigManifestShape = WorkspaceConfigSchema.omit({ id: true });
 
-/** Userland-authored composition source stored in `meta/templates/workspace.yml`. */
+/** A publishable workspace source manifest with self-asserted presentation. */
 export const WorkspaceConfigTopLayerSchema = WorkspaceConfigManifestShape.extend({
-  templates: WorkspaceTemplatesConfigSchema.optional(),
-  disable: z.array(z.string().trim().min(1)).optional(),
   /**
    * What a template calls itself, read only out of a template's own manifest.
    *
@@ -423,100 +404,6 @@ export const WorkspaceConfigTopLayerSchema = WorkspaceConfigManifestShape.extend
    */
   template: WorkspaceTemplatePresentationSchema.optional(),
 }).strict();
-
-/**
- * Sanitized template-owned layer. Template relationships are resolver input,
- * while trust/provider grants and concrete Git credentials are never accepted
- * as inherited configuration.
- */
-export const WorkspaceConfigFragmentSchema = WorkspaceConfigManifestShape.omit({
-  trust: true,
-  providers: true,
-})
-  .extend({
-    git: z
-      .object({
-        remotes: z.record(z.record(z.record(WorkspaceGitRemoteDeclarationSchema))).optional(),
-        upstreams: z
-          .record(
-            z.record(
-              WorkspaceGitUpstreamSchema.omit({
-                authorEmail: true,
-                authorName: true,
-              })
-            )
-          )
-          .optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
-const WorkspaceTemplateStateNodeSchema = z
-  .object({
-    nodeId: z.string().regex(/^t-[0-9a-f]+$/),
-    alias: z.string().trim().min(1),
-    pin: WorkspaceTemplatePinSchema,
-    parents: z.array(z.string().regex(/^t-[0-9a-f]+$/)),
-    fragment: z.string().min(1),
-    /**
-     * The node's self-given name and sentence, already sanitized.
-     *
-     * It lives in relationship state rather than in the fragment so status and
-     * provenance surfaces do not need to reinterpret runtime configuration.
-     */
-    presentation: z
-      .object({
-        name: z.string().optional(),
-        description: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    suggestions: z
-      .object({
-        trust: z
-          .object({
-            digest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
-            value: z.unknown(),
-          })
-          .strict()
-          .optional(),
-        providers: z
-          .object({
-            digest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
-            value: z.unknown(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict(),
-  })
-  .strict();
-
-export const WorkspaceTemplateStateSchema = z
-  .object({
-    version: z.literal(1),
-    /** The normalized workspace-authored relationship declaration. */
-    roots: z.array(WorkspaceTemplateDeclarationSchema),
-    overrides: z.record(WorkspaceTemplatePinSchema),
-    nodes: z.array(WorkspaceTemplateStateNodeSchema),
-    repositories: z.record(
-      z
-        .object({
-          contributions: z.array(
-            z
-              .object({
-                nodeId: z.string().regex(/^t-[0-9a-f]+$/),
-                subtreeDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
-              })
-              .strict()
-          ),
-        })
-        .strict()
-    ),
-  })
-  .strict();
 
 export const WorkspaceCreationDescriptorSchema: z.ZodType<WorkspaceCreationDescriptor> = z
   .object({

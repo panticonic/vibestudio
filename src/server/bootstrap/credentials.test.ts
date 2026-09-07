@@ -27,7 +27,7 @@ describe("wireCredentialService", () => {
       sessionGrantStore: inert as CredentialBootstrapDeps["sessionGrantStore"],
       credentialUseGrantStore: inert as CredentialBootstrapDeps["credentialUseGrantStore"],
       credentialLifecycle: inert as CredentialBootstrapDeps["credentialLifecycle"],
-      hasConnectedShell: () => false,
+      isPersonalWorkspaceOwner: () => false,
       getAuthorizingShell: () => null,
       hasAppCapability: () => false,
     });

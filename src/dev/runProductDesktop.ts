@@ -47,15 +47,14 @@ async function main(): Promise<void> {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-start-"));
   try {
     const needsInitialWorkspace = !profileHasWorkspace();
-    const initialBase = needsInitialWorkspace
-      ? ((await resolveDevelopmentBaseSelection({
-          repoRoot,
-          checkpointTarget: path.join(temporaryRoot, "base-checkpoint"),
-        })) ?? undefined)
-      : undefined;
-    if (needsInitialWorkspace && !initialBase) {
+    const distributions =
+      (await resolveDevelopmentBaseSelection({
+        repoRoot,
+        checkpointTarget: path.join(temporaryRoot, "workspace-distributions"),
+      })) ?? undefined;
+    if (!distributions) {
       throw new Error(
-        "The first source launch needs the linked development Base. Run `pnpm dev:base setup`."
+        "A source product launch needs the linked development Base. Run `pnpm dev:base setup`."
       );
     }
     const developmentTemplates = await resolveDevelopmentTemplateSelections({
@@ -66,7 +65,8 @@ async function main(): Promise<void> {
     const env = productDesktopEnvironment({
       parent: process.env,
       repoRoot,
-      ...(initialBase ? { initialBase } : {}),
+      distributions,
+      bootstrapSystem: needsInitialWorkspace,
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
     await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], env);

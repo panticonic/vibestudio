@@ -71,6 +71,13 @@ describe("HeadlessHost lifecycle guards", () => {
     let recover: (() => void | Promise<void>) | null = null;
     const rpc = {
       call: vi.fn(async <T = unknown>(_targetId: string, method: string): Promise<T> => {
+        if (method === "workspace.getInfo") {
+          return {
+            id: "workspace-test", name: "Test", path: "/workspace",
+            statePath: "/state", contextProjectionsPath: "/contexts",
+            config: { id: "workspace-test", systemEpoch: 0 },
+          } as T;
+        }
         if (method === "panelRuntime.getSnapshot") {
           return { version: { epoch: "e1", counter: 0 }, leases: [] } as T;
         }
@@ -125,7 +132,8 @@ describe("HeadlessHost lifecycle guards", () => {
     );
 
     await host.start();
-    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "panelRuntime.registerClient", [
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "workspace.getInfo", []);
+    expect(rpc.call).toHaveBeenNthCalledWith(2, "main", "panelRuntime.registerClient", [
       { ...host.registration, loadOnLeaseAssignment: false },
     ]);
     expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.registerClient", [

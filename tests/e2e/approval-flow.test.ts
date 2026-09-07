@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { EventService } from "@vibestudio/shared/eventsService";
 import {
   createApprovalPushBridge,
   type ApprovalPushBridge,
@@ -72,9 +73,15 @@ async function flushAsyncWork(): Promise<void> {
 }
 async function createHarness(): Promise<Harness> {
   const sentMessages: SentMessage[] = [];
-  const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+  const workspaceAccess = {
+    isMember: (userId: string) => userId === "u-member",
+    isAdmin: () => false,
+  };
+  const approvalQueue = createApprovalQueue({ eventService: new EventService(), workspaceAccess });
   const metrics = createPushMetrics();
   const pushService = createPushService({
+    workspaceId: "ws-test",
+    serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
     registrationsPath: tempRegistrationsPath(),
     firebaseAdminLoader: async () => ({
       send: async (message) => {
@@ -84,7 +91,7 @@ async function createHarness(): Promise<Harness> {
     }),
     metrics,
   });
-  const shellApprovalService = createShellApprovalService({ approvalQueue, metrics });
+  const shellApprovalService = createShellApprovalService({ approvalQueue, metrics, workspaceAccess });
   const services = {
     push: pushService.definition,
     shellApproval: shellApprovalService,
@@ -105,6 +112,7 @@ async function createHarness(): Promise<Harness> {
     // The single member whose devices (mobile + desktop) form the push
     // audience for this workspace's approvals (WP4 §4.4).
     workspaceMemberUserIds: () => ["u-member"],
+    workspaceAccess,
   });
   return {
     approvalQueue,
@@ -118,6 +126,7 @@ async function createHarness(): Promise<Harness> {
 }
 function requestCredentialApproval(queue: ApprovalQueueWithListeners) {
   return queue.request({
+    requestedByUserId: "u-member",
     callerId: "worker:approval-e2e",
     callerKind: "worker",
     repoPath: "/repo",

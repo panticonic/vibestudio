@@ -12,6 +12,7 @@
     "./appArtifacts": "./src/appArtifacts.ts",
     "./approvalContract": "./src/approvalContract.ts",
     "./approvalCopy": "./src/approvalCopy.ts",
+    "./approvalVisibility": "./src/approvalVisibility.ts",
     "./approvalMarkdown": "./src/approvalMarkdown.ts",
     "./approvals": "./src/approvals.ts",
     "./asyncStateConvergenceLoop": "./src/asyncStateConvergenceLoop.ts",
@@ -126,7 +127,8 @@
     "./webhooks/*": "./src/webhooks/*.ts",
     "./ws/*": "./src/ws/*.ts",
     "./nativeRuntimeResources": "./src/nativeRuntimeResources.ts",
-    "./nativeWorkspaceCleanup": "./src/nativeWorkspaceCleanup.ts"
+    "./nativeWorkspaceCleanup": "./src/nativeWorkspaceCleanup.ts",
+    "./workspacePushScope": "./src/workspacePushScope.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/shared/src"

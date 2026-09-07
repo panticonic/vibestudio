@@ -3,6 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  canonicalTemplateYaml,
+  parseTemplateManifestContent,
+  rootRuntimeFromTemplateManifest,
+} from "@vibestudio/workspace/templateManifest";
 import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
 
 const roots: string[] = [];
@@ -36,11 +41,19 @@ function fixture(): { checkout: string; checkpointRoot: string } {
       "  repositories:",
       "    - panels/example",
       "  files: []",
-      "templates:",
-      "  use:",
-      "    - url: git+https://github.com/panticonic/vibestudio-workspace-base.git",
       "",
     ].join("\n")
+  );
+  fs.writeFileSync(
+    path.join(checkout, "meta", "vibestudio.yml"),
+    canonicalTemplateYaml(
+      rootRuntimeFromTemplateManifest(
+        parseTemplateManifestContent(
+          fs.readFileSync(path.join(checkout, "meta", "template.yml"), "utf8"),
+          0
+        )
+      )
+    )
   );
   fs.writeFileSync(path.join(checkout, "panels", "example", "index.ts"), "export const v = 1;\n");
   git(checkout, "init", "-b", "main");
@@ -69,7 +82,6 @@ describe("development template selection", () => {
 
     expect(selection).toMatchObject({
       sourceCheckout: fx.checkout,
-      temporary: true,
       changedPaths: ["panels/example/new.ts"],
       pin: {
         url: "git+https://github.com/acme/example.git",
@@ -81,13 +93,13 @@ describe("development template selection", () => {
     ).toContain("v = 2");
   });
 
-  it("rejects a root template on the optional-template channel", async () => {
+  it("rejects old contribution layers instead of composing them into the developer workspace", async () => {
     const fx = fixture();
     fs.writeFileSync(
       path.join(fx.checkout, "meta", "template.yml"),
       fs
         .readFileSync(path.join(fx.checkout, "meta", "template.yml"), "utf8")
-        .replace(/templates:[\s\S]*$/u, "")
+        .concat("templates:\n  use:\n    - url: git+https://github.com/acme/base.git\n")
     );
     git(fx.checkout, "add", ".");
     git(fx.checkout, "commit", "-m", "root");
@@ -97,6 +109,6 @@ describe("development template selection", () => {
         checkouts: [fx.checkout],
         checkpointRoot: fx.checkpointRoot,
       })
-    ).rejects.toThrow("root-capable");
+    ).rejects.toThrow(/unrecognized key.*templates/iu);
   });
 });

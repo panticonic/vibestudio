@@ -1,4 +1,3 @@
-import YAML from "yaml";
 import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import type {
   ApprovalPreparationProgress,
@@ -15,20 +14,9 @@ import type {
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type {
   InstallReviewOrigin,
-  InstallReviewTemplate,
   UnitInstallSourceOrigin,
 } from "@vibestudio/shared/authority/unitInstallReview";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
-import { multipleTemplateContributorsOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
-import { templateOrigin } from "@vibestudio/origin-identity";
-import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
-import { parseTemplateState } from "@vibestudio/workspace/templateState";
-import {
-  normalizeTemplateGitUrl,
-  templateGitTransportUrl,
-} from "@vibestudio/workspace/templateCoordinates";
-import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
-import { sanitizeTemplateDisplayText } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
@@ -567,195 +555,10 @@ export interface SemanticAdvanceApprovalCandidate {
   via?: string;
 }
 
-const TEMPLATE_STATE_PATH = "meta/templates.state.yml";
-// A heading and a single line under it. Same bounds the manifest schema applies
-// on the way in, restated here because display text is always sanitized where
-// it crosses into the host-owned review surface.
-const TEMPLATE_NAME_MAX = 60;
-const TEMPLATE_PURPOSE_MAX = 200;
-
 /** `installReview` as this gate presents it. */
 export type InstallReviewPresentation = NonNullable<
   AuthorityChallengePresentation["installReview"]
 >;
-
-/**
- * What a publication does to this workspace's template relationships (§5.3).
- *
- * A template pulls foreign code over the network — categorically unlike an edit
- * to code already present — so it gets the install surface rather than "someone
- * edited this part in your workspace". Everything needed to say that is derived
- * here, on the server, and nothing about it is asked of the caller.
- */
-export interface TemplateOperationRecognition {
-  mode: "install" | "update" | "remove";
-  template: InstallReviewTemplate;
-  /** Where each repository the state claims came from, at the state being published. */
-  origins: ReadonlyMap<string, InstallReviewOrigin>;
-  /** Repositories touched by contributions from the closure this operation moves. */
-  contributedRepoPaths: ReadonlySet<string>;
-}
-
-/**
- * Recognize a template operation from the relationship delta. This state is
- * descriptive UX context, not authority: protected-main validation still
- * derives every changed unit and permission independently. Malformed state
- * merely loses template-specific framing and falls back to the generic review.
- */
-export function recognizeTemplateOperation(input: {
-  /** The state the workspace currently has, or null when it composes nothing. */
-  currentState: WorkspaceTemplateState | null;
-  /** The state at the state being published. */
-  candidateState: WorkspaceTemplateState | null;
-  /** Sources the user has already run code from, for first encounter. */
-  admittedOriginKeys: ReadonlySet<string>;
-}): TemplateOperationRecognition | null {
-  const current = rootNodes(input.currentState);
-  const candidate = rootNodes(input.candidateState);
-  const moved: Array<{
-    mode: TemplateOperationRecognition["mode"];
-    url: string;
-  }> = [];
-  for (const [url, node] of candidate) {
-    const before = current.get(url);
-    if (!before) moved.push({ mode: "install", url });
-    // The commit is the exact identity of a pin and never leaves this function:
-    // it decides whether the pin moved, and the review shows only the human ref.
-    else if (before.pin.commit !== node.pin.commit) moved.push({ mode: "update", url });
-  }
-  for (const url of current.keys()) {
-    if (!candidate.has(url)) moved.push({ mode: "remove", url });
-  }
-  // Two templates moving at once is a real state — a recompose, a cutover — but
-  // it has no single name, and naming it after one of them would head the card
-  // with a template that is not the whole story. The generic review is the
-  // honest surface for it.
-  if (moved.length !== 1) return null;
-  const operation = moved[0]!;
-
-  const state = operation.mode === "remove" ? input.currentState : input.candidateState;
-  const rootNode = (operation.mode === "remove" ? current : candidate).get(operation.url)!;
-  const fromVersion = current.get(operation.url)?.pin.ref ?? null;
-  const toVersion = candidate.get(operation.url)?.pin.ref ?? null;
-
-  // A root's closure is the root plus everything it depends on. A repository
-  // belongs to the operation when any node in that closure contributes to it;
-  // no template exclusively owns the resulting workspace repository.
-  const nodesById = new Map((state?.nodes ?? []).map((node) => [node.nodeId, node]));
-  const closure = new Set<string>();
-  const pending = [rootNode.nodeId];
-  while (pending.length > 0) {
-    const nodeId = pending.pop()!;
-    if (closure.has(nodeId)) continue;
-    closure.add(nodeId);
-    for (const parent of nodesById.get(nodeId)?.parents ?? []) pending.push(parent);
-  }
-
-  const origins = new Map<string, InstallReviewOrigin>();
-  const contributedRepoPaths = new Set<string>();
-  for (const [repoPath, repository] of Object.entries(state?.repositories ?? {})) {
-    const contributors = repository.contributions
-      .map(({ nodeId }) => nodesById.get(nodeId))
-      .filter((node): node is NonNullable<typeof node> => node !== undefined);
-    if (contributors.length === 1) {
-      const contributor = contributors[0]!;
-      const contributorName = sanitizeTemplateDisplayText(
-        contributor.presentation?.name,
-        TEMPLATE_NAME_MAX
-      );
-      origins.set(
-        repoPath,
-        templateOrigin({
-          url: contributor.pin.url,
-          version: contributor.pin.ref,
-          ...(contributorName ? { selfName: contributorName } : {}),
-          admittedOriginKeys: input.admittedOriginKeys,
-        })
-      );
-    } else if (contributors.length > 1) {
-      origins.set(repoPath, multipleTemplateContributorsOrigin());
-    }
-    if (repository.contributions.some(({ nodeId }) => closure.has(nodeId))) {
-      contributedRepoPaths.add(repoPath);
-    }
-  }
-
-  // What the template says it is called and what it says it does, re-sanitized
-  // at the point of use. Relationship state is workspace-owned and descriptive;
-  // this is the last boundary before self-authored text reaches a person.
-  const selfName = sanitizeTemplateDisplayText(rootNode.presentation?.name, TEMPLATE_NAME_MAX);
-  const selfPurpose = sanitizeTemplateDisplayText(
-    rootNode.presentation?.description,
-    TEMPLATE_PURPOSE_MAX
-  );
-
-  return {
-    mode: operation.mode,
-    template: {
-      // The template's own name may head the card, because a heading is a title
-      // and titles are attributed to the thing they name. It may NOT become the
-      // origin: `origin` below is built from the pin URL alone, so a template
-      // calling itself Vibestudio changes what the card is headed and nothing
-      // about where the review says its bytes came from (§7.6.3). When the
-      // manifest offers no usable name — or offered one the sanitizer refused —
-      // the URL stem stands in, which is a worse heading and an honest one.
-      title: selfName ?? templateTitleFromUrl(rootNode.pin.url),
-      purpose: selfPurpose ?? "",
-      origin: templateOrigin({
-        url: rootNode.pin.url,
-        version: toVersion ?? fromVersion,
-        // Carried beside the URL rather than instead of it: every renderer that
-        // shows `selfName` shows it as the template's claim about itself, next
-        // to the identity it cannot alter.
-        ...(selfName ? { selfName } : {}),
-        admittedOriginKeys: input.admittedOriginKeys,
-      }),
-      fromVersion,
-      toVersion,
-    },
-    origins,
-    contributedRepoPaths,
-  };
-}
-
-/** The declared roots of a state, keyed by normalized URL, with their nodes. */
-function rootNodes(
-  state: WorkspaceTemplateState | null
-): ReadonlyMap<string, WorkspaceTemplateState["nodes"][number]> {
-  const roots = new Map<string, WorkspaceTemplateState["nodes"][number]>();
-  if (!state) return roots;
-  for (const root of state.roots) {
-    const url = normalizeTemplateGitUrl(root.url);
-    const node = state.nodes.find(
-      (candidate) => normalizeTemplateGitUrl(candidate.pin.url) === url
-    );
-    if (node) roots.set(url, node);
-  }
-  return roots;
-}
-
-/**
- * The human name of a template, derived from its URL and only from its URL.
- *
- * Same derivation the state's alias uses, minus the content-addressed suffix
- * that makes an alias collision-proof and a heading unreadable.
- */
-function templateTitleFromUrl(url: string): string {
-  try {
-    const transport = new URL(templateGitTransportUrl(normalizeTemplateGitUrl(url)));
-    return (
-      transport.pathname
-        .split("/")
-        .filter(Boolean)
-        .at(-1)
-        ?.replace(/\.git$/u, "")
-        .replace(/^vibestudio-(?:template|workspace)-/u, "")
-        .replace(/^template-/u, "") || "template"
-    );
-  } catch {
-    return "template";
-  }
-}
 
 export interface MainAdvanceApprovalGate {
   approve(
@@ -794,50 +597,11 @@ export function createMainAdvanceApprovalGate(deps: {
   resolveUnitOrigins?: (
     repoPaths: readonly string[]
   ) => Promise<ReadonlyMap<string, InstallReviewOrigin>>;
-  /**
-   * `meta/templates.state.yml` at an exact composed workspace state, and at the
-   * live workspace when `stateHash` is null.
-   *
-   * This is display context for recognizing a relationship change. The gate
-   * parses it itself; it never uses it to decide which code or permissions land.
-   */
-  readTemplateState?: (stateHash: string | null) => Promise<string | null>;
-  /** Sources the user has already run code from, for first encounter. */
-  admittedOriginKeys?: () => ReadonlySet<string>;
   reportInstallLandingByToken?: (
     landingToken: string,
     report: import("./approvalQueue.js").InstallLandingReport
   ) => void;
 }): MainAdvanceApprovalGate {
-  // One publication reaches this gate once per repository it advances, each
-  // time with the same candidate view. The recognition is a property of that
-  // view, so it is computed once and reused for the whole batch.
-  let recognized: { stateHash: string; result: TemplateOperationRecognition | null } | null = null;
-  const recognizeFor = async (stateHash: string): Promise<TemplateOperationRecognition | null> => {
-    if (!deps.readTemplateState) return null;
-    if (recognized?.stateHash === stateHash) return recognized.result;
-    let result: TemplateOperationRecognition | null = null;
-    try {
-      const [currentText, candidateText] = await Promise.all([
-        deps.readTemplateState(null),
-        deps.readTemplateState(stateHash),
-      ]);
-      result = recognizeTemplateOperation({
-        currentState: parsedTemplateState(currentText, "the workspace"),
-        candidateState: parsedTemplateState(candidateText, "this publication"),
-        admittedOriginKeys: deps.admittedOriginKeys?.() ?? new Set<string>(),
-      });
-    } catch (error) {
-      // Nothing about the decision depends on recognizing the operation being
-      // possible: failing here costs the template framing, never the review.
-      console.warn(
-        `[Units] Could not read template relationships for this publication: ${message(error)}`
-      );
-      result = null;
-    }
-    recognized = { stateHash, result };
-    return result;
-  };
   return {
     async approve(candidate) {
       if (candidate.changedPaths.length === 0) return;
@@ -1004,15 +768,7 @@ export function createMainAdvanceApprovalGate(deps: {
         };
       }
 
-      const template = await recognizeFor(candidate.stateHash);
-
-      // Nothing changed about what any part can do:
-      // this is an ordinary content advance, not a permission decision. A
-      // template operation is never that, even when it lands nothing but
-      // effective-version churn — an upgrade that changes no declared authority
-      // is still a decision about foreign code, and §5.4 gives it one line
-      // rather than no card at all.
-      if (!template && !metaChanged && units.length === 0) {
+      if (!metaChanged && units.length === 0) {
         await approveWorkspaceMainAdvance(deps, candidate);
         return {
           prepare: async () => {
@@ -1035,43 +791,12 @@ export function createMainAdvanceApprovalGate(deps: {
 
       const repoPaths = units.map((unit) => unit.source.repo);
       const origins = new Map(await (deps.resolveUnitOrigins?.(repoPaths) ?? []));
-      // The resolver answers from the state the workspace HAS. A template
-      // arriving now is not in it, so every part it lands would print as the
-      // workspace's own code — the one claim this system must never make by
-      // accident. The candidate state is the same evidence one state later, so
-      // it wins wherever it claims a repository.
-      for (const [repoPath, origin] of template?.origins ?? []) origins.set(repoPath, origin);
-      // Inside a template publication every changed unit is one of two things:
-      // a repository this template closure contributes to, or an unrelated fix
-      // in the same publication, which is shown separately (§5.3). A shared
-      // repository remains a template contribution; no exclusive owner exists.
-      const sections = template
-        ? new Map(
-            repoPaths.map(
-              (repoPath) =>
-                [
-                  repoPath,
-                  template.contributedRepoPaths.has(repoPath) ? "template" : "repair",
-                ] as const
-            )
-          )
-        : null;
       await approveWorkspaceMainAdvance(deps, candidate, {
-        // An edit to code already in the workspace is the part-changed review
-        // (§7.4): the question is not "may this run" but "someone edited this
-        // part; do you want the new version?". A template operation asks the
-        // other question — may this arrive at all — and says so in its heading.
-        mode: template?.mode ?? "part-changed",
+        mode: "part-changed",
         reportsLanding: true,
         landingToken: candidate.publicationId,
-        title: template
-          ? HOST_APPROVAL_COPY.installReview.heading[template.mode](template.template.title)
-          : unitChangeTitle(units, previousRequests, metaChanged),
-        ...(template
-          ? {}
-          : { description: unitChangeDescription(units, previousRequests, metaChanged) }),
-        ...(template ? { template: template.template } : {}),
-        ...(sections ? { sections } : {}),
+        title: unitChangeTitle(units, previousRequests, metaChanged),
+        description: unitChangeDescription(units, previousRequests, metaChanged),
         units,
         unchangedPartCount,
         previousRequests,
@@ -1337,23 +1062,6 @@ async function authorizeProtectedPublication(
       sensitivity: "write",
     }
   );
-}
-
-/**
- * Malformed relationship state loses template-specific framing. It does not
- * block publication and cannot change the independently derived unit review.
- */
-function parsedTemplateState(
-  content: string | null,
-  source: string
-): WorkspaceTemplateState | null {
-  if (content === null) return null;
-  try {
-    return parseTemplateState(YAML.parse(content) as unknown);
-  } catch (error) {
-    console.warn(`[Units] Could not parse ${TEMPLATE_STATE_PATH} in ${source}: ${message(error)}`);
-    return null;
-  }
 }
 
 function message(error: unknown): string {

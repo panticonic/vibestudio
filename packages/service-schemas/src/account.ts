@@ -33,6 +33,13 @@ export const accountProfileSchema = z
 
 export type AccountProfile = z.infer<typeof accountProfileSchema>;
 
+export const workspaceMemberProfileSchema = accountProfileSchema.extend({
+  role: z.enum(["admin", "member"]),
+  accountRole: accountProfileSchema.shape.role,
+});
+
+export type WorkspaceMemberProfile = z.infer<typeof workspaceMemberProfileSchema>;
+
 export const accountProfileUpdateSchema = z
   .object({
     /** Defaults to the authenticated caller. Editing another user is root-only. */
@@ -124,9 +131,9 @@ export const accountMethods = defineServiceMethods({
         "P-discovery: ordinary workspace participant rendering; principal and workspace admission still apply",
     },
     description:
-      "List live account profiles for this child server's bound workspace, including implicit root membership.",
+      "List live members of this child server's bound workspace with their workspace role and separate account role.",
     args: z.tuple([]),
-    returns: z.array(accountProfileSchema),
+    returns: z.array(workspaceMemberProfileSchema),
     authority: ACCOUNT_READ_POLICY,
     access: READ_ACCESS,
   },

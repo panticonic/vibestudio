@@ -42,13 +42,24 @@ function fixture(systemEpoch: number): { host: string; base: string; checkpoint:
     })
   );
   fs.mkdirSync(path.join(base, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(base, "meta", "vibestudio.yml"), `systemEpoch: ${systemEpoch}\n`);
+  fs.writeFileSync(path.join(base, "package.json"), '{"name":"@workspace/root","private":true}\n');
   fs.writeFileSync(
     path.join(base, "meta", "template.yml"),
-    `systemEpoch: ${systemEpoch}\ntemplate:\n  repositories:\n    - packages/base\n  files: []\n`
+    `systemEpoch: ${systemEpoch}\ntemplate:\n  repositories:\n    - packages/base\n  files:\n    - package.json\n`
   );
   fs.mkdirSync(path.join(base, "packages", "base"), { recursive: true });
-  fs.writeFileSync(path.join(base, "packages", "base", "package.json"), "{}\n");
+  fs.writeFileSync(
+    path.join(base, "packages", "base", "package.json"),
+    '{"name":"@workspace/base"}\n'
+  );
+  fs.writeFileSync(path.join(base, "packages", "base", "index.ts"), "export {};\n");
+  fs.mkdirSync(path.join(base, "meta", "distributions"), { recursive: true });
+  for (const name of ["base", "personal", "system"]) {
+    fs.writeFileSync(
+      path.join(base, "meta", "distributions", `${name}.yml`),
+      `systemEpoch: ${systemEpoch}\ntemplate:\n  name: ${name}\n  repositories: [packages/base]\n  files: [package.json]\n`
+    );
+  }
   git(base, "init", "-b", "main");
   git(base, "add", ".");
   git(base, "commit", "-m", "fixture");
@@ -71,8 +82,12 @@ describe("resolveDevelopmentBaseSelection", () => {
       })
     ).resolves.toMatchObject({
       sourceCheckout: base,
-      temporary: false,
       writebackRepositories: ["meta", "packages/base"],
+      pins: {
+        base: { ref: "refs/heads/distributions/base" },
+        personal: { ref: "refs/heads/distributions/personal" },
+        system: { ref: "refs/heads/distributions/system" },
+      },
     });
   });
 
@@ -85,8 +100,6 @@ describe("resolveDevelopmentBaseSelection", () => {
         checkpointTarget: checkpoint,
         explicitCheckout: base,
       })
-    ).rejects.toThrow(
-      `declares systemEpoch ${WORKSPACE_SYSTEM_EPOCH + 1}, but this host requires ${WORKSPACE_SYSTEM_EPOCH}`
-    );
+    ).rejects.toThrow(/systemEpoch/u);
   });
 });

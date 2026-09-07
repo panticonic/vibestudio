@@ -125,6 +125,7 @@ export interface WsRoutedMessage {
 export interface WsRoutedEventErrorMessage {
   type: "ws:routed-event-error";
   targetId: string;
+  targetWorkspaceId?: string;
   event: string;
   error: string;
   errorKind: RpcErrorKind;
@@ -134,6 +135,7 @@ export interface WsRoutedEventErrorMessage {
 export interface WsRoutedResponseErrorMessage {
   type: "ws:routed-response-error";
   targetId: string;
+  targetWorkspaceId?: string;
   requestId: string;
   error: string;
   errorKind: RpcErrorKind;

@@ -168,6 +168,7 @@ const pendingApprovalBaseShape = {
   repoPath: z.string(),
   effectiveVersion: z.string(),
   requestedAt: z.number(),
+  requestedByUserId: z.string().min(1).optional(),
   operationId: z.string().optional(),
   taskSubject: z.string().optional(),
   taskTitle: z.string().optional(),
@@ -584,6 +585,8 @@ const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
 export const invocationSnapshotSchema = z
   .object({
     v: z.literal(2),
+    workspaceId: z.string().min(1).optional(),
+    sourceWorkspaceId: z.string().min(1).optional(),
     service: z.string(),
     method: z.string(),
     capability: z.string(),

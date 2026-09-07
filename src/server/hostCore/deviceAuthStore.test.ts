@@ -280,6 +280,7 @@ describe("DeviceAuthStore", () => {
     });
     expect(createCalls).toBe(1);
     expect(users.getUser(credential.userId)?.role).toBe("root");
+    expect(db.listWorkspacesForUser(credential.userId)).toEqual([workspaceId]);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

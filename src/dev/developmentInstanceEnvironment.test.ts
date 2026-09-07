@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 
+const pin = (name: string) => ({
+  url: `git+https://example.test/${name}.git`,
+  ref: `refs/heads/distributions/${name}`,
+  commit: name[0]!.repeat(40),
+  snapshot: `v1-sha256:${name[0]!.repeat(64)}` as const,
+});
 const base = {
-  pin: { commit: "candidate" },
-  checkout: "/private/checkpoint",
+  pins: { base: pin("base"), personal: pin("personal"), system: pin("system") },
+  checkouts: {
+    base: "/private/base",
+    personal: "/private/personal",
+    system: "/private/system",
+  },
   sourceCheckout: "/visible/base",
   writebackRepositories: ["meta", "packages/base"],
 };
@@ -21,7 +31,8 @@ describe("development instance environment", () => {
     });
     expect(env).toMatchObject({
       VIBESTUDIO_SOURCE_INSTANCE: "1",
-      VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: "/private/checkpoint",
+      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(base.pins),
+      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(base.pins.system),
       VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: JSON.stringify({
         root: "/visible/base",
         repositories: ["meta", "packages/base"],
@@ -52,7 +63,12 @@ describe("development instance environment", () => {
       templates,
     });
 
-    expect(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]).toBe(JSON.stringify(templates));
+    expect(JSON.parse(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]!)).toEqual([
+      { pin: base.pins.base, checkout: base.checkouts.base },
+      { pin: base.pins.personal, checkout: base.checkouts.personal },
+      { pin: base.pins.system, checkout: base.checkouts.system },
+      ...templates,
+    ]);
     expect(JSON.parse(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]!)).toEqual({
       root: "/visible/base",
       repositories: ["meta", "packages/base"],
@@ -79,8 +95,9 @@ describe("development instance environment", () => {
     });
     expect(env["VIBESTUDIO_SOURCE_INSTANCE"]).toBe("0");
     expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]).toBeUndefined();
-    expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]).toBe(
-      hasBase ? "/private/checkpoint" : undefined
+    expect(env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]).toBeUndefined();
+    expect(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]).toBe(
+      hasBase ? JSON.stringify(base.pins) : undefined
     );
   });
 });

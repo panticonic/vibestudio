@@ -8,9 +8,8 @@
  * gate and push audience. `workspaceId` everywhere is the OPAQUE STABLE id
  * from the registry (WP0 §3.5 note), never the display name or path.
  *
- * Membership is a routing/attribution surface for mutually trusting members
- * (plan §0.0) — "which workspaces does the hub offer this user", not an
- * inter-user security boundary.
+ * Personal and System designations are private even to another server root.
+ * These application access checks do not provide native process containment.
  */
 
 import type { IdentityDb, WorkspaceMembership } from "./identityDb.js";
@@ -21,7 +20,7 @@ export type { WorkspaceMembership } from "./identityDb.js";
 export class MembershipStore {
   constructor(
     private readonly db: IdentityDb,
-    /** For the implicit-root rule; typically the `UserStore` over the same DB. */
+    /** Live account status; server roles do not imply workspace membership. */
     private readonly users: Pick<UserStore, "getUser">,
     private readonly now = () => Date.now()
   ) {}
@@ -35,23 +34,26 @@ export class MembershipStore {
    * `addedBy`/`addedAt`. Does NOT validate that the workspace exists —
    * existence is the registry's concern (WP2 §2).
    */
-  add(userId: string, workspaceId: string, addedBy: string): WorkspaceMembership {
+  add(userId: string, workspaceId: string, addedBy: string, role: "admin" | "member" = "member"): WorkspaceMembership {
     const membership: WorkspaceMembership = {
       userId,
       workspaceId,
       addedBy,
       addedAt: this.now(),
+      role,
     };
     this.db.addMembership(membership);
     return membership;
   }
 
   /**
-   * Remove a stored membership. No-op (returns false) for root — root is
-   * implicitly a member of every workspace and cannot be removed from one.
+   * Remove a stored ordinary-workspace membership. Private ownership cannot
+   * be removed through membership. Ordinary membership is explicit for every role.
    */
   remove(userId: string, workspaceId: string): boolean {
-    if (this.users.getUser(userId)?.role === "root") return false;
+    if (this.db.getPrivateWorkspaceOwner(workspaceId)) {
+      throw new Error("Private workspace ownership cannot be removed through membership");
+    }
     return this.db.removeMembership(userId, workspaceId);
   }
 
@@ -70,9 +72,7 @@ export class MembershipStore {
   // ===========================================================================
 
   /**
-   * Stored workspaceIds this user was explicitly added to. Root is NOT
-   * special-cased here — the CALLER resolves root's implicit all-workspaces
-   * membership against the registry (WP2 §2).
+   * Stored workspaceIds this user was explicitly added to.
    */
   list(userId: string): string[] {
     return this.db.listWorkspacesForUser(userId);
@@ -83,12 +83,18 @@ export class MembershipStore {
   }
 
   /**
-   * The load-bearing entry predicate: true for role `root` WITHOUT a stored
-   * row (implicit-root rule, WP0 §3.5), else true iff a row exists. Admins
-   * manage membership but only ENTER workspaces they were added to.
+   * The load-bearing entry predicate. A private workspace admits only its live
+   * designated owner. Every ordinary workspace requires a stored membership.
    */
   has(userId: string, workspaceId: string): boolean {
-    if (this.users.getUser(userId)?.role === "root") return true;
+    const user = this.users.getUser(userId);
+    if (!user || user.revokedAt !== undefined) return false;
+    const owner = this.db.getPrivateWorkspaceOwner(workspaceId);
+    if (owner) return owner.userId === userId;
     return this.db.isMember(userId, workspaceId);
+  }
+
+  isAdmin(userId: string, workspaceId: string): boolean {
+    return this.has(userId, workspaceId) && this.db.getMembership(userId, workspaceId)?.role === "admin";
   }
 }

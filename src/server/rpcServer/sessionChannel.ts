@@ -1,4 +1,4 @@
-import { responseEnvelopeFor, type RpcEnvelope } from "@vibestudio/rpc";
+import { responseEnvelopeFor, type RpcEnvelope, type AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -13,7 +13,8 @@ const SESSION_SERVER_RESPONDER = { callerId: "main", callerKind: "server" as con
 
 export function encodeWebSocketStreamFrame(
   requestEnvelope: RpcEnvelope,
-  frame: StreamFrame
+  frame: StreamFrame,
+  responder: AuthenticatedCaller = SESSION_SERVER_RESPONDER
 ): WsServerMessage {
   const request = requestEnvelope.message;
   if (request.type !== "stream-request") {
@@ -52,7 +53,7 @@ export function encodeWebSocketStreamFrame(
   }
   return {
     type: "ws:rpc",
-    envelope: responseEnvelopeFor(requestEnvelope, SESSION_SERVER_RESPONDER, {
+    envelope: responseEnvelopeFor(requestEnvelope, responder, {
       type: "stream-frame",
       requestId: request.requestId,
       fromId: "main",
@@ -88,7 +89,11 @@ export interface RpcSessionChannel {
    * encoding: loopback WebSocket serializes the legacy JSON frame envelope,
    * while Iroh writes the binary body directly to the request's QUIC stream.
    */
-  sendStreamFrame(requestEnvelope: RpcEnvelope, frame: StreamFrame): Promise<void>;
+  sendStreamFrame(
+    requestEnvelope: RpcEnvelope,
+    frame: StreamFrame,
+    responder?: AuthenticatedCaller
+  ): Promise<void>;
 }
 
 /** Loopback WebSocket carrier for the transport-neutral session channel. */
@@ -143,8 +148,12 @@ export class WebSocketSessionChannel implements RpcSessionChannel {
     return undefined;
   }
 
-  async sendStreamFrame(requestEnvelope: RpcEnvelope, frame: StreamFrame): Promise<void> {
-    this.sendMessage(encodeWebSocketStreamFrame(requestEnvelope, frame));
+  async sendStreamFrame(
+    requestEnvelope: RpcEnvelope,
+    frame: StreamFrame,
+    responder?: AuthenticatedCaller
+  ): Promise<void> {
+    this.sendMessage(encodeWebSocketStreamFrame(requestEnvelope, frame, responder));
   }
 
   close(code?: number, reason?: string): void {

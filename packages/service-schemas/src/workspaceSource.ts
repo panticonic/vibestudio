@@ -1275,7 +1275,7 @@ function semanticWireMethod(
   method: (typeof vcsMethods)[keyof typeof vcsMethods],
   wireName: string
 ): MethodSchema {
-  const inputSchema = (method.args as z.ZodTuple<[z.ZodTypeAny]>).items[0];
+  const inputSchema = (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
   const resultSchema = method.returns;
   return {
     description: `Execute the exact ${wireName} semantic workspace operation.`,
@@ -1328,6 +1328,7 @@ const semanticWireMethods = {
   ),
   vcsPush: semanticWireMethod(vcsMethods.push, "push"),
   vcsStatus: semanticWireMethod(vcsMethods.status, "status"),
+  vcsMainState: semanticWireMethod(vcsMethods.mainState, "main state"),
   vcsCompare: semanticWireMethod(vcsMethods.compare, "compare"),
   vcsInspect: semanticWireMethod(vcsMethods.inspect, "inspect"),
   vcsNeighbors: semanticWireMethod(vcsMethods.neighbors, "neighbors"),

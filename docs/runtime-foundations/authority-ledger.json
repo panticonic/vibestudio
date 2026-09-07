@@ -7293,96 +7293,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:baseRelease.check",
-      "rpcPlane": "host-service",
-      "owner": "baseRelease",
-      "method": "check",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace.base-release",
-      "reviewRationale": "Read-only comparison of installed Base lineage with the host's verified immutable release pin.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:baseRelease.check"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:baseRelease.check),allOf(capability(user,service:baseRelease.check),workspace-member))",
-      "r3b": {
-        "review": "read-only-base-release-lineage-comparison",
-        "change": "Adds the missing reviewed open-tier decision for a read-only comparison between the installed Base lineage and the host's verified immutable release pin. The method performs no acquisition or publication and exposes only release compatibility metadata already owned by workspace supervision."
-      },
-      "capability": "service:baseRelease.check",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:baseRelease.pull",
-      "rpcPlane": "host-service",
-      "owner": "baseRelease",
-      "method": "pull",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace.base-release",
-      "reviewRationale": "The host supplies only its verified immutable Base pin; Composer retains ordinary semantic review, repair, and protected-main publication.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:baseRelease.pull"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:baseRelease.pull),allOf(capability(user,service:baseRelease.pull),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:baseRelease.pull",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:blobstore.delete",
       "rpcPlane": "host-service",
       "owner": "blobstore",
@@ -18342,7 +18252,7 @@
         "host",
         "code"
       ],
-      "sensitivity": "admin",
+      "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -18363,8 +18273,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:hubControl.addWorkspaceMember),allOf(capability(user,service:hubControl.addWorkspaceMember),workspace-member),allOf(capability(code,service:hubControl.addWorkspaceMember),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-membership-owned-administration",
+        "change": "Replaces server-wide administrator sensitivity with ordinary write sensitivity and explicit live target-workspace administrator enforcement. Server administration alone grants no membership management, and designated Personal/System workspaces reject additional members."
       },
       "capability": "service:hubControl.addWorkspaceMember",
       "parityAssertion": "generated-census:host-authority"
@@ -18434,7 +18344,7 @@
         "host",
         "code"
       ],
-      "sensitivity": "destructive",
+      "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -18455,8 +18365,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:hubControl.deleteWorkspace),allOf(capability(user,service:hubControl.deleteWorkspace),workspace-member),allOf(capability(code,service:hubControl.deleteWorkspace),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-membership-owned-deletion",
+        "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
       },
       "capability": "service:hubControl.deleteWorkspace",
       "parityAssertion": "generated-census:host-authority"
@@ -18508,6 +18418,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:hubControl.ensureUserWorkspaces",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "ensureUserWorkspaces",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.create",
+      "reviewRationale": "Idempotently ensure the authenticated account's own Personal and System workspaces.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.ensureUserWorkspaces"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.ensureUserWorkspaces),allOf(capability(user,service:hubControl.ensureUserWorkspaces),workspace-member),allOf(capability(code,service:hubControl.ensureUserWorkspaces),workspace-member))",
+      "r3b": {
+        "review": "authenticated-private-workspace-pair",
+        "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      },
+      "capability": "service:hubControl.ensureUserWorkspaces",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:hubControl.getProfile",
       "rpcPlane": "host-service",
       "owner": "hubControl",
@@ -18551,6 +18507,52 @@
         "change": null
       },
       "capability": "service:hubControl.getProfile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.getWorkspaceRpcPolicy",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "getWorkspaceRpcPolicy",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.read",
+      "reviewRationale": "Read host-owned workspace integration settings as an authorized manager.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.getWorkspaceRpcPolicy"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.getWorkspaceRpcPolicy),allOf(capability(user,service:hubControl.getWorkspaceRpcPolicy),workspace-member),allOf(capability(code,service:hubControl.getWorkspaceRpcPolicy),workspace-member))",
+      "r3b": {
+        "review": "explicit-workspace-administrator-policy-read",
+        "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      },
+      "capability": "service:hubControl.getWorkspaceRpcPolicy",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -18848,7 +18850,7 @@
         "host",
         "code"
       ],
-      "sensitivity": "destructive",
+      "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -18869,8 +18871,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:hubControl.removeWorkspaceMember),allOf(capability(user,service:hubControl.removeWorkspaceMember),workspace-member),allOf(capability(code,service:hubControl.removeWorkspaceMember),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-membership-owned-removal",
+        "change": "Keeps the critical capability tier while requiring explicit target-workspace administrator membership. Ordinary write sensitivity removes the unrelated server-account role prerequisite; private workspace membership and live revocation checks remain authoritative."
       },
       "capability": "service:hubControl.removeWorkspaceMember",
       "parityAssertion": "generated-census:host-authority"
@@ -19057,6 +19059,52 @@
         "change": null
       },
       "capability": "service:hubControl.setRole",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.setWorkspaceRpcPolicy",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "setWorkspaceRpcPolicy",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.integration",
+      "reviewRationale": "Change a workspace's hard integration ceilings through authenticated host management.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hubControl.setWorkspaceRpcPolicy"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hubControl.setWorkspaceRpcPolicy),allOf(capability(user,service:hubControl.setWorkspaceRpcPolicy),workspace-member),allOf(capability(code,service:hubControl.setWorkspaceRpcPolicy),workspace-member))",
+      "r3b": {
+        "review": "explicit-workspace-administrator-policy-change",
+        "change": "Uses the existing protected host management path, explicit live workspace administrator membership and compare-and-swap policy expectations. System application ingress cannot be enabled. Permitting an operation to ask never grants its resource use."
+      },
+      "capability": "service:hubControl.setWorkspaceRpcPolicy",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -27222,6 +27270,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:vcs.mainState",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "mainState",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "vcs.read-transport",
+      "reviewRationale": "Workspace main event metadata; content reads retain their exact-reference authorization.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.mainState"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.mainState),allOf(capability(user,service:vcs.mainState),workspace-member),allOf(capability(code,service:vcs.mainState),workspace-member))",
+      "r3b": {
+        "review": "workspace-main-metadata-read",
+        "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads."
+      },
+      "capability": "service:vcs.mainState",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:vcs.merge",
       "rpcPlane": "host-service",
       "owner": "vcs",
@@ -27881,6 +27975,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -27902,10 +27997,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.applyNativePanelSurfaces),workspace-member),allOf(capability(code,service:view.applyNativePanelSurfaces),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.applyNativePanelSurfaces),allOf(capability(user,service:view.applyNativePanelSurfaces),workspace-member),allOf(capability(code,service:view.applyNativePanelSurfaces),workspace-member))",
       "r3b": {
-        "review": "trusted-shell-complete-native-surface-projection",
-        "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.applyNativePanelSurfaces",
       "parityAssertion": "generated-census:host-authority"
@@ -27926,6 +28021,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -27947,10 +28043,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.browserForceReload),workspace-member),allOf(capability(code,service:view.browserForceReload),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.browserForceReload),allOf(capability(user,service:view.browserForceReload),workspace-member),allOf(capability(code,service:view.browserForceReload),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.browserForceReload",
       "parityAssertion": "generated-census:host-authority"
@@ -27971,6 +28067,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -27992,10 +28089,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.browserGoBack),workspace-member),allOf(capability(code,service:view.browserGoBack),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.browserGoBack),allOf(capability(user,service:view.browserGoBack),workspace-member),allOf(capability(code,service:view.browserGoBack),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.browserGoBack",
       "parityAssertion": "generated-census:host-authority"
@@ -28016,6 +28113,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28037,10 +28135,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.browserGoForward),workspace-member),allOf(capability(code,service:view.browserGoForward),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.browserGoForward),allOf(capability(user,service:view.browserGoForward),workspace-member),allOf(capability(code,service:view.browserGoForward),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.browserGoForward",
       "parityAssertion": "generated-census:host-authority"
@@ -28061,6 +28159,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28082,10 +28181,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.browserNavigate),workspace-member),allOf(capability(code,service:view.browserNavigate),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.browserNavigate),allOf(capability(user,service:view.browserNavigate),workspace-member),allOf(capability(code,service:view.browserNavigate),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.browserNavigate",
       "parityAssertion": "generated-census:host-authority"
@@ -28106,6 +28205,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28127,10 +28227,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.browserReload),workspace-member),allOf(capability(code,service:view.browserReload),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.browserReload),allOf(capability(user,service:view.browserReload),workspace-member),allOf(capability(code,service:view.browserReload),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.browserReload",
       "parityAssertion": "generated-census:host-authority"
@@ -28151,6 +28251,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28172,10 +28273,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.browserStop),workspace-member),allOf(capability(code,service:view.browserStop),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.browserStop),allOf(capability(user,service:view.browserStop),workspace-member),allOf(capability(code,service:view.browserStop),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.browserStop",
       "parityAssertion": "generated-census:host-authority"
@@ -28196,6 +28297,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28217,10 +28319,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.clearNativeBrowserSiteData),workspace-member),allOf(capability(code,service:view.clearNativeBrowserSiteData),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.clearNativeBrowserSiteData),allOf(capability(user,service:view.clearNativeBrowserSiteData),workspace-member),allOf(capability(code,service:view.clearNativeBrowserSiteData),workspace-member))",
       "r3b": {
-        "review": "stale-checked-native-browser-storage-effect",
-        "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.clearNativeBrowserSiteData",
       "parityAssertion": "generated-census:host-authority"
@@ -28241,6 +28343,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28262,10 +28365,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.connectNativePanelAdapter),workspace-member),allOf(capability(code,service:view.connectNativePanelAdapter),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.connectNativePanelAdapter),allOf(capability(user,service:view.connectNativePanelAdapter),workspace-member),allOf(capability(code,service:view.connectNativePanelAdapter),workspace-member))",
       "r3b": {
-        "review": "trusted-shell-native-panel-adapter-generation",
-        "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.connectNativePanelAdapter",
       "parityAssertion": "generated-census:host-authority"
@@ -28376,6 +28479,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28397,10 +28501,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.findInPage),workspace-member),allOf(capability(code,service:view.findInPage),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.findInPage),allOf(capability(user,service:view.findInPage),workspace-member),allOf(capability(code,service:view.findInPage),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.findInPage",
       "parityAssertion": "generated-census:host-authority"
@@ -28466,6 +28570,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28487,10 +28592,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.forwardMouseClick),workspace-member),allOf(capability(code,service:view.forwardMouseClick),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.forwardMouseClick),allOf(capability(user,service:view.forwardMouseClick),workspace-member),allOf(capability(code,service:view.forwardMouseClick),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.forwardMouseClick",
       "parityAssertion": "generated-census:host-authority"
@@ -28511,6 +28616,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28532,10 +28638,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getBrowserPageIdentity),workspace-member),allOf(capability(code,service:view.getBrowserPageIdentity),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getBrowserPageIdentity),allOf(capability(user,service:view.getBrowserPageIdentity),workspace-member),allOf(capability(code,service:view.getBrowserPageIdentity),workspace-member))",
       "r3b": {
-        "review": "exact-native-browser-page-identity-read",
-        "change": "Replaces the compound browser site-state facade with a bounded read of the selected Electron webContents URL, origin, transport security, and document title. Bookmark, cookie-summary, and zoom-preference reads no longer cross the host boundary through view; workspace chrome composes them from the browser-data provider."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Replaces the compound browser site-state facade with a bounded read of the selected Electron webContents URL, origin, transport security, and document title. Bookmark, cookie-summary, and zoom-preference reads no longer cross the host boundary through view; workspace chrome composes them from the browser-data provider. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.getBrowserPageIdentity",
       "parityAssertion": "generated-census:host-authority"
@@ -28556,6 +28662,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28577,10 +28684,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getChromeState),workspace-member),allOf(capability(code,service:view.getChromeState),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getChromeState),allOf(capability(user,service:view.getChromeState),workspace-member),allOf(capability(code,service:view.getChromeState),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.getChromeState",
       "parityAssertion": "generated-census:host-authority"
@@ -28601,6 +28708,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28622,10 +28730,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getFocusedPanelId),workspace-member),allOf(capability(code,service:view.getFocusedPanelId),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getFocusedPanelId),allOf(capability(user,service:view.getFocusedPanelId),workspace-member),allOf(capability(code,service:view.getFocusedPanelId),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.getFocusedPanelId",
       "parityAssertion": "generated-census:host-authority"
@@ -28646,6 +28754,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28667,10 +28776,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getLocalPresentation),workspace-member),allOf(capability(code,service:view.getLocalPresentation),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getLocalPresentation),allOf(capability(user,service:view.getLocalPresentation),workspace-member),allOf(capability(code,service:view.getLocalPresentation),workspace-member))",
       "r3b": {
-        "review": "trusted-chrome-canonical-local-lifecycle-read",
-        "change": "Adds an open, read-only lookup of one exact panel slot's revisioned Electron-local lifecycle snapshot. The handler requires trusted panel-hosting chrome and returns bounded loading, contention, ready, or failure facts without acquiring a lease, creating a view, changing focus, or exposing foreign panel state."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds an open, read-only lookup of one exact panel slot's revisioned Electron-local lifecycle snapshot. The handler requires trusted panel-hosting chrome and returns bounded loading, contention, ready, or failure facts without acquiring a lease, creating a view, changing focus, or exposing foreign panel state. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.getLocalPresentation",
       "parityAssertion": "generated-census:host-authority"
@@ -28691,6 +28800,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28712,10 +28822,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getPresentation),workspace-member),allOf(capability(code,service:view.getPresentation),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getPresentation),allOf(capability(user,service:view.getPresentation),workspace-member),allOf(capability(code,service:view.getPresentation),workspace-member))",
       "r3b": {
-        "review": "trusted-chrome-local-panel-presentation-read",
-        "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.getPresentation",
       "parityAssertion": "generated-census:host-authority"
@@ -28736,6 +28846,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28757,10 +28868,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getPresentations),workspace-member),allOf(capability(code,service:view.getPresentations),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.getPresentations),allOf(capability(user,service:view.getPresentations),workspace-member),allOf(capability(code,service:view.getPresentations),workspace-member))",
       "r3b": {
-        "review": "trusted-chrome-bounded-local-panel-presentation-read",
-        "change": "Adds an open, read-only batch over at most 2,000 exact panel identifiers. The receiver deduplicates the request, returns only existing Electron-local presentation projections, and retains the panel-hosting app requirement; it grants no panel mutation or runtime lifecycle authority."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds an open, read-only batch over at most 2,000 exact panel identifiers. The receiver deduplicates the request, returns only existing Electron-local presentation projections, and retains the panel-hosting app requirement; it grants no panel mutation or runtime lifecycle authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.getPresentations",
       "parityAssertion": "generated-census:host-authority"
@@ -28826,6 +28937,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28847,10 +28959,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.hideContentOverlay),workspace-member),allOf(capability(code,service:view.hideContentOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.hideContentOverlay),allOf(capability(user,service:view.hideContentOverlay),workspace-member),allOf(capability(code,service:view.hideContentOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.hideContentOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -28871,6 +28983,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28892,10 +29005,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.hideNativeShellOverlay),workspace-member),allOf(capability(code,service:view.hideNativeShellOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.hideNativeShellOverlay),allOf(capability(user,service:view.hideNativeShellOverlay),workspace-member),allOf(capability(code,service:view.hideNativeShellOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.hideNativeShellOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -28916,6 +29029,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "read",
@@ -28937,10 +29051,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.listPinnedPanelIds),workspace-member),allOf(capability(code,service:view.listPinnedPanelIds),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.listPinnedPanelIds),allOf(capability(user,service:view.listPinnedPanelIds),workspace-member),allOf(capability(code,service:view.listPinnedPanelIds),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.listPinnedPanelIds",
       "parityAssertion": "generated-census:host-authority"
@@ -28961,6 +29075,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -28982,10 +29097,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.markBrowserNavigationIntent),workspace-member),allOf(capability(code,service:view.markBrowserNavigationIntent),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.markBrowserNavigationIntent),allOf(capability(user,service:view.markBrowserNavigationIntent),workspace-member),allOf(capability(code,service:view.markBrowserNavigationIntent),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.markBrowserNavigationIntent",
       "parityAssertion": "generated-census:host-authority"
@@ -29006,6 +29121,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29027,10 +29143,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.openPanelDevTools),workspace-member),allOf(capability(code,service:view.openPanelDevTools),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.openPanelDevTools),allOf(capability(user,service:view.openPanelDevTools),workspace-member),allOf(capability(code,service:view.openPanelDevTools),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.openPanelDevTools",
       "parityAssertion": "generated-census:host-authority"
@@ -29051,6 +29167,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29072,10 +29189,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.printBrowserPage),workspace-member),allOf(capability(code,service:view.printBrowserPage),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.printBrowserPage),allOf(capability(user,service:view.printBrowserPage),workspace-member),allOf(capability(code,service:view.printBrowserPage),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.printBrowserPage",
       "parityAssertion": "generated-census:host-authority"
@@ -29096,6 +29213,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29117,10 +29235,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.saveBrowserPagePdf),workspace-member),allOf(capability(code,service:view.saveBrowserPagePdf),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.saveBrowserPagePdf),allOf(capability(user,service:view.saveBrowserPagePdf),workspace-member),allOf(capability(code,service:view.saveBrowserPagePdf),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.saveBrowserPagePdf",
       "parityAssertion": "generated-census:host-authority"
@@ -29141,6 +29259,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29162,10 +29281,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setBounds),workspace-member),allOf(capability(code,service:view.setBounds),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.setBounds),allOf(capability(user,service:view.setBounds),workspace-member),allOf(capability(code,service:view.setBounds),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setBounds",
       "parityAssertion": "generated-census:host-authority"
@@ -29186,6 +29305,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29207,10 +29327,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setFocusedPanelId),workspace-member),allOf(capability(code,service:view.setFocusedPanelId),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.setFocusedPanelId),allOf(capability(user,service:view.setFocusedPanelId),workspace-member),allOf(capability(code,service:view.setFocusedPanelId),workspace-member))",
       "r3b": {
-        "review": "trusted-chrome-local-panel-focus-persistence",
-        "change": "Adds an open, host-local write of the shell's exact focused panel id. The service handler requires the trusted panel-hosting app capability and records focus without acquiring a panel lease, loading a view, emitting navigation intent, or waiting for readiness."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds an open, host-local write of the shell's exact focused panel id. The service handler requires the trusted panel-hosting app capability and records focus without acquiring a panel lease, loading a view, emitting navigation intent, or waiting for readiness. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setFocusedPanelId",
       "parityAssertion": "generated-census:host-authority"
@@ -29231,6 +29351,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29252,10 +29373,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setNativeBrowserZoom),workspace-member),allOf(capability(code,service:view.setNativeBrowserZoom),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.setNativeBrowserZoom),allOf(capability(user,service:view.setNativeBrowserZoom),workspace-member),allOf(capability(code,service:view.setNativeBrowserZoom),workspace-member))",
       "r3b": {
-        "review": "stale-checked-native-browser-zoom-effect",
-        "change": "Replaces host-owned zoom preference policy with the irreducible Electron setZoomFactor effect. The caller supplies the exact origin whose preference it persisted, and the receiver rejects the effect if the selected panel has navigated to another origin."
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Replaces host-owned zoom preference policy with the irreducible Electron setZoomFactor effect. The caller supplies the exact origin whose preference it persisted, and the receiver rejects the effect if the selected panel has navigated to another origin. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setNativeBrowserZoom",
       "parityAssertion": "generated-census:host-authority"
@@ -29276,6 +29397,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29297,10 +29419,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setShellOverlay),workspace-member),allOf(capability(code,service:view.setShellOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.setShellOverlay),allOf(capability(user,service:view.setShellOverlay),workspace-member),allOf(capability(code,service:view.setShellOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setShellOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -29321,6 +29443,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29342,10 +29465,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setThemeCss),workspace-member),allOf(capability(code,service:view.setThemeCss),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.setThemeCss),allOf(capability(user,service:view.setThemeCss),workspace-member),allOf(capability(code,service:view.setThemeCss),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setThemeCss",
       "parityAssertion": "generated-census:host-authority"
@@ -29366,6 +29489,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29387,10 +29511,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setVisible),workspace-member),allOf(capability(code,service:view.setVisible),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.setVisible),allOf(capability(user,service:view.setVisible),workspace-member),allOf(capability(code,service:view.setVisible),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.setVisible",
       "parityAssertion": "generated-census:host-authority"
@@ -29411,6 +29535,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29432,10 +29557,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.showContentOverlay),workspace-member),allOf(capability(code,service:view.showContentOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.showContentOverlay),allOf(capability(user,service:view.showContentOverlay),workspace-member),allOf(capability(code,service:view.showContentOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.showContentOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -29456,6 +29581,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29477,10 +29603,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.showNativeShellOverlay),workspace-member),allOf(capability(code,service:view.showNativeShellOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.showNativeShellOverlay),allOf(capability(user,service:view.showNativeShellOverlay),workspace-member),allOf(capability(code,service:view.showNativeShellOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.showNativeShellOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -29501,6 +29627,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29522,10 +29649,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.stopBrowserMedia),workspace-member),allOf(capability(code,service:view.stopBrowserMedia),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.stopBrowserMedia),allOf(capability(user,service:view.stopBrowserMedia),workspace-member),allOf(capability(code,service:view.stopBrowserMedia),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.stopBrowserMedia",
       "parityAssertion": "generated-census:host-authority"
@@ -29546,6 +29673,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29567,10 +29695,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.stopFindInPage),workspace-member),allOf(capability(code,service:view.stopFindInPage),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.stopFindInPage),allOf(capability(user,service:view.stopFindInPage),workspace-member),allOf(capability(code,service:view.stopFindInPage),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.stopFindInPage",
       "parityAssertion": "generated-census:host-authority"
@@ -29591,6 +29719,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29612,10 +29741,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.togglePin),workspace-member),allOf(capability(code,service:view.togglePin),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.togglePin),allOf(capability(user,service:view.togglePin),workspace-member),allOf(capability(code,service:view.togglePin),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.togglePin",
       "parityAssertion": "generated-census:host-authority"
@@ -29636,6 +29765,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29657,10 +29787,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.updateContentOverlay),workspace-member),allOf(capability(code,service:view.updateContentOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.updateContentOverlay),allOf(capability(user,service:view.updateContentOverlay),workspace-member),allOf(capability(code,service:view.updateContentOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.updateContentOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -29681,6 +29811,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29702,10 +29833,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.updateNativeShellOverlay),workspace-member),allOf(capability(code,service:view.updateNativeShellOverlay),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.updateNativeShellOverlay),allOf(capability(user,service:view.updateNativeShellOverlay),workspace-member),allOf(capability(code,service:view.updateNativeShellOverlay),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.updateNativeShellOverlay",
       "parityAssertion": "generated-census:host-authority"
@@ -29726,6 +29857,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29747,10 +29879,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.updateTheme),workspace-member),allOf(capability(code,service:view.updateTheme),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.updateTheme),allOf(capability(user,service:view.updateTheme),workspace-member),allOf(capability(code,service:view.updateTheme),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.updateTheme",
       "parityAssertion": "generated-census:host-authority"
@@ -29771,6 +29903,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "host",
         "code"
       ],
       "sensitivity": "write",
@@ -29792,10 +29925,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.updateThemeConfig),workspace-member),allOf(capability(code,service:view.updateThemeConfig),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:view.updateThemeConfig),allOf(capability(user,service:view.updateThemeConfig),workspace-member),allOf(capability(code,service:view.updateThemeConfig),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "workspace-scoped-native-ui-adapter",
+        "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
       },
       "capability": "service:view.updateThemeConfig",
       "parityAssertion": "generated-census:host-authority"

@@ -137,7 +137,7 @@ describe("template repository exchange", () => {
     ).toThrow("must be separate trees");
   });
 
-  it("does not invent a flattened runtime for a contribution template", () => {
+  it("rejects obsolete contribution manifests before modifying either workspace", () => {
     const fx = fixture();
     const manifestPath = path.join(fx.workspace, "meta", "template.yml");
     fs.appendFileSync(
@@ -145,10 +145,7 @@ describe("template repository exchange", () => {
       ["templates:", "  use:", "    - url: git+https://example.test/base.git", ""].join("\n")
     );
     fs.copyFileSync(manifestPath, path.join(fx.checkout, "meta", "template.yml"));
-    const plan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
-    expect(plan.projection).not.toContain("meta/vibestudio.yml");
-    expect(plan.paths).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: "meta/vibestudio.yml" })])
-    );
+    expect(() => planTemplateRepositoryExchange({ ...fx, direction: "export" })).toThrow(/Unrecognized key.*templates/);
+    expect(fs.existsSync(path.join(fx.checkout, "meta", "vibestudio.yml"))).toBe(false);
   });
 });

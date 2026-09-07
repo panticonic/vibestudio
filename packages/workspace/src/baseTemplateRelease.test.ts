@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
+  DEFAULT_WORKSPACE_TEMPLATES_ENV,
   parseBaseTemplateReleaseArtifact,
   readBaseTemplateRelease,
+  readDefaultWorkspaceTemplates,
   readWorkspaceCreationTemplate,
   sameWorkspaceTemplatePin,
 } from "./baseTemplateRelease.js";
@@ -15,6 +17,15 @@ const pin = {
 };
 
 describe("Base release pointer", () => {
+  it("selects three exact independent distribution pins without requiring a running Base", () => {
+    const templates = { base: pin, personal: { ...pin, commit: "c".repeat(40) }, system: { ...pin, commit: "d".repeat(40) } };
+    expect(readDefaultWorkspaceTemplates("/unused", { [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(templates) })).toEqual(templates);
+    expect(parseBaseTemplateReleaseArtifact({ format: "vibestudio-base-release/1", baseTemplate: pin, workspaceTemplates: templates }).workspaceTemplates).toEqual(templates);
+  });
+
+  it("rejects an incomplete distribution set instead of silently using the combined Base", () => {
+    expect(() => readDefaultWorkspaceTemplates("/unused", { [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify({ base: pin }) })).toThrow();
+  });
   it("accepts the one current exact format", () => {
     expect(
       parseBaseTemplateReleaseArtifact({

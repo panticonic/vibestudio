@@ -3,11 +3,17 @@
  *
  * A workspace child can report only the workspace-local observations and
  * request only the hub-owned writes listed here. This is deliberately not a
- * general RPC client: callers cannot choose a route, transport a subject, or
- * forward an arbitrary service invocation.
+ * general RPC client. Cross-workspace envelopes use a dedicated host-attested
+ * forwarding operation; ordinary workspace code never receives this port.
  */
 
 import { z } from "zod";
+import {
+  forwardWorkspaceRpcHttp,
+  WORKSPACE_RPC_INTERNAL_ROUTE,
+  type WorkspaceRpcInvocation,
+} from "./workspaceRpcTransport.js";
+import type { RpcEnvelope } from "@vibestudio/rpc";
 import {
   ApprovalRecordSchema,
   GovernanceRecordSchema,
@@ -69,6 +75,20 @@ export const WorkspaceChildPresenceReportInputSchema = z
   .object({
     serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
     revision: z.number().int().nonnegative(),
+    workspaceApprovalCount: z.number().int().nonnegative(),
+    pendingApprovals: z
+      .array(
+        z
+          .object({
+            userId: z.string().min(1),
+            count: z.number().int().positive(),
+          })
+          .strict()
+      )
+      .refine(
+        (entries) => new Set(entries.map((entry) => entry.userId)).size === entries.length,
+        "Approval report contains duplicate users"
+      ),
     users: z
       .array(
         z
@@ -104,6 +124,15 @@ export const WorkspaceChildGovernanceQueryResultSchema = z
   .strict();
 
 export interface WorkspaceChildHubPort {
+  forwardWorkspaceRpc(
+    invocation: WorkspaceRpcInvocation,
+    options: {
+      body?: ReadableStream<Uint8Array> | null;
+      signal?: AbortSignal;
+      onEnvelope(envelope: RpcEnvelope): Promise<void> | void;
+      assertLive?(): void;
+    }
+  ): Promise<void>;
   mintAgentCredential(input: { entityId: string; ttlMs?: number }): Promise<IssuedAgentCredential>;
   revokeAgentCredential(agentId: string): Promise<boolean>;
   revokeAgentCredentialsForEntity(entityId: string): Promise<string[]>;
@@ -166,6 +195,14 @@ export function createWorkspaceChildHubPort(
   };
 
   return {
+    forwardWorkspaceRpc: (invocation, delivery) =>
+      forwardWorkspaceRpcHttp({
+        ...delivery,
+        invocation,
+        runtimeToken: options.runtimeToken,
+        fetchImpl,
+        url: new URL(WORKSPACE_RPC_INTERNAL_ROUTE, options.hubUrl),
+      }),
     mintAgentCredential: (input) =>
       post(
         "agent-credential/mint",

@@ -98,10 +98,14 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     expect(fx.acquire).not.toHaveBeenCalled();
   });
 
-  it("acquires the pin and creates complete installed lineage before initialization", async () => {
+  it("acquires, validates, and imports the exact root source without installed layers", async () => {
     const runtime = canonicalTemplateYaml({
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-      extensions: [{ source: "extensions/template-composer" }],
+      templateRegistry: {
+        url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
+        ref: "refs/heads/main",
+      },
+      extensions: [{ source: "extensions/templates" }],
     });
     const rootSnapshot = snapshot([
       {
@@ -114,38 +118,32 @@ describe("WorkspaceRootTemplateBootstrap", () => {
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
           template: {
             name: "Base",
-            repositories: ["extensions/template-composer"],
+            repositories: ["extensions/templates"],
             files: ["README.md"],
           },
-          templates: {
-            use: [],
-            registry: {
-              url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
-              ref: "refs/heads/main",
-            },
+          templateRegistry: {
+            url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
+            ref: "refs/heads/main",
           },
-          extensions: [{ source: "extensions/template-composer" }],
+          extensions: [{ source: "extensions/templates" }],
         }),
       },
-      { path: "extensions/template-composer/package.json", text: "{}" },
-      { path: "extensions/template-composer/index.ts", text: "export {};" },
+      { path: "extensions/templates/package.json", text: "{}" },
+      { path: "extensions/templates/index.ts", text: "export {};" },
       { path: "README.md", text: "repository tooling" },
     ]);
     const fx = fixture(rootSnapshot);
 
-    await expect(fx.bootstrap.prepareInitialization()).resolves.toMatchObject({
+    await expect(fx.bootstrap.prepareInitialization()).resolves.toEqual({
       pin: fx.pin,
-      repositories: [
-        { repoPath: "extensions/template-composer", subdir: "extensions/template-composer" },
-        { repoPath: "meta", subdir: "meta" },
-      ],
+      repositories: enumerateRootTemplateRepositories(rootSnapshot),
     });
     expect(fx.acquire).toHaveBeenCalledExactlyOnceWith(fx.pin);
-    expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates.state.yml"))).toBe(true);
-    expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"))).toBe(true);
-    expect(
-      fs.readFileSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"), "utf8")
-    ).toContain("vibestudio-template-registry.git");
+    expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates.state.yml"))).toBe(false);
+    expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"))).toBe(false);
+    expect(fs.readFileSync(path.join(fx.sourcePath, "meta/template.yml"), "utf8")).toBe(
+      new TextDecoder().decode(rootSnapshot.readFile("meta/template.yml")!)
+    );
   });
 
   it("rejects container-root files instead of inventing an owner", () => {

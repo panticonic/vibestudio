@@ -37,12 +37,15 @@ export function readDevelopmentTemplateSources(
     throw new Error("Local template checkout sources require an explicit source launch");
   }
   const sources = DevelopmentTemplateSourcesSchema.parse(JSON.parse(raw));
-  const urls = new Set<string>();
+  const exactCoordinates = new Set<string>();
   for (const source of sources) {
-    if (urls.has(source.pin.url)) {
-      throw new Error(`Development template source is selected more than once: ${source.pin.url}`);
+    const coordinate = JSON.stringify([source.pin.url, source.pin.commit, source.pin.snapshot]);
+    if (exactCoordinates.has(coordinate)) {
+      throw new Error(
+        `Development template source is selected more than once: ${source.pin.url} at ${source.pin.commit}`
+      );
     }
-    urls.add(source.pin.url);
+    exactCoordinates.add(coordinate);
   }
   return sources;
 }

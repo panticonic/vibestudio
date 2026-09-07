@@ -112,6 +112,7 @@ const SEMANTIC_WIRE_METHODS = {
   vcsFinalizeExternalDelta: true,
   vcsPush: true,
   vcsStatus: true,
+  vcsMainState: true,
   vcsCompare: true,
   vcsInspect: true,
   vcsNeighbors: true,

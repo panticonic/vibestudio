@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ProcessAdapter } from "@vibestudio/process-adapter";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
-import type { RpcEnvelope } from "@vibestudio/rpc";
+import type { RpcEnvelope, AuthenticatedCaller } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import {
   AUTHENTICATION_FRAME_MAX_BYTES,
@@ -110,8 +110,12 @@ export class ProcessSessionChannel implements RpcSessionChannel {
   takeInboundBody(_requestId: string): undefined {
     return undefined;
   }
-  async sendStreamFrame(requestEnvelope: RpcEnvelope, frame: StreamFrame): Promise<void> {
-    this.sendMessage(encodeWebSocketStreamFrame(requestEnvelope, frame));
+  async sendStreamFrame(
+    requestEnvelope: RpcEnvelope,
+    frame: StreamFrame,
+    responder?: AuthenticatedCaller
+  ): Promise<void> {
+    this.sendMessage(encodeWebSocketStreamFrame(requestEnvelope, frame, responder));
   }
   close(code = 1000, reason = "RPC process session closed"): void {
     if (!this.open) return;

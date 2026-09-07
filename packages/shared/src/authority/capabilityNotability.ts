@@ -195,6 +195,8 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "workspaces.delete", notability: "headline" },
   { key: "workspaces.open", notability: "everyday" },
   { key: "workspaces.read", notability: "everyday" },
+  { key: "workspaces.rpcPolicy.read", notability: "everyday" },
+  { key: "workspaces.rpcPolicy.write", notability: "headline" },
   { key: "workspace-panels.manage", notability: "everyday" },
   { key: "workspace.configure", notability: "headline" },
   { key: "workspace.config.apply", notability: "headline" },

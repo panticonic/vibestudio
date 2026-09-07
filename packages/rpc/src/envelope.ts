@@ -4,6 +4,7 @@ export interface EnvelopeInput {
   selfId: string;
   from: string;
   target: string;
+  targetWorkspaceId?: string;
   message: RpcMessage;
   callerKind?: CallerKind | "unknown";
   caller?: AuthenticatedCaller;
@@ -14,9 +15,10 @@ export interface EnvelopeInput {
 
 export function authenticatedCaller(
   callerId: string,
-  callerKind: CallerKind | "unknown" = "unknown"
+  callerKind: CallerKind | "unknown" = "unknown",
+  workspaceId?: string
 ): AuthenticatedCaller {
-  return { callerId, callerKind };
+  return { callerId, callerKind, ...(workspaceId ? { workspaceId } : {}) };
 }
 
 export function originOfEnvelope(envelope: RpcEnvelope): AuthenticatedCaller {
@@ -28,6 +30,7 @@ export function envelopeFromMessage(input: EnvelopeInput): RpcEnvelope {
   return {
     from: input.from,
     target: input.target,
+    ...(input.targetWorkspaceId ? { targetWorkspaceId: input.targetWorkspaceId } : {}),
     delivery: {
       caller,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -84,9 +87,15 @@ export function responseEnvelopeFor(
   responder: AuthenticatedCaller,
   message: RpcMessage
 ): RpcEnvelope {
+  if (requestEnvelope.targetWorkspaceId && !requestEnvelope.delivery.caller.workspaceId) {
+    throw new Error("Workspace-addressed RPC request has no authenticated origin workspace");
+  }
   return {
     from: requestEnvelope.target,
     target: requestEnvelope.from,
+    ...(requestEnvelope.targetWorkspaceId && requestEnvelope.delivery.caller.workspaceId
+      ? { targetWorkspaceId: requestEnvelope.delivery.caller.workspaceId }
+      : {}),
     delivery: { caller: responder },
     provenance: requestEnvelope.provenance,
     message,

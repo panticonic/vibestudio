@@ -22,7 +22,7 @@ import {
   executionArtifactDigest,
   executionSourceClosureDigest,
 } from "@vibestudio/shared/execution/retention";
-import { AppHost } from "./appHost.js";
+import { AppHost, type AppHostDeps } from "./appHost.js";
 import { UnitInstallReviewCoordinator } from "./unitInstallReviewCoordinator.js";
 import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
 
@@ -124,6 +124,8 @@ function makeHarness(
     reactNativeAppArtifactBaseUrl?: string;
     terminalAppArtifactBaseUrl?: string;
     affectedBuildUnits?: string[];
+    isSystemWorkspace?: () => boolean;
+    connectionGrants?: AppHostDeps["connectionGrants"];
   } = {}
 ) {
   const root = tempRoot();
@@ -284,12 +286,14 @@ function makeHarness(
     statePath: path.join(root, "state"),
     workspacePath,
     workspaceId: "ws",
+    isSystemWorkspace: opts.isSystemWorkspace ?? (() => true),
     buildSystem,
     eventService: eventService as never,
     approvalQueue,
     approvalCoordinator,
     notificationService,
     entityCache,
+    connectionGrants: opts.connectionGrants,
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       filePath === "apps/shell/package.json"
         ? fs.readFileSync(path.join(appPath, "package.json"), "utf8")
@@ -509,6 +513,66 @@ function createMockResponse() {
 }
 
 describe("AppHost", () => {
+  it("keeps native app source authorable outside System without staging launch reviews or runtimes", async () => {
+    const { host, buildSystem, approvalQueue, graphNode, workspacePath } = makeHarness({
+      isSystemWorkspace: () => false,
+      seeded: true,
+    });
+    const mobile = createAppGraphNode(workspacePath, "apps/mobile", {
+      name: "@workspace-apps/mobile",
+      target: "react-native",
+    });
+    const terminal = createAppGraphNode(workspacePath, "apps/remote-cli", {
+      name: "@workspace-apps/remote-cli",
+      target: "terminal",
+    });
+    const nodes = [graphNode, mobile, terminal];
+    buildSystem.getGraph.mockReturnValue({ allNodes: () => nodes } as never);
+    const declared = nodes.map((node) => ({ source: node.relativePath, ref: "main" }));
+    host.setDeclared(declared);
+    expect(host.reviewDeclared(declared)).toEqual({ units: [], identityKeys: [] });
+    expect(host.seedTrustedDeclared(declared)).toEqual([]);
+    await host.reconcileDeclared(declared);
+    await host.whenSettled();
+    expect((await host.unitChangeApprovalForCommit(`state:${"a".repeat(64)}`)).units).toEqual([]);
+    for (const target of ["electron", "react-native", "terminal"] as const)
+      expect(host.listHostTargetCandidates(target)).toEqual([]);
+    expect(await host.ensureElectronReady()).toMatchObject({ ready: false });
+    expect(await host.reactNative.ensureReady()).toMatchObject({ ready: false });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(host.registry.list()).toEqual([]);
+    expect(buildSystem.getGraph().allNodes()).toEqual(nodes);
+  });
+
+  it.each(["electron", "react-native", "terminal"] as const)(
+    "rejects stale %s runtime authority when the protected System designation is absent",
+    async (target) => {
+      let system = true;
+      const connectionGrants = { grant: vi.fn(), revokeForPrincipal: vi.fn() };
+      const { host, graphNode, entityCache } = makeHarness({
+        isSystemWorkspace: () => system,
+        connectionGrants,
+      });
+      installApp(host, graphNode);
+      const entry = host.registry.patch(graphNode.name, { target });
+      expect(host.hasAppCapability(graphNode.name, "notifications")).toBe(true);
+      system = false;
+      expect(host.hasAppCapability(graphNode.name, "notifications")).toBe(false);
+      await expect(host.activateRelease(graphNode.name)).rejects.toThrow(
+        "designated System workspace"
+      );
+      if (target === "react-native")
+        expect(() => host.reactNative.getBootstrap(graphNode.relativePath)).toThrow(
+          "designated System workspace"
+        );
+      if (target === "terminal")
+        await expect(host.terminal.start(entry)).rejects.toThrow("designated System workspace");
+      expect(entityCache.listActive()).toEqual([]);
+      expect(connectionGrants.grant).not.toHaveBeenCalled();
+    }
+  );
+
   it("publishes one immutable initial-artifact transfer for remote desktop startup", async () => {
     const { host, buildSystem, graphNode, root } = makeHarness();
     installAppEntry(host, graphNode, { activeBundleKey: "app-key" });
@@ -2686,6 +2750,15 @@ describe("AppHost", () => {
                 integrity: "sha256-android",
                 content: "bundle",
               },
+              {
+                path: "android/drawable-mdpi/logo.png",
+                role: "asset",
+                contentType: "image/png",
+                encoding: "base64",
+                platform: "android",
+                integrity: "sha256-logo",
+                content: "image",
+              },
             ],
           } as never)
         : null
@@ -2700,6 +2773,13 @@ describe("AppHost", () => {
           integrity: "sha256-android",
           route: "/_a/rn-android-only-key/index.android.bundle",
           url: "https://host.tailnet.ts.net/_a/rn-android-only-key/index.android.bundle",
+        }),
+        expect.objectContaining({
+          path: "android/drawable-mdpi/logo.png",
+          platform: "android",
+          role: "asset",
+          integrity: "sha256-logo",
+          url: "https://host.tailnet.ts.net/_a/rn-android-only-key/android/drawable-mdpi/logo.png",
         }),
       ],
     });

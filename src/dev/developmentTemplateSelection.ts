@@ -4,20 +4,17 @@ import { execFileSync } from "node:child_process";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { GitClient, readExactGitSnapshot } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import {
-  parseTemplateManifestContent,
-  validateTemplateSnapshotInventory,
-} from "@vibestudio/workspace/templateManifest";
+import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
+import { enumerateRootTemplateRepositories } from "../server/workspaceRootTemplateBootstrap.js";
 
 export interface DevelopmentTemplateSelection {
   pin: WorkspaceTemplatePin;
   checkout: string;
   sourceCheckout: string;
-  temporary: boolean;
   changedPaths: readonly string[];
 }
 
@@ -64,7 +61,6 @@ export async function resolveDevelopmentTemplateSelections(input: {
     const checkpoint = await prepareDevelopmentTemplateCheckpoint({
       checkout: sourceCheckout,
       target: path.join(input.checkpointRoot, String(index)),
-      gitClient,
     });
     const status = await gitClient.status(checkpoint.checkout);
     if (!status.commit || !status.branch) {
@@ -82,25 +78,13 @@ export async function resolveDevelopmentTemplateSelections(input: {
       },
       reservedPaths: "exclude",
     });
-    const manifestBytes = snapshot.readFile("meta/template.yml");
-    if (!manifestBytes)
-      throw new Error(`Template checkout ${sourceCheckout} has no meta/template.yml`);
-    const manifest = parseTemplateManifestContent(
-      new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes),
-      WORKSPACE_SYSTEM_EPOCH
-    );
-    validateTemplateSnapshotInventory(
-      manifest.inventory,
-      snapshot.files.map((file) => file.path)
-    );
-    if (manifest.dependencies.length === 0) {
-      throw new Error(
-        `Development template ${url} is root-capable; select it with --base-checkout instead`
-      );
-    }
-    if (snapshot.readFile("meta/vibestudio.yml")) {
-      throw new Error(`Contribution template ${url} must not contain meta/vibestudio.yml`);
-    }
+    validateRootTemplateSource({
+      workspaceId: "development-template",
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      readFile: snapshot.readFile,
+      snapshotPaths: snapshot.files.map((file) => file.path),
+      repositories: enumerateRootTemplateRepositories(snapshot),
+    });
     const pin = WorkspaceTemplatePinSchema.parse({
       url,
       ref: `refs/heads/${status.branch}`,

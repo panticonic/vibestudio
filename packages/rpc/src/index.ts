@@ -15,6 +15,7 @@ export type {
   RpcMessage,
   RpcTransport,
   RpcCallOptions,
+  RpcTargetOptions,
   RpcCausalParent,
   RpcStreamOptions,
   AuthenticatedCaller,

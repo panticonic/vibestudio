@@ -104,6 +104,17 @@ describe("GAD runtime schema", () => {
       capability: "workspace-service:gad.workspace",
       authority: { principals: ["host", "code"] },
     });
+    expect(gadWireMethods.vcsMainState).toMatchObject({
+      capability: "workspace-service:gad.workspace",
+      authority: { principals: ["host", "code"] },
+    });
+    const request = {
+      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+    };
+    expect(gadWireMethods.vcsMainState.args.safeParse([request]).success).toBe(true);
+    expect(gadWireMethods.vcsMainState.args.safeParse([{ ...request, input: {} }]).success).toBe(
+      false
+    );
   });
 
   it("accepts exact bootstrap content roots at the RPC authority boundary", () => {

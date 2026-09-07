@@ -15,7 +15,7 @@ import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { capabilityDomain } from "@vibestudio/shared/authority/authorityDomains";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
 import { stateLayout } from "../stateLayout.js";
-import { AUTHORITY_GRANTS_SCHEMA } from "./authorityGrantSchema.js";
+import { AUTHORITY_GRANTS_SCHEMA, AUTHORITY_GRANTS_MIGRATIONS } from "./authorityGrantSchema.js";
 
 export interface IssueAuthorityGrantInput {
   id?: string;
@@ -53,6 +53,7 @@ export class CapabilityGrantStore {
     try {
       openCanonicalSqliteDatabase(this.db, AUTHORITY_GRANTS_SCHEMA, {
         description: `authority grant store in ${this.databasePath}`,
+        migrations: AUTHORITY_GRANTS_MIGRATIONS,
       });
       this.db.exec("PRAGMA journal_mode = WAL");
     } catch (error) {
@@ -81,8 +82,8 @@ export class CapabilityGrantStore {
           session_id, invocation_digest, provider_execution_digest, mission_subject,
           agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
-          decided_by, decision_surface, task_ref
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`
+          decided_by, decision_surface, task_ref, source_workspace_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -107,7 +108,8 @@ export class CapabilityGrantStore {
         input.lastUsedAt ?? null,
         input.decidedBy ?? null,
         input.decisionSurface ?? null,
-        constraints.taskRef ?? null
+        constraints.taskRef ?? null,
+        constraints.sourceWorkspaceId ?? null
       );
     return {
       id,
@@ -621,6 +623,9 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     throw new Error(`Grant ${String(row["id"])} has invalid lineage_at_consent`);
   }
   const constraints = {
+    ...(row["source_workspace_id"] === null
+      ? {}
+      : { sourceWorkspaceId: String(row["source_workspace_id"]) }),
     ...(row["session_id"] === null ? {} : { sessionId: String(row["session_id"]) }),
     ...(row["invocation_digest"] === null
       ? {}

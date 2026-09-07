@@ -50,6 +50,7 @@ export const ThemeConfigSchema: z.ZodType<ThemeConfig> = z.object({
 });
 
 export const AppInfoSchema: z.ZodType<AppInfo> = z.object({
+  initialFocusedWorkspaceId: z.string().min(1).optional(),
   version: z.string(),
   connectionMode: z.enum(["local", "remote"]),
   remoteHost: z.string().optional(),

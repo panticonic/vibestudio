@@ -22,11 +22,23 @@ describe("shell surface targets", () => {
     expect(() => validateShellSurfaceTarget({ kind: "panel-command", panelId: "p" })).toThrow(
       /commandId/
     );
+    expect(() => validateShellSurfaceTarget({ kind: "settings", workspaceId: "" })).toThrow(
+      /workspaceId/
+    );
     expect(() => validateShellSurfaceTarget("invented")).toThrow(/Unknown shell surface/);
   });
 
   it("round-trips deep links on both carriers", () => {
     const targets = [
+      {
+        kind: "workspace-chooser",
+        template: {
+          url: "git+https://example.test/app.git",
+          ref: "refs/heads/main",
+          commit: "a".repeat(40),
+          snapshot: `v1-sha256:${"b".repeat(64)}`,
+        },
+      },
       {
         kind: "command-agent",
         panelId: "panel:tree/a~b/c",
@@ -36,6 +48,7 @@ describe("shell surface targets", () => {
       { kind: "about", page: "credentials" },
       { kind: "panel-command", panelId: "panel:tree/x", commandId: "tour-next" },
       { kind: "settings", section: "devices" },
+      { kind: "settings", section: "workspaces", workspaceId: "workspace:a/b" },
     ] as const;
     for (const target of targets) {
       for (const carrier of ["scheme", "https"] as const) {
@@ -59,6 +72,9 @@ describe("shell surface targets", () => {
     expect(parseShellSurfaceLink("https://vibestudio.app/p#compact")).toEqual({
       kind: "unrelated",
     });
+    expect(
+      parseShellSurfaceLink("vibestudio://surface?v=1&kind=workspace-chooser&template=%7B%7D").kind
+    ).toBe("error");
     expect(parseShellSurfaceLink("vibestudio://about?v=2&page=permissions").kind).toBe("error");
     expect(parseShellSurfaceLink("vibestudio://ask?v=1&prompt=hi&auto=1").kind).toBe("error");
     expect(parseShellSurfaceLink("https://vibestudio.app/about?page=x#v=1").kind).toBe("error");

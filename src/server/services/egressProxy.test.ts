@@ -2949,7 +2949,9 @@ describe("EgressProxy", () => {
   it("resolves queued credential proxy approvals covered by a trusted version grant", async () => {
     const credential = createCredential({ grants: [] });
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
-    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const approvalQueue = createApprovalQueue({
+      eventService: { emitProjected: vi.fn() } as never,
+    });
     const proxy = new EgressProxy({
       credentialStore: store,
       auditLog: new MemoryAuditLog() as never,

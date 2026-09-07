@@ -21,7 +21,7 @@ import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient
 
 export type WorkspaceRpcSchemaMetadata = Pick<
   ServiceMethodSchemas[string],
-  "authority" | "tier" | "access" | "directEffect" | "execution"
+  "authority" | "tier" | "access" | "directEffect" | "execution" | "crossWorkspace"
 >;
 
 function authorityPrincipals(
@@ -64,6 +64,7 @@ export interface WorkspaceRpcMethodDoc {
     tier?: "open" | "gated" | "critical";
     sensitivity?: "read" | "write" | "admin" | "destructive";
     codeOnly?: boolean;
+    crossWorkspace?: boolean;
   };
   execution?: { harness: "attested-system-test" };
   inputContractDigest: string;
@@ -231,6 +232,11 @@ function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
       if (value === "read" || value === "write" || value === "admin" || value === "destructive") {
         access.sensitivity = value;
       }
+    } else if (name === "crossWorkspace") {
+      if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) access.crossWorkspace = true;
+      else if (property.initializer.kind === ts.SyntaxKind.FalseKeyword)
+        access.crossWorkspace = false;
+      else throw new Error("RPC crossWorkspace exposure must be a literal boolean");
     } else if (name === "codeOnly") {
       if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) access.codeOnly = true;
       if (property.initializer.kind === ts.SyntaxKind.FalseKeyword) access.codeOnly = false;
@@ -353,6 +359,7 @@ export function collectWorkspaceRpcCatalog(
                 tier: schema.tier.tier,
                 sensitivity: schema.access.sensitivity,
                 ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
+                ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
               };
               effect = schema.directEffect;
               execution = schema.execution;

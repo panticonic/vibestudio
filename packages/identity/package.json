@@ -14,7 +14,8 @@
     "./revocationCleanup": "./src/revocationCleanup.ts",
     "./types": "./src/types.ts",
     "./userStore": "./src/userStore.ts",
-    "./userSubjectSource": "./src/userSubjectSource.ts"
+    "./userSubjectSource": "./src/userSubjectSource.ts",
+    "./workspaceRpcPolicy": "./src/workspaceRpcPolicy.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/identity/src"

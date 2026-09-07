@@ -28,9 +28,13 @@ const directRoute = (url = "http://local") => ({
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-cli-test-"));
+  const configRoot = path.join(tmpRoot, "host-claude-fixture");
+  fs.mkdirSync(configRoot);
+  vi.stubEnv("CLAUDE_CONFIG_DIR", configRoot);
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 

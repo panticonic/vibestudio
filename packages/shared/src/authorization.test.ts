@@ -568,3 +568,37 @@ describe("compositional authority", () => {
     ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 });
+
+describe("workspace-bound consent", () => {
+  const grant: AuthorityGrant = {
+    subject: code,
+    capability: "fs.write",
+    resource: { kind: "exact", key: RESOURCE },
+    effect: "allow",
+    issuedBy: user,
+    createdAt: 1,
+    provenance: "acquisition",
+  };
+  const allowed = (context: AuthorizationContext, consent: AuthorityGrant) =>
+    evaluateAuthority({
+      context,
+      grants: [consent],
+      requirement: capability("code", "fs.write"),
+      resourceKey: RESOURCE,
+      now: 100,
+    }).allowed;
+
+  it("keeps existing grants local even for the exact same caller code and user", () => {
+    expect(allowed(codeContext(), grant)).toBe(true);
+    expect(allowed({ ...codeContext(), sourceWorkspaceId: "ws-other" }, grant)).toBe(false);
+  });
+
+  it("requires the exact foreign workspace and does not reuse its consent locally", () => {
+    const foreignConsent = { ...grant, constraints: { sourceWorkspaceId: "ws-other" } };
+    expect(allowed({ ...codeContext(), sourceWorkspaceId: "ws-other" }, foreignConsent)).toBe(true);
+    expect(allowed({ ...codeContext(), sourceWorkspaceId: "ws-third" }, foreignConsent)).toBe(
+      false
+    );
+    expect(allowed(codeContext(), foreignConsent)).toBe(false);
+  });
+});

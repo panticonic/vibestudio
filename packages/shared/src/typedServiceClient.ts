@@ -196,6 +196,8 @@ export interface MethodError {
  * agents via the capability catalog. The serializer must explicitly emit them.
  */
 export interface MethodSchema {
+  /** Eligible for explicitly gated calls from another workspace. Omitted is closed. */
+  crossWorkspace?: boolean;
   description?: string;
   args: z.ZodType;
   returns?: z.ZodType;

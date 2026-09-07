@@ -402,9 +402,15 @@ describe("wsClientTransport", () => {
 
   it("synthesizes a rejecting response envelope from ws:routed-response-error", async () => {
     const { sockets, transport } = createTransportHarness();
-    const delivered: Array<{ from: string; message: unknown }> = [];
+    const delivered: Array<{ from: string; callerWorkspaceId?: string; message: unknown }> = [];
     transport.onMessage((envelope) => {
-      delivered.push({ from: envelope.from, message: envelope.message });
+      delivered.push({
+        from: envelope.from,
+        ...(envelope.delivery.caller.workspaceId
+          ? { callerWorkspaceId: envelope.delivery.caller.workspaceId }
+          : {}),
+        message: envelope.message,
+      });
     });
 
     const connected = transport.connectAndWait();
@@ -417,6 +423,7 @@ describe("wsClientTransport", () => {
       data: JSON.stringify({
         type: "ws:routed-response-error",
         targetId: "do:notes:Bucket:key",
+        targetWorkspaceId: "workspace:notes",
         requestId: "req-123",
         error: "Target not reachable: do:notes:Bucket:key",
         errorKind: "transport",
@@ -427,6 +434,7 @@ describe("wsClientTransport", () => {
     expect(delivered).toEqual([
       {
         from: "do:notes:Bucket:key",
+        callerWorkspaceId: "workspace:notes",
         message: {
           type: "response",
           requestId: "req-123",

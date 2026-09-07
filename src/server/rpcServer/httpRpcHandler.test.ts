@@ -159,8 +159,12 @@ describe("HttpRpcHandler", () => {
 
     expect(configured.handleRequest).toHaveBeenCalledWith(
       { callerId: "worker:trusted", callerKind: "worker" },
-      envelope,
-      envelope.message,
+      expect.objectContaining({
+        from: "worker:trusted",
+        delivery: { caller: { callerId: "worker:trusted", callerKind: "worker" } },
+        provenance: [{ callerId: "worker:trusted", callerKind: "worker" }],
+      }),
+      { ...envelope.message, fromId: "worker:trusted" },
       expect.any(AbortSignal)
     );
     expect(captured.status).toBe(200);
@@ -171,6 +175,73 @@ describe("HttpRpcHandler", () => {
         result: { services: ["docs"] },
       },
     });
+  });
+
+  it("rejects a foreign workspace before local dispatch or cancellation", async () => {
+    const configured = deps({ workspaceId: "source" });
+    const handler = new HttpRpcHandler(configured);
+    for (const message of [
+      rpcEnvelope().message,
+      {
+        type: "request-cancel" as const,
+        requestId: "request-1",
+        fromId: "forged-caller",
+      },
+    ]) {
+      const { res, captured } = response();
+      await handler.handle(
+        request({
+          body: JSON.stringify({
+            ...rpcEnvelope(),
+            targetWorkspaceId: "destination",
+            message,
+          }),
+        }),
+        res
+      );
+      expect(captured.status).toBe(403);
+    }
+    expect(configured.handleRequest).not.toHaveBeenCalled();
+    expect(configured.handleEvent).not.toHaveBeenCalled();
+  });
+
+  it("attests local workspace addressing and its reply despite forged provenance", async () => {
+    const configured = deps({ workspaceId: "source" });
+    const handler = new HttpRpcHandler(configured);
+    const { res, captured } = response();
+    const envelope = rpcEnvelope();
+    envelope.targetWorkspaceId = "source";
+    envelope.delivery.caller.workspaceId = "forged-workspace";
+    await handler.handle(request({ body: JSON.stringify(envelope) }), res);
+    expect(captured.status).toBe(200);
+    expect(JSON.parse(captured.body)).toMatchObject({
+      target: "worker:trusted",
+      targetWorkspaceId: "source",
+      delivery: { caller: { callerId: "main", workspaceId: "source" } },
+      provenance: [{ callerId: "worker:trusted", workspaceId: "source" }],
+    });
+    expect(configured.handleRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        delivery: {
+          caller: {
+            callerId: "worker:trusted",
+            callerKind: "worker",
+            workspaceId: "source",
+          },
+        },
+      }),
+      expect.anything(),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it.each(["null", "[]", "{}"])("rejects malformed envelope %s", async (body) => {
+    const configured = deps({ workspaceId: "source" });
+    const { res, captured } = response();
+    await new HttpRpcHandler(configured).handle(request({ body }), res);
+    expect(captured.status).toBe(400);
+    expect(configured.handleRequest).not.toHaveBeenCalled();
   });
 
   it("aborts the authenticated caller's matching in-flight unary request", async () => {

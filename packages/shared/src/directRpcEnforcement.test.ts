@@ -104,6 +104,17 @@ describe("directRpcInvocationResourceKey", () => {
 });
 
 describe("directRpcDenial", () => {
+  it("requires the actual receiver to opt in to a foreign workspace call", () => {
+    const input = {
+      kind: "call" as const, method: "read", caller: { workspaceId: "other" },
+      attestation: attestation(),
+      declaration: { tier: "open" as const, principals: ["code" as const], sensitivity: "read" as const, effect: { kind: "open" as const } },
+      audience: "do:x", resourceKey: "do:x", capability: "rpc:read", now: 100,
+    };
+    expect(directRpcDenial(input)).toMatchObject({ code: "EACCES", reason: expect.stringContaining("cross-workspace") });
+    expect(directRpcDenial({ ...input, declaration: { ...input.declaration, crossWorkspace: true } })).toBeNull();
+    expect(directRpcDenial({ ...input, caller: { workspaceId: "ws" } })).toBeNull();
+  });
   it("identifies an undeclared receiver as a provider defect, not an acquirable grant", () => {
     expect(
       directRpcDenial({

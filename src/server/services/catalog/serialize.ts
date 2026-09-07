@@ -14,6 +14,7 @@ import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 
 export function serializeMethod(method: MethodSchema) {
   return {
+    ...(method.crossWorkspace === true ? { crossWorkspace: true } : {}),
     ...(method.description ? { description: method.description } : {}),
     ...(method.authority ? { authority: method.authority } : {}),
     ...(method.access ? { access: method.access } : {}),

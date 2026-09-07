@@ -19,6 +19,8 @@ import {
   buildHubReadyPayload,
   buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
+  executeHubControl,
+  applyHubWorkspacePresenceReport,
   snapshotInternalDOBundleForHub,
   handleWorkspaceChildExit,
   HubCompletePairingBodySchema,
@@ -40,7 +42,6 @@ import {
   type WorkspaceRuntime,
 } from "./hubServer.js";
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
-import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
 
 const removeWorkspaceTreeForTest = (target: string): void => {
   fs.rmSync(target, { recursive: true, force: true });
@@ -112,51 +113,55 @@ describe("hub workspace creation template selection", () => {
     commit: "a".repeat(40),
     snapshot: `v1-sha256:${"b".repeat(64)}` as const,
   };
+  const defaultTemplates = {
+    base: developmentPin,
+    personal: { ...developmentPin, ref: "refs/heads/distributions/personal" },
+    system: { ...developmentPin, ref: "refs/heads/distributions/system" },
+  };
 
-  it("records the development Base selected for this hub boot", () => {
+  it("uses the minimal Base for ordinary creation", () => {
     expect(
       selectWorkspaceCreationRootTemplate({
         appRoot: "/unused",
         environment: {
-          NODE_ENV: "development",
-          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+          VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates),
         },
       })
     ).toEqual(developmentPin);
   });
 
-  it("accepts an explicit template matching the selected development Base", () => {
+  it("accepts any explicit exact template", () => {
     expect(
       selectWorkspaceCreationRootTemplate({
         appRoot: "/unused",
         requested: developmentPin,
         environment: {
-          NODE_ENV: "development",
-          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+          VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates),
         },
       })
     ).toEqual(developmentPin);
   });
 
-  it("uses a local checkout only to acquire a production source launch's explicit intent", () => {
+  it("uses an initial System override only for bootstrap selection", () => {
     const environment = {
       NODE_ENV: "production",
-      VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+      VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates),
+      VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: JSON.stringify(defaultTemplates.system),
     };
     expect(
       selectWorkspaceCreationRootTemplate({
         appRoot: process.cwd(),
-        requested: developmentPin,
+        initial: true,
         environment,
       })
-    ).toEqual(developmentPin);
+    ).toEqual(defaultTemplates.system);
     expect(selectWorkspaceCreationRootTemplate({ appRoot: process.cwd(), environment })).toEqual(
-      readBaseTemplateRelease(process.cwd()).baseTemplate
+      defaultTemplates.base
     );
   });
 
-  it("rejects a conflicting explicit template before registering the workspace", () => {
-    expect(() =>
+  it("does not constrain an explicit template to one development pin", () => {
+    expect(
       selectWorkspaceCreationRootTemplate({
         appRoot: "/unused",
         requested: {
@@ -165,11 +170,10 @@ describe("hub workspace creation template selection", () => {
           snapshot: `v1-sha256:${"d".repeat(64)}` as const,
         },
         environment: {
-          NODE_ENV: "development",
-          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentPin),
+          VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: JSON.stringify(defaultTemplates),
         },
       })
-    ).toThrow(/does not match the selected development Base/);
+    ).toMatchObject({ commit: "c".repeat(40) });
   });
 });
 
@@ -338,7 +342,17 @@ describe("workspace child exit reconciliation", () => {
       serverBootId: "boot-owner",
       workspaceChildTokens: new Map([["child-token", "ws_dev"]]),
       workspacePresence: new Map([
-        ["ws_dev", { serverBootId: "boot-child", revision: 1, users: new Map() }],
+        [
+          "ws_dev",
+          {
+            runtimeToken: "old-token",
+            serverBootId: "boot-child",
+            revision: 1,
+            users: new Map(),
+            pendingApprovals: new Map(),
+            workspaceApprovalCount: 0,
+          },
+        ],
       ]),
       runtimes: new Map([["dev", runtime]]),
       shuttingDown: false,
@@ -647,6 +661,8 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     baseEnv: {
       PATH: "/usr/bin",
       VIBESTUDIO_GATEWAY_PORT: "3030",
+      VIBESTUDIO_REQUIRE_MOBILE_READY: "1",
+      VIBESTUDIO_REQUIRE_ELECTRON_READY: "1",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
       VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/hub/runtime/internal-do.bundle.mjs",
@@ -690,6 +706,8 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
 
   it("keeps the strict hub-child control contract and clears inherited ports", () => {
     const env = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "alpha", ephemeral: true });
+    expect(env["VIBESTUDIO_REQUIRE_MOBILE_READY"]).toBeUndefined();
+    expect(env["VIBESTUDIO_REQUIRE_ELECTRON_READY"]).toBeUndefined();
     expect(env["VIBESTUDIO_PROCESS_ROLE"]).toBe("workspace-child");
     expect(env["VIBESTUDIO_HUB_URL"]).toBe("http://127.0.0.1:3030");
     expect(env["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"]).toBe("workspace-child-identity");
@@ -734,6 +752,37 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     });
 
     expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
+  });
+
+  it("passes source write-back only to the supervisor-designated workspace", () => {
+    const writeback = JSON.stringify({ root: "/source/base", repositories: ["meta"] });
+    const designated = buildWorkspaceChildEnv({
+      ...base,
+      baseEnv: {
+        ...base.baseEnv,
+        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: writeback,
+        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID: "ws_base",
+      },
+      childWorkspaceName: "base",
+    });
+    const other = buildWorkspaceChildEnv({
+      ...base,
+      baseEnv: {
+        ...base.baseEnv,
+        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK: writeback,
+        VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID: "ws_base",
+      },
+      workspaceId: "ws_other",
+      childWorkspaceName: "other",
+    });
+
+    expect(JSON.parse(designated["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]!)).toEqual({
+      root: "/source/base",
+      repositories: ["meta"],
+      workspaceId: "ws_base",
+    });
+    expect(other["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]).toBeUndefined();
+    expect(designated["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK_WORKSPACE_ID"]).toBeUndefined();
   });
 
   it("does not inherit an unrecognized startup approval value", () => {
@@ -929,6 +978,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
     // then mint the shell token whose callerId (`shell:<deviceId>`) resolves
     // back to root through the device→user FK.
     const root = userStore.createRoot({ handle: "root", displayName: "Root" });
+    membershipStore.add(root.id, runtime.workspaceId, root.id);
     const rootDevice = deviceAuthStore.issueDevice({
       userId: root.id,
       label: "root-cli",
@@ -938,6 +988,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
     const state: HubRuntimeState = {
       appRoot: "/app",
       args: {},
+      bootstrapWorkspaceId: runtime.workspaceId,
       // Seeded so invite-workspace inference can resolve the running workspace
       // by name without spawning (the runtime is already in `runtimes`).
       centralData: makeHubCentralData([
@@ -975,6 +1026,164 @@ describe("hub RPC pairing surfacing (§5)", () => {
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
+
+  it("uses workspace administration for RPC policy independently of account role", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    const rootSubject = { userId: rootUserId, handle: "root", role: "root" as const };
+    const administrator = state.userStore.inviteUser({
+      handle: "workspace_admin",
+      displayName: "Workspace admin",
+      role: "member",
+      createdBy: rootUserId,
+    });
+    state.membershipStore.add(administrator.id, runtime.workspaceId, rootUserId, "admin");
+    const subject = {
+      userId: administrator.id,
+      handle: administrator.handle,
+      role: administrator.role,
+    };
+    const policy = {
+      incoming: [],
+      outgoing: [
+        {
+          workspaceId: "ws_destination",
+          userId: administrator.id,
+          target: "main",
+          operation: "notes.read",
+          purpose: "call" as const,
+        },
+      ],
+    };
+    const args = [
+      { workspaceId: runtime.workspaceId, policy, expectedPolicy: { incoming: [], outgoing: [] } },
+    ];
+    try {
+      for (const method of ["getWorkspaceRpcPolicy", "setWorkspaceRpcPolicy"]) {
+        await expect(executeHubControl(state, rootSubject, method, args, vi.fn())).rejects.toThrow(
+          "Requires workspace administrator role"
+        );
+      }
+      const respond = vi.fn();
+      await executeHubControl(state, subject, "setWorkspaceRpcPolicy", args, respond);
+      expect(state.identityDb.getWorkspaceRpcPolicy(runtime.workspaceId)).toEqual(policy);
+      await executeHubControl(state, subject, "getWorkspaceRpcPolicy", args, respond);
+      expect(respond).toHaveBeenLastCalledWith({
+        workspaceId: runtime.workspaceId,
+        policy,
+        incomingLocked: false,
+      });
+    } finally {
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("rejects account-admin invitations into a workspace they only belong to", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    try {
+      await expect(
+        executeHubControl(
+          state,
+          { userId: rootUserId, handle: "root", role: "root" },
+          "inviteUser",
+          [{ handle: "unapproved_guest", workspaces: [runtime.advertisedName] }],
+          vi.fn()
+        )
+      ).rejects.toThrow("Requires workspace administrator role");
+      expect(state.userStore.getByHandle("unapproved_guest")).toBeNull();
+      expect(state.identityDb.listMembers(runtime.workspaceId)).toHaveLength(1);
+    } finally {
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("projects only the viewer's live approval counts and retires replaced child reports", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    const bob = state.userStore.inviteUser({
+      handle: "bob",
+      displayName: "Bob",
+      role: "member",
+      createdBy: rootUserId,
+    });
+    state.membershipStore.add(bob.id, runtime.workspaceId, rootUserId, "admin");
+    state.workspaceChildTokens.set(runtime.runtimeToken, runtime.workspaceId);
+    const report = {
+      serverBootId: `boot_${"C".repeat(24)}`,
+      revision: 1,
+      users: [],
+      pendingApprovals: [
+        { userId: rootUserId, count: 2 },
+        { userId: bob.id, count: 5 },
+        { userId: "outsider", count: 100 },
+      ],
+      workspaceApprovalCount: 3,
+    };
+    const list = async (userId: string) => {
+      let entries: Array<{ pendingApprovalCount: number }> = [];
+      await executeHubControl(
+        state,
+        { userId, handle: "viewer", role: "member" },
+        "listWorkspaces",
+        [],
+        (result) => {
+          entries = result as typeof entries;
+        }
+      );
+      return entries;
+    };
+    try {
+      expect(
+        applyHubWorkspacePresenceReport(state, runtime.workspaceId, report, runtime.runtimeToken)
+      ).toBe(true);
+      expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(2);
+      expect((await list(bob.id))[0]?.pendingApprovalCount).toBe(8);
+      expect(await list("outsider")).toEqual([]);
+      expect(
+        state.workspacePresence.get(runtime.workspaceId)?.pendingApprovals.has("outsider")
+      ).toBe(false);
+      expect(
+        applyHubWorkspacePresenceReport(
+          state,
+          runtime.workspaceId,
+          { ...report, pendingApprovals: [] },
+          runtime.runtimeToken
+        )
+      ).toBe(false);
+      state.membershipStore.add(bob.id, runtime.workspaceId, rootUserId, "member");
+      expect((await list(bob.id))[0]?.pendingApprovalCount).toBe(5);
+      state.workspaceChildTokens.delete(runtime.runtimeToken);
+      const replacement = { ...runtime, runtimeToken: "replacement-token" };
+      state.runtimes.set(runtime.advertisedName, replacement);
+      state.workspaceChildTokens.set(replacement.runtimeToken, runtime.workspaceId);
+      expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(0);
+      expect(
+        applyHubWorkspacePresenceReport(
+          state,
+          runtime.workspaceId,
+          { ...report, revision: 50 },
+          runtime.runtimeToken
+        )
+      ).toBe(false);
+      expect(
+        applyHubWorkspacePresenceReport(
+          state,
+          runtime.workspaceId,
+          { ...report, pendingApprovals: [], workspaceApprovalCount: 0 },
+          replacement.runtimeToken
+        )
+      ).toBe(true);
+      expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(0);
+      state.runtimes.delete(runtime.advertisedName);
+      expect((await list(rootUserId))[0]?.pendingApprovalCount).toBe(0);
+    } finally {
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
 
   it("writes one canonical secret-free hub ready contract", () => {
     const { state } = makeState(fakeRuntime(9, {}));
@@ -1023,6 +1232,16 @@ describe("hub RPC pairing surfacing (§5)", () => {
     });
     expect(payload).not.toHaveProperty("adminToken");
     expect(payload).not.toHaveProperty("publicUrl");
+    expect(payload.workspaces.length).toBeGreaterThan(0);
+    for (const workspace of payload.workspaces) {
+      expect(
+        Object.keys(workspace).every((key) =>
+          ["workspaceId", "name", "lastOpened", "running", "ephemeral"].includes(key)
+        )
+      ).toBe(true);
+      expect(workspace).not.toHaveProperty("pendingApprovalCount");
+      expect(workspace).not.toHaveProperty("privateRole");
+    }
     expect(payload.rootInvite).not.toHaveProperty("qr");
     expect(payload.rootInvite).not.toHaveProperty("serverUrl");
   });

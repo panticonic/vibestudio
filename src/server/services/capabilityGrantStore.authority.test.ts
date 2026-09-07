@@ -22,11 +22,11 @@ describe("CapabilityGrantStore agent authority", () => {
     old.close();
 
     expect(() => new CapabilityGrantStore({ statePath })).toThrow(
-      /cannot be loaded without risking data loss.*schema version is 6, expected 7/iu
+      /cannot be loaded without risking data loss.*schema version is 6, expected 8/iu
     );
   });
 
-  it("reopens the current version-7 store without invalidating existing grants", () => {
+  it("migrates version-7 consent without extending it to foreign workspaces", () => {
     const statePath = mkdtempSync(join(tmpdir(), "authority-grants-reopen-v7-"));
     const first = new CapabilityGrantStore({ statePath });
     const issued = first.issue({
@@ -39,10 +39,14 @@ describe("CapabilityGrantStore agent authority", () => {
       constraints: { lineageAtConsent: ["none"] },
     });
     first.close();
+    const legacy = new DatabaseSync(first.databasePath);
+    legacy.exec("ALTER TABLE authority_grants DROP COLUMN source_workspace_id");
+    legacy.exec("PRAGMA user_version = 7");
+    legacy.close();
 
     const reopened = new CapabilityGrantStore({ statePath });
     expect(reopened.grantsForSubjects(["user:alice"], issued.capability)).toEqual([
-      expect.objectContaining({ id: issued.id }),
+      expect.objectContaining({ id: issued.id, constraints: { lineageAtConsent: ["none"] } }),
     ]);
     reopened.close();
   });
@@ -59,6 +63,7 @@ describe("CapabilityGrantStore agent authority", () => {
       constraints: {
         sessionId: "session-one",
         taskRef: "task:one",
+        sourceWorkspaceId: "source-workspace",
         lineageAtConsent: ["none"],
       },
       scope: "task",
@@ -68,6 +73,10 @@ describe("CapabilityGrantStore agent authority", () => {
       grants.grantsForSubjects(["session:session-one"], "workspace.gateway.access")[0]?.constraints
         ?.taskRef
     ).toBe("task:one");
+    expect(
+      grants.grantsForSubjects(["session:session-one"], "workspace.gateway.access")[0]?.constraints
+        ?.sourceWorkspaceId
+    ).toBe("source-workspace");
     grants.close();
   });
 

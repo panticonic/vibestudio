@@ -4,6 +4,8 @@
  *   browser launch → cdp-host bridge connect → snapshot reconcile.
  * (The bridge upgrade is rejected until registerClient exists server-side.)
  */
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { randomUUID } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type {
@@ -86,11 +88,16 @@ export class HeadlessHost implements PanelHost {
   async start(): Promise<void> {
     const connection = await (this.config.connectionFactory?.() ?? connectToServer(this.config));
     this.connection = connection;
+    const workspace = createTypedServiceClient("workspace", workspaceMethods, (service, method, args) =>
+      connection.rpc.call("main", `${service}.${method}`, args)
+    );
+    const workspaceInfo = await workspace.getInfo();
     this.panelInit = new PanelInitClient(
       connection.rpc,
       this.config.serverUrl,
       this.config.label,
-      this.config.clientSessionId
+      this.config.clientSessionId,
+      workspaceInfo.config.id
     );
 
     await this.registerClient(this.bootstrapRegistration);

@@ -149,9 +149,9 @@ describe("CentralDataManager SQLite control store", () => {
        VALUES (?, ?, ?, ?, ?)`
     ).run("usr_member", "member", "Member", "member", 1);
     db.prepare(
-      `INSERT INTO membership (user_id, workspace_id, added_by, added_at)
-       VALUES (?, ?, ?, ?)`
-    ).run("usr_member", ephemeral.workspaceId, "usr_member", 1);
+      `INSERT INTO membership (user_id, workspace_id, added_by, added_at, role)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run("usr_member", ephemeral.workspaceId, "usr_member", 1, "member");
     db.prepare(
       `INSERT INTO user_workspace_targets (user_id, workspace_id, last_opened)
        VALUES (?, ?, ?)`
@@ -271,9 +271,9 @@ describe("CentralDataManager SQLite control store", () => {
        VALUES (?, ?, ?, ?, ?)`
     ).run("usr_member", "member", "Member", "member", 1);
     db.prepare(
-      `INSERT INTO membership (user_id, workspace_id, added_by, added_at)
-       VALUES (?, ?, ?, ?)`
-    ).run("usr_member", workspaceId, "usr_member", 1);
+      `INSERT INTO membership (user_id, workspace_id, added_by, added_at, role)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run("usr_member", workspaceId, "usr_member", 1, "member");
     db.prepare(
       `INSERT INTO user_revocation_cleanup (user_id, workspace_id)
        VALUES (?, ?)`

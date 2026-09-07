@@ -15,6 +15,10 @@ import {
 } from "@vibestudio/shared/approvalCopy";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import {
+  approvalVisibleToUser,
+  type ApprovalWorkspaceAccess,
+} from "@vibestudio/shared/approvalVisibility";
 import type { ApprovalQueueWithListeners } from "./approvalQueue.js";
 import type { PushDeliveryTarget, PushServiceInternal } from "./pushService.js";
 import type { ShellPresenceInternal } from "./shellPresenceService.js";
@@ -24,13 +28,12 @@ interface ApprovalPushBridgeDeps {
   push: PushServiceInternal;
   shellPresence: ShellPresenceInternal;
   /**
-   * This child's workspace member userIds (WP4 §4.4, WP2-backed). A child process
-   * IS one workspace, so its members are exactly the push audience for that
-   * child's approvals — every member may approve (plan §6.1), so every member's
-   * devices may be notified and no non-member device is. Read live (not cached)
-   * from the shared identity DB by `index.ts`.
+   * Live workspace membership bounds device delivery. The shared approval
+   * audience predicate further restricts each request to its private owner or
+   * the workspace administrators who can decide an unowned admission review.
    */
   workspaceMemberUserIds: () => readonly string[];
+  workspaceAccess?: ApprovalWorkspaceAccess;
   delayMs?: number;
   presenceMaxAgeMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -121,7 +124,7 @@ function payloadFor(
   title: string,
   body: string,
   category: string
-): PushApprovalDataPayload {
+): Omit<PushApprovalDataPayload, "workspaceId" | "serverId" | "userId"> {
   return {
     kind: "approval-prompt",
     approvalId: approval.approvalId,
@@ -173,7 +176,12 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
     );
     const targets = deps.push
       .listRegistrations()
-      .filter((registration) => members.has(registration.userId))
+      .filter(
+        (registration) =>
+          members.has(registration.userId) &&
+          deps.workspaceAccess &&
+          approvalVisibleToUser(approval, registration.userId, deps.workspaceAccess)
+      )
       .map((registration) => ({ userId: registration.userId, clientId: registration.clientId }))
       .filter((target) => !delivered.has(`${target.userId}\0${target.clientId}`));
     if (targets.length === 0) return [];

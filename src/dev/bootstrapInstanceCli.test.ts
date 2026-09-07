@@ -5,7 +5,7 @@ import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadCliCredentials, saveCliCredentials } from "../cli/credentialStore.js";
 import { ConnectionError } from "../cli/output.js";
-import { bootstrapInstanceCliFromDevice } from "./bootstrapInstanceCli.js";
+import { bootstrapInstanceCli, bootstrapInstanceCliFromDevice } from "./bootstrapInstanceCli.js";
 
 const roots: string[] = [];
 const reach = (byte: string) => ({
@@ -19,6 +19,66 @@ afterEach(() => {
 });
 
 describe("bootstrapInstanceCliFromDevice", () => {
+  it("routes a saved private identity without publishing it in hub readiness", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-private-"));
+    roots.push(root);
+    const credentialFile = path.join(root, "credentials.json");
+    const serverId = `srv_${"S".repeat(24)}`;
+    const serverBootId = `boot_${"B".repeat(24)}`;
+    saveCliCredentials(
+      {
+        schemaVersion: 5,
+        kind: "device",
+        transport: "local",
+        pairedAt: 123,
+        url: "http://127.0.0.1:5000/_workspace/private-old-name",
+        workspaceId: "ws_private",
+        workspaceName: "private-old-name",
+        serverId,
+        deviceId: `dev_${"C".repeat(24)}`,
+        refreshToken: "R".repeat(43),
+      },
+      credentialFile
+    );
+    const call = vi.fn(async (method, args) => {
+      expect({ method, args }).toEqual({
+        method: "hubControl.routeWorkspace",
+        args: [{ workspaceId: "ws_private" }],
+      });
+      return {
+        workspace: "private-new-name",
+        workspaceId: "ws_private",
+        running: true,
+        serverUrl: "http://127.0.0.1:5000/_r/ws/private-new-name",
+        workspaceReach: reach("cc"),
+        serverId,
+        serverBootId,
+      };
+    });
+    const close = vi.fn(async () => undefined);
+    await expect(
+      bootstrapInstanceCli(
+        {
+          gatewayUrl: "http://127.0.0.1:5000",
+          serverId,
+          serverBootId,
+          workspaces: [],
+          mode: "hub",
+          rootInvite: null,
+          gatewayPort: 5000,
+          pid: 1,
+          version: "0.1.33",
+          buildId: "a".repeat(64),
+        },
+        { credentialFile, rpcClient: () => ({ call, close }) }
+      )
+    ).resolves.toEqual({
+      status: "existing",
+      workspaceName: "private-new-name",
+    });
+    expect(loadCliCredentials(credentialFile)).toMatchObject({ workspaceId: "ws_private" });
+    expect(close).toHaveBeenCalledOnce();
+  });
   it("reconciles an existing CLI device onto the current ephemeral workspace route", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-reconcile-"));
     roots.push(root);

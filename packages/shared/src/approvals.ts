@@ -308,6 +308,8 @@ export interface PendingApprovalBase {
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
+  /** Authenticated requesting account; personal consent is never transferable to another member. */
+  requestedByUserId?: string;
   /** Canonical acquisition operation that owns this one human decision. */
   operationId?: string;
   /** Host-authenticated chat/mission authority subject, when one exists. */

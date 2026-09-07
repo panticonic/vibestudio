@@ -185,7 +185,6 @@ function same(left: FileValue | null, right: FileValue | null): boolean {
 function projection(root: string): {
   files: string[];
   manifestDigest: string;
-  flattenedRoot: boolean;
 } {
   const manifestPath = path.join(root, "meta/template.yml");
   const manifestBytes = fs.readFileSync(manifestPath);
@@ -194,7 +193,6 @@ function projection(root: string): {
     WORKSPACE_SYSTEM_EPOCH
   );
   const files = walkFiles(root);
-  const flattenedRoot = manifest.dependencies.length === 0;
   const projected = [
     ...new Set([
       ...files.filter(
@@ -203,11 +201,11 @@ function projection(root: string): {
           manifest.inventory.files.includes(file) ||
           manifest.inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
       ),
-      ...(flattenedRoot ? ["meta/vibestudio.yml"] : []),
+      "meta/vibestudio.yml",
     ]),
   ].sort();
   validateTemplateSnapshotInventory(manifest.inventory, projected);
-  return { files: projected, manifestDigest: digest(manifestBytes), flattenedRoot };
+  return { files: projected, manifestDigest: digest(manifestBytes) };
 }
 
 function generatedValue(root: string, relative: string): FileValue | null {
@@ -218,7 +216,6 @@ function generatedValue(root: string, relative: string): FileValue | null {
     fs.readFileSync(manifestPath, "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
-  if (manifest.dependencies.length > 0) return null;
   const bytes = Buffer.from(canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest)));
   return { bytes, mode: 0o644, digest: digest(bytes) };
 }

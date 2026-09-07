@@ -618,6 +618,12 @@ function grantConstraintsMatch(
   providerExecutionDigest: string | undefined
 ): boolean {
   const constraints = grant.constraints;
+  // Source identity alone is not an installation. Equal code versions or
+  // conversation IDs in two workspaces never pool their grants. Existing
+  // grants stay local; cross-workspace consent names the source explicitly.
+  const sourceWorkspaceId = context.sourceWorkspaceId ?? context.workspace?.workspaceId;
+  const consentWorkspaceId = constraints?.sourceWorkspaceId ?? context.workspace?.workspaceId;
+  if (sourceWorkspaceId !== consentWorkspaceId) return false;
   if (!constraints) return true;
   if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id)
     return false;

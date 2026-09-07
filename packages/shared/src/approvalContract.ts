@@ -24,8 +24,7 @@ export const AUTHORITY_ACQUISITION_DECISIONS = [
   "version",
   "deny",
 ] as const;
-export type AuthorityAcquisitionDecision =
-  (typeof AUTHORITY_ACQUISITION_DECISIONS)[number];
+export type AuthorityAcquisitionDecision = (typeof AUTHORITY_ACQUISITION_DECISIONS)[number];
 
 // Notification action ids (subset of decisions + "open"). Order matters for iOS:
 // the system prioritizes earlier actions in constrained notification layouts.
@@ -43,7 +42,7 @@ export const APPROVAL_CATEGORY_DECIDE = "vibestudio-approval-decide";
 export const APPROVAL_CATEGORY_INPUT_REQUIRED = "vibestudio-approval-input-required";
 export const APPROVAL_CATEGORY_BROWSER_PERMISSION = "vibestudio-browser-permission-decide";
 
-export type PushApprovalDataPayload = {
+export type PushApprovalDataPayload = import("./workspacePushScope.js").WorkspacePushScope & {
   kind: "approval-prompt" | "approval-cancel";
   approvalId: string;
   approvalKind?:

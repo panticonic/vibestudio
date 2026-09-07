@@ -53,6 +53,7 @@ export interface PanelListItem {
 }
 
 export interface PanelRegistryOptions {
+  workspaceId: string;
   onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
   onPresentationUpdated?: (update: { revision: number; panelIds: string[] }) => void;
 }
@@ -82,7 +83,11 @@ export class PanelRegistry implements PanelRelationshipProvider {
   private readonly onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
   private readonly onPresentationUpdated?: PanelRegistryOptions["onPresentationUpdated"];
 
+  readonly workspaceId: string;
+
   constructor(opts: PanelRegistryOptions) {
+    if (!opts.workspaceId) throw new Error("PanelRegistry needs its owning workspace");
+    this.workspaceId = opts.workspaceId;
     this.onTreeUpdated = opts.onTreeUpdated;
     this.onPresentationUpdated = opts.onPresentationUpdated;
   }
@@ -181,7 +186,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       source: getPanelSource(panel),
       kind: getPanelSource(panel).startsWith("browser:") ? "browser" : "workspace",
       parentId: this.findParentId(panel.id),
-      partition: contextIdToPartition(contextId),
+      partition: contextIdToPartition(this.workspaceId, contextId),
       contextId,
       runtimeEntityId: panel.runtimeEntityId ?? null,
       effectiveVersion: panel.effectiveVersion ?? null,

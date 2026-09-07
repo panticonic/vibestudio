@@ -34,7 +34,7 @@ Authority principals: `code`, `host`, `user`
 | `account.getProfile` | Resolve one account's live profile (defaults to the caller's own subject). Returns null for an unknown userId. |
 | `account.resolveProfiles` | Batch-resolve userIds to live profiles for rendering user participants. Unknown ids are absent from the result. |
 | `account.isMember` | Return whether a user belongs to this child server's bound workspace. The workspace is host-bound, never caller-selected. |
-| `account.listWorkspaceMembers` | List live account profiles for this child server's bound workspace, including implicit root membership. |
+| `account.listWorkspaceMembers` | List live members of this child server's bound workspace with their workspace role and separate account role. |
 
 ## `audit`
 
@@ -69,17 +69,6 @@ Authority principals: `code`, `host`, `mission`, `session`, `user`
 | `authority.resetTaskRules` | Revoke every reusable rule attached to one chat-bound agent task. |
 | `authority.awaitDecision` | Wait without a deadline for one acquisition owned by this session. |
 | `authority.preflight` | Dry-run a service method's complete authority contract without prompting or consuming authority. |
-
-## `baseRelease`
-
-Verified host-to-Base release update handshake
-
-Authority principals: `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `baseRelease.check` | Compare the installed Base lineage with the host's verified immutable Base release pin. |
-| `baseRelease.pull` | Ask Composer to pull the host's verified exact Base release through its server-only release handshake. |
 
 ## `blobstore`
 
@@ -600,6 +589,7 @@ Authority principals: `code`, `host`, `user`
 | `vcs.supersedeExternalDelta` | Retire one active external delta so it can no longer be merged. |
 | `vcs.finalizeExternalDelta` | Finalize one fully decided external delta and release its dedicated GC roots. |
 | `vcs.push` | Publish one exact already-committed event to protected main; epochTransition requests the reviewed host handoff for a foreign-epoch candidate. |
+| `vcs.mainState` | Read the current protected main event without creating a context. |
 | `vcs.status` | Return context pointers, clean state, main relation, and compact working counts. |
 | `vcs.compare` | Compare an exact target state with a committed source event or coordinator-owned external delta by semantic change. |
 | `vcs.inspect` | Inspect one typed semantic node and a bounded preview of its direct adjacency. |

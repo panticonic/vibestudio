@@ -15,7 +15,11 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { accountMethods, type AccountProfile } from "@vibestudio/service-schemas/account";
-import type { IdentityDb, ResolvedUser } from "@vibestudio/identity/identityDb";
+import type {
+  IdentityDb,
+  ResolvedUser,
+  WorkspaceMembership,
+} from "@vibestudio/identity/identityDb";
 
 function profileOfResolved(userId: string, resolved: ResolvedUser): AccountProfile {
   return {
@@ -36,9 +40,8 @@ export function createAccountService(deps: {
    * bound workspace; userland callers never supply a workspace id.
    */
   isWorkspaceMember: (userId: string) => boolean;
-  /** Active account ids visible in this child server's bound workspace,
-   * including implicit root membership. */
-  listWorkspaceMemberUserIds: () => string[];
+  /** Membership rows in this child server's bound workspace. */
+  listWorkspaceMemberships: () => Pick<WorkspaceMembership, "userId" | "role">[];
 }): ServiceDefinition {
   const requireSubject = (
     subject: { userId: string; handle: string } | undefined,
@@ -72,11 +75,22 @@ export function createAccountService(deps: {
       },
       isMember: (_ctx, [userId]) => deps.isWorkspaceMember(userId),
       listWorkspaceMembers: () => {
-        const userIds = [...new Set(deps.listWorkspaceMemberUserIds())];
+        const memberships = new Map(
+          deps.listWorkspaceMemberships().map((member) => [member.userId, member])
+        );
+        const userIds = [...memberships.keys()].filter(deps.isWorkspaceMember);
         const resolved = deps.identityDb.resolveUsers(userIds);
         return userIds.flatMap((userId) => {
           const user = resolved.get(userId);
-          return user && user.revokedAt === undefined ? [profileOfResolved(userId, user)] : [];
+          return user && user.revokedAt === undefined
+            ? [
+                {
+                  ...profileOfResolved(userId, user),
+                  role: memberships.get(userId)!.role,
+                  accountRole: user.role,
+                },
+              ]
+            : [];
         });
       },
     }),

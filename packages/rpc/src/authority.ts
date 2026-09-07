@@ -277,6 +277,8 @@ export interface ExecutionAdmissionFact {
  * authorize eval calls directly.
  */
 export interface AuthorizationContext {
+  /** Authenticated workspace of the initiating caller; `workspace` is the receiver. */
+  sourceWorkspaceId?: string;
   authorizingOrigin: AuthorizationOrigin;
   host: `host:${string}` | null;
   actingUser: `user:${string}` | null;
@@ -316,6 +318,8 @@ export interface AuthorizationContext {
 }
 
 export interface AuthorityGrantConstraints {
+  /** Omitted means the workspace owning this grant; foreign callers require an exact binding. */
+  sourceWorkspaceId?: string;
   sessionId?: string;
   invocationDigest?: string;
   /**
@@ -405,6 +409,8 @@ export interface AuthorizationDecision {
 
 export interface InvocationSnapshot {
   v: 2;
+  workspaceId?: string;
+  sourceWorkspaceId?: string;
   service: string;
   method: string;
   capability: string;

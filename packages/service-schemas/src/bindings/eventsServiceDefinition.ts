@@ -8,7 +8,7 @@ import { eventsMethods } from "../events.js";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 
 export type EventSnapshotProviders = {
-  [E in EventName]?: () => EventPayloads[E] | undefined;
+  [E in EventName]?: (context: ServiceContext) => EventPayloads[E] | undefined;
 };
 
 export interface EventsServiceDefinitionOptions {
@@ -43,7 +43,7 @@ export function createEventsServiceDefinition(
         const snapshots: Partial<Record<EventName, () => unknown>> = {};
         for (const event of events) {
           const snapshot = opts.snapshots?.[event];
-          if (snapshot) snapshots[event] = snapshot;
+          if (snapshot) snapshots[event] = () => snapshot(ctx);
         }
         const release = opts.onWatchOpened?.(events, ctx);
         return eventService.openWatch({

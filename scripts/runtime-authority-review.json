@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7780851143b8c2802e8f4bf6bff7e6d4a576b9548841547e0a93f3c4d9946b38",
+  "censusDigest": "sha256:0a6bdaa0553265c8bb9ec06750769defd82f93819ddf260347bcd5ffeb5f1fba",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -30,10 +30,6 @@
       "review": "fenced-mission-authority-retirement",
       "change": "Requires the attributed mission owner, refuses retirement while an admitted execution remains live, then fences the target, cancels pending acquisitions, and revokes its standing grants. Pause never uses this operation."
     },
-    "host:baseRelease.check": {
-      "review": "read-only-base-release-lineage-comparison",
-      "change": "Adds the missing reviewed open-tier decision for a read-only comparison between the installed Base lineage and the host's verified immutable release pin. The method performs no acquisition or publication and exposes only release compatibility metadata already owned by workspace supervision."
-    },
     "host:phoneNativeEndpoint.desktops": {
       "review": "exact-base-phone-provider-desktop-discovery",
       "change": "Replaces generic connected-client enumeration with a typed, account-bound desktop projection admitted only for the exact approved workers/phone-provisioning Durable Object. It carries no independent user gate and exposes no arbitrary client method transport."
@@ -51,16 +47,16 @@
       "change": "Forwards only the typed desktopPhoneProvider.provision input to one live account-owned desktop after exact approved provider verification. The public Base provider's mobile.provision decision is the sole user-facing gate; no generic connected-client conduit remains."
     },
     "host:view.getBrowserPageIdentity": {
-      "review": "exact-native-browser-page-identity-read",
-      "change": "Replaces the compound browser site-state facade with a bounded read of the selected Electron webContents URL, origin, transport security, and document title. Bookmark, cookie-summary, and zoom-preference reads no longer cross the host boundary through view; workspace chrome composes them from the browser-data provider."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Replaces the compound browser site-state facade with a bounded read of the selected Electron webContents URL, origin, transport security, and document title. Bookmark, cookie-summary, and zoom-preference reads no longer cross the host boundary through view; workspace chrome composes them from the browser-data provider. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.setNativeBrowserZoom": {
-      "review": "stale-checked-native-browser-zoom-effect",
-      "change": "Replaces host-owned zoom preference policy with the irreducible Electron setZoomFactor effect. The caller supplies the exact origin whose preference it persisted, and the receiver rejects the effect if the selected panel has navigated to another origin."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Replaces host-owned zoom preference policy with the irreducible Electron setZoomFactor effect. The caller supplies the exact origin whose preference it persisted, and the receiver rejects the effect if the selected panel has navigated to another origin. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.clearNativeBrowserSiteData": {
-      "review": "stale-checked-native-browser-storage-effect",
-      "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:fs.readBytes": {
       "review": "bounded-workspace-binary-range-read",
@@ -108,7 +104,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",
@@ -151,24 +147,24 @@
       "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending secret-input validation."
     },
     "host:view.getPresentation": {
-      "review": "trusted-chrome-local-panel-presentation-read",
-      "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.getLocalPresentation": {
-      "review": "trusted-chrome-canonical-local-lifecycle-read",
-      "change": "Adds an open, read-only lookup of one exact panel slot's revisioned Electron-local lifecycle snapshot. The handler requires trusted panel-hosting chrome and returns bounded loading, contention, ready, or failure facts without acquiring a lease, creating a view, changing focus, or exposing foreign panel state."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds an open, read-only lookup of one exact panel slot's revisioned Electron-local lifecycle snapshot. The handler requires trusted panel-hosting chrome and returns bounded loading, contention, ready, or failure facts without acquiring a lease, creating a view, changing focus, or exposing foreign panel state. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.getPresentations": {
-      "review": "trusted-chrome-bounded-local-panel-presentation-read",
-      "change": "Adds an open, read-only batch over at most 2,000 exact panel identifiers. The receiver deduplicates the request, returns only existing Electron-local presentation projections, and retains the panel-hosting app requirement; it grants no panel mutation or runtime lifecycle authority."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds an open, read-only batch over at most 2,000 exact panel identifiers. The receiver deduplicates the request, returns only existing Electron-local presentation projections, and retains the panel-hosting app requirement; it grants no panel mutation or runtime lifecycle authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.ensurePanelLoaded": {
       "review": "trusted-chrome-local-panel-materialization",
       "change": "Adds an open, host-local materialization operation for one exact panel. The service handler requires the trusted panel-hosting app capability and creates the native view without changing layout focus, emitting navigation intent, waiting for visible-slot readiness, or granting cross-panel or server lifecycle authority."
     },
     "host:view.setFocusedPanelId": {
-      "review": "trusted-chrome-local-panel-focus-persistence",
-      "change": "Adds an open, host-local write of the shell's exact focused panel id. The service handler requires the trusted panel-hosting app capability and records focus without acquiring a panel lease, loading a view, emitting navigation intent, or waiting for readiness."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds an open, host-local write of the shell's exact focused panel id. The service handler requires the trusted panel-hosting app capability and records focus without acquiring a panel lease, loading a view, emitting navigation intent, or waiting for readiness. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:workspace-state.panelTree.page": {
       "review": "bounded-panel-sibling-read",
@@ -443,12 +439,12 @@
       "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
     },
     "host:view.connectNativePanelAdapter": {
-      "review": "trusted-shell-native-panel-adapter-generation",
-      "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "host:view.applyNativePanelSurfaces": {
-      "review": "trusted-shell-complete-native-surface-projection",
-      "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel."
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel. Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
     },
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordSummaries": {
       "review": "host-only-protected-password-inventory",
@@ -613,6 +609,154 @@
     "host:fs.nativeRoots": {
       "review": "scoped-native-context-root-disclosure",
       "change": "Reports only the already admitted native source and scratch paths for the calling extension context; does not grant another context or host filesystem access."
+    },
+    "host:hubControl.ensureUserWorkspaces": {
+      "review": "authenticated-private-workspace-pair",
+      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+    },
+    "host:hubControl.getWorkspaceRpcPolicy": {
+      "review": "explicit-workspace-administrator-policy-read",
+      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+    },
+    "host:hubControl.setWorkspaceRpcPolicy": {
+      "review": "explicit-workspace-administrator-policy-change",
+      "change": "Uses the existing protected host management path, explicit live workspace administrator membership and compare-and-swap policy expectations. System application ingress cannot be enabled. Permitting an operation to ask never grants its resource use."
+    },
+    "host:hubControl.addWorkspaceMember": {
+      "review": "workspace-membership-owned-administration",
+      "change": "Replaces server-wide administrator sensitivity with ordinary write sensitivity and explicit live target-workspace administrator enforcement. Server administration alone grants no membership management, and designated Personal/System workspaces reject additional members."
+    },
+    "host:hubControl.deleteWorkspace": {
+      "review": "workspace-membership-owned-deletion",
+      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+    },
+    "host:hubControl.removeWorkspaceMember": {
+      "review": "workspace-membership-owned-removal",
+      "change": "Keeps the critical capability tier while requiring explicit target-workspace administrator membership. Ordinary write sensitivity removes the unrelated server-account role prerequisite; private workspace membership and live revocation checks remain authoritative."
+    },
+    "host:view.browserForceReload": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.browserGoBack": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.browserGoForward": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.browserNavigate": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.browserReload": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.browserStop": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.findInPage": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.forwardMouseClick": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.getChromeState": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.getFocusedPanelId": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.hideContentOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.hideNativeShellOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.listPinnedPanelIds": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.markBrowserNavigationIntent": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.openPanelDevTools": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.printBrowserPage": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.saveBrowserPagePdf": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.setBounds": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.setShellOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.setThemeCss": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.setVisible": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.showContentOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.showNativeShellOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.stopBrowserMedia": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.stopFindInPage": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.togglePin": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.updateContentOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.updateNativeShellOverlay": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.updateTheme": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:view.updateThemeConfig": {
+      "review": "workspace-scoped-native-ui-adapter",
+      "change": "Adds the existing host principal for the native UI adapter. The dispatcher first checks the sealed designated System app identity, host chrome admission, acting user, live destination membership and exact workspace-qualified native runtime. Server relays retain the app caller; this does not elevate workspace code or websites to shell authority."
+    },
+    "host:vcs.mainState": {
+      "review": "workspace-main-metadata-read",
+      "change": "Reads the current workspace protected-main event pointer through the existing VCS read transport without creating an observation context. It returns no file content and preserves workspace session admission, membership, and exact-reference authorization for subsequent content reads."
     }
   }
 }

@@ -17,6 +17,8 @@
  */
 
 import { PAIR_LINK_ORIGIN } from "./connect.js";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 
 export const SHELL_SURFACE_PROTOCOL_VERSION = 1 as const;
 export const MAX_SHELL_SURFACE_PARAMS_LENGTH = 8 * 1024;
@@ -38,6 +40,7 @@ export const SETTINGS_SECTIONS = [
   "apps",
   "hosts",
   "templates",
+  "workspaces",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
@@ -46,8 +49,8 @@ export const MANAGEMENT_SURFACES: readonly ManagementSurface[] = ["settings", "w
 
 /** The object forms; the two management surfaces may also be passed as bare strings. */
 export type ShellSurfaceDescriptor =
-  | { kind: "settings"; section?: SettingsSection }
-  | { kind: "workspace-chooser" }
+  | { kind: "settings"; section?: SettingsSection; workspaceId?: string }
+  | { kind: "workspace-chooser"; template?: WorkspaceTemplatePin }
   | {
       kind: "command-agent";
       /** Panel slot id the overlay is about; the focused panel when omitted. */
@@ -116,8 +119,8 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
     throw new Error(`Unknown shell surface kind "${String(kind)}"`);
   }
   const allowed: Record<ShellSurfaceKind, readonly string[]> = {
-    settings: ["kind", "section"],
-    "workspace-chooser": ["kind"],
+    settings: ["kind", "section", "workspaceId"],
+    "workspace-chooser": ["kind", "template"],
     "command-agent": ["kind", "panelId", "mode", "prompt"],
     about: ["kind", "page"],
     "panel-command": ["kind", "panelId", "commandId"],
@@ -130,16 +133,29 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
   switch (kind as ShellSurfaceKind) {
     case "settings": {
       const section = record["section"];
+      const workspaceId = record["workspaceId"];
+      if (
+        workspaceId !== undefined &&
+        (typeof workspaceId !== "string" || !isSafeText(workspaceId, PANEL_ID_MAX))
+      ) {
+        throw new Error("Shell settings workspaceId must be a non-empty workspace id");
+      }
       if (section !== undefined && !(SETTINGS_SECTIONS as readonly unknown[]).includes(section)) {
         throw new Error("Shell settings section is not recognized");
       }
       return {
         kind: "settings",
         ...(section !== undefined ? { section: section as SettingsSection } : {}),
+        ...(workspaceId !== undefined ? { workspaceId: workspaceId as string } : {}),
       };
     }
     case "workspace-chooser":
-      return { kind: kind as ManagementSurface };
+      return {
+        kind: "workspace-chooser",
+        ...(record["template"] !== undefined
+          ? { template: WorkspaceTemplatePinSchema.parse(record["template"]) }
+          : {}),
+      };
     case "command-agent": {
       const { panelId, mode, prompt } = record;
       if (
@@ -192,9 +208,11 @@ function encodeParams(descriptor: ShellSurfaceDescriptor): string {
     case "settings":
       pairs.push(["kind", descriptor.kind]);
       if (descriptor.section !== undefined) pairs.push(["section", descriptor.section]);
+      if (descriptor.workspaceId !== undefined) pairs.push(["workspace", descriptor.workspaceId]);
       break;
     case "workspace-chooser":
       pairs.push(["kind", descriptor.kind]);
+      if (descriptor.template) pairs.push(["template", JSON.stringify(descriptor.template)]);
       break;
     case "command-agent":
       if (descriptor.panelId !== undefined) pairs.push(["panel", descriptor.panelId]);
@@ -306,6 +324,18 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
       candidate = {
         kind: decoded.get("kind"),
         ...(decoded.has("section") ? { section: decoded.get("section") } : {}),
+        ...(decoded.has("workspace") ? { workspaceId: decoded.get("workspace") } : {}),
+        ...(decoded.has("template")
+          ? {
+              template: (() => {
+                try {
+                  return JSON.parse(decoded.get("template")!);
+                } catch {
+                  return null;
+                }
+              })(),
+            }
+          : {}),
       };
       break;
     case "ask":
@@ -329,7 +359,18 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
     default:
       return { kind: "unrelated" };
   }
-  const known = new Set(["v", "kind", "section", "panel", "mode", "prompt", "page", "id"]);
+  const known = new Set([
+    "v",
+    "kind",
+    "section",
+    "workspace",
+    "template",
+    "panel",
+    "mode",
+    "prompt",
+    "page",
+    "id",
+  ]);
   for (const key of decoded.keys()) {
     if (!known.has(key))
       return { kind: "error", reason: `Shell surface link contains unknown parameter \`${key}\`` };

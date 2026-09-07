@@ -2,22 +2,13 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   templateAuthoringInspectionSchema,
-  templateOperationSchema,
   templatePublicationSchema,
   type TemplateAuthoringInspection,
   type TemplateCatalogSnapshot,
-  type TemplateInspection,
   type TemplateLocator,
-  type TemplateOperation,
   type TemplatePublication,
-  type TemplateStatusRow,
   type TemplatesClient,
 } from "@vibestudio/service-schemas/templates";
-import {
-  baseReleaseCheckSchema,
-  baseReleaseMethods,
-  type BaseReleaseCheck,
-} from "@vibestudio/service-schemas/baseRelease";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -27,303 +18,109 @@ import {
 import { loadCliCredentials, requireDeviceCliCredentials } from "./credentialStore.js";
 import { AuthError, jsonMode, printError, printResult, UsageError } from "./output.js";
 import { RpcClient } from "./rpcClient.js";
-import { createTemplateComposerClient } from "./templateComposerClient.js";
+import { createTemplatesClient } from "./templatesClient.js";
 
-const COMMAND_ID: FlagSpec = {
-  name: "command-id",
+const flag = (name: string, description: string, multiple = false): FlagSpec => ({
+  name,
   takesValue: true,
-  description: "Stable retry identity (generated and printed when omitted)",
-};
-const CATALOG: FlagSpec = { name: "catalog", takesValue: true, description: "Catalog template id" };
-const CREDENTIAL: FlagSpec = {
-  name: "credential",
-  takesValue: true,
-  description: "Logical credential name declared for a direct template URL",
-};
+  description,
+  ...(multiple ? { multiple: true } : {}),
+});
+const COMMAND_ID = flag("command-id", "Stable retry identity");
+const CATALOG = flag("catalog", "Catalog template id");
+const CREDENTIAL = flag("credential", "Logical credential name");
 const REFRESH: FlagSpec = {
   name: "refresh",
   takesValue: false,
-  description: "Refresh the verified registry before listing it",
+  description: "Refresh the verified registry",
 };
-const ALIAS: FlagSpec = { name: "alias", takesValue: true, description: "Installed template name" };
-const TO_REF: FlagSpec = { name: "to-ref", takesValue: true, description: "Version to propose" };
-const PART: FlagSpec = {
-  name: "part",
-  takesValue: true,
-  multiple: true,
-  description: "Workspace part to include (repeatable)",
-};
-const DEPENDENCY: FlagSpec = {
-  name: "dependency",
-  takesValue: true,
-  multiple: true,
-  description: "Installed template URL this template relies on (repeatable)",
-};
-const NAME: FlagSpec = {
-  name: "name",
-  takesValue: true,
-  description: "Human-readable template name",
-};
-const DESCRIPTION: FlagSpec = {
-  name: "description",
-  takesValue: true,
-  description: "Template or repository description",
-};
-const VERSION: FlagSpec = {
-  name: "version",
-  takesValue: true,
-  description: "Immutable release version",
-};
-const PROVIDER: FlagSpec = {
-  name: "provider",
-  takesValue: true,
-  description: "Connected Git publication provider (defaults to github)",
-};
-const REPOSITORY: FlagSpec = {
-  name: "repository",
-  takesValue: true,
-  description: "Destination repository name",
-};
-const OWNER: FlagSpec = {
-  name: "owner",
-  takesValue: true,
-  description: "Exact destination account or organization",
-};
+const PART = flag("part", "Workspace repository to include", true);
+const NAME = flag("name", "Human-readable template name");
+const DESCRIPTION = flag("description", "Template description");
+const VERSION = flag("version", "Immutable release version");
+const PROVIDER = flag("provider", "Connected Git publication provider");
+const REPOSITORY = flag("repository", "Destination repository name");
+const OWNER = flag("owner", "Destination account or organization");
 const PRIVATE: FlagSpec = {
   name: "private",
   takesValue: false,
-  description: "Create a private repository (public by default)",
+  description: "Create a private repository",
 };
-const CREDENTIAL_ID: FlagSpec = {
-  name: "credential-id",
-  takesValue: true,
-  description: "Explicit connected-account credential id",
-};
-const RECEIPT: FlagSpec = {
-  name: "receipt",
-  takesValue: true,
-  description: "Save the exact JSON receipt to a new local file",
-};
-const SECTION: FlagSpec = {
-  name: "section",
-  takesValue: true,
-  description: "Suggestion section: trust or providers",
-};
-const DECISION: FlagSpec = {
-  name: "decision",
-  takesValue: true,
-  description: "Suggestion decision: accept or decline",
-};
-const ID: FlagSpec = { name: "id", takesValue: true, description: "Stable catalog id" };
-const TAG: FlagSpec = {
-  name: "tag",
-  takesValue: true,
-  multiple: true,
-  description: "Catalog search tag (repeatable)",
-};
-const REVISION: FlagSpec = {
-  name: "revision",
-  takesValue: true,
-  description: "New registry promotion revision (YYYY-MM-DD.N)",
-};
+const CREDENTIAL_ID = flag("credential-id", "Connected-account credential id");
+const RECEIPT = flag("receipt", "Save the exact JSON receipt");
+const ID = flag("id", "Stable catalog id");
+const TAG = flag("tag", "Catalog search tag", true);
+const REVISION = flag("revision", "Registry revision (YYYY-MM-DD.N)");
 const RECOMMENDED: FlagSpec = {
   name: "recommended",
   takesValue: false,
-  description: "Mark the catalog entry as recommended",
+  description: "Mark catalog entry recommended",
 };
+
 function requireClient(): { rpc: RpcClient; templates: TemplatesClient } {
   const credentials = loadCliCredentials();
   if (!credentials)
     throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
-  if (!credentials.workspaceName) {
-    throw new AuthError(
-      "no remote workspace selected — run `vibestudio remote select <workspace>`"
-    );
-  }
+  if (!credentials.workspaceName) throw new AuthError("no remote workspace selected");
   const rpc = new RpcClient(requireDeviceCliCredentials(credentials, "template management"));
-  return { rpc, templates: createTemplateComposerClient(rpc) };
+  return { rpc, templates: createTemplatesClient(rpc) };
 }
-
-async function withTemplates<T>(run: (templates: TemplatesClient) => Promise<T>): Promise<T> {
+async function withTemplates<T>(fn: (client: TemplatesClient) => Promise<T>): Promise<T> {
   const { rpc, templates } = requireClient();
   try {
-    return await run(templates);
+    return await fn(templates);
   } finally {
     await rpc.close().catch(() => undefined);
   }
 }
-
-async function withBaseRelease<T>(
-  run: (client: ReturnType<typeof baseReleaseClient>) => Promise<T>
-): Promise<T> {
-  const { rpc } = requireClient();
-  try {
-    return await run(baseReleaseClient(rpc));
-  } finally {
-    await rpc.close().catch(() => undefined);
-  }
-}
-
-function baseReleaseClient(rpc: RpcClient) {
-  return {
-    check: async () =>
-      baseReleaseCheckSchema.parse(
-        await rpc.call("baseRelease.check", baseReleaseMethods["check"]!.args.parse([]))
-      ),
-    pull: async (input: { commandId: string }) =>
-      templateOperationSchema.parse(
-        await rpc.call("baseRelease.pull", baseReleaseMethods["pull"]!.args.parse([input]))
-      ),
-  };
-}
-
-function commandId(inv: ParsedInvocation): string {
-  const explicit = inv.flags["command-id"];
-  if (typeof explicit === "string") return explicit;
-  const generated = `cli:${randomUUID()}`;
-  console.error(`[vibestudio] command-id: ${generated}`);
-  return generated;
-}
-
-function target(
+function run<T>(
   inv: ParsedInvocation,
-  registryCoordinates?: TemplateCatalogSnapshot["coordinates"]
-): TemplateLocator {
-  const catalogId = inv.flags["catalog"];
-  const credential =
-    typeof inv.flags["credential"] === "string" ? inv.flags["credential"].trim() : undefined;
-  if (typeof catalogId === "string" && catalogId.trim()) {
-    if (credential) throw new UsageError("--credential is only valid with a direct template URL");
-    if (!registryCoordinates) {
-      throw new UsageError("catalog selections must be bound to an exact verified registry");
-    }
-    return {
-      catalogId: catalogId.trim(),
-      registryCommit: registryCoordinates.commit,
-      registrySnapshot: registryCoordinates.snapshot,
-    };
-  }
-  const raw = inv.positionals[0]?.trim();
-  if (!raw) throw new UsageError("pass a template URL or alias, or --catalog ID");
-  try {
-    const url = new URL(raw);
-    if (
-      url.protocol !== "https:" &&
-      url.protocol !== "http:" &&
-      url.protocol !== "git+https:" &&
-      url.protocol !== "git+http:"
-    ) {
-      throw new Error("scheme");
-    }
-    return { url: raw, ...(credential ? { credential } : {}) };
-  } catch {
-    if (credential) throw new UsageError("--credential is only valid with a direct template URL");
-    return { alias: raw };
-  }
+  fn: (client: TemplatesClient) => Promise<T>,
+  render: (value: T) => void
+): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  return withTemplates(fn)
+    .then((value) => {
+      printResult(value, { json, human: () => render(value) });
+      return 0;
+    })
+    .catch((error) => printError(error, { json }));
 }
-
-async function resolvedTarget(
-  templates: TemplatesClient,
-  inv: ParsedInvocation
-): Promise<TemplateLocator> {
-  if (typeof inv.flags["catalog"] !== "string") return target(inv);
-  const catalog = await templates.catalog();
-  if (!catalog) {
-    throw new UsageError(
-      "no verified template registry is cached; run templates catalog --refresh first"
-    );
-  }
-  return target(inv, catalog.coordinates);
-}
-
-function requireAlias(inv: ParsedInvocation): string {
-  const flagged = inv.flags["alias"];
-  const value = typeof flagged === "string" ? flagged : inv.positionals[0];
-  if (!value?.trim()) throw new UsageError("pass a template name");
-  return value.trim();
-}
-
-function requireOperationId(inv: ParsedInvocation): string {
-  const value = inv.positionals[0];
-  if (!value?.trim()) throw new UsageError("pass an operation id");
-  return value.trim();
-}
-
 function requiredFlag(inv: ParsedInvocation, name: string): string {
   const value = inv.flags[name];
   if (typeof value !== "string" || !value.trim()) throw new UsageError(`--${name} is required`);
   return value.trim();
 }
-
-function authoringPlan(inv: ParsedInvocation): TemplateAuthoringInspection {
+function commandId(inv: ParsedInvocation): string {
+  const value = inv.flags["command-id"];
+  if (typeof value === "string") return value;
+  const generated = `cli:${randomUUID()}`;
+  console.error(`[vibestudio] command-id: ${generated}`);
+  return generated;
+}
+function readReceipt<T>(
+  inv: ParsedInvocation,
+  kind: string,
+  schema: {
+    safeParse(value: unknown): { success: true; data: T } | { success: false; error: Error };
+  }
+): T {
   const path = inv.positionals[0]?.trim();
-  if (!path) throw new UsageError("pass the authoring receipt JSON file");
-  if (inv.positionals.length > 1)
-    throw new UsageError("pass exactly one authoring receipt JSON file");
-  let value: unknown;
+  if (!path || inv.positionals.length !== 1)
+    throw new UsageError(`pass exactly one ${kind} receipt JSON file`);
   try {
-    value = JSON.parse(readFileSync(path, "utf8"));
+    const parsed = schema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+    if (!parsed.success) throw parsed.error;
+    return parsed.data;
   } catch (error) {
     throw new UsageError(
-      `Could not read authoring receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
+      `Could not read ${kind} receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  const parsed = templateAuthoringInspectionSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new UsageError(`Invalid authoring receipt ${path}: ${parsed.error.message}`);
-  }
-  return parsed.data;
 }
-
-function publicationReceipt(inv: ParsedInvocation): TemplatePublication {
-  const path = inv.positionals[0]?.trim();
-  if (!path || inv.positionals.length !== 1) {
-    throw new UsageError("pass exactly one publication receipt JSON file");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new UsageError(
-      `Could not read publication receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  const parsed = templatePublicationSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new UsageError(`Invalid publication receipt ${path}: ${parsed.error.message}`);
-  }
-  return parsed.data;
-}
-
-function version(ref: string): string {
-  const value = ref.split("/").filter(Boolean).at(-1);
-  return value || ref;
-}
-
-function renderAuthoringPlan(plan: TemplateAuthoringInspection): void {
-  console.log(`${plan.request.name} authoring receipt ${plan.fingerprint}`);
-  console.log(`  protected main: ${plan.mainEventId}`);
-  console.log(`  requested: ${plan.requestedParts.join(", ")}`);
-  console.log(`  included: ${plan.includedParts.join(", ")}`);
-  if (plan.requiredParts.length) console.log(`  required: ${plan.requiredParts.join(", ")}`);
-  if (plan.dependencyParts.length)
-    console.log(`  supplied by dependencies: ${plan.dependencyParts.join(", ")}`);
-  if (plan.overlapParts.length)
-    console.log(`  deliberate dependency overlaps: ${plan.overlapParts.join(", ")}`);
-  console.log(`  manifest: ${plan.manifestDigest}`);
-}
-
-function renderPublication(publication: TemplatePublication): void {
-  console.log(`${publication.templateUrl} @ ${version(publication.ref)}`);
-  console.log(`  commit: ${publication.commit}`);
-  console.log(`  snapshot: ${publication.snapshot}`);
-  console.log(`  parts: ${publication.parts.join(", ")}`);
-}
-
 function saveReceipt(inv: ParsedInvocation, kind: string, value: unknown): void {
   const path = inv.flags["receipt"];
   if (typeof path !== "string") return;
-  if (!path.trim()) throw new UsageError("--receipt requires a file path");
   try {
     writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, {
       encoding: "utf8",
@@ -335,251 +132,127 @@ function saveReceipt(inv: ParsedInvocation, kind: string, value: unknown): void 
       `Could not save ${kind} receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  console.error(`[vibestudio] ${kind} receipt: ${path}`);
 }
-
-function renderStatus(rows: TemplateStatusRow[]): void {
-  if (rows.length === 0) {
-    console.log("No committed template relationships yet.");
-    return;
+function target(inv: ParsedInvocation, catalog?: TemplateCatalogSnapshot): TemplateLocator {
+  const catalogId = inv.flags["catalog"];
+  if (typeof catalogId === "string") {
+    if (!catalog) throw new UsageError("refresh the catalog before selecting an entry");
+    return {
+      catalogId,
+      registryCommit: catalog.coordinates.commit,
+      registrySnapshot: catalog.coordinates.snapshot,
+    };
   }
-  for (const row of rows) {
-    const state =
-      row.state === "current"
-        ? "up to date"
-        : row.state === "update-available"
-          ? "update available"
-          : row.state === "reviewing"
-            ? `reviewing changes${row.pendingReviews ? ` — ${row.pendingReviews} to review` : ""}`
-            : row.state === "local-changes"
-              ? "local changes"
-              : row.state === "waiting-for-credential"
-                ? "connect an account to finish"
-                : row.state === "conflict"
-                  ? "needs a choice"
-                  : "needs attention";
-    console.log(`  ${row.alias} template  ${version(row.ref)}  ${state}`);
-    if (row.review?.items.length) {
-      if (!row.review.approvalGranted) {
-        console.log("    review: awaiting approval before VCS changes can be reviewed");
-      } else {
-        for (const item of row.review.items) {
-          console.log(
-            `    review ${item.repoPath}: vibestudio vcs compare --context ${row.review.contextId} --delta ${item.sourceDeltaId}`
-          );
-        }
-      }
-    }
-    if (row.blocker?.nextAction === "connect-credential" && row.blocker.credential) {
-      console.log(`    ${row.blocker.message}`);
-      console.log(
-        `    next: open Templates in Vibestudio, choose Connect account, then rerun this command`
-      );
-    }
-    for (const suggestion of row.suggestions) {
-      console.log(`    suggested ${suggestion.section}: ${JSON.stringify(suggestion.value)}`);
-      console.log(
-        `      decide: vibestudio templates decide-suggestion ${row.alias} --section ${suggestion.section} --decision accept|decline`
-      );
-    }
-    if (row.error) console.log(`    ${row.error}`);
-  }
+  const url = inv.positionals[0]?.trim();
+  if (!url) throw new UsageError("pass a template URL or --catalog ID");
+  return {
+    url,
+    ...(typeof inv.flags["credential"] === "string" ? { credential: inv.flags["credential"] } : {}),
+  };
 }
-
-function renderInspection(result: TemplateInspection): void {
-  console.log(
-    `Affects ${result.affectedParts.length} ${result.affectedParts.length === 1 ? "repository" : "repositories"}.`
-  );
-  for (const suggestion of result.excludedSuggestions) {
-    console.log(
-      `Suggested ${suggestion.section} from ${suggestion.alias}: ${JSON.stringify(suggestion.value)}`
-    );
-  }
+async function resolvedTarget(
+  client: TemplatesClient,
+  inv: ParsedInvocation
+): Promise<TemplateLocator> {
+  if (typeof inv.flags["catalog"] !== "string") return target(inv);
+  const catalog = await client.catalog();
+  if (!catalog) throw new UsageError("no verified template catalog is cached");
+  return target(inv, catalog);
 }
-
-function renderPending(operation: TemplateOperation): void {
-  if (operation.state !== "pending" && operation.state !== "applied") {
-    console.log(
-      operation.blocker?.message ??
-        "This template operation needs attention before it can continue."
-    );
-    if (operation.blocker?.nextAction === "connect-credential") {
-      console.log(
-        `Next: open Templates in Vibestudio, choose Connect account, then run vibestudio templates resume ${operation.operationId}.`
-      );
-    }
-    if (operation.repair) {
-      console.log(`Repair context: ${operation.repair.contextId}`);
-      for (const failure of operation.repair.failures) {
-        console.log(`  ${failure.unit}: ${failure.message}`);
-      }
-      console.log(
-        `Next: repair that context with ordinary workspace/VCS tools, then run vibestudio templates resume ${operation.operationId}.`
-      );
-    }
-    return;
-  }
-  if (operation.state === "applied" && operation.contribution) {
-    console.log(`Suggestion ready on ${operation.contribution.branch}.`);
-    if (operation.contribution.url) console.log(`Open it: ${operation.contribution.url}`);
-    return;
-  }
-  console.log("The approved operation remains isolated until its review is complete.");
-  if (operation.review?.items.length) {
-    console.log(
-      `${operation.review.items.length} ${operation.review.items.length === 1 ? "part is" : "parts are"} ready for VCS review.`
-    );
-  }
+function renderPlan(plan: TemplateAuthoringInspection): void {
+  console.log(`${plan.request.name} authoring receipt ${plan.fingerprint}`);
+  console.log(`  included: ${plan.includedParts.join(", ")}`);
+  if (plan.requiredParts.length) console.log(`  required: ${plan.requiredParts.join(", ")}`);
 }
-
-function renderOperations(operations: Awaited<ReturnType<TemplatesClient["operations"]>>): void {
-  if (operations.length === 0) {
-    console.log("No template operations are waiting.");
-    return;
-  }
-  for (const operation of operations) {
-    console.log(`  ${operation.operationId}  ${operation.kind}  ${operation.state}`);
-    for (const item of operation.review?.items ?? []) {
-      console.log(
-        `    review ${item.repoPath}: vibestudio vcs compare --context ${operation.contextId} --delta ${item.sourceDeltaId}`
-      );
-    }
-  }
-}
-
-function suggestionSection(inv: ParsedInvocation): "trust" | "providers" {
-  const value = inv.flags["section"];
-  if (value === "trust" || value === "providers") return value;
-  throw new UsageError("--section must be trust or providers");
-}
-
-function suggestionDecision(inv: ParsedInvocation): "accept" | "decline" {
-  const value = inv.flags["decision"];
-  if (value === "accept" || value === "decline") return value;
-  throw new UsageError("--decision must be accept or decline");
-}
-
-function run<T>(
-  inv: ParsedInvocation,
-  operation: (templates: TemplatesClient) => Promise<T>,
-  render: (value: T) => void
-): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  return withTemplates(operation)
-    .then((value) => {
-      printResult(value, { json, human: () => render(value) });
-      return 0;
-    })
-    .catch((error) => printError(error, { json }));
-}
-
-function runBaseRelease<T>(
-  inv: ParsedInvocation,
-  operation: (client: ReturnType<typeof baseReleaseClient>) => Promise<T>,
-  render: (value: T) => void
-): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  return withBaseRelease(operation)
-    .then((value) => {
-      printResult(value, { json, human: () => render(value) });
-      return 0;
-    })
-    .catch((error) => printError(error, { json }));
+function renderPublication(value: TemplatePublication): void {
+  console.log(`${value.templateUrl} @ ${value.ref}`);
+  console.log(`  commit: ${value.commit}`);
+  console.log(`  snapshot: ${value.snapshot}`);
 }
 
 export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
-    name: "check-base",
-    summary: "Compare this workspace with the Base shipped by the current host",
-    flags: [JSON_FLAG],
+    name: "catalog",
+    summary: "List upstream workspace snapshots from the verified registry",
+    flags: [REFRESH, JSON_FLAG],
     run: (inv) =>
-      runBaseRelease(
+      run(
         inv,
-        (client) => client.check(),
-        (check: BaseReleaseCheck) => {
-          console.log(
-            check.updateAvailable
-              ? `  ${check.alias} template  ${version(check.installed.ref)} → ${version(check.target.ref)}`
-              : `  ${check.alias} template  ${version(check.installed.ref)}  up to date`
+        (c) => (inv.flags["refresh"] ? c.catalog({ refresh: true }) : c.catalog()),
+        (catalog) => {
+          if (!catalog)
+            return console.log(
+              "No verified template registry is cached. Run with --refresh to load it."
+            );
+          console.log(`Registry ${catalog.revision}`);
+          catalog.entries.forEach((entry) =>
+            console.log(`  ${entry.id} — ${entry.name}: ${entry.description}`)
           );
         }
       ),
   },
   {
     group: "templates",
-    name: "pull-base",
-    summary: "Update this workspace to the exact Base shipped by the current host",
-    flags: [COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      runBaseRelease(inv, (client) => client.pull({ commandId: commandId(inv) }), renderPending),
-  },
-  {
-    group: "templates",
-    name: "author-parts",
-    summary: "List protected-main parts available for template authoring",
-    flags: [JSON_FLAG],
+    name: "inspect",
+    summary: "Resolve and verify an exact upstream workspace snapshot",
+    flags: [CATALOG, CREDENTIAL, JSON_FLAG],
     run: (inv) =>
       run(
         inv,
-        (templates) => templates.authoringParts(),
-        (parts) => {
-          for (const part of parts) {
-            const metadata = [
-              part.packageName,
-              part.templateAliases?.length && `from ${part.templateAliases.join(", ")}`,
-            ]
-              .filter(Boolean)
-              .join(" · ");
-            console.log(`  ${part.repoPath}${metadata ? ` — ${metadata}` : ""}`);
-          }
+        async (c) => c.inspect(await resolvedTarget(c, inv)),
+        (result) => {
+          console.log(`${result.presentation?.name ?? result.pin.url} @ ${result.pin.commit}`);
+          console.log(`  repositories: ${result.repositories.join(", ")}`);
         }
       ),
   },
   {
     group: "templates",
-    name: "author-inspect",
-    summary: "Create an exact template authoring receipt without publishing",
-    usage:
-      "vibestudio templates author-inspect --name NAME --description TEXT --part PATH [--part PATH] [--dependency URL] [--receipt FILE] [--json]",
-    flags: [NAME, DESCRIPTION, PART, DEPENDENCY, RECEIPT, JSON_FLAG],
+    name: "author-parts",
+    summary: "List protected-main repositories available for snapshot authoring",
+    flags: [JSON_FLAG],
     run: (inv) =>
       run(
         inv,
-        async (templates) => {
-          if (inv.positionals.length) {
-            throw new UsageError(
-              "author-inspect accepts selections through flags, not positionals"
-            );
-          }
+        (c) => c.authoringParts(),
+        (parts) =>
+          parts.forEach((part) =>
+            console.log(`  ${part.repoPath}${part.packageName ? ` — ${part.packageName}` : ""}`)
+          )
+      ),
+  },
+  {
+    group: "templates",
+    name: "author-inspect",
+    summary: "Create an exact snapshot authoring receipt without publishing",
+    flags: [NAME, DESCRIPTION, PART, RECEIPT, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        async (c) => {
+          if (inv.positionals.length)
+            throw new UsageError("author-inspect accepts selections through flags");
           const parts = inv
             .flagsMulti("part")
             .map((part) => part.trim())
             .filter(Boolean);
           if (!parts.length) throw new UsageError("pass at least one --part");
-          const dependencies = inv
-            .flagsMulti("dependency")
-            .map((url) => url.trim())
-            .filter(Boolean)
-            .map((url) => ({ url }));
-          const plan = await templates.inspectAuthoring({
+          const plan = await c.inspectAuthoring({
             name: requiredFlag(inv, "name"),
             description: requiredFlag(inv, "description"),
             parts,
-            ...(dependencies.length ? { dependencies } : {}),
           });
           saveReceipt(inv, "authoring", plan);
           return plan;
         },
-        renderAuthoringPlan
+        renderPlan
       ),
   },
   {
     group: "templates",
     name: "author-publish",
-    summary: "Publish an unchanged authoring receipt as an immutable Git template",
-    usage:
-      "vibestudio templates author-publish RECEIPT.json --version VERSION --owner OWNER --repository NAME [--private] [--credential-id ID] [--receipt FILE]",
+    summary: "Publish an unchanged receipt as an immutable workspace snapshot",
     flags: [
       VERSION,
       OWNER,
@@ -595,23 +268,16 @@ export const templatesCommands: CliCommand[] = [
     run: (inv) =>
       run(
         inv,
-        async (templates) => {
-          const plan = authoringPlan(inv);
-          const publication = await templates.publishAuthoring({
+        async (c) => {
+          const plan = readReceipt(inv, "authoring", templateAuthoringInspectionSchema);
+          const publication = await c.publishAuthoring({
             commandId: commandId(inv),
-            intent: {
-              name: plan.request.name,
-              description: plan.request.description,
-              parts: plan.request.parts,
-              ...(plan.request.dependencies?.length
-                ? { dependencies: plan.request.dependencies }
-                : {}),
-            },
+            intent: plan.request,
             expectedFingerprint: plan.fingerprint,
             version: requiredFlag(inv, "version"),
             destination: {
               provider:
-                typeof inv.flags["provider"] === "string" ? inv.flags["provider"].trim() : "github",
+                typeof inv.flags["provider"] === "string" ? inv.flags["provider"] : "github",
               owner: requiredFlag(inv, "owner"),
               name: requiredFlag(inv, "repository"),
             },
@@ -622,7 +288,7 @@ export const templatesCommands: CliCommand[] = [
                 : {}),
             },
             ...(typeof inv.flags["credential-id"] === "string"
-              ? { credentialId: inv.flags["credential-id"].trim() }
+              ? { credentialId: inv.flags["credential-id"] }
               : {}),
           });
           saveReceipt(inv, "publication", publication);
@@ -634,27 +300,25 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "registry-suggest",
-    summary: "Suggest an exact published release to the verified template registry",
-    usage:
-      "vibestudio templates registry-suggest PUBLICATION.json --id ID --name NAME --description TEXT --tag TAG [--recommended] --revision YYYY-MM-DD.N",
+    summary: "Suggest an exact published snapshot to the verified registry",
     flags: [ID, NAME, DESCRIPTION, TAG, RECOMMENDED, REVISION, CREDENTIAL, COMMAND_ID, JSON_FLAG],
     run: (inv) =>
       run(
         inv,
-        async (templates) => {
+        async (c) => {
           const tags = inv
             .flagsMulti("tag")
             .map((tag) => tag.trim())
             .filter(Boolean);
           if (!tags.length) throw new UsageError("pass at least one --tag");
-          const catalog = await templates.catalog({ refresh: true });
+          const catalog = await c.catalog({ refresh: true });
           if (!catalog) throw new UsageError("the workspace has no configured template registry");
-          return templates.suggestRegistryEntry({
+          return c.suggestRegistryEntry({
             commandId: commandId(inv),
             catalog,
-            publication: publicationReceipt(inv),
+            publication: readReceipt(inv, "publication", templatePublicationSchema),
             ...(typeof inv.flags["credential"] === "string"
-              ? { credential: inv.flags["credential"].trim() }
+              ? { credential: inv.flags["credential"] }
               : {}),
             entry: {
               id: requiredFlag(inv, "id"),
@@ -666,228 +330,11 @@ export const templatesCommands: CliCommand[] = [
             revision: requiredFlag(inv, "revision"),
           });
         },
-        (result) => {
-          if (!result.branch) {
-            console.log(`Registry entry ${result.entry.id} already matches this release.`);
-            return;
-          }
-          console.log(`Registry suggestion ready on ${result.branch}.`);
-          console.log(`  release: ${result.entry.promoted.ref} at ${result.entry.promoted.commit}`);
-        }
-      ),
-  },
-  {
-    group: "templates",
-    name: "status",
-    summary: "Show the templates connected to this workspace",
-    flags: [JSON_FLAG],
-    run: (inv) => run(inv, (templates) => templates.status(), renderStatus),
-  },
-  {
-    group: "templates",
-    name: "catalog",
-    summary: "List templates from the verified workspace registry",
-    flags: [REFRESH, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) =>
-          inv.flags["refresh"] === true
-            ? templates.catalog({ refresh: true })
-            : templates.catalog(),
-        (catalog) => {
-          if (!catalog) {
-            console.log("No verified template registry is cached. Run with --refresh to load it.");
-            return;
-          }
-          console.log(`Registry ${catalog.revision}${catalog.stale ? " (cached)" : ""}`);
-          for (const entry of catalog.entries)
-            console.log(`  ${entry.id} — ${entry.name}: ${entry.description}`);
-        }
-      ),
-  },
-  {
-    group: "templates",
-    name: "check",
-    summary: "Check for template updates",
-    usage: "vibestudio templates check [ALIAS]",
-    flags: [ALIAS, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) => {
-          const alias =
-            typeof inv.flags["alias"] === "string" ? inv.flags["alias"] : inv.positionals[0];
-          return alias ? templates.check({ alias }) : templates.check();
-        },
-        (candidates) => {
-          if (candidates.length === 0) console.log("All checked templates are up to date.");
-          for (const candidate of candidates) {
-            console.log(
-              `  ${candidate.alias} template  ${version(candidate.currentRef)} → ${version(candidate.candidateRef)}`
-            );
-          }
-        }
-      ),
-  },
-  {
-    group: "templates",
-    name: "inspect",
-    summary: "Check what a template would add without changing your workspace",
-    usage: "vibestudio templates inspect URL_OR_ALIAS [--catalog ID] [--credential NAME]",
-    flags: [CATALOG, CREDENTIAL, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        async (templates) => templates.inspect(await resolvedTarget(templates, inv)),
-        renderInspection
-      ),
-  },
-  {
-    group: "templates",
-    name: "add",
-    summary: "Add a template through one protected workspace review",
-    usage: "vibestudio templates add URL_OR_ALIAS [--catalog ID] [--credential NAME]",
-    flags: [CATALOG, CREDENTIAL, COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        async (templates) => {
-          const locator = await resolvedTarget(templates, inv);
-          if ("alias" in locator) throw new UsageError("add needs a template URL or --catalog ID");
-          return templates.add({
-            commandId: commandId(inv),
-            source: locator,
-          });
-        },
-        renderPending
-      ),
-  },
-  {
-    group: "templates",
-    name: "adopt",
-    summary: "Record an existing template lineage without merging historical content",
-    usage: "vibestudio templates adopt URL_OR_ALIAS [--catalog ID] [--credential NAME]",
-    flags: [CATALOG, CREDENTIAL, COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        async (templates) => {
-          const locator = await resolvedTarget(templates, inv);
-          const inspection = await templates.inspect(locator);
-          return templates.adopt({
-            commandId: commandId(inv),
-            pin: inspection.pin,
-          });
-        },
-        renderPending
-      ),
-  },
-  {
-    group: "templates",
-    name: "pull",
-    summary: "Ask to update one template",
-    usage: "vibestudio templates pull ALIAS [--to-ref VERSION]",
-    flags: [TO_REF, COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) =>
-          templates.pull({
-            commandId: commandId(inv),
-            alias: requireAlias(inv),
-            ...(typeof inv.flags["to-ref"] === "string" ? { toRef: inv.flags["to-ref"] } : {}),
-          }),
-        renderPending
-      ),
-  },
-  {
-    group: "templates",
-    name: "remove",
-    summary: "Ask to remove a template relationship",
-    usage: "vibestudio templates remove ALIAS",
-    flags: [COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) => templates.remove({ commandId: commandId(inv), alias: requireAlias(inv) }),
-        renderPending
-      ),
-  },
-  {
-    group: "templates",
-    name: "suggest",
-    summary: "Ask to suggest local changes back to a template",
-    usage: "vibestudio templates suggest ALIAS [--part PART]",
-    flags: [PART, COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) =>
-          templates.suggest({
-            commandId: commandId(inv),
-            alias: requireAlias(inv),
-            ...(inv.flagsMulti("part").length ? { parts: inv.flagsMulti("part") } : {}),
-          }),
-        renderPending
-      ),
-  },
-  {
-    group: "templates",
-    name: "operations",
-    summary: "List template operations that can be reviewed, resumed, or cancelled",
-    flags: [JSON_FLAG],
-    run: (inv) => run(inv, (templates) => templates.operations(), renderOperations),
-  },
-  {
-    group: "templates",
-    name: "resume",
-    summary: "Resume an exact pending template operation",
-    usage: "vibestudio templates resume OPERATION_ID",
-    flags: [JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) =>
-          templates.resume({
-            operationId: requireOperationId(inv),
-          }),
-        renderPending
-      ),
-  },
-  {
-    group: "templates",
-    name: "cancel",
-    summary: "Discard an in-flight template operation",
-    usage: "vibestudio templates cancel OPERATION_ID",
-    flags: [JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) => templates.cancel({ operationId: requireOperationId(inv) }),
-        (result) => console.log(`Template operation ${result.operationId} discarded.`)
-      ),
-  },
-  {
-    group: "templates",
-    name: "decide-suggestion",
-    summary: "Accept or decline one exact template setup suggestion",
-    usage:
-      "vibestudio templates decide-suggestion ALIAS --section trust|providers --decision accept|decline",
-    flags: [SECTION, DECISION, COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (templates) =>
-          templates.decideSuggestion({
-            commandId: commandId(inv),
-            alias: requireAlias(inv),
-            section: suggestionSection(inv),
-            decision: suggestionDecision(inv),
-          }),
         (result) =>
           console.log(
-            `${result.section} suggestion ${result.state === "accepted" ? "accepted" : "declined"}.`
+            result.branch
+              ? `Registry suggestion ready on ${result.branch}.`
+              : `Registry entry ${result.entry.id} already matches this release.`
           )
       ),
   },
