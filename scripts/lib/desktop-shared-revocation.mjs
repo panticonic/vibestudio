@@ -84,6 +84,17 @@ async function visibleCard(app, approvalId) {
   return (await visibleCards(app, approvalId))[0] ?? null;
 }
 
+async function visibleApprovalCardMatching(app, pattern) {
+  for (const page of app.context().pages()) {
+    if (page.isClosed()) continue;
+    for (const card of await page.locator("[data-approval-card]").all()) {
+      if (!(await card.isVisible())) continue;
+      if (pattern.test((await card.innerText()).replace(/\s+/g, " "))) return card;
+    }
+  }
+  return null;
+}
+
 /** Additional native acceptance using the smoke's existing launch/cleanup owner.
  * launchMember must isolate both profile and native credential-store state and
  * register the application for teardown before waiting for its readiness.
@@ -131,11 +142,11 @@ export async function runSharedMemberRevocation({
         })),
       })}`
     );
-  const panel = await nativeRpc(member, workspace.workspaceId, "view.createPanel", [
-    null,
-    "browser:https://example.com",
-    { title: "Revocation acceptance website" },
-  ]);
+  const panel = await memberApp.evaluate(async () => {
+    const testApi = globalThis.__testApi;
+    if (!testApi) throw new Error("Native test API is unavailable");
+    return testApi.createBrowserPanel(null, "https://example.com", { focus: true });
+  });
   const epoch = randomUUID();
   let settledRequest;
   const requestOutcome = nativeRpc(
@@ -212,12 +223,59 @@ export async function runSharedMemberRevocation({
   await card.screenshot({ path: screenshotPath });
   await fs.chmod(screenshotPath, 0o600);
 
-  const removal = await nativeRpc(owner, undefined, "hubControl.removeWorkspaceMember", [
+  const removalArgs = [
     {
       workspace: workspaceName,
       userId: invitation.user.userId,
     },
-  ]);
+  ];
+  let removalChallenge;
+  try {
+    await nativeRpc(owner, undefined, "hubControl.removeWorkspaceMember", removalArgs);
+  } catch (error) {
+    removalChallenge = error.message;
+  }
+  if (
+    !removalChallenge ||
+    !/approval-required|authority acquisition required/.test(removalChallenge)
+  ) {
+    throw new Error(
+      `Removing a workspace member did not require explicit owner approval: ${removalChallenge ?? "call succeeded"}`
+    );
+  }
+  const removalCard = await until(
+    async () => {
+      const displayed = await visibleApprovalCardMatching(ownerApp, /Remove a workspace member/i);
+      if (displayed) return displayed;
+      for (const page of ownerApp.context().pages()) {
+        if (page.isClosed()) continue;
+        const pill = page.locator("[data-approval-pill]:visible").first();
+        if (await pill.isVisible().catch(() => false)) {
+          await pill.click();
+          break;
+        }
+      }
+      return null;
+    },
+    "displaying the owner's member-removal approval",
+    deadline
+  );
+  const approveRemoval = removalCard.locator('[data-approval-decision="once"]');
+  if (!(await approveRemoval.isEnabled())) {
+    throw new Error("The member-removal approval has no enabled one-time decision");
+  }
+  await approveRemoval.click();
+  await until(
+    async () => ((await removalCard.isVisible().catch(() => false)) ? null : true),
+    "recording the owner's member-removal approval",
+    deadline
+  );
+  const removal = await nativeRpc(
+    owner,
+    undefined,
+    "hubControl.removeWorkspaceMember",
+    removalArgs
+  );
   if (!removal.removed || removal.closedSessions < 1)
     throw new Error("Membership removal did not retire the live member session");
 
