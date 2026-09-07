@@ -25,7 +25,11 @@ import {
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
-import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  ServiceError,
+  verifiedInitiator,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
@@ -60,7 +64,7 @@ function resolverFrom(
   ctx: ServiceContext,
   deviceLabelFor: (deviceId: string) => string | undefined
 ): ApprovalResolver | undefined {
-  const subject = ctx.caller.subject;
+  const subject = verifiedInitiator(ctx).subject;
   if (!subject) return undefined;
   const deviceId =
     ctx.caller.runtime.kind === "shell" && ctx.caller.runtime.id.startsWith("shell:")
@@ -90,8 +94,9 @@ export function createShellApprovalService(deps: {
     deps.workspaceCreationReviewState ?? (() => ({ status: "resolved" as const }));
   const serviceName = "shellApproval";
   const pendingFor = (ctx: ServiceContext) => {
+    const presenter = verifiedInitiator(ctx);
     const owner = {
-      userId: ctx.caller.subject?.userId,
+      userId: presenter.subject?.userId,
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
     };

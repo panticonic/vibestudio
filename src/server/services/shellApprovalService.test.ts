@@ -60,6 +60,52 @@ function startupApproval(id = "startup-1"): PendingUnitInstallReviewApproval {
 }
 
 describe("shellApprovalService", () => {
+  it("uses the verified window user when hosted chrome presents private approvals", async () => {
+    const access = {
+      isMember: (userId: string) => userId === "alice" || userId === "bob",
+      isAdmin: () => false,
+    };
+    const approvalQueue = createApprovalQueue({
+      eventService: { emitProjected: vi.fn() } as never,
+      workspaceAccess: access,
+    });
+    const service = createShellApprovalService({ approvalQueue, workspaceAccess: access });
+    const decision = approvalQueue.request({
+      kind: "credential",
+      callerId: "do:agent:one",
+      callerKind: "do",
+      repoPath: "workers/agent",
+      effectiveVersion: "v1",
+      allowedDecisions: ["once", "session", "version", "deny"],
+      credentialId: "credential-1",
+      credentialLabel: "Provider",
+      accountIdentity: { providerUserId: "provider-alice" },
+      scopes: [],
+      audience: [{ url: "https://example.test/", match: "origin" }],
+      injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+      requestedByUserId: "alice",
+    });
+    const app = createVerifiedCaller("app:apps/shell:desktop", "app");
+    const alice = createVerifiedCaller("shell:alice", "shell", null, null, {
+      userId: "alice",
+      handle: "alice",
+    });
+    const bob = createVerifiedCaller("shell:bob", "shell", null, null, {
+      userId: "bob",
+      handle: "bob",
+    });
+
+    const aliceContext = { caller: app, authorizingCaller: alice };
+    await expect(service.handler(aliceContext, "listPending", [])).resolves.toHaveLength(1);
+    await expect(
+      service.handler({ caller: app, authorizingCaller: bob }, "listPending", [])
+    ).resolves.toEqual([]);
+
+    const approvalId = approvalQueue.listPending()[0]!.approvalId;
+    await service.handler(aliceContext, "resolve", [approvalId, "deny"]);
+    await expect(decision).resolves.toBe("deny");
+  });
+
   it("keeps trusted presenters independent of their own approval grants", async () => {
     const approvalQueue = createApprovalQueue({
       eventService: { emitProjected: vi.fn() } as never,
