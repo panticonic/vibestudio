@@ -7,6 +7,7 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./websiteNotificationCompatibility": "./src/websiteNotificationCompatibility.ts",
     "./agentInspection": "./src/agentInspection.ts",
     "./actorIdentity": "./src/actorIdentity.ts",
     "./appArtifacts": "./src/appArtifacts.ts",

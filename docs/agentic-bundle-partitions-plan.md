@@ -90,7 +90,14 @@ with that captured owner; workspace detach and window close retire their notific
 Focused tests cover System/ordinary workspaces without Personal, identical panel IDs
 and tags, session replacement, cross-workspace actions and window recreation, retaining
 the prior document-lifetime cases. All 42 focused tests and host typechecks pass;
-native acceptance of this change remains outstanding. Mobile has no website
+native acceptance of workspace routing remains outstanding. The shared document
+compatibility script subsequently passes 27 focused tests across adapter, document API
+and host bridge; a hidden Electron check under `script-src 'none'` verifies main-world
+installation, remembered permission, accepted show and close. The owned Electron process
+exited and its temporary profile was removed. This uses Electron's explicit
+`webFrame.executeJavaScript` source-injection API, not function construction or a new
+page-visible evaluator. Shared lifecycle tests also fix lost close events and premature
+service-worker `showNotification` success. Mobile has no completed website
 Notification bridge yet; its app/server notifications are a different feature, so
 this desktop correction does not establish mobile website-notification parity.
 
