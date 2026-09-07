@@ -16,7 +16,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { getCentralDataPath, getUserDataPath } from "@vibestudio/env-paths";
+import {
+  getCentralDataPath,
+  getSharedDerivedDataPath,
+  getUserDataPath,
+} from "@vibestudio/env-paths";
 import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
@@ -36,7 +40,7 @@ import {
   type ExecutionSourceStateRef,
   type ExecutionSourceContentRoot,
 } from "@vibestudio/shared/execution/retention";
-import { blobCasPath, centralBlobCasDir, putBlobBytes } from "../storage/blobCas.js";
+import { blobCasPath, putBlobBytes } from "../storage/blobCas.js";
 import { stateLayout } from "../stateLayout.js";
 import {
   derivedCacheCoordinator,
@@ -298,12 +302,12 @@ async function writeExecutionMetadata(dir: string, metadata: BuildMetadata): Pro
  * Build metadata remains in each workspace because sourceStateHash and builtAt
  * are workspace-specific. Only immutable artifact payloads are hardlinked.
  */
-export function getCentralBuildArtifactPoolDir(): string {
-  return centralBlobCasDir(getCentralDataPath());
+export function getSharedBuildArtifactPoolDir(): string {
+  return path.join(getSharedDerivedDataPath(), "build-artifacts");
 }
 
-export function getCentralBuildResultCacheDir(): string {
-  return path.join(getCentralDataPath(), "build-cache");
+export function getSharedBuildResultCacheDir(): string {
+  return path.join(getSharedDerivedDataPath(), "build-results");
 }
 
 function getSharedArtifactPoolDir(): string | null {
@@ -316,10 +320,10 @@ function getSharedArtifactPoolDir(): string | null {
   if (path.basename(userDataPath) !== "state" || path.dirname(workspaceDir) !== workspacesDir) {
     return null;
   }
-  return getCentralBuildArtifactPoolDir();
+  return getSharedBuildArtifactPoolDir();
 }
 
-function getSharedBuildResultCacheDir(): string | null {
+function getConfiguredSharedBuildResultCacheDir(): string | null {
   const override = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
   if (override) return path.resolve(override);
 
@@ -329,11 +333,11 @@ function getSharedBuildResultCacheDir(): string | null {
   if (path.basename(userDataPath) !== "state" || path.dirname(workspaceDir) !== workspacesDir) {
     return null;
   }
-  return getCentralBuildResultCacheDir();
+  return getSharedBuildResultCacheDir();
 }
 
 function getSharedBuildDir(key: string): string | null {
-  const cacheDir = getSharedBuildResultCacheDir();
+  const cacheDir = getConfiguredSharedBuildResultCacheDir();
   return cacheDir ? path.join(cacheDir, key) : null;
 }
 
@@ -834,7 +838,10 @@ export function get(key: string): BuildResult | null {
 }
 
 /** Hydrate a shared immutable build without blocking the server event loop. */
-export async function getOrHydrate(key: string): Promise<BuildResult | null> {
+export async function getOrHydrate(
+  key: string,
+  sourceStateHash?: string
+): Promise<BuildResult | null> {
   const localDir = getBuildDir(key);
   const local = get(key);
   if (local) return local;
@@ -863,11 +870,15 @@ export async function getOrHydrate(key: string): Promise<BuildResult | null> {
       // safe cache miss and the caller must rebuild from its own source.
       let sharedMetadata = shared.metadata;
       if (sharedMetadata.sourceStateHash !== null) {
-        const sourceState = activeExecutionIdentityContext?.executionStateForContent(
-          sharedMetadata.sourceStateHash
-        );
+        const reboundStateHash = sourceStateHash ?? sharedMetadata.sourceStateHash;
+        const sourceState =
+          activeExecutionIdentityContext?.executionStateForContent(reboundStateHash);
         if (!sourceState) return null;
-        const reboundMetadata: BuildMetadata = { ...sharedMetadata, sourceState };
+        const reboundMetadata: BuildMetadata = {
+          ...sharedMetadata,
+          sourceStateHash: reboundStateHash,
+          sourceState,
+        };
         const execution = createBuildExecutionIdentity(reboundMetadata, shared.artifacts);
         if (!execution) return null;
         sharedMetadata = { ...reboundMetadata, execution };

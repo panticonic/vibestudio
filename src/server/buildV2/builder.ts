@@ -1988,7 +1988,7 @@ export async function buildUnit(
   const buildKey = computeBuildUnitKey(node, ev, options);
 
   // Check store first
-  let cached = await buildStore.getOrHydrate(buildKey);
+  let cached = await buildStore.getOrHydrate(buildKey, stateRef);
   if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
     cached = await buildStore.rebindSourceState(cached, stateRef);
   }

@@ -11,6 +11,8 @@ import {
   get,
   getByExecution,
   getOrHydrate,
+  getSharedBuildArtifactPoolDir,
+  getSharedBuildResultCacheDir,
   has,
   primaryArtifact,
   primaryArtifactFilePath,
@@ -88,6 +90,19 @@ function expectedArtifactSetIntegrity(
 }
 
 describe("build artifact helpers", () => {
+  it("places cross-instance build caches in the shared derived-data root", () => {
+    const previous = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+    const root = path.join(os.tmpdir(), "vibestudio-shared-derived-test");
+    try {
+      process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = root;
+      expect(getSharedBuildResultCacheDir()).toBe(path.join(root, "build-results"));
+      expect(getSharedBuildArtifactPoolDir()).toBe(path.join(root, "build-artifacts"));
+    } finally {
+      if (previous === undefined) delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+      else process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previous;
+    }
+  });
+
   it("reports stored bytes without removing an unreferenced build", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-retention-"));
     try {
@@ -875,11 +890,18 @@ describe("build artifact helpers", () => {
   it("reuses artifact bytes without changing either workspace's persisted execution identity", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+    const previousSharedDerived = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+    const previousInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
     try {
-      const sharedCache = path.join(root, "shared-builds");
-      const stateA = path.join(root, "workspaces", "a", "state");
-      const stateB = path.join(root, "workspaces", "b", "state");
-      process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = sharedCache;
+      const sharedDerived = path.join(root, "profile-derived");
+      const sharedCache = path.join(sharedDerived, "build-results");
+      const instanceA = path.join(root, "instance-a");
+      const instanceB = path.join(root, "instance-b");
+      const stateA = path.join(instanceA, "workspaces", "a", "state");
+      const stateB = path.join(instanceB, "workspaces", "b", "state");
+      delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+      process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = sharedDerived;
+      process.env["VIBESTUDIO_INSTANCE_ROOT"] = instanceA;
 
       setUserDataPath(stateA);
       const buildKey = "a".repeat(64);
@@ -897,20 +919,21 @@ describe("build artifact helpers", () => {
       expect(original.dir).toBe(path.join(stateA, "builds", buildKey));
 
       setUserDataPath(stateB);
+      process.env["VIBESTUDIO_INSTANCE_ROOT"] = instanceB;
       setBuildExecutionIdentityContext({
         workspaceId: "workspace:b",
         executionStateForContent: (stateHash) =>
-          stateHash === `state:${"1".repeat(64)}`
+          stateHash === `state:${"2".repeat(64)}`
             ? { kind: "event", eventId: "event:workspace-b" }
             : null,
       });
       expect(has(buildKey)).toBe(false);
-      const reused = await getOrHydrate(buildKey);
+      const reused = await getOrHydrate(buildKey, `state:${"2".repeat(64)}`);
       expect(has(buildKey)).toBe(true);
 
       expect(reused).toMatchObject({
         dir: path.join(stateB, "builds", buildKey),
-        sourceStateHash: `state:${"1".repeat(64)}`,
+        sourceStateHash: `state:${"2".repeat(64)}`,
       });
       expect(reused?.metadata.sourceState).toEqual({
         kind: "event",
@@ -927,6 +950,7 @@ describe("build artifact helpers", () => {
       // hydrates the shared bytes. put() did not populate A's verified read
       // cache, so this exercises the disk verification used after a restart.
       setUserDataPath(stateA);
+      process.env["VIBESTUDIO_INSTANCE_ROOT"] = instanceA;
       setBuildExecutionIdentityContext({
         workspaceId: "workspace:test",
         executionStateForContent: (stateHash) => ({
@@ -956,6 +980,16 @@ describe("build artifact helpers", () => {
         delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
       } else {
         process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
+      }
+      if (previousSharedDerived === undefined) {
+        delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+      } else {
+        process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedDerived;
+      }
+      if (previousInstanceRoot === undefined) {
+        delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
+      } else {
+        process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstanceRoot;
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
