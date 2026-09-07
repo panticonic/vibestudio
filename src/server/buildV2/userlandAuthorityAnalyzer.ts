@@ -8,6 +8,7 @@ import {
 } from "typescript/unstable/sync";
 import { TypeCheckService } from "@vibestudio/typecheck";
 import { EFFECT_IMPLEMENTATION_PACKAGES } from "./authorityEffectBoundary.js";
+import type { WorkspaceServiceProtocolRequest } from "@vibestudio/shared/authorityManifest";
 
 export type AbstractString =
   | { kind: "literals"; values: ReadonlySet<string> }
@@ -45,6 +46,8 @@ export interface AuthorityFoldUnit {
   relativePath: string;
   effectiveVersion?: string;
   packageDigest?: string;
+  /** Service protocols reviewed by this exact workspace package manifest. */
+  serviceRequests?: readonly WorkspaceServiceProtocolRequest[];
   package?: {
     kind: "workspace" | "external";
     name: string;

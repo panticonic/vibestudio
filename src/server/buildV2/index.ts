@@ -1728,7 +1728,11 @@ export async function initBuildSystemV2(
         const tsc = await typecheckWorker.check({
           unitRelativePath: node.relativePath,
           sourceRoot,
-          internalDeps: internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
+          internalDeps: internalDeps.map((u) => ({
+            name: u.name,
+            relativePath: u.relativePath,
+            serviceRequests: u.manifest.authority?.serviceRequests ?? [],
+          })),
           nodeModulesPaths: dependencyEnvironment.nodePaths,
           // Packages are libraries, not authority principals. Their effects
           // are folded into each executable consumer through executableModules

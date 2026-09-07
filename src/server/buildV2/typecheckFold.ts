@@ -21,6 +21,7 @@ import type {
   WorkspacePackageInfo,
 } from "@vibestudio/typecheck";
 import type { PackageManifest } from "@vibestudio/shared/types";
+import type { WorkspaceServiceProtocolRequest } from "@vibestudio/shared/authorityManifest";
 import { workspaceDiagnosticPath, type BuildDiagnostic } from "./diagnostics.js";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
 import type { ExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
@@ -30,6 +31,7 @@ import type { ExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js"
 export interface TypecheckUnitDep {
   name: string;
   relativePath: string;
+  serviceRequests?: readonly WorkspaceServiceProtocolRequest[];
 }
 
 async function readPackageJson(dir: string): Promise<WorkspacePackageInfo["packageJson"] | null> {

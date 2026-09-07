@@ -272,9 +272,19 @@ export async function authorityDiagnosticsForProgram(input: {
   };
   const literalValues = (value: AbstractString): string[] | null =>
     value.kind === "literals" ? [...value.values].sort() : null;
-  const declaredServices = new Map(
+  const consumerDeclaredServices = new Map(
     (authority.serviceRequests ?? []).map((request) => [request.protocol, request] as const)
   );
+  const dependencyDeclaredServices = new Map(
+    input.units.map((unit) => [
+      unit.name,
+      new Map((unit.serviceRequests ?? []).map((request) => [request.protocol, request] as const)),
+    ])
+  );
+  const declaredServicesFor = (fact: WorkspaceServiceCallFact) =>
+    fact.origin.package?.kind === "workspace"
+      ? (dependencyDeclaredServices.get(fact.origin.package.name) ?? new Map())
+      : consumerDeclaredServices;
   const objectKeyValues = (
     service: ExactResolvedService,
     value: AbstractString | { kind: "not-applicable" }
@@ -343,6 +353,7 @@ export async function authorityDiagnosticsForProgram(input: {
       return [];
     }
     const resolved: Array<{ query: string; service: ExactResolvedService }> = [];
+    const declaredServices = declaredServicesFor(fact);
     for (const query of queries) {
       const declaration = declaredServices.get(query);
       if (!declaration) {

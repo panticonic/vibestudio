@@ -86,6 +86,115 @@ const catalog = {
 };
 
 describe("userland authority fold", () => {
+  it("uses a workspace dependency's own service declaration for its calls", async () => {
+    const { root, project } = programForFiles({
+      "index.ts": `import { notes } from "./packages/orchestration"; export { notes };`,
+      "packages/orchestration/index.ts": `
+        declare const workers: { resolveService(query: string): Promise<unknown> };
+        export const notes = workers.resolveService("example.notes.v1");
+      `,
+    });
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:exact",
+      services: [binding],
+      resolveCatalog: async () => catalog,
+    });
+    const dependencyRequest = {
+      capability: "workspace-service:notes",
+      resource: { kind: "prefix" as const, prefix: "do:workers/notes:NotesDO:" },
+      tier: "gated" as const,
+      evidence: "bounded-dynamic" as const,
+      packages: ["@workspace/orchestration"],
+    };
+    const units = [
+      { name: "consumer", relativePath: "." },
+      {
+        name: "@workspace/orchestration",
+        relativePath: "packages/orchestration",
+        serviceRequests: [{ protocol: "example.notes.v1", availability: "required" as const }],
+      },
+    ];
+
+    await expect(
+      authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units,
+        manifest: {
+          authority: { requests: [dependencyRequest], serviceRequests: [], provides: [] },
+        },
+        environment,
+      })
+    ).resolves.toEqual([]);
+
+    const missing = await authorityDiagnosticsForProgram({
+      project,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: units.map((unit) => ({ ...unit, serviceRequests: [] })),
+      manifest: { authority: { requests: [dependencyRequest], serviceRequests: [], provides: [] } },
+      environment,
+    });
+    expect(missing).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "Dependency package '@workspace/orchestration' contributes authority"
+        ),
+      }),
+    ]);
+    expect(missing[0]?.message).toContain("does not declare it");
+  });
+
+  it("does not let consumer code borrow a dependency service declaration", async () => {
+    const { root, project } = programForFiles({
+      "index.ts": `
+        declare const workers: { resolveService(query: string): Promise<unknown> };
+        export const notes = workers.resolveService("example.notes.v1");
+      `,
+      "packages/orchestration/index.ts": "export {};",
+    });
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:exact",
+      services: [binding],
+      resolveCatalog: async () => catalog,
+    });
+
+    const diagnostics = await authorityDiagnosticsForProgram({
+      project,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: [
+        { name: "consumer", relativePath: "." },
+        {
+          name: "@workspace/orchestration",
+          relativePath: "packages/orchestration",
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+        },
+      ],
+      manifest: {
+        authority: {
+          requests: [
+            {
+              capability: "workspace-service:notes",
+              resource: { kind: "prefix", prefix: "do:workers/notes:NotesDO:" },
+              tier: "gated",
+              evidence: "bounded-dynamic",
+            },
+          ],
+          serviceRequests: [],
+          provides: [],
+        },
+      },
+      environment,
+    });
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("does not declare it") }),
+    ]);
+    expect(diagnostics[0]?.message).not.toContain("Dependency package");
+  });
+
   it("admits an explicitly reviewed factory service family with a dynamic object key", async () => {
     const { root, project } = programFor(`
       declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };
@@ -456,6 +565,7 @@ describe("userland authority fold", () => {
         {
           name: "@workspace/wrapper",
           relativePath: "dep",
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
           package: {
             kind: "workspace",
             name: "@workspace/wrapper",
@@ -466,7 +576,7 @@ describe("userland authority fold", () => {
       ],
       manifest: {
         authority: {
-          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          serviceRequests: [],
           requests: [
             {
               capability: "context.boundary",
