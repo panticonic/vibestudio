@@ -34,4 +34,22 @@ describe("panel initialization failure state", () => {
     clearPanelInitializationFailure();
     expect(readPanelInitializationFailure()).toBeNull();
   });
+
+  it("records host launch synchronization failures in the startup ledger", () => {
+    expect(
+      recordPanelInitializationFailure(
+        "electron-host-target-sync",
+        new Error("Capability browser-import has no reviewed authority presentation"),
+        "host-launch"
+      )
+    ).toMatchObject({
+      phase: "host-launch",
+      trigger: "electron-host-target-sync",
+      message: "Capability browser-import has no reviewed authority presentation",
+    });
+    clearPanelInitializationFailure("panel-tree");
+    expect(readPanelInitializationFailure()?.phase).toBe("host-launch");
+    clearPanelInitializationFailure("host-launch");
+    expect(readPanelInitializationFailure()).toBeNull();
+  });
 });

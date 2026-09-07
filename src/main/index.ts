@@ -1316,11 +1316,11 @@ async function drainPendingReadyElectronLaunch(): Promise<void> {
 function initializePanelTreeOnce(reason: string): Promise<void> {
   const runtime = systemRuntime;
   if (!runtime) return Promise.resolve();
-  clearPanelInitializationFailure();
+  clearPanelInitializationFailure("panel-tree");
   log.info(`[panels] Initializing panel tree after ${reason}`);
   return runtime
     .initializePanelTree()
-    .then(() => clearPanelInitializationFailure())
+    .then(() => clearPanelInitializationFailure("panel-tree"))
     .catch((error) => {
       const failure = recordPanelInitializationFailure(reason, error);
       console.error("[App] Failed to initialize panel tree:", error);
@@ -1372,6 +1372,7 @@ async function syncElectronHostTarget(
     ).launch("electron");
     const launch = recordFromUnknown(result);
     const status = launch?.["status"] ?? null;
+    clearPanelInitializationFailure("host-launch");
     if (status === "approval-required") {
       const statusChanged = rememberElectronHostLaunchStatus("approval-required", launch);
       if (!electronHostLaunchBlockedByApproval || statusChanged) {
@@ -1401,6 +1402,7 @@ async function syncElectronHostTarget(
     return "waiting-for-change";
   } catch (error) {
     if (isCleaningUp) return "waiting-for-change";
+    recordPanelInitializationFailure("electron-host-target-sync", error, "host-launch");
     log.warn(
       `[apps] Failed to synchronize Electron host target: ${
         error instanceof Error ? error.message : String(error)

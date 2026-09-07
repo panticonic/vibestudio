@@ -8,6 +8,7 @@ import {
   ensureHostedShellReady,
   linkSharedMachineCaches,
   panelInitializationFailureError,
+  readPanelInitializationFailure,
 } from "./electronSetup.js";
 
 const temporaryRoots: string[] = [];
@@ -59,7 +60,7 @@ describe("hosted-shell initialization diagnostics", () => {
     });
 
     expect(error?.message).toContain(
-      "Hosted shell panel initialization failed during electron-host-ready: missing workspace authority"
+      "Hosted shell initialization failed during electron-host-ready: missing workspace authority"
     );
     expect(error?.message).toContain("PanelTreeError: missing workspace authority");
   });
@@ -76,7 +77,10 @@ describe("hosted-shell initialization diagnostics", () => {
       rpcCall,
     } as unknown as TestApi;
     const forWorkspace = vi.fn(async () => ownerApi);
-    globalThis.__testApi = { forWorkspace } as unknown as TestApi;
+    globalThis.__testApi = {
+      forWorkspace,
+      readPanelInitializationFailure: ownerApi.readPanelInitializationFailure,
+    } as unknown as TestApi;
     const app = {
       evaluate: async (callback: (_electron: unknown, input: unknown) => unknown, input: unknown) =>
         callback(undefined, input),
@@ -88,9 +92,31 @@ describe("hosted-shell initialization diagnostics", () => {
         { panelSource: "panels/chat", timeoutMs: 30_000 }
       )
     ).rejects.toThrow(
-      "Hosted shell panel initialization failed during electron-host-ready: workspace-state denied the snapshot"
+      "Hosted shell initialization failed during electron-host-ready: workspace-state denied the snapshot"
     );
-    expect(forWorkspace).toHaveBeenCalledWith("personal-test");
+    expect(forWorkspace).not.toHaveBeenCalled();
     expect(rpcCall).not.toHaveBeenCalled();
+  });
+
+  it("reads a launch failure without resolving the unavailable workspace", async () => {
+    const failure = {
+      timestamp: 1234,
+      phase: "panel-tree" as const,
+      trigger: "electron-host-ready",
+      message: "Capability browser-import has no reviewed authority presentation",
+    };
+    const forWorkspace = vi.fn(() => new Promise<TestApi>(() => {}));
+    globalThis.__testApi = {
+      forWorkspace,
+      readPanelInitializationFailure: () => failure,
+    } as unknown as TestApi;
+    const app = {
+      evaluate: async (callback: (_electron: unknown) => unknown) => callback(undefined),
+    } as unknown as ElectronApplication;
+
+    await expect(
+      readPanelInitializationFailure({ app, workspaceId: "personal-test" })
+    ).resolves.toEqual(failure);
+    expect(forWorkspace).not.toHaveBeenCalled();
   });
 });

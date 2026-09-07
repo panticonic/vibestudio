@@ -1051,7 +1051,12 @@ export async function readPanelInitializationFailure(
   owner: TestWorkspaceOwner
 ): Promise<PanelInitializationFailure | null> {
   return retryIdempotentAutomationRead(
-    () => callTestApi(owner, "readPanelInitializationFailure", []),
+    () =>
+      owner.app.evaluate(() => {
+        const root = globalThis.__testApi;
+        if (!root) throw new Error("Test API not available");
+        return root.readPanelInitializationFailure();
+      }),
     { label: "reading panel initialization failure" }
   );
 }
@@ -1062,7 +1067,7 @@ export function panelInitializationFailureError(
   if (!failure) return null;
   const stack = failure.stack ? `\n${failure.stack}` : "";
   return new Error(
-    `Hosted shell panel initialization failed during ${failure.trigger}: ${failure.message}${stack}`
+    `Hosted shell initialization failed during ${failure.trigger}: ${failure.message}${stack}`
   );
 }
 
@@ -1075,12 +1080,34 @@ export async function ensureHostedShellReady(
     async (_electron, input) => {
       const root = globalThis.__testApi;
       if (!root) throw new Error("Test API not available");
-      const testApi = await root.forWorkspace(input.workspaceId);
-
       const deadline = Date.now() + input.timeoutMs;
       let lastState: unknown = null;
+      const initialFailure = root.readPanelInitializationFailure();
+      if (initialFailure) {
+        return { readiness: null, initializationFailure: initialFailure, lastState };
+      }
+      const workspace = root.forWorkspace(input.workspaceId).then((testApi) => ({ testApi }));
+      let testApi: TestApi | null = null;
+      while (!testApi && Date.now() < deadline) {
+        const initializationFailure = root.readPanelInitializationFailure();
+        if (initializationFailure) {
+          return { readiness: null, initializationFailure, lastState };
+        }
+        const resolved = await Promise.race([
+          workspace,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+        ]);
+        if (resolved) testApi = resolved.testApi;
+      }
+      if (!testApi) {
+        return {
+          readiness: null,
+          initializationFailure: root.readPanelInitializationFailure(),
+          lastState: { workspaceId: input.workspaceId, workspace: "resolving" },
+        };
+      }
       while (Date.now() < deadline) {
-        const initializationFailure = testApi.readPanelInitializationFailure();
+        const initializationFailure = root.readPanelInitializationFailure();
         if (initializationFailure) {
           return { readiness: null, initializationFailure, lastState };
         }

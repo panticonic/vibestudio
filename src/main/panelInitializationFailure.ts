@@ -1,6 +1,6 @@
 export interface PanelInitializationFailure {
   timestamp: number;
-  phase: "panel-tree";
+  phase: "panel-tree" | "host-launch";
   trigger: string;
   message: string;
   stack?: string;
@@ -15,11 +15,12 @@ let currentFailure: PanelInitializationFailure | null = null;
  */
 export function recordPanelInitializationFailure(
   trigger: string,
-  error: unknown
+  error: unknown,
+  phase: PanelInitializationFailure["phase"] = "panel-tree"
 ): PanelInitializationFailure {
   currentFailure = {
     timestamp: Date.now(),
-    phase: "panel-tree",
+    phase,
     trigger,
     message: error instanceof Error ? error.message : String(error),
     ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
@@ -28,7 +29,8 @@ export function recordPanelInitializationFailure(
 }
 
 /** Clear the previous attempt's terminal state before retrying or after success. */
-export function clearPanelInitializationFailure(): void {
+export function clearPanelInitializationFailure(phase?: PanelInitializationFailure["phase"]): void {
+  if (phase && currentFailure?.phase !== phase) return;
   currentFailure = null;
 }
 
