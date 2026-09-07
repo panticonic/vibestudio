@@ -165,6 +165,86 @@ describe("install clearance", () => {
     ]);
   });
 
+  it("mints clearance from the exact candidate service binding before it is live", () => {
+    const capability = "workspace-service:task-board-store";
+    const issued = mintUnitClearanceGrants({
+      grantStore,
+      units: [
+        {
+          repoPath: "panels/task-board",
+          effectiveVersion: "ev-candidate",
+          authority: authority([{ capability }]),
+          serviceReviews: [
+            {
+              capability,
+              providerUnit: "meta/task-board-store",
+              catalogDigest: "candidate-catalog",
+              presentation: {
+                action: "manage the task board",
+                authorityCategory: { domain: "automation", verb: "manage" },
+                notability: "everyday",
+              },
+            },
+          ],
+        },
+      ],
+      origin: "publication",
+      decidedBy: "user:alice",
+      issuedBy: "host:vibestudio",
+      presentationFor: () => ({
+        title: "Unknown",
+        action: "unknown",
+        description: "Unknown live service",
+        group: "other",
+      }),
+    });
+
+    expect(issued).toEqual([
+      expect.objectContaining({ capability, subject: "code:panels/task-board@ev-candidate" }),
+    ]);
+  });
+
+  it("does not infer clearance for an unknown direct service request without reviewed facts", () => {
+    expect(
+      mint({ authority: authority([{ capability: "workspace-service:not-in-candidate" }]) })
+    ).toEqual([]);
+  });
+
+  it("does not mint from a stale live provider when the candidate binding is unavailable", () => {
+    const capability = "workspace-service:task-board-store";
+    const issued = mintUnitClearanceGrants({
+      grantStore,
+      units: [
+        {
+          repoPath: "panels/task-board",
+          effectiveVersion: "ev-candidate",
+          authority: authority([{ capability }]),
+          serviceReviews: [
+            {
+              capability,
+              providerUnit: null,
+              catalogDigest: null,
+              presentation: null,
+            },
+          ],
+        },
+      ],
+      origin: "publication",
+      decidedBy: "user:alice",
+      issuedBy: "host:vibestudio",
+      presentationFor: () => ({
+        title: "Old task board",
+        action: "use the old task board",
+        description: "Stale live provider",
+        group: "runtime",
+        authorityCategory: { domain: "automation", verb: "manage" },
+        notability: "everyday",
+      }),
+    });
+
+    expect(issued).toEqual([]);
+  });
+
   it("withholds a grant for a row the user deselected, and admits the unit anyway", () => {
     const manifest = authority([
       { capability: "workspace.files.write" },

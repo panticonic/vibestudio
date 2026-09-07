@@ -41,6 +41,7 @@ function identity(
     dependencyEvs: { "@workspace/runtime": "runtime-old" },
     externalDeps: {},
     serviceBindings: [],
+    serviceReviews: [],
     ...overrides,
   };
 }

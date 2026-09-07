@@ -7,6 +7,8 @@ import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import {
   installReviewRows,
   installRowKey,
+  type ServiceBindingFact,
+  type WorkspaceServiceReviewFact,
   type UserlandDefinitions,
 } from "@vibestudio/shared/authority/unitInstallReview";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
@@ -33,6 +35,8 @@ export interface UnitClearanceIdentity {
   repoPath: string;
   effectiveVersion: string;
   authority: UnitAuthorityManifest;
+  serviceBindings?: readonly ServiceBindingFact[];
+  serviceReviews?: readonly WorkspaceServiceReviewFact[];
   /**
    * The row keys the user allowed now. Absent means every install-clearable row
    * for this unit; an empty array means the user chose to be asked about
@@ -97,7 +101,13 @@ export function mintUnitClearanceGrants(input: MintUnitClearanceInput): Authorit
     for (const unit of input.units) {
       const subject = codePrincipal(unit);
       const requested = new Set(unit.clearedRowKeys ?? null);
-      const clearable = clearableRequests(unit.authority, definitions, input.presentationFor);
+      const clearable = clearableRequests(
+        unit.authority,
+        definitions,
+        input.presentationFor,
+        unit.serviceBindings,
+        unit.serviceReviews
+      );
       for (const { request, key } of clearable) {
         if (unit.clearedRowKeys !== undefined && !requested.has(key)) continue;
         issued.push(
@@ -157,12 +167,16 @@ export function retireUnitClearanceGrants(input: {
 export function clearableRequests(
   authority: UnitAuthorityManifest,
   userlandDefinitions?: UserlandDefinitions,
-  presentationFor?: CapabilityPresentationResolver
+  presentationFor?: CapabilityPresentationResolver,
+  serviceBindings?: readonly ServiceBindingFact[],
+  serviceReviews?: readonly WorkspaceServiceReviewFact[]
 ): Array<{ request: UnitAuthorityRequest; key: string }> {
   const { notableRows, everydayRows } = installReviewRows({
     requests: authority.requests,
     ...(userlandDefinitions ? { userlandDefinitions } : {}),
     ...(presentationFor ? { presentationFor } : {}),
+    ...(serviceBindings ? { serviceBindings } : {}),
+    ...(serviceReviews ? { serviceReviews } : {}),
   });
   const clearableKeys = new Set(
     [...notableRows, ...everydayRows].filter((row) => row.selectable).map((row) => row.key)

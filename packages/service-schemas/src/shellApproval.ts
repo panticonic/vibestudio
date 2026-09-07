@@ -17,6 +17,7 @@ import type {
   InstallReviewRow,
   TemplateInstallResolution,
 } from "@vibestudio/shared/authority/unitInstallReview";
+import type { ServiceBindingFact } from "@vibestudio/shared/authority/unitInstallReview";
 import type { AuthorityRequirement, InvocationSnapshot } from "@vibestudio/rpc";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
@@ -236,7 +237,7 @@ const serviceBindingFactSchema = z
     providerUnit: z.string().nullable(),
     catalogDigest: z.string().nullable(),
   })
-  .strict();
+  .strict() satisfies z.ZodType<ServiceBindingFact>;
 
 const installReviewRowSchema = z.union([
   z

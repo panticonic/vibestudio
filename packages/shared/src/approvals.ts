@@ -10,6 +10,8 @@ import type { ApprovalDecisionId } from "./approvalContract.js";
 import type { InvocationSnapshot } from "@vibestudio/rpc";
 import type { UnitAuthorityRequest } from "./authorityManifest.js";
 import type { AuthorityPromptCardType } from "./authority/promptRegistry.js";
+import type { ServiceBindingFact } from "./authority/unitInstallReview.js";
+import type { WorkspaceServiceReviewFact } from "./authority/unitInstallReview.js";
 
 export type ApprovalDecision = ApprovalDecisionId;
 export type ApprovalConfigFieldType = "text" | "secret";
@@ -522,13 +524,8 @@ export interface ReviewedUnit {
     requests: readonly UnitAuthorityRequest[];
     serviceRequests: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
     previousServiceRequests: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
-    serviceBindings?: readonly {
-      protocol: string;
-      availability: "required" | "optional";
-      serviceName: string | null;
-      providerUnit: string | null;
-      catalogDigest: string | null;
-    }[];
+    serviceBindings?: readonly ServiceBindingFact[];
+    serviceReviews?: readonly WorkspaceServiceReviewFact[];
     /** Receiver-owned userland capabilities in the proposed exact build. */
     provides: readonly import("./authorityManifest.js").UserlandCapabilityDefinition[];
     /** Receiver-owned capabilities in the previously approved exact build. */

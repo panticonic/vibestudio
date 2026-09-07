@@ -1,4 +1,8 @@
-import { reviewedUserlandDefinitions } from "@vibestudio/shared/authority/unitInstallReview";
+import {
+  reviewedUserlandDefinitions,
+  type ServiceBindingFact,
+  type WorkspaceServiceReviewFact,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -43,6 +47,9 @@ import type {
 export interface AcceptedUnit {
   /** The exact version being admitted. */
   identity: UnitAdmissionIdentity;
+  /** Exact candidate service facts shown by this same acceptance. */
+  serviceBindings?: readonly ServiceBindingFact[];
+  serviceReviews?: readonly WorkspaceServiceReviewFact[];
   /**
    * The version this one replaces. Its clearance retires in the same step:
    * grants are version-bound, so leaving them behind would let a reverted unit
@@ -140,6 +147,8 @@ export function prepareUnitInstallReview(
         grantStore,
         units: input.units.map((unit, index) => ({
           ...unit.identity,
+          ...(unit.serviceBindings ? { serviceBindings: unit.serviceBindings } : {}),
+          ...(unit.serviceReviews ? { serviceReviews: unit.serviceReviews } : {}),
           ...(cleared[index] === undefined ? {} : { clearedRowKeys: cleared[index] }),
         })),
         origin: input.origin,

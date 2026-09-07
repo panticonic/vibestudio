@@ -120,6 +120,10 @@ import {
   executionArtifactRefFromBuild,
 } from "../executionRootProviders.js";
 import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
+import type {
+  ServiceBindingFact,
+  WorkspaceServiceReviewFact,
+} from "@vibestudio/shared/authority/unitInstallReview";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -211,13 +215,8 @@ export interface BuildUnitIdentityResolution extends BuildUnitResolution {
   packageVersion: string | null;
   dependencyEvs: Record<string, string>;
   externalDeps: Record<string, string>;
-  serviceBindings: Array<{
-    protocol: string;
-    availability: "required" | "optional";
-    serviceName: string | null;
-    providerUnit: string | null;
-    catalogDigest: string | null;
-  }>;
+  serviceBindings: ServiceBindingFact[];
+  serviceReviews: WorkspaceServiceReviewFact[];
 }
 
 interface GraphView {
@@ -1076,6 +1075,39 @@ export async function initBuildSystemV2(
           serviceName: resolution.service.binding.name,
           providerUnit: resolution.service.binding.source,
           catalogDigest: resolution.service.catalog.digest,
+        };
+      })
+    );
+  };
+  const serviceReviewsForNode = async (
+    node: GraphNode,
+    environment: ExactWorkspaceAuthorityEnvironment | null
+  ): Promise<WorkspaceServiceReviewFact[]> => {
+    const capabilities = (node.manifest.authority?.requests ?? [])
+      .map((request) => request.capability)
+      .filter((capability) => capability.startsWith("workspace-service:"));
+    return Promise.all(
+      capabilities.map(async (capability) => {
+        if (!environment) {
+          return { capability, providerUnit: null, catalogDigest: null, presentation: null };
+        }
+        const serviceName = capability.slice("workspace-service:".length);
+        const resolution = await environment.resolveService(serviceName);
+        if (resolution.kind !== "resolved" && resolution.kind !== "inaccessible") {
+          return { capability, providerUnit: null, catalogDigest: null, presentation: null };
+        }
+        const binding = resolution.service.binding;
+        return {
+          capability,
+          providerUnit: binding.source,
+          catalogDigest: resolution.service.catalog.digest,
+          presentation: {
+            ...(binding.title ? { title: binding.title } : {}),
+            action: binding.action,
+            ...(binding.description ? { description: binding.description } : {}),
+            authorityCategory: binding.presentation,
+            notability: binding.notability ?? "headline",
+          },
         };
       })
     );
@@ -2404,6 +2436,12 @@ export async function initBuildSystemV2(
             ? await authorityEnvironmentAt(stateHash, graph, evMap)
             : null
         ),
+        serviceReviews: await serviceReviewsForNode(
+          node,
+          rootOptions.workspaceAuthorityEnvironmentAt
+            ? await authorityEnvironmentAt(stateHash, graph, evMap)
+            : null
+        ),
       };
     },
 
@@ -2460,6 +2498,7 @@ export async function initBuildSystemV2(
                 appNodeModuleRoots
               ).installSet,
               serviceBindings: await serviceBindingsForNode(node, environment),
+              serviceReviews: await serviceReviewsForNode(node, environment),
             };
           })
       ).then((identities) =>

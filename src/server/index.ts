@@ -1174,9 +1174,16 @@ async function main() {
           effectiveVersion,
           authority: {
             requests: unit.authority?.requests ?? [],
+            serviceRequests: unit.authority?.serviceRequests ?? [],
             provides: unit.authority?.provides ?? [],
           },
         },
+        ...(unit.authority?.serviceBindings
+          ? { serviceBindings: unit.authority.serviceBindings }
+          : {}),
+        ...(unit.authority?.serviceReviews
+          ? { serviceReviews: unit.authority.serviceReviews }
+          : {}),
         ...(outgoing && outgoing !== effectiveVersion
           ? { previous: { repoPath: unit.source.repo, effectiveVersion: outgoing } }
           : {}),

@@ -309,6 +309,77 @@ describe("building rows from a declaration", () => {
     });
   });
 
+  it("classifies a newly resolved service from its exact binding presentation", () => {
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:task-board-store")],
+      serviceBindings: [
+        {
+          protocol: "vibestudio.task-board.v1",
+          availability: "required",
+          serviceName: "task-board-store",
+          providerUnit: "meta/task-board-store",
+          catalogDigest: "candidate-catalog",
+        },
+      ],
+      serviceReviews: [
+        {
+          capability: "workspace-service:task-board-store",
+          providerUnit: "meta/task-board-store",
+          catalogDigest: "candidate-catalog",
+          presentation: {
+            title: "Task board",
+            action: "manage the task board",
+            authorityCategory: { domain: "automation", verb: "manage" },
+            notability: "everyday",
+          },
+        },
+      ],
+      // The current workspace deliberately does not know the candidate service.
+      presentationFor: () => ({
+        title: "Unknown",
+        action: "unknown",
+        description: "Unknown live service",
+        group: "other",
+      }),
+    });
+
+    expect(notableRows).toEqual([]);
+    expect(everydayRows).toEqual([
+      expect.objectContaining({
+        selectable: true,
+        notability: "everyday",
+        row: expect.objectContaining({ action: "manage the task board" }),
+      }),
+    ]);
+  });
+
+  it("does not borrow stale live review metadata when the exact binding has none", () => {
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:task-board-store")],
+      serviceReviews: [
+        {
+          capability: "workspace-service:task-board-store",
+          providerUnit: null,
+          catalogDigest: null,
+          presentation: null,
+        },
+      ],
+      presentationFor: () => ({
+        title: "Old task board",
+        action: "use the old task board",
+        description: "Stale live provider",
+        group: "runtime",
+        authorityCategory: { domain: "automation", verb: "manage" },
+        notability: "everyday",
+      }),
+    });
+
+    expect(everydayRows).toEqual([]);
+    expect(notableRows).toEqual([
+      expect.objectContaining({ selectable: false, notability: "headline" }),
+    ]);
+  });
+
   it("leaves a service row unbound when no declaration resolved to it", () => {
     const { notableRows, everydayRows } = installReviewRows({
       requests: [request("workspace-service:local-notifications")],

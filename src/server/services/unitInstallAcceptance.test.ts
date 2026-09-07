@@ -199,6 +199,52 @@ describe("acceptUnitInstallReview", () => {
     ]);
   });
 
+  it("carries clearance for a candidate service across an update using the reviewed binding", () => {
+    const capability = "workspace-service:task-board-store";
+    const serviceReviews = [
+      {
+        capability,
+        providerUnit: "meta/task-board-store",
+        catalogDigest: "candidate-catalog",
+        presentation: {
+          action: "manage the task board",
+          authorityCategory: { domain: "automation" as const, verb: "manage" as const },
+          notability: "everyday" as const,
+        },
+      },
+    ];
+    const first = {
+      repoPath: "panels/task-board",
+      effectiveVersion: "ev-1",
+      authority: authority(capability),
+    };
+    acceptUnitInstallReview(
+      { admissionStore, grantStore },
+      {
+        units: [{ identity: first, serviceReviews, clearedRowKeys: [rowKey(capability)] }],
+        origin: "publication",
+      }
+    );
+
+    const updated = { ...first, effectiveVersion: "ev-2" };
+    acceptUnitInstallReview(
+      { admissionStore, grantStore },
+      {
+        units: [
+          {
+            identity: updated,
+            serviceReviews,
+            previous: { repoPath: first.repoPath, effectiveVersion: first.effectiveVersion },
+          },
+        ],
+        origin: "publication",
+      }
+    );
+
+    expect([...heldClearanceRowKeys({ grantStore, ...first })]).toEqual([]);
+    expect([...heldClearanceRowKeys({ grantStore, ...updated })]).toEqual([rowKey(capability)]);
+  });
+
   it("keeps an update the user emptied empty, rather than reading it as unasked", () => {
     acceptUnitInstallReview(
       { admissionStore, grantStore },

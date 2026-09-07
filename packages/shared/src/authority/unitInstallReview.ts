@@ -21,7 +21,11 @@
 
 import type { AuthorityRow } from "./authorityRows.js";
 import { authorityRow } from "./authorityRows.js";
-import { AUTHORITY_DOMAINS } from "./authorityDomains.js";
+import {
+  AUTHORITY_DOMAINS,
+  type AuthorityDomainId,
+  type AuthorityVerb,
+} from "./authorityDomains.js";
 import { capabilityNotability, reviewedCapabilityNotability } from "./capabilityNotability.js";
 import type { CapabilityNotability } from "./capabilityNotability.js";
 import { capabilityClearancePolicy } from "./capabilityClearance.js";
@@ -151,6 +155,19 @@ export interface ServiceBindingFact {
   catalogDigest: string | null;
 }
 
+export interface WorkspaceServiceReviewFact {
+  capability: string;
+  providerUnit: string | null;
+  catalogDigest: string | null;
+  presentation: {
+    title?: string;
+    action: string;
+    description?: string;
+    authorityCategory: { domain: AuthorityDomainId; verb: AuthorityVerb };
+    notability: CapabilityNotability;
+  } | null;
+}
+
 export interface InstallReviewPermissionRow extends InstallReviewRowBase {
   kind: "permission";
   row: AuthorityRow;
@@ -233,6 +250,7 @@ export interface InstallReviewRowsInput {
    * currently filling it.
    */
   serviceBindings?: readonly ServiceBindingFact[];
+  serviceReviews?: readonly WorkspaceServiceReviewFact[];
   /** Exact workspace declarations for dynamic service envelopes. */
   presentationFor?: CapabilityPresentationResolver;
   /**
@@ -274,6 +292,9 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       .filter((binding) => binding.serviceName !== null)
       .map((binding) => [`workspace-service:${binding.serviceName}`, binding] as const)
   );
+  const serviceReviewByCapability = new Map(
+    (input.serviceReviews ?? []).map((fact) => [fact.capability, fact] as const)
+  );
 
   for (const request of input.requests) {
     const key = requestKey(request);
@@ -285,6 +306,7 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       userlandDefinitions: input.userlandDefinitions,
       presentationFor: input.presentationFor,
       binding: bindingByCapability.get(request.capability),
+      serviceReview: serviceReviewByCapability.get(request.capability),
       change: !isUpdate
         ? undefined
         : !previous
@@ -314,6 +336,7 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       userlandDefinitions: input.userlandDefinitions,
       presentationFor: input.presentationFor,
       binding: bindingByCapability.get(request.capability),
+      serviceReview: serviceReviewByCapability.get(request.capability),
       change: "removed",
       selectedByDefault: false,
       removed: true,
@@ -344,13 +367,16 @@ function buildPermissionRow(input: {
   userlandDefinitions: UserlandDefinitions | undefined;
   presentationFor: CapabilityPresentationResolver | undefined;
   binding?: ServiceBindingFact | undefined;
+  serviceReview?: WorkspaceServiceReviewFact | undefined;
   change: InstallRowChange | undefined;
   selectedByDefault: boolean;
   removed?: boolean;
 }): InstallReviewPermissionRow {
   const { request } = input;
   const definition = input.userlandDefinitions?.get(request.capability);
-  const declaredPresentation = input.presentationFor?.(request.capability);
+  const declaredPresentation = input.serviceReview
+    ? (input.serviceReview.presentation ?? undefined)
+    : input.presentationFor?.(request.capability);
   const declaredServiceReview =
     request.capability.startsWith("workspace-service:") &&
     declaredPresentation?.notability !== undefined
