@@ -38,6 +38,7 @@ export type PanelLogRecord = z.infer<typeof PanelLogRecordSchema>;
 
 export const panelLogMethods = defineServiceMethods({
   append: {
+    website: {"kind":"closed","reason":"The panelLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

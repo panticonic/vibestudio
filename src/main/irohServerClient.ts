@@ -418,7 +418,10 @@ export async function createIrohServerClient(
       return rpc.stream("main", `${service}.${method}`, callArgs, options);
     },
     onDirectEvent(event, listener) {
-      return rpc.on(event, ({ payload }) => listener(payload as never));
+      return rpc.on(event, ({ payload }) => listener(payload as never), {
+        kind: "closed",
+        reason: "This listener consumes host or implementation lifecycle events.",
+      });
     },
     async callAs(caller, service, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
       const client = await getScopedClient(caller);

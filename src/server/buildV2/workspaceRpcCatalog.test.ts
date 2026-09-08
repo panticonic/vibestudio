@@ -16,7 +16,7 @@ describe("workspace RPC build catalog", () => {
         declare const root: any;
         const generated = ${generatedExpression};
         class NotesDO {
-          @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+          @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
           async getNote(): Promise<void> {}
         }
       `
@@ -35,9 +35,9 @@ describe("workspace RPC build catalog", () => {
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
-      @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+      @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
       async local(): Promise<void> {}
-      @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read", crossWorkspace: true })
+      @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read", crossWorkspace: true })
       async shared(): Promise<void> {}
     }`
     );
@@ -59,7 +59,7 @@ describe("workspace RPC build catalog", () => {
       `
         class NotesDO {
           /** Return one note without changing it. */
-          @rpc({ principals: ["code", "user"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+          @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code", "user"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
           async getNote(id: string): Promise<{ id: string }> { return { id }; }
 
           private helper(): void {}
@@ -68,7 +68,7 @@ describe("workspace RPC build catalog", () => {
     );
     writeFileSync(
       join(root, "provider.test.ts"),
-      `class Fake { @rpc({ principals: ["code"], tier: "open", sensitivity: "read" }) nope() {} }`
+      `class Fake { @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], tier: "open", sensitivity: "read" }) nope() {} }`
     );
 
     expect(
@@ -78,6 +78,10 @@ describe("workspace RPC build catalog", () => {
       })
     ).toEqual([
       expect.objectContaining({
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver exposure for this test fixture.",
+        } as const,
         className: "NotesDO",
         name: "getNote",
         signature: "getNote(id: string): Promise<{ id: string }>",
@@ -98,7 +102,7 @@ describe("workspace RPC build catalog", () => {
     writeFileSync(
       join(root, "provider.ts"),
       `class NotesDO {
-        @rpc({
+        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
           principals: ["code", "user"],
           effect: {
             kind: "userland-capability",
@@ -170,6 +174,10 @@ describe("workspace RPC build catalog", () => {
       rpcSchemas: {
         NotesDO: defineServiceMethods({
           deleteNote: {
+            website: {
+              kind: "eligible",
+              rationale: "Explicit receiver policy for this test fixture.",
+            } as const,
             crossWorkspace: true,
             args: z.tuple([z.string()]),
             returns: z.void(),
@@ -210,7 +218,7 @@ describe("workspace RPC build catalog", () => {
     writeFileSync(
       join(root, "index.ts"),
       `class Notes {
-        @rpc({
+        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
           principals: ["code"],
           effect: { kind: "open" },
           produces: { kind: "opaque-handle", capability: "notes.read" },
@@ -219,7 +227,7 @@ describe("workspace RPC build catalog", () => {
         })
         async prepareNote(id: string): Promise<unknown> {}
 
-        @rpc({
+        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
           principals: ["code"],
           effect: {
             kind: "userland-capability",

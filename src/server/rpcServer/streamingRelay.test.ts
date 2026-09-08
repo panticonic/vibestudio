@@ -50,6 +50,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       }),
       verifiedCaller: () => caller,
       authorizeRelay: () => ({ ok: true }),
+      createHttpContext: (caller, _request, extras) => ({ caller, ...extras }),
       createSessionContext: () => {
         throw new Error("WebSocket context was not expected");
       },
@@ -150,6 +151,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       }),
       verifiedCaller: () => evaluated,
       authorizeRelay: () => ({ ok: true }),
+      createHttpContext: (caller, _request, extras) => ({ caller, ...extras }),
       createSessionContext: () => {
         throw new Error("WebSocket context was not expected");
       },

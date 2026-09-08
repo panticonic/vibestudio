@@ -46,6 +46,11 @@ export class LifecycleProbeDO extends DurableObjectBase {
   }
 
   @rpc({
+    website: {
+      kind: "closed",
+      reason:
+        "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
+    },
     principals: ["host", "user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -68,6 +73,11 @@ export class LifecycleProbeDO extends DurableObjectBase {
   }
 
   @rpc({
+    website: {
+      kind: "closed",
+      reason:
+        "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
+    },
     principals: ["host", "user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -82,6 +92,11 @@ export class LifecycleProbeDO extends DurableObjectBase {
    *  whether real workerd caps a long-held DO `fetch` handler (it should not; a DO
    *  is not a regular Worker with the ~30s wall limit). */
   @rpc({
+    website: {
+      kind: "closed",
+      reason:
+        "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
+    },
     principals: ["host", "user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -93,6 +108,11 @@ export class LifecycleProbeDO extends DurableObjectBase {
   }
 
   @rpc({
+    website: {
+      kind: "closed",
+      reason:
+        "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
+    },
     principals: ["host", "user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -126,6 +146,11 @@ export class LifecycleProbeDO extends DurableObjectBase {
    * until the next request ⇒ the isolate froze and only resumed when re-woken.
    */
   @rpc({
+    website: {
+      kind: "closed",
+      reason:
+        "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
+    },
     principals: ["host", "user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -163,6 +188,11 @@ export class LifecycleProbeDO extends DurableObjectBase {
   }
 
   @rpc({
+    website: {
+      kind: "closed",
+      reason:
+        "This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation.",
+    },
     principals: ["host", "user", "code"],
     effect: { kind: "open" },
     tier: "open",

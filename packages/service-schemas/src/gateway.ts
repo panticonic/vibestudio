@@ -25,6 +25,7 @@ export type GatewayFetchDescriptor = z.infer<typeof fetchDescriptorSchema>;
 
 export const gatewayMethods = defineServiceMethods({
   fetch: {
+    website: {"kind":"eligible","rationale":"Network access uses the same scoped egress and credential approvals as other runtimes."} as const,
     capability: "workspace.gateway.access",
     tier: {
       tier: "gated",

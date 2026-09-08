@@ -69,7 +69,10 @@ export class WsRpcClient {
     listener: (payload: unknown, fromId: string) => void
   ): Promise<() => void> {
     const { core } = await this.ensureConnected();
-    return core.on(event, (ctx) => listener(ctx.payload, ctx.caller.callerId));
+    return core.on(event, (ctx) => listener(ctx.payload, ctx.caller.callerId), {
+      kind: "closed",
+      reason: "This listener consumes host or implementation lifecycle events.",
+    });
   }
 
   async onRecovery(handler: (kind: RecoveryKind) => void | Promise<void>): Promise<() => void> {

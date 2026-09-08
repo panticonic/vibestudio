@@ -110,7 +110,7 @@ export class BrowserImportCoordinator {
     const host = this.host(identity, selection.hostId);
     const abort = this.linkedAbort(signal);
     const startedAt = Date.now();
-    const job = this.newJob(selection, startedAt, host.displayName);
+    const job = this.newJob(selection, startedAt, host.displayName, crypto.randomUUID());
     job.phase = "discovering";
     await this.persist(identity, job);
     try {
@@ -154,12 +154,17 @@ export class BrowserImportCoordinator {
 
   async start(
     identity: BrowserEnvironmentIdentity,
-    selection: BrowserImportSelection
+    selection: BrowserImportSelection,
+    operationId: string,
+    signal?: AbortSignal
   ): Promise<ImportJobSnapshot> {
+    if (!operationId || operationId.length > 200) throw new Error("Import operation ID is required");
+    if (this.jobs.has(operationId) || await this.store.getJob(identity, operationId))
+      throw new Error("Import operation already exists; observe or resume that job");
     const host = this.host(identity, selection.hostId);
     const startedAt = Date.now();
-    const snapshot = this.newJob(selection, startedAt, host.displayName);
-    const abort = new AbortController();
+    const snapshot = this.newJob(selection, startedAt, host.displayName, operationId);
+    const abort = this.linkedAbort(signal);
     const state: JobState = {
       identity,
       snapshot,
@@ -352,10 +357,11 @@ export class BrowserImportCoordinator {
   private newJob(
     selection: BrowserImportSelection,
     startedAt: number,
-    hostLabel: string
+    hostLabel: string,
+    jobId: string
   ): ImportJobSnapshot {
     return {
-      jobId: crypto.randomUUID(),
+      jobId,
       hostId: selection.hostId,
       hostLabel,
       sourceId: selection.sourceId,

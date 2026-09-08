@@ -20,6 +20,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
     protocols: ["vibestudio.workspace-state.v1"],
     methods: {
       "panelTree.rootGroups": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -37,6 +42,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -44,6 +54,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panelTree.rootsForCaller": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -61,6 +76,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -68,6 +88,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panelTree.page": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -85,6 +110,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -92,6 +122,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panelTree.path": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -109,6 +144,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -116,6 +156,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panelTree.detail": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -133,6 +178,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -140,6 +190,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panelTree.search": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -157,6 +212,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -164,6 +224,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.get": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -181,6 +246,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -188,6 +258,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.historyRelative": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -205,6 +280,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -212,6 +292,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.historyEntry": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -229,6 +314,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -236,6 +326,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "entity.resolveActive": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -253,6 +348,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -260,6 +360,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "entity.resolve": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -277,6 +382,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -284,6 +394,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.resolveByEntity": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -301,6 +416,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -308,6 +428,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.create": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -391,6 +516,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -398,6 +528,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.commitPreparedNavigation": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -496,6 +631,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -503,6 +643,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.updateCurrentStateArgs": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -585,6 +730,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -592,6 +742,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.move": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -674,6 +829,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -681,6 +841,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.close": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -763,6 +928,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -770,6 +940,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.closeCleanupPage": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -787,6 +962,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -794,6 +974,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.closeOwnedRoots": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -811,6 +996,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -818,6 +1008,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "slot.closeCleanupAck": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -835,6 +1030,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -842,6 +1042,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panel.search": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -859,6 +1064,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -866,6 +1076,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panel.sourceUsage": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -883,6 +1098,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -890,6 +1110,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panel.index": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -907,6 +1132,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -914,6 +1144,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panel.updateTitle": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -996,6 +1231,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1003,6 +1243,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panel.incrementAccess": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1020,6 +1265,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1027,6 +1277,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       "panel.rebuildIndex": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1044,6 +1299,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1051,6 +1311,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleLeaseUpsert: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "open",
         session: "family",
@@ -1068,6 +1333,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1075,6 +1345,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleLeaseClear: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "open",
         session: "family",
@@ -1092,6 +1367,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1099,6 +1379,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmSet: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "open",
         session: "family",
@@ -1116,6 +1401,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1123,6 +1413,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmClear: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "open",
         session: "family",
@@ -1140,6 +1435,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1162,6 +1462,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
     hostCapabilityRequests: [],
     directMethods: {
       initializePanels: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1170,6 +1475,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1177,6 +1487,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityActivate: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1185,6 +1500,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1192,6 +1512,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityReserve: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1200,6 +1525,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1207,6 +1537,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityAdvanceExecution: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1215,6 +1550,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1222,6 +1562,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityAdvanceExecutions: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1230,6 +1575,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1237,6 +1587,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityRebindAgentChannel: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1245,6 +1600,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1252,6 +1612,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityRetire: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1260,6 +1625,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1267,6 +1637,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityCleanupComplete: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1275,6 +1650,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1282,6 +1662,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       runtimeResourceBindingsReplace: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1290,6 +1675,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1297,6 +1687,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       runtimeResourceBindingsRelease: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1305,6 +1700,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1312,6 +1712,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       runtimeResourceBindingEntities: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1320,6 +1725,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1327,6 +1737,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityFindIncompleteCleanups: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1335,6 +1750,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1342,6 +1762,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityGc: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1350,6 +1775,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1357,6 +1787,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityResolve: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1365,6 +1800,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1372,6 +1812,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityResolveActive: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1380,6 +1825,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1387,6 +1837,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityResolveContext: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1395,6 +1850,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1402,6 +1862,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotResolveByEntity: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -1419,6 +1884,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -1426,6 +1896,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleLeaseUpsert: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1434,6 +1909,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1441,6 +1921,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleLeaseClear: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1449,6 +1934,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1456,6 +1946,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       durableWorkOwnerRegister: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1464,6 +1959,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1471,6 +1971,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       durableWorkOwnerList: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1479,6 +1984,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1486,6 +1996,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmSet: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1494,6 +2009,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1501,6 +2021,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmClear: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1509,6 +2034,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1516,6 +2046,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmNextWakeAt: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1524,6 +2059,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1531,6 +2071,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmAdoptWorker: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1539,6 +2084,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1546,6 +2096,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmListScheduled: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1554,6 +2109,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1561,6 +2121,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       alarmClaimDue: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1569,6 +2134,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1576,6 +2146,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleListLeases: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1584,6 +2159,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1591,6 +2171,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleOpenEpoch: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1599,6 +2184,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1606,6 +2196,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleRecordOp: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1614,6 +2209,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1621,6 +2221,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleListOps: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1629,6 +2234,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1636,6 +2246,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleCompleteEpoch: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1644,6 +2259,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1651,6 +2271,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       lifecycleListResumeTargets: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1659,6 +2284,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1666,6 +2296,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityListActive: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1674,6 +2309,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1681,6 +2321,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityListActiveByKind: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1689,6 +2334,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1696,6 +2346,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityListPreparing: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1704,6 +2359,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1711,6 +2371,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityListPreparingByKind: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1719,6 +2384,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1726,6 +2396,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityListExecutionRoots: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "gated",
         session: "family",
@@ -1734,6 +2409,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -1741,6 +2421,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       entityListByContext: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1749,6 +2434,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1756,6 +2446,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       contextEdgeUpsert: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1764,6 +2459,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1771,6 +2471,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       contextEdgeListByOwner: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1779,6 +2484,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1786,6 +2496,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       contextEdgeListByChild: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1794,6 +2509,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1801,6 +2521,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       contextEdgeDeleteByChild: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1809,6 +2534,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -1816,6 +2546,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       panelTreeRootGroups: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -1833,6 +2568,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -1840,6 +2580,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       panelTreePage: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -1857,6 +2602,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -1864,6 +2614,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       panelTreePath: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -1881,6 +2636,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -1888,6 +2648,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       panelTreeDetail: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -1905,6 +2670,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -1912,6 +2682,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotCreate: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -1995,6 +2770,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2002,6 +2782,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotCommitPreparedNavigation: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2100,6 +2885,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2107,6 +2897,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotUpdateCurrentStateArgs: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2189,6 +2984,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2196,6 +2996,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotMove: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2278,6 +3083,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2285,6 +3095,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotClose: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2367,6 +3182,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2374,6 +3194,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotCloseOwnedRoots: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2391,6 +3216,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2398,6 +3228,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotCloseCleanupPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2415,6 +3250,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2422,6 +3262,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotCloseCleanupAck: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.manage",
         tier: "gated",
         session: "family",
@@ -2439,6 +3284,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
@@ -2446,6 +3296,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotGet: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -2463,6 +3318,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -2470,6 +3330,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotHistoryRelative: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -2487,6 +3352,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -2494,6 +3364,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       slotHistoryEntry: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "workspace.runtime-state.inspect",
         tier: "open",
         session: "family",
@@ -2511,6 +3386,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "workspace.runtime-state.inspect",
           resource: {
             kind: "receiver-object",
@@ -2542,6 +3422,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
     hostCapabilityRequests: [],
     directMethods: {
       listPasswordSummaries: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2557,6 +3442,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listPasswordSummariesPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2572,6 +3462,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getPasswordForSite: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2587,6 +3482,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listPasswordsPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2602,6 +3502,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       addPassword: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2617,6 +3522,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       updatePassword: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2632,6 +3542,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       deletePassword: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2647,6 +3562,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       addNeverSave: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2662,6 +3582,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       isNeverSave: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "open",
         session: "family",
@@ -2677,6 +3602,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getNeverSaveOrigins: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "open",
         session: "family",
@@ -2692,6 +3622,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getNeverSaveOriginsPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "open",
         session: "family",
@@ -2707,6 +3642,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       removeNeverSave: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2722,6 +3662,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       updateLastUsed: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2737,6 +3682,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getFormFillSuggestions: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2752,6 +3702,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listFormFillValues: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2767,6 +3722,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listFormFillValuesPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2782,6 +3742,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       addFormFillValue: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2797,6 +3762,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       updateFormFillValue: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2812,6 +3782,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       markFormFillValueUsed: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2827,6 +3802,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       deleteFormFillValue: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2842,6 +3822,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       clearFormFillValues: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2857,6 +3842,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       applyCookieMutations: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -2872,6 +3862,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listCookieOrigins: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "open",
         session: "family",
@@ -2887,6 +3882,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listCookieOriginsPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "open",
         session: "family",
@@ -2902,6 +3902,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getCookiesForOrigin: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2917,6 +3922,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listCookiesPage: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "gated",
         session: "family",
@@ -2932,6 +3942,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       clearCookiesForOrigin: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2947,6 +3962,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       clearAllCookies: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2962,6 +3982,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       endBrowserSession: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.delete",
         tier: "gated",
         session: "family",
@@ -2977,6 +4002,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getCookieSiteSummary: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.read",
         tier: "open",
         session: "family",
@@ -2992,6 +4022,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       addCookiesBatch: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -3007,6 +4042,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       addPasswordsBatch: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -3022,6 +4062,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       addFormFillBatch: {
+        website: {
+          kind: "closed",
+          reason:
+            "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+        },
         capability: "browser-data.write",
         tier: "gated",
         session: "family",
@@ -3072,6 +4117,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
     ],
     directMethods: {
       acquireKernelLease: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3080,6 +4129,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3087,6 +4140,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       attachKernelLeaseHolder: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3095,6 +4152,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3102,6 +4163,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       holdKernelLease: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3110,6 +4175,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3117,6 +4186,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       run: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3125,6 +4198,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3132,6 +4209,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       startRun: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3140,6 +4221,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3147,6 +4232,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       executeRun: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3155,6 +4244,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3162,6 +4255,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getRun: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3170,6 +4267,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3177,6 +4278,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       getRunEvents: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3185,6 +4290,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3192,6 +4301,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       appendAuthorityEvent: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3200,6 +4313,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3207,6 +4324,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       failPendingRun: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3215,6 +4336,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3222,6 +4347,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       readScopeTextPage: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3230,6 +4359,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3237,6 +4370,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       deleteScopeValue: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3245,6 +4382,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3252,6 +4393,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       reset: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3260,6 +4405,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3267,6 +4416,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       dispose: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3275,6 +4428,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3282,6 +4439,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       retainExecutionRoot: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3290,6 +4451,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3297,6 +4462,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       listRetainedExecutionRoots: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "open",
         session: "family",
@@ -3308,6 +4477,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       cancel: {
+        website: {
+          kind: "closed",
+          reason: "Execution engine control is internal to reviewed execution receivers.",
+        },
         capability: "runtime.code-execution.manage",
         tier: "gated",
         session: "family",
@@ -3316,6 +4489,10 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason: "Execution engine control is internal to reviewed execution receivers.",
+          },
           capability: "runtime.code-execution.manage",
           resource: {
             kind: "receiver-object",
@@ -3347,6 +4524,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
     hostCapabilityRequests: [],
     directMethods: {
       create: {
+        website: {
+          kind: "closed",
+          reason:
+            "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "webhooks.manage",
         tier: "gated",
         session: "family",
@@ -3355,6 +4537,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "webhooks.manage",
           resource: {
             kind: "receiver-object",
@@ -3362,6 +4549,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       get: {
+        website: {
+          kind: "closed",
+          reason:
+            "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "webhooks.manage",
         tier: "gated",
         session: "family",
@@ -3370,6 +4562,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "webhooks.manage",
           resource: {
             kind: "receiver-object",
@@ -3377,6 +4574,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       list: {
+        website: {
+          kind: "closed",
+          reason:
+            "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "webhooks.manage",
         tier: "gated",
         session: "family",
@@ -3385,6 +4587,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "webhooks.manage",
           resource: {
             kind: "receiver-object",
@@ -3392,6 +4599,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         },
       },
       replace: {
+        website: {
+          kind: "closed",
+          reason:
+            "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
         capability: "webhooks.manage",
         tier: "gated",
         session: "family",
@@ -3400,6 +4612,11 @@ export const PRODUCT_BUILTIN_CATALOG = [
         presentation: null,
         effect: {
           kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
           capability: "webhooks.manage",
           resource: {
             kind: "receiver-object",
@@ -3448,6 +4665,7 @@ export function productBuiltinMethodPolicy(source: string, className: string, me
     | Record<
         string,
         {
+          website: import("@vibestudio/rpc").WebsiteMethodPolicy;
           capability: string;
           tier: "open" | "gated" | "critical";
           session: "family" | "codeOnly";

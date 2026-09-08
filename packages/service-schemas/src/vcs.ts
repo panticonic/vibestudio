@@ -2422,6 +2422,7 @@ const defineVcsMethods = <const M extends Record<string, VcsMethodSchema>>(metho
 
 const vcsSemanticMethods = defineVcsMethods({
   edit: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2445,6 +2446,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.move", "vcs.copy", "vcs.revert"],
   },
   move: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2469,6 +2471,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.copy", "vcs.neighbors"],
   },
   copy: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2494,6 +2497,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.move", "vcs.blame"],
   },
   merge: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2517,6 +2521,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.commit"],
   },
   revert: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2535,6 +2540,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.history", "vcs.discard"],
   },
   commit: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2554,6 +2560,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.status", "vcs.push"],
   },
   discard: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2572,6 +2579,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.revert", "vcs.status"],
   },
   importSnapshot: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2597,6 +2605,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.blame", "vcs.inspect"],
   },
   registerExternalDelta: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2619,6 +2628,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.merge"],
   },
   supersedeExternalDelta: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2637,6 +2647,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare"],
   },
   finalizeExternalDelta: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2655,6 +2666,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.commit", "vcs.compare"],
   },
   push: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2690,6 +2702,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.commit", "vcs.status"],
   },
   mainState: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2708,6 +2721,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.status", "vcs.listFiles"],
   },
   status: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2726,6 +2740,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.history"],
   },
   compare: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2749,6 +2764,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.merge", "vcs.inspect"],
   },
   inspect: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2767,6 +2783,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.neighbors", "vcs.history"],
   },
   neighbors: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2785,6 +2802,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.inspect", "vcs.blame"],
   },
   history: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2804,6 +2822,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.inspect", "vcs.neighbors"],
   },
   walk: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2823,6 +2842,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.neighbors", "vcs.query", "vcs.search"],
   },
   query: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2842,6 +2862,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.walk", "vcs.search"],
   },
   search: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2861,6 +2882,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.walk", "vcs.query"],
   },
   blame: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2883,6 +2905,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.neighbors", "vcs.history"],
   },
   readMemory: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2902,6 +2925,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.blame", "vcs.inspect", "vcs.history"],
   },
   resolveRepository: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2920,6 +2944,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.listFiles", "vcs.inspect"],
   },
   readFile: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2942,6 +2967,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.listFiles", "vcs.blame"],
   },
   listDirectory: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -2961,6 +2987,7 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.readFile", "vcs.listFiles", "vcs.resolveRepository"],
   },
   listFiles: {
+    website: {"kind":"closed","reason":"The vcs receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

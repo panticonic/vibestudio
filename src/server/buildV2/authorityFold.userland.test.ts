@@ -78,7 +78,12 @@ const catalog = {
         tier: "critical" as const,
         sensitivity: "destructive" as const,
         resource: { kind: "receiver-object" as const, resourceType: "note" },
-        access: { principals: ["code" as const], codeOnly: false, codeReachable: true },
+        access: {
+          website: { kind: "eligible" as const, rationale: "Explicit fixture exposure." },
+          principals: ["code" as const],
+          codeOnly: false,
+          codeReachable: true,
+        },
       },
     ],
   ]),

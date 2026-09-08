@@ -71,6 +71,11 @@ function sanitizeAuditEvent(entry: CredentialAuditEvent): CredentialAuditEvent {
 export function createAuditService(auditLog: AuditLog): ServiceDefinition {
   const methods = defineServiceMethods({
     query: {
+      website: {
+        kind: "closed",
+        reason:
+          "The auditService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       capability: "security.audit.read",
       tier: {
         tier: "gated",

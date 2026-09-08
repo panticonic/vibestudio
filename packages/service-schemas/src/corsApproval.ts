@@ -58,6 +58,7 @@ export type CorsApprovalResult = z.infer<typeof corsApprovalResultSchema>;
 
 export const corsApprovalMethods = defineServiceMethods({
   authorize: {
+    website: {"kind":"closed","reason":"The corsApproval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "network.response.read",
     tier: {
       tier: "open",

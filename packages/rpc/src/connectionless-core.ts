@@ -1,3 +1,4 @@
+import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
 /**
  * Connectionless RPC client — the one shared assembly for off-socket targets
  * (workerd workers, both Durable Object bases). It runs the unified
@@ -74,6 +75,7 @@ export type RpcAuthorityPolicy = (
       principals?: never;
     }
 ) & {
+  website: WebsiteMethodPolicy;
   /** Deliberate eligibility for cross-workspace boundary admission; never a grant. */
   crossWorkspace?: boolean;
   /** No default: omitting a tier is a registration/build error. */
@@ -106,6 +108,7 @@ type RpcMethodDecorator = <This, Args extends unknown[], Return>(
 ) => void;
 
 function registerRpc(target: object, name: string, authority: RpcAuthorityPolicy): void {
+  validateWebsiteMethodPolicy(authority.website, name);
   if (authority.effect.kind === "open" && authority.tier !== "open") {
     throw new Error(`@rpc ${name}: open effects must have open tier`);
   }

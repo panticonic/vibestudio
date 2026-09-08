@@ -63,6 +63,11 @@ const controlTier = {
 };
 export const linkedClaudeMethods = defineServiceMethods({
   start: {
+    website: {
+      kind: "closed",
+      reason:
+        "The linkedClaude receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Start an authorized linked Claude agent with host-owned runtime and credential materialization; accepts no filesystem paths or executable grants",
     capability: "subagents.create",
@@ -115,6 +120,11 @@ export const linkedClaudeMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   inspect: {
+    website: {
+      kind: "closed",
+      reason:
+        "The linkedClaude receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Read the bounded state of an owned linked Claude generation",
     tier: controlTier,
     args: z.tuple([reference]),
@@ -122,6 +132,11 @@ export const linkedClaudeMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   stop: {
+    website: {
+      kind: "closed",
+      reason:
+        "The linkedClaude receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Retire an owned linked Claude generation and reconcile its isolated credential after confirmed exit",
     tier: controlTier,

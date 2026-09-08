@@ -165,6 +165,10 @@ function registerRpcTestService(
     Object.entries(methods).map(([method, sensitivity]) => [
       method,
       {
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver policy for this test fixture.",
+        } as const,
         args: z.tuple([]).rest(z.unknown()),
         access: { sensitivity },
         tier: {

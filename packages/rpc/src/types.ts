@@ -1,3 +1,4 @@
+import type { WebsiteMethodPolicy } from "./authority.js";
 /**
  * Shared RPC types for panel/worker communication.
  *
@@ -169,7 +170,14 @@ export interface RpcRequestCancel {
 /**
  * Union type for all RPC messages.
  */
+/** A complete receiver-owned declaration, scoped to its authenticated live transport. */
+export interface RpcExposure {
+  type: "exposure";
+  entries: Array<{ name: string; kind: "method" | "stream" | "event"; website: WebsiteMethodPolicy }>;
+}
+
 export type RpcMessage =
+  | RpcExposure
   | RpcRequest
   | RpcResponse
   | RpcEvent
@@ -521,7 +529,8 @@ export interface RpcPeer<
   readonly call: TypedCallProxy<TMethods>;
   on<K extends keyof TEvents & string>(
     event: K,
-    listener: (event: RpcEventContext & { payload: TEvents[K] }) => void
+    listener: (event: RpcEventContext & { payload: TEvents[K] }) => void,
+    website: WebsiteMethodPolicy
   ): () => void;
   emit<K extends keyof TEmitEvents & string>(event: K, payload: TEmitEvents[K]): Promise<void>;
   withContract<C extends RpcContract, Role extends keyof C & string>(
@@ -545,9 +554,16 @@ export type RpcContract = Record<
 
 export interface RpcClientConfig {
   selfId: string;
+  /** Hosted duplex endpoints publish their dynamic contract on the same RPC carrier. */
+  publishExposures?: boolean;
   /** Workspace identity attached to this client's caller attribution. */
   workspaceId?: string;
   transport: EnvelopeRpcTransport;
+  /**
+   * Lifetime owned by the client creator. Aborting it retires this RPC endpoint;
+   * scoped clients and peers are borrowed views and cannot retire the owner.
+   */
+  lifetime?: AbortSignal;
   /**
    * Optional default deadline for the response HEAD and subsequent body-frame
    * silence. Omitted or `null` means unbounded; callers that own a bounded
@@ -568,10 +584,11 @@ export interface RpcClient {
   readonly selfId: string;
   expose<TArgs extends unknown[], TReturn>(
     method: string,
-    handler: RpcContextHandler<TArgs, TReturn>
+    handler: RpcContextHandler<TArgs, TReturn>,
+    website: WebsiteMethodPolicy
   ): void;
-  exposeAll(methods: RpcContextMethods): void;
-  exposeStreaming(method: string, handler: RpcContextStreamingHandler): void;
+  exposeAll(methods: RpcContextMethods, website: Readonly<Record<string, WebsiteMethodPolicy>>): void;
+  exposeStreaming(method: string, handler: RpcContextStreamingHandler, website: WebsiteMethodPolicy): void;
   call<T = unknown>(
     targetId: string,
     method: string,
@@ -597,7 +614,7 @@ export interface RpcClient {
     options?: RpcStreamOptions
   ): Promise<DecodedFramedStream>;
   emit(targetId: string, event: string, payload: unknown, options?: RpcCallOptions): Promise<void>;
-  on(event: string, listener: (event: RpcEventContext) => void): () => void;
+  on(event: string, listener: (event: RpcEventContext) => void, website: WebsiteMethodPolicy): () => void;
   peer<
     TMethods extends MethodMap = MethodMap,
     TEvents extends EventMap = EventMap,

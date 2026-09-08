@@ -15,7 +15,7 @@ export function encodeWebSocketStreamFrame(
   requestEnvelope: RpcEnvelope,
   frame: StreamFrame,
   responder: AuthenticatedCaller = SESSION_SERVER_RESPONDER
-): WsServerMessage {
+): Extract<WsServerMessage, { type: "ws:rpc" }> {
   const request = requestEnvelope.message;
   if (request.type !== "stream-request") {
     throw new Error(`Streaming response requires a stream-request, received ${request.type}`);

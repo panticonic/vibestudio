@@ -83,6 +83,7 @@ export type EventName =
   | "browser-panel:open"
   | "browser-import-progress"
   | "browser-data-changed"
+  | "website:connection-changed"
   | "browser-permissions:changed"
   | "autofill:save-prompt"
   | "autofill:form-fill-save-prompt"
@@ -459,6 +460,7 @@ export interface EventPayloads {
   };
   "shell-approval:pending-changed": { pending: PendingApproval[] };
   "shell-approval:resolved": ApprovalResolvedEvent;
+  "website:connection-changed": { runtimeId: string; connected: boolean; documentId: string; slotId: string | null };
   "browser-permissions:changed": {
     environmentKey: string;
     grants: Array<{
@@ -561,6 +563,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "browser-panel:open",
   "browser-import-progress",
   "browser-data-changed",
+  "website:connection-changed",
   "browser-permissions:changed",
   "autofill:save-prompt",
   "autofill:form-fill-save-prompt",

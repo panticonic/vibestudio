@@ -9,6 +9,109 @@ import {
 import { testAuthority } from "./serviceDispatcherTestUtils.js";
 
 describe("ServiceDispatcher ownership", () => {
+  it("rejects disconnected websites before method lookup, argument parsing, or resource acquisition", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const resolver = vi.fn();
+    const acquire = vi.fn();
+    dispatcher.setAuthorityResolver(resolver);
+    dispatcher.setAuthorityAcquirer({
+      request: vi.fn(),
+      acquire,
+      consume: vi.fn(),
+      invalidate: vi.fn(),
+    });
+    const ctx = {
+      caller: {
+        ...createVerifiedCaller("browser:doc-1", "panel"),
+        website: {
+          subject: "website:site-1" as const,
+          userId: "user:alice" as const,
+          workspaceId: "project",
+          origin: "https://example.com",
+          connected: false,
+          binding: { subject: "website:site-1" as const, generation: 0, documentId: "doc-1" },
+        },
+      },
+    };
+    for (const entry of [
+      "dispatch",
+      "preflightAuthority",
+      "preauthorizeAuthority",
+      "assertAuthority",
+    ] as const) {
+      await expect(dispatcher[entry](ctx, "unknown", "unknown", [null])).rejects.toMatchObject({
+        code: "ECONNECTIONREQUIRED",
+        errorKind: "access",
+        errorData: {
+          authorityFailure: {
+            reasonCode: "connection-required",
+            remediation: { kind: "connect-workspace" },
+          },
+        },
+      });
+    }
+    expect(resolver).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it("does not apply a disconnected initiator's website eligibility to a reviewed receiver", async () => {
+    const dispatcher = new ServiceDispatcher();
+    const handler = vi.fn(async () => "inspected");
+    dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+      testAuthority(caller, capability, resourceKey)
+    );
+    dispatcher.registerService({
+      name: "internalTemplateSource",
+      authority: { principals: ["code"] },
+      methods: {
+        inspect: {
+          args: z.tuple([]),
+          website: {
+            kind: "closed",
+            reason: "Only the reviewed template receiver uses this host operation.",
+          },
+          tier: {
+            tier: "open",
+            session: "family",
+            rationale: "Inspect through the reviewed receiver.",
+          },
+        },
+      },
+      handler,
+    });
+    dispatcher.markInitialized();
+    const caller = createVerifiedCaller("extension:templates", "extension");
+    const authorizingCaller = {
+      ...createVerifiedCaller("browser:retired", "panel"),
+      website: {
+        subject: "website:site-1" as const,
+        userId: "user:alice" as const,
+        workspaceId: "project",
+        origin: "https://example.com",
+        connected: false,
+        binding: { subject: "website:site-1" as const, generation: 0, documentId: "retired" },
+      },
+    };
+    await expect(
+      dispatcher.dispatch({ caller, authorizingCaller }, "internalTemplateSource", "inspect", [])
+    ).resolves.toBe("inspected");
+    expect(handler).toHaveBeenCalledOnce();
+    await expect(
+      dispatcher.dispatch(
+        {
+          caller: {
+            ...authorizingCaller,
+            website: { ...authorizingCaller.website, connected: true },
+          },
+        },
+        "internalTemplateSource",
+        "inspect",
+        []
+      )
+    ).rejects.toMatchObject({ code: "EACCES" });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   it("derives a complete compound identity for lifecycle-style authority targets", () => {
     const dispatcher = new ServiceDispatcher();
     dispatcher.registerService({
@@ -16,6 +119,10 @@ describe("ServiceDispatcher ownership", () => {
       authority: { principals: ["code"] },
       methods: {
         activate: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
           capability: "runtime.supervision.manage",
           tier: { tier: "gated", session: "family", rationale: "Starts admitted code" },
@@ -83,6 +190,10 @@ describe("ServiceDispatcher ownership", () => {
       authority: { principals: ["code"] },
       methods: {
         activate: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([z.object({ kind: z.string(), releaseId: z.string() })]),
           capability,
           tier: { tier: "gated", session: "family", rationale: "Starts admitted code" },
@@ -154,6 +265,10 @@ describe("ServiceDispatcher ownership", () => {
       authority: { principals: ["code"] },
       methods: {
         send: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([z.string()]),
           capability: "workspace-service:mail",
           tier: {

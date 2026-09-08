@@ -79,6 +79,7 @@ const leafSchema = z
           "receiver-rejected",
           "fixed-code-not-requested",
           "invalid-session",
+          "connection-required",
           "invalid-attestation",
           "receiver-undeclared",
           "attestation-required",
@@ -97,6 +98,7 @@ const leafSchema = z
               "use-admitted-principal",
               "satisfy-relationship",
               "refresh-session",
+              "connect-workspace",
               "respect-denial",
               "use-writable-session",
               "retry-through-host",
@@ -120,6 +122,7 @@ const leafSchema = z
 
 export const authorityMethods = defineServiceMethods({
   listTaskRules: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -147,6 +150,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   resetTaskRules: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -163,6 +167,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   awaitDecision: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -183,6 +188,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   preflight: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -220,6 +226,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   compileAuthorityPlan: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -261,6 +268,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   acquireForTarget: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -290,6 +298,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   acquireForCurrentTask: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -318,6 +327,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   admitExecution: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -378,6 +388,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   finishExecution: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -392,6 +403,7 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   retireTarget: {
+    website: {"kind":"closed","reason":"Authority administration belongs to trusted callers; websites acquire through ordinary RPC."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",

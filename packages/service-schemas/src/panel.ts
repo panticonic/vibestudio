@@ -159,6 +159,7 @@ const LocalPanelPresentationSnapshotSchema: z.ZodType<PanelPresentationSnapshot>
 
 export const panelMethods = defineServiceMethods({
   createPanel: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -175,6 +176,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   focusPanel: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -198,6 +200,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   ensurePanelLoaded: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -214,6 +217,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   updateTheme: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -228,6 +232,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   updateThemeConfig: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -242,6 +247,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getThemeConfig: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -257,6 +263,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getPresentation: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -271,6 +278,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getPresentations: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -285,6 +293,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getLocalPresentation: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -298,6 +307,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getChromeState: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -312,6 +322,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   markBrowserNavigationIntent: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -327,6 +338,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   findInPage: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -348,6 +360,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   stopFindInPage: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -362,6 +375,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getBrowserPageIdentity: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -382,6 +396,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   setNativeBrowserZoom: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -397,6 +412,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   clearNativeBrowserSiteData: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -412,6 +428,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   printBrowserPage: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -426,6 +443,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   saveBrowserPagePdf: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -440,6 +458,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   stopBrowserMedia: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -454,6 +473,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   togglePin: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -469,6 +489,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   listPinnedPanelIds: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -483,6 +504,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getFocusedPanelId: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -496,6 +518,7 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   setFocusedPanelId: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -510,6 +533,7 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   openPanelDevTools: {
+    website: {"kind":"closed","reason":"The panel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

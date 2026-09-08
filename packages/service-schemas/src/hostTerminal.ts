@@ -21,6 +21,7 @@ const controlTier = {
 };
 export const hostTerminalMethods = defineServiceMethods({
   open: {
+    website: {"kind":"closed","reason":"The hostTerminal receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: HOST_TERMINAL_CAPABILITY,
     description:
       "Open an explicitly approved terminal with full host access as the app's OS user. This is outside workspace confinement and does not elevate to administrator.",
@@ -74,6 +75,7 @@ export const hostTerminalMethods = defineServiceMethods({
     },
   },
   read: {
+    website: {"kind":"closed","reason":"The hostTerminal receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "Read bounded output from an owned host terminal; cursor advances only over returned bytes.",
     tier: controlTier,
@@ -103,6 +105,7 @@ export const hostTerminalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   write: {
+    website: {"kind":"closed","reason":"The hostTerminal receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "Write ordered terminal input. Retry only the latest sequence with identical bytes; out-of-order input is rejected.",
     tier: controlTier,
@@ -119,6 +122,7 @@ export const hostTerminalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   resize: {
+    website: {"kind":"closed","reason":"The hostTerminal receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Resize an owned host terminal.",
     tier: controlTier,
     args: z.tuple([z.object({ terminalSessionId: id, ...dimensions }).strict()]),
@@ -126,6 +130,7 @@ export const hostTerminalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   close: {
+    website: {"kind":"closed","reason":"The hostTerminal receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "Retire terminal control before attempting process cleanup. Host descendants may survive.",
     tier: controlTier,

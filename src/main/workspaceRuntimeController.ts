@@ -525,6 +525,7 @@ export function createDesktopWorkspaceRuntime(deps: {
         window.attachWorkspaceServices({
           serverSession: connection,
           eventService,
+          openShellSurface: deps.app?.onOpenShellSurface,
           panelRegistry: controller.registry,
           panelOrchestrator: controller.orchestrator,
           cdpHost,

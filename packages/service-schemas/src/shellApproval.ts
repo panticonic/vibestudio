@@ -958,7 +958,10 @@ const protectedInputAuthority = presenterAuthority(
 
 export const shellApprovalMethods = defineServiceMethods({
   resolve: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -996,7 +999,10 @@ export const shellApprovalMethods = defineServiceMethods({
    * cannot ask for more than it was offered (§8).
    */
   resolveInstallReview: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -1028,7 +1034,10 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { decision: "cancel" }] }],
   },
   resolveTaskRules: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -1058,7 +1067,10 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
   },
   resolveBootstrap: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -1094,7 +1106,10 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: [["approval-123"], "deny"] }],
   },
   submitClientConfig: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "protected-input.submit",
     tier: {
       tier: "open",
@@ -1123,7 +1138,10 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { clientId: "abc", clientSecret: "shh" }] }],
   },
   submitCredentialInput: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "protected-input.submit",
     tier: {
       tier: "open",
@@ -1152,7 +1170,10 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { token: "secret-value" }] }],
   },
   submitSecretInput: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "protected-input.submit",
     tier: {
       tier: "open",
@@ -1181,7 +1202,10 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { value: "secret-value" }] }],
   },
   listPending: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "approvals.read",
     tier: {
       tier: "open",
@@ -1209,7 +1233,10 @@ export const shellApprovalMethods = defineServiceMethods({
     access: LIST_PENDING_ACCESS,
   },
   getWorkspaceCreationReviewState: {
-    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
+    website: {
+      kind: "closed",
+      reason: "Consent decisions and pending requests belong to trusted approval UI.",
+    } as const,
     capability: "approvals.read",
     tier: {
       tier: "open",

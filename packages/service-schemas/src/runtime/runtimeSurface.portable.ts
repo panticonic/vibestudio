@@ -796,6 +796,10 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "webhookIngress"
   ),
   extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
+  templates: namespaceEntry(
+    ["inspect", "inspectAuthoring", "authoringParts", "publishAuthoring"],
+    "Exact source inspection and publication through the admitted template receiver."
+  ),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
   panelTree: namespaceEntry(PANEL_TREE_MEMBERS, undefined, undefined, PANEL_TREE_METHOD_CATALOG),
   services: valueEntry(

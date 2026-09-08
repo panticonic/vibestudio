@@ -291,6 +291,7 @@ export const rotateWebhookIngressSecretResultSchema = z
 
 export const webhookIngressMethods = defineServiceMethods({
   createSubscription: {
+    website: {"kind":"closed","reason":"The webhookIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "webhooks.manage",
     tier: {
       tier: "gated",
@@ -317,6 +318,7 @@ export const webhookIngressMethods = defineServiceMethods({
     description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (${WEBHOOK_DEFAULT_MAX_BODY_BYTES}) for relay delivery and the configured host ceiling for direct delivery (${WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES} bytes by default). In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.`,
   },
   listSubscriptions: {
+    website: {"kind":"closed","reason":"The webhookIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "webhooks.manage",
     tier: {
       tier: "gated",
@@ -344,6 +346,7 @@ export const webhookIngressMethods = defineServiceMethods({
       "List the caller's active webhook subscriptions (secrets redacted). Pass includeRevoked:true only for audit/history views.",
   },
   revokeSubscription: {
+    website: {"kind":"closed","reason":"The webhookIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "webhooks.manage",
     tier: {
       tier: "gated",
@@ -370,6 +373,7 @@ export const webhookIngressMethods = defineServiceMethods({
     description: "Revoke one caller-owned webhook subscription idempotently.",
   },
   rotateSecret: {
+    website: {"kind":"closed","reason":"The webhookIngress receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "webhooks.manage",
     tier: {
       tier: "gated",

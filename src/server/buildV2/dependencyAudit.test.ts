@@ -157,4 +157,32 @@ describe("auditWorkspaceDependencies", () => {
 
     expect(audit()).toEqual([]);
   });
+
+  it("keeps a React-free core usable by workers while its UI adapter requires React ownership", () => {
+    writeUnit("packages/template-management", {
+      name: "@workspace/template-management",
+    });
+    writeUnit("packages/react", {
+      name: "@workspace/react",
+      dependencies: { "@workspace/template-management": "workspace:*" },
+      peerDependencies: { react: "^19.0.0", "react-dom": "^19.0.0" },
+    });
+    writeUnit("workers/presentation", {
+      name: "@workspace-workers/presentation",
+      dependencies: { "@workspace/template-management": "workspace:*" },
+    });
+
+    expect(audit()).toEqual([]);
+
+    writeUnit("panels/templates", {
+      name: "@workspace-panels/templates",
+      dependencies: { "@workspace/react": "workspace:*" },
+    });
+    expect(audit()).toEqual([
+      "panels/templates: @workspace-panels/templates is loaded on its own, so nothing provides " +
+        "its closure's peers: react-dom@^19.0.0 (required by @workspace/react); " +
+        "react@^19.0.0 (required by @workspace/react). Declare each as a dependency of " +
+        "@workspace-panels/templates at the version it should own.",
+    ]);
+  });
 });

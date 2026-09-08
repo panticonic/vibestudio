@@ -196,7 +196,6 @@ ${itemsHtml}
     this.visible = true;
 
     // Bring to top of z-order
-    this.window.contentView.removeChildView(view);
     this.window.contentView.addChildView(view);
   }
 
@@ -237,7 +236,6 @@ ${itemsHtml}
   bringToFront(): void {
     if (!this.window || !this.view || this.view.webContents.isDestroyed()) return;
     if (!this.isVisible()) return;
-    this.window.contentView.removeChildView(this.view);
     this.window.contentView.addChildView(this.view);
   }
 

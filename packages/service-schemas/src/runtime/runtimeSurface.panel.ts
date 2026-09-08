@@ -40,6 +40,11 @@ export const panelRuntimeSurface: RuntimeSurface = {
   description: "Top-level value exports available from @workspace/runtime in panel eval contexts.",
   exports: {
     ...coreRuntimeSurface,
+    isRpcConnectionLost: valueEntry("Recognize a retired or disconnected RPC session."),
+    createPanelRuntime: valueEntry("Create the complete panel API with explicit transport, bootstrap, presentation inputs and lifetime ownership. No injected globals are required."),
+    connectWorkspace: valueEntry("Explicitly ask the presentation host to connect this website to its workspace, then bind the same runtime API used by installed panels. Calls never connect implicitly."),
+    disconnectWorkspace: valueEntry("Disconnect this document and retire its RPC calls, streams and borrowed clients."),
+    workspaceConnection: namespaceEntry(["connected", "available", "subscribe"], "Connection state can be observed without accessing a workspace."),
     // Entries whose description is panel-specific (member arrays shared with core).
     workspace: namespaceEntry(
       WORKSPACE_MEMBERS,

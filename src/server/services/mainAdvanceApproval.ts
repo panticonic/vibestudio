@@ -1047,6 +1047,11 @@ async function authorizeProtectedPublication(
       ...(input.signal ? { signal: input.signal } : {}),
     },
     {
+      website: {
+        kind: "closed",
+        reason:
+          "The mainAdvanceApproval receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       service: "vcs",
       method: "vcsPush",
       capability: input.capability,

@@ -1,3 +1,5 @@
+import { bindInvocationParent } from "@vibestudio/rpc/internal";
+import { validateWebsiteMethodPolicy, type RpcExposure } from "@vibestudio/rpc";
 import {
   isWorkspaceRpcDestination,
   workspaceRpcDestination,
@@ -14,8 +16,10 @@ import { isLocalWorkspaceTarget, WORKSPACE_RPC_NOT_ADMITTED } from "./rpcServer/
 
 import { WebSocketServer } from "ws";
 import { createHmac, randomBytes, randomUUID } from "crypto";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type { WorkspaceChildHubPort } from "./workspaceChildHubPort.js";
+import { receiveWorkspaceRpcHttp, type WorkspaceRpcDelivery } from "./workspaceRpcTransport.js";
 import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
   createRpcClient,
@@ -487,6 +491,7 @@ function createRelayError(message: string, code: RelayErrorCode): Error {
 }
 
 export class RpcServer {
+  private readonly endpointExposures = new WeakMap<WsClientState, RpcExposure["entries"]>();
   private wss: WebSocketServer | null = null;
   private workerdUrl: string | null = null;
   private workerdGatewayToken: string | null = null;
@@ -529,6 +534,7 @@ export class RpcServer {
        * `relayCall` promise already settles the caller on every failure path.
        */
       callee?: { targetId: string; calleeId: string; connectionId: string };
+      releaseAuthorityParent?: () => void;
     }
   >();
   private sessions: SessionRegistry;
@@ -548,6 +554,11 @@ export class RpcServer {
   private readonly activeInboundRequests = new Map<RpcSessionChannel, number>();
   /** Exact unary requests owned by each authenticated socket. */
   private readonly inboundRequestControllers = new WeakMap<
+    RpcSessionChannel,
+    Map<string, AbortController>
+  >();
+  /** Original foreign deliveries owned by each authenticated source socket. */
+  private readonly workspaceRpcControllers = new WeakMap<
     RpcSessionChannel,
     Map<string, AbortController>
   >();
@@ -616,6 +627,7 @@ export class RpcServer {
       >;
       fsService?: Pick<import("./services/fsService.js").FsService, "closeHandlesForCaller">;
       entityCache?: EntityCache;
+      websiteDocuments?: Pick<import("./services/websiteDocuments.js").WebsiteDocuments, "fact">;
       /** Exact active-row readiness barrier required before direct DO relay. */
       ensureUserlandDoReady: (ref: DORef) => Promise<void>;
       /** Live host-created admission for one concrete evaluated run. */
@@ -723,6 +735,7 @@ export class RpcServer {
               };
               methodTier: "open" | "gated" | "critical";
               methodCrossWorkspace?: boolean;
+              methodWebsite: import("@vibestudio/rpc").WebsiteMethodPolicy;
               methodExecution?: { harness: "attested-system-test" };
               principals: readonly import("@vibestudio/rpc").PrincipalKind[];
               presentation: {
@@ -759,6 +772,7 @@ export class RpcServer {
             };
             methodTier: "open" | "gated" | "critical";
             methodCrossWorkspace?: boolean;
+            methodWebsite: import("@vibestudio/rpc").WebsiteMethodPolicy;
             methodExecution?: { harness: "attested-system-test" };
             principals: readonly import("@vibestudio/rpc").PrincipalKind[];
             presentation: {
@@ -841,10 +855,13 @@ export class RpcServer {
       /** Live membership and hard policy ceiling, before export lookup or approval. */
       assertWorkspaceRpcAccess?: (input: {
         caller: VerifiedCaller;
+        destinationWorkspaceId?: string;
         target: string;
         operation: string;
         purpose: "call" | "discover";
       }) => void;
+      /** Existing authenticated child → hub → child workspace RPC transport. */
+      workspaceChildHub?: Pick<WorkspaceChildHubPort, "forwardWorkspaceRpc">;
       connectionGrants?: ConnectionGrantService;
       resolveExtensionInvocation?: (
         extensionName: string,
@@ -932,7 +949,7 @@ export class RpcServer {
           )
         ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
-        this.checkRelayAuth(callerId, callerKind, targetId, method),
+        this.checkRelayAuth(callerId, callerKind, targetId, method, "stream"),
       resolveCausalInvocation: async (caller, request) => {
         const causal = await this.resolveCausalInvocation(caller, request);
         return {
@@ -940,10 +957,23 @@ export class RpcServer {
           parent: causal?.parent,
         };
       },
+      createHttpContext: (caller, request, extras) =>
+        this.serviceContextForInvocation(caller, request, extras),
       createSessionContext: (client, request, caller, extras) =>
         this.serviceContextForRpcMessage(client, request, extras, caller),
-      relayTargetStream: (caller, envelope, request, causalParent, signal) =>
-        this.relayTargetStream(caller, envelope, request, causalParent, signal),
+      relayTargetStream: (caller, envelope, request, causalParent, signal) => {
+        const parent = this.authorityParentFor(
+          caller.runtime.id,
+          (request as InternalRpcStreamRequest).authorityParentNonce
+        );
+        return this.relayTargetStream(caller, envelope, request, causalParent, signal, {
+          authenticatedCaller: caller,
+          authorizingCaller: parent?.authorizingCaller ?? caller,
+          ...(parent?.contextIntegrity
+            ? { inheritedContextIntegrity: parent.contextIntegrity }
+            : {}),
+        });
+      },
     });
     this.httpRpc = new HttpRpcHandler({
       workspaceId: deps.workspaceId,
@@ -997,6 +1027,11 @@ export class RpcServer {
     // Every registered executable runtime carries its owning context, including
     // panels and apps. Context authority must follow that live host record.
     const activeEntity = this.deps.entityCache?.resolveActive(callerId);
+    const website = activeEntity?.source.repoPath.startsWith("browser:")
+      ? this.deps.websiteDocuments?.fact(callerId)
+      : undefined;
+    if (activeEntity?.source.repoPath.startsWith("browser:") && !website?.connected)
+      throw createRelayError("Connect this website to the workspace first", "EACCES");
     const resolvedAgentBinding = agentBinding ?? activeEntity?.agentBinding;
     const residentCode =
       callerKind === "extension"
@@ -1061,10 +1096,13 @@ export class RpcServer {
       executionSession,
       effectiveTestPolicy
     );
+    if (website && website.userId !== `user:${resolvedSubject?.userId}`)
+      throw createRelayError("Website document belongs to another viewer", "EACCES");
     const taskAuthority =
       executionSession?.taskAuthority ?? this.deps.taskAuthorityForRuntime?.(callerId);
     const withTaskAuthority = {
       ...verified,
+      ...(website ? { website } : {}),
       ...(this.deps.workspaceId ? { workspaceId: this.deps.workspaceId } : {}),
       ...(taskAuthority ? { taskAuthority } : {}),
     };
@@ -1160,25 +1198,47 @@ export class RpcServer {
           externalKeys: Object.freeze([...inheritedContextIntegrity.externalKeys]),
         })
       : null;
-    if (this.activeAuthorityParents.has(authorization.nonce)) {
-      throw createRelayError("Direct invocation authority nonce is already active", "EACCES");
-    }
-    const entry = {
+    return this.retainAuthorityParent(authorization.nonce, {
       receiverRuntimeId,
       testPolicy,
       requested,
       authorizingCaller,
       contextIntegrity,
-    };
-    this.activeAuthorityParents.set(authorization.nonce, entry);
-    let active = true;
+    });
+  }
+
+  private retainAuthorityParent(
+    nonce: string,
+    entry: {
+      receiverRuntimeId: string;
+      testPolicy: AgentExecutionTestPolicy | null;
+      requested: readonly CapabilityScope[] | null;
+      authorizingCaller: VerifiedCaller | null;
+      contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
+    }
+  ): () => void {
+    if (this.activeAuthorityParents.has(nonce))
+      throw createRelayError("Invocation authority nonce is already active", "EACCES");
+    this.activeAuthorityParents.set(nonce, entry);
     return () => {
-      if (!active) return;
-      active = false;
-      if (this.activeAuthorityParents.get(authorization.nonce) === entry) {
-        this.activeAuthorityParents.delete(authorization.nonce);
-      }
+      if (this.activeAuthorityParents.get(nonce) === entry)
+        this.activeAuthorityParents.delete(nonce);
     };
+  }
+
+  private beginRelayAuthorityParent(receiverRuntimeId: string, scope: RelayCallerScope) {
+    const nonce = randomUUID();
+    const release = this.retainAuthorityParent(nonce, {
+      receiverRuntimeId,
+      requested: null,
+      authorizingCaller: scope.authorizingCaller,
+      testPolicy:
+        scope.authenticatedCaller.testPolicy ??
+        scope.authenticatedCaller.executionSession?.testPolicy ??
+        null,
+      contextIntegrity: scope.inheritedContextIntegrity ?? null,
+    });
+    return { nonce, release };
   }
 
   async withAuthorityParent<T>(
@@ -1274,6 +1334,7 @@ export class RpcServer {
     client: WsClientState,
     message: {
       parentRequestId?: string;
+      authorityParentNonce?: string;
       causalParent?: import("@vibestudio/rpc").RpcCausalParent;
     },
     extras: Omit<
@@ -1282,14 +1343,34 @@ export class RpcServer {
     > = {},
     invocationCaller: VerifiedCaller = client.caller
   ): ServiceContext {
-    const ctx: ServiceContext = {
-      caller: invocationCaller,
+    return this.serviceContextForInvocation(invocationCaller, message, {
       connectionId: client.connectionId,
       connectionSignal: this.connections.connectionSignal(client),
       wsClient: client,
       ...extras,
+    });
+  }
+
+  private serviceContextForInvocation(
+    caller: VerifiedCaller,
+    message: { parentRequestId?: string; authorityParentNonce?: string },
+    extras: Omit<ServiceContext, "caller"> = {}
+  ): ServiceContext {
+    const authorityParent = this.authorityParentFor(
+      caller.runtime.id,
+      message.authorityParentNonce
+    );
+    const ctx: ServiceContext = {
+      caller: this.callerWithAuthorityParent(caller, authorityParent),
+      ...(authorityParent?.authorizingCaller
+        ? { authorizingCaller: authorityParent.authorizingCaller }
+        : {}),
+      ...(authorityParent?.contextIntegrity
+        ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
+        : {}),
+      ...extras,
     };
-    const parent = this.resolveExtensionParentCaller(client.caller, message);
+    const parent = this.resolveExtensionParentCaller(caller, message);
     if (parent) ctx.authorizingCaller = parent.authorizingCaller;
     if (parent?.chainCaller) ctx.chainCaller = parent.chainCaller;
     return ctx;
@@ -1433,14 +1514,25 @@ export class RpcServer {
 
   private relayCallerScopeForRpcMessage(
     client: WsClientState,
-    message: Pick<RpcRequest, "parentRequestId">,
+    message: Pick<RpcRequest, "parentRequestId"> & { authorityParentNonce?: string },
     invocationCaller: VerifiedCaller = client.caller
   ): RelayCallerScope {
     const parent = this.resolveExtensionParentCaller(client.caller, message);
-    const authenticatedCaller = this.withLiveRuntimeRelationships(invocationCaller);
+    const authorityParent = this.authorityParentFor(
+      client.caller.runtime.id,
+      message.authorityParentNonce
+    );
+    const authenticatedCaller = this.callerWithAuthorityParent(
+      this.withLiveRuntimeRelationships(invocationCaller),
+      authorityParent
+    );
     return {
       authenticatedCaller,
-      authorizingCaller: parent?.authorizingCaller ?? authenticatedCaller,
+      authorizingCaller:
+        parent?.authorizingCaller ?? authorityParent?.authorizingCaller ?? authenticatedCaller,
+      ...(authorityParent?.contextIntegrity
+        ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
+        : {}),
     };
   }
 
@@ -2393,12 +2485,19 @@ export class RpcServer {
           return;
         }
         if (!isLocalWorkspaceTarget(envelope, this.deps.workspaceId)) {
-          this.sendRouteError(
+          if (msg.streamBody) {
+            if (envelope.message.type !== "stream-request" || !client.uploadBodies) {
+              client.ws.close(4004, "Invalid WebSocket stream body declaration");
+              return;
+            }
+            client.uploadBodies.open(envelope.message.requestId);
+          }
+          this.forwardForeignWorkspaceRpc(
             client,
-            envelope.target,
-            envelope.message,
-            createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
-            envelope.destination
+            envelope,
+            envelope.message.type === "stream-request"
+              ? client.uploadBodies?.take(envelope.message.requestId)
+              : undefined
           );
           return;
         }
@@ -2461,13 +2560,7 @@ export class RpcServer {
           return;
         }
         if (!isLocalWorkspaceTarget(routeEnvelope, this.deps.workspaceId)) {
-          this.sendRouteError(
-            client,
-            routeEnvelope.target,
-            routeEnvelope.message,
-            createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
-            routeEnvelope.destination
-          );
+          this.forwardForeignWorkspaceRpc(client, routeEnvelope);
           return;
         }
         void this.handleRoute(
@@ -2522,6 +2615,35 @@ export class RpcServer {
     message: RpcMessage,
     envelope: RpcEnvelope
   ): Promise<void> {
+    if (message.type === "exposure") {
+      try {
+        this.verifiedCallerFor(client.caller.runtime.id, client.caller.runtime.kind);
+        if (!Array.isArray(message.entries) || message.entries.length > 512)
+          throw new Error("RPC endpoint declarations must contain at most 512 entries");
+        const keys = new Set<string>();
+        for (const entry of message.entries) {
+          if (
+            !entry ||
+            typeof entry.name !== "string" ||
+            !entry.name ||
+            entry.name.length > 256 ||
+            !["method", "stream", "event"].includes(entry.kind)
+          )
+            throw new Error("Invalid RPC endpoint declaration");
+          validateWebsiteMethodPolicy(entry.website, entry.name);
+          const key = `${entry.kind}:${entry.name}`;
+          if (keys.has(key)) throw new Error("Duplicate RPC endpoint declaration");
+          keys.add(key);
+        }
+        this.endpointExposures.set(client, structuredClone(message.entries));
+      } catch (error) {
+        client.ws.close(
+          4403,
+          error instanceof Error ? error.message : "Invalid RPC endpoint declaration"
+        );
+      }
+      return;
+    }
     if (message.type === "stream-request") {
       await this.streamingRelay.handleSessionRequest(client, message, envelope);
       return;
@@ -2624,6 +2746,113 @@ export class RpcServer {
     }
   }
 
+  private forwardForeignWorkspaceRpc(
+    client: WsClientState,
+    envelope: RpcEnvelope,
+    body?: ReadableStream<Uint8Array>
+  ): void {
+    const message = envelope.message;
+    if (message.type === "request-cancel" || message.type === "stream-cancel") {
+      this.workspaceRpcControllers
+        .get(client.ws)
+        ?.get(message.requestId)
+        ?.abort(new Error("Cross-workspace RPC cancelled by caller"));
+      return;
+    }
+    if (message.type !== "request" && message.type !== "stream-request") {
+      this.sendRouteError(
+        client,
+        envelope.target,
+        message,
+        createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
+        envelope.destination
+      );
+      return;
+    }
+    const destinationWorkspaceId = workspaceRpcDestination(envelope.destination);
+    const childHub = this.deps.workspaceChildHub;
+    if (!destinationWorkspaceId || !childHub) {
+      this.sendRouteError(
+        client,
+        envelope.target,
+        message,
+        createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES"),
+        envelope.destination
+      );
+      return;
+    }
+    let controllers = this.workspaceRpcControllers.get(client.ws);
+    if (!controllers) {
+      controllers = new Map();
+      this.workspaceRpcControllers.set(client.ws, controllers);
+    }
+    controllers.get(message.requestId)?.abort(new Error("RPC request id reused"));
+    const controller = new AbortController();
+    controllers.set(message.requestId, controller);
+    void (async () => {
+      try {
+        const causal = await this.resolveCausalInvocation(client.caller, message);
+        const caller = this.callerWithInvocationAttribution(client.caller, message, causal);
+        const scope = this.relayCallerScopeForRpcMessage(client, message, caller);
+        const purpose =
+          envelope.target === "main" && message.method === "workers.listServices"
+            ? "discover"
+            : "call";
+        this.deps.assertWorkspaceRpcAccess?.({
+          caller,
+          destinationWorkspaceId,
+          target: envelope.target,
+          operation: message.method,
+          purpose,
+        });
+        this.deps.assertWorkspaceRpcAccess?.({
+          caller: scope.authorizingCaller,
+          destinationWorkspaceId,
+          target: envelope.target,
+          operation: message.method,
+          purpose,
+        });
+        await childHub.forwardWorkspaceRpc(
+          {
+            envelope,
+            caller,
+            authorizingCaller: scope.authorizingCaller,
+            contextIntegrity:
+              this.deps.contextIntegrityFactForSession?.(
+                caller.agentBinding?.channelId ?? caller.runtime.id,
+                caller
+              ) ?? null,
+            operation: message.method,
+            purpose,
+          },
+          {
+            ...(body ? { body } : {}),
+            signal: controller.signal,
+            assertLive: () => {
+              if (!this.connections.isActiveClient(client)) {
+                throw Object.assign(new Error("Workspace caller disconnected"), {
+                  code: "EACCES",
+                });
+              }
+            },
+            onEnvelope: (reply) => {
+              this.sendToSession(client.ws, { type: "ws:rpc", envelope: reply });
+            },
+          }
+        );
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          this.sendRouteError(client, envelope.target, message, error, envelope.destination);
+        }
+      } finally {
+        if (controllers?.get(message.requestId) === controller) {
+          controllers.delete(message.requestId);
+          if (controllers.size === 0) this.workspaceRpcControllers.delete(client.ws);
+        }
+      }
+    })();
+  }
+
   private handleToolResult(callId: string, result: ToolExecutionResult): void {
     const pending = this.pendingToolCalls.get(callId);
     if (!pending) return;
@@ -2687,12 +2916,27 @@ export class RpcServer {
         return;
       }
     }
-    const method = message.type === "request" ? message.method : undefined;
+    const method =
+      message.type === "request"
+        ? message.method
+        : message.type === "event"
+          ? `__event:${message.event}`
+          : undefined;
+    let routedScope: RelayCallerScope | undefined;
+    try {
+      if (message.type === "request")
+        routedScope = this.relayCallerScopeForRpcMessage(client, message, routedInvocationCaller);
+    } catch (error) {
+      this.sendRouteError(client, targetId, message, error);
+      return;
+    }
     const auth = this.checkRelayAuth(
       client.caller.runtime.id,
       client.caller.runtime.kind,
       targetId,
-      method
+      method,
+      "method",
+      routedScope?.authenticatedCaller
     );
     if (!auth.ok) {
       this.sendRouteError(client, targetId, message, createRelayError(auth.reason, "EACCES"));
@@ -2726,7 +2970,7 @@ export class RpcServer {
         );
         return;
       }
-      this.routedRequestOrigins.delete(message.requestId);
+      this.deleteRoutedRequestOrigin(message.requestId);
       void this.resolveWsRelayTarget(origin.callerId, origin.connectionId).then(
         (originClient) => {
           this.sendToSession(originClient.ws, {
@@ -2825,11 +3069,22 @@ export class RpcServer {
     // CALLEE connection the request is delivered to so the caller can be
     // settled if that callee terminally dies (§3.4, failRoutedRequestsForCallee).
     if (message.type === "request") {
-      this.recordRoutedRequestOrigin(message.requestId, client, {
-        targetId,
-        calleeId: targetClient.caller.runtime.id,
-        connectionId: targetClient.connectionId,
-      });
+      const scope = this.relayCallerScopeForRpcMessage(client, message, routedInvocationCaller);
+      const parent = this.beginRelayAuthorityParent(targetClient.caller.runtime.id, scope);
+      this.recordRoutedRequestOrigin(
+        message.requestId,
+        client,
+        {
+          targetId,
+          calleeId: targetClient.caller.runtime.id,
+          connectionId: targetClient.connectionId,
+        },
+        parent.release
+      );
+      routeEnvelope = {
+        ...routeEnvelope,
+        message: { ...message, authorityParentNonce: parent.nonce } as InternalRpcRequest,
+      };
     }
 
     this.sendToSession(targetClient.ws, {
@@ -2991,15 +3246,24 @@ export class RpcServer {
     });
   }
 
+  private deleteRoutedRequestOrigin(requestId: string): void {
+    const origin = this.routedRequestOrigins.get(requestId);
+    this.routedRequestOrigins.delete(requestId);
+    origin?.releaseAuthorityParent?.();
+  }
+
   private recordRoutedRequestOrigin(
     requestId: string,
     client: WsClientState,
-    callee?: { targetId: string; calleeId: string; connectionId: string }
+    callee?: { targetId: string; calleeId: string; connectionId: string },
+    releaseAuthorityParent?: () => void
   ): void {
+    this.deleteRoutedRequestOrigin(requestId);
     this.routedRequestOrigins.set(requestId, {
       callerId: client.caller.runtime.id,
       connectionId: client.connectionId,
       ...(callee ? { callee } : {}),
+      ...(releaseAuthorityParent ? { releaseAuthorityParent } : {}),
     });
 
     // Bound memory if a responder never replies. Drop oldest entries first.
@@ -3007,7 +3271,7 @@ export class RpcServer {
     while (this.routedRequestOrigins.size > maxEntries) {
       const oldest = this.routedRequestOrigins.keys().next().value as string | undefined;
       if (!oldest) break;
-      this.routedRequestOrigins.delete(oldest);
+      this.deleteRoutedRequestOrigin(oldest);
     }
   }
 
@@ -3033,6 +3297,10 @@ export class RpcServer {
     const wasReplaced = !removedActive;
 
     this.streamingRelay.abortConnection(client);
+    for (const controller of this.workspaceRpcControllers.get(client.ws)?.values() ?? []) {
+      controller.abort(new Error("Workspace caller disconnected"));
+    }
+    this.workspaceRpcControllers.delete(client.ws);
     client.uploadBodies?.closeAll(new Error("RPC connection closed"));
     for (const controller of this.inboundRequestControllers.get(client.ws)?.values() ?? []) {
       controller.abort(new Error("RPC connection closed"));
@@ -3185,6 +3453,10 @@ export class RpcServer {
     }
     this.releaseEventSession(client);
     client.uploadBodies?.closeAll(new Error("RPC connection replaced"));
+    for (const controller of this.workspaceRpcControllers.get(client.ws)?.values() ?? []) {
+      controller.abort(new Error("Workspace caller connection replaced"));
+    }
+    this.workspaceRpcControllers.delete(client.ws);
     this.connections.removeClient(client);
   }
 
@@ -3198,7 +3470,7 @@ export class RpcServer {
   private cleanupRoutedOriginsForConnection(callerId: string, connectionId: string): void {
     for (const [requestId, origin] of this.routedRequestOrigins) {
       if (origin.callerId === callerId && origin.connectionId === connectionId) {
-        this.routedRequestOrigins.delete(requestId);
+        this.deleteRoutedRequestOrigin(requestId);
       }
     }
   }
@@ -3222,7 +3494,7 @@ export class RpcServer {
       if (!callee || callee.calleeId !== calleeId || callee.connectionId !== connectionId) {
         continue;
       }
-      this.routedRequestOrigins.delete(requestId);
+      this.deleteRoutedRequestOrigin(requestId);
       // Same error shape relayCall produces when a bridge-relayed target's
       // grace window expires; the client's routed-response-error handler turns
       // it into a rejecting response, settling the pending.
@@ -3419,7 +3691,14 @@ export class RpcServer {
     }
 
     // Relay to another target
-    const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
+    const auth = this.checkRelayAuth(
+      callerId,
+      callerKind,
+      targetId,
+      method,
+      "method",
+      invocationCaller
+    );
     if (!auth.ok) throw createRelayError(auth.reason, "EACCES");
     const authenticatedCaller = invocationCaller;
     return await this.relayCall(
@@ -3454,7 +3733,7 @@ export class RpcServer {
     message: RpcEvent
   ): Promise<void> {
     const targetId = envelope.target;
-    const auth = this.checkRelayAuth(callerId, callerKind, targetId);
+    const auth = this.checkRelayAuth(callerId, callerKind, targetId, `__event:${message.event}`);
     if (!auth.ok) throw new Error(auth.reason);
     const executionSessionNonce = (message as InternalRpcEvent).executionSessionNonce;
     const attributedCaller =
@@ -3496,8 +3775,46 @@ export class RpcServer {
     callerId: string,
     callerKind: CallerKind,
     targetId: string,
-    method?: string
+    method?: string,
+    kind: "method" | "stream" = "method",
+    authenticatedCaller?: VerifiedCaller
   ): RelayAuthCheck {
+    const website = authenticatedCaller?.website ?? this.deps.websiteDocuments?.fact(callerId);
+    const isWebsite =
+      !!website ||
+      this.deps.entityCache?.resolveActive(callerId)?.source.repoPath.startsWith("browser:") ===
+        true;
+    if (isWebsite) {
+      if (
+        !website?.connected ||
+        (authenticatedCaller?.website &&
+          !this.deps.capabilityGrantStore?.isSubjectExecutionCurrent(website.binding))
+      )
+        return { ok: false, reason: "Connect this website to the workspace first" };
+      if (method && !targetId.startsWith("do:")) {
+        const event = method.startsWith("__event:");
+        const name = event ? method.slice("__event:".length) : method;
+        const expectedKind = event ? "event" : kind;
+        const targets = this.connections.getCallerConnections(
+          this.resolveRoutableTargetId(targetId)
+        );
+        if (
+          targets.length === 0 ||
+          targets.some(
+            (target) =>
+              !this.endpointExposures
+                .get(target)
+                ?.some(
+                  (entry) =>
+                    entry.kind === expectedKind &&
+                    entry.name === name &&
+                    entry.website.kind === "eligible"
+                )
+          )
+        )
+          return { ok: false, reason: "This receiver operation is closed to websites" };
+      }
+    }
     if (callerKind !== "server" && typeof method === "string" && method.startsWith("extension.")) {
       return {
         ok: false,
@@ -3609,11 +3926,49 @@ export class RpcServer {
     if (isPanelOrShellTarget) {
       const options = relayCallOptions(meta);
       const routedTargetId = this.resolveRoutableTargetId(targetId);
+      const invokeBridge = async (bridge: RpcClient, receiverRuntimeId: string) => {
+        const authenticatedCaller =
+          relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind);
+        const scope = relayCallerScope ?? {
+          authenticatedCaller,
+          authorizingCaller: authenticatedCaller,
+        };
+        const admission = this.checkRelayAuth(
+          callerId,
+          callerKind,
+          targetId,
+          method,
+          "method",
+          scope.authenticatedCaller
+        );
+        if (!admission.ok) throw createRelayError(admission.reason, "EACCES");
+        const parent = this.beginRelayAuthorityParent(receiverRuntimeId, scope);
+        try {
+          return await bridge.call(
+            routedTargetId,
+            method,
+            args,
+            bindInvocationParent(
+              { ...options },
+              {
+                nonce: parent.nonce,
+                caller: authenticatedCallerOf(authenticatedCaller),
+                provenance: [
+                  authenticatedCallerOf(scope.authorizingCaller),
+                  authenticatedCallerOf(authenticatedCaller),
+                ],
+              }
+            )
+          );
+        } finally {
+          parent.release();
+        }
+      };
       const wsClient = this.pickRoutableTarget(targetId, targetConnectionId);
       if (wsClient && wsClient.ws.readyState === wsClient.ws.OPEN) {
         const bridge = this.connections.getBridge(routedTargetId, wsClient.connectionId);
         if (bridge) {
-          return await bridge.call(routedTargetId, method, args, options);
+          return await invokeBridge(bridge, wsClient.caller.runtime.id);
         }
       }
 
@@ -3628,7 +3983,7 @@ export class RpcServer {
             `Target ${targetId}:${targetConnectionId} reconnected but bridge missing`
           );
         }
-        return await bridge.call(routedTargetId, method, args, options);
+        return await invokeBridge(bridge, reconnectedClient.caller.runtime.id);
       }
 
       const outcome = await this.awaitReconnectIfPending(routedTargetId);
@@ -3638,7 +3993,7 @@ export class RpcServer {
           if (!bridge) {
             throw new Error(`Target ${targetId} reconnected but bridge missing`);
           }
-          return await bridge.call(routedTargetId, method, args, options);
+          return await invokeBridge(bridge, outcome.client.caller.runtime.id);
         }
         case "server-shutdown":
           throw createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN");
@@ -3677,6 +4032,7 @@ export class RpcServer {
    * their response ownership differs, so their authority derivation must not.
    */
   private async directDOAuthorization(input: {
+    initiatingWebsite?: import("@vibestudio/rpc").WebsiteAuthorityFact;
     caller: VerifiedCaller;
     ref: { source: string; className: string; objectKey: string };
     method: string;
@@ -3721,6 +4077,7 @@ export class RpcServer {
       );
     }
     const workspaceAuthority = workspaceAuthorities?.[0];
+
     if (foreign && workspaceAuthority?.methodCrossWorkspace !== true) {
       throw createRelayError(WORKSPACE_RPC_NOT_ADMITTED, "EACCES");
     }
@@ -3736,6 +4093,12 @@ export class RpcServer {
     ) {
       throw createRelayError(`${input.method} requires an attested system-test harness`, "EACCES");
     }
+    const initiatingWebsite = input.initiatingWebsite ?? input.caller.website;
+    if (
+      input.caller.website &&
+      (workspaceAuthority?.methodWebsite ?? productPolicy?.website)?.kind !== "eligible"
+    )
+      throw createRelayError("This receiver operation is closed to websites", "EACCES");
     const preparedDeclaration = productPolicy?.prepared;
     const sessionId = input.caller.agentBinding?.channelId ?? input.caller.runtime.id;
     const methodCapability = workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
@@ -3794,6 +4157,7 @@ export class RpcServer {
         ? { class: "internal" as const, latchEpoch: 0, externalKeys: [] }
         : { class: "not-applicable" as const, latchEpoch: 0, externalKeys: [] });
     const authorityFacts = {
+      ...(initiatingWebsite ? { initiatingWebsite } : {}),
       caller: input.caller,
       source: input.ref.source,
       className: input.ref.className,
@@ -3978,6 +4342,7 @@ export class RpcServer {
       }
       const caller = selection.authorizingCaller ?? input.caller;
       const authorization = authorizeVerifiedCaller(caller, {
+        ...(initiatingWebsite ? { initiatingWebsite } : {}),
         workspaceId,
         workspaceMember:
           caller.runtime.kind === "server" ||
@@ -4047,6 +4412,10 @@ export class RpcServer {
           principals: workspaceAuthority?.principals ?? productPolicy?.principals ?? [],
         }),
         callerPrincipal: leaf.context.authorizingOrigin.principal,
+        ...(leaf.context.subjectBinding ? { subjectBinding: leaf.context.subjectBinding } : {}),
+        ...(leaf.context.initiatingWebsite
+          ? { initiatingWebsite: leaf.context.initiatingWebsite }
+          : {}),
         sessionId,
         ...(leaf.context.session.taskRef ? { taskRef: leaf.context.session.taskRef } : {}),
         ...(leaf.context.session.taskAuthority
@@ -4375,6 +4744,7 @@ export class RpcServer {
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
+        initiatingWebsite: relayCallerScope?.authorizingCaller.website,
         ref,
         method,
         args,
@@ -4486,10 +4856,20 @@ export class RpcServer {
     envelope: RpcEnvelope,
     request: import("@vibestudio/rpc").RpcStreamRequest,
     causalParent: RpcCausalParent | undefined,
-    signal: AbortSignal
+    signal: AbortSignal,
+    relayCallerScope?: RelayCallerScope
   ): Promise<Response> {
     const invocationCaller = caller;
     const targetId = envelope.target;
+    const admission = this.checkRelayAuth(
+      caller.runtime.id,
+      caller.runtime.kind,
+      targetId,
+      request.method,
+      "stream",
+      relayCallerScope?.authenticatedCaller
+    );
+    if (!admission.ok) throw createRelayError(admission.reason, "EACCES");
     if (!targetId.startsWith("do:")) {
       throw createRelayError(
         `Streaming target ${targetId} is not a Durable Object`,
@@ -4515,12 +4895,16 @@ export class RpcServer {
         : undefined;
     const authorization = await this.directDOAuthorization({
       caller: invocationCaller,
+      initiatingWebsite: relayCallerScope?.authorizingCaller.website,
       ref,
       method: request.method,
       args: request.args,
       readOnly: envelope.delivery.readOnly,
       waitForAuthority: true,
       signal,
+      ...(relayCallerScope?.inheritedContextIntegrity !== undefined
+        ? { inheritedContextIntegrity: relayCallerScope.inheritedContextIntegrity }
+        : {}),
     });
     if (authorization.handleProduction) {
       throw createRelayError("Handle-producing RPC methods cannot stream responses", "EACCES");
@@ -4529,7 +4913,7 @@ export class RpcServer {
     const releaseAuthorityParent = this.beginAuthorityParent(
       targetId,
       authorization,
-      invocationCaller
+      relayCallerScope?.authorizingCaller ?? invocationCaller
     );
     try {
       const response = await streamFromDurableObject(
@@ -5394,6 +5778,164 @@ export class RpcServer {
     await this.httpRpc.handle(req, res);
   }
 
+  /** Receive a hub-authenticated foreign invocation and enter the same target
+   * relay and receiver authority path used by a local authenticated session. */
+  async handleWorkspaceRpcHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const authenticate = (): void => {
+      const header = req.headers["authorization"];
+      const token =
+        typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
+      if (!token || !this.deps.tokenManager.validateAdminToken(token)) {
+        throw Object.assign(new Error("Workspace relay is not authenticated"), {
+          code: "EACCES",
+        });
+      }
+    };
+    await receiveWorkspaceRpcHttp(req, res, {
+      authenticate,
+      assertLive: ({ caller, authorizingCaller, envelope, operation, purpose }) => {
+        if (this.isShuttingDown()) {
+          throw Object.assign(new Error("Workspace receiver is shutting down"), {
+            code: "EACCES",
+          });
+        }
+        const targetWorkspaceId = workspaceRpcDestination(envelope.destination);
+        if (!targetWorkspaceId || targetWorkspaceId !== this.deps.workspaceId) {
+          throw Object.assign(new Error(WORKSPACE_RPC_NOT_ADMITTED), { code: "EACCES" });
+        }
+        this.deps.assertWorkspaceRpcAccess?.({
+          caller,
+          target: envelope.target,
+          operation,
+          purpose,
+        });
+        this.deps.assertWorkspaceRpcAccess?.({
+          caller: authorizingCaller,
+          target: envelope.target,
+          operation,
+          purpose,
+        });
+      },
+      dispatch: (delivery) => this.dispatchWorkspaceRpc(delivery),
+    });
+  }
+
+  private async dispatchWorkspaceRpc(delivery: WorkspaceRpcDelivery): Promise<void> {
+    const { invocation } = delivery;
+    const message = invocation.envelope.message;
+    const relayScope: RelayCallerScope = {
+      authenticatedCaller: invocation.caller,
+      authorizingCaller: invocation.authorizingCaller,
+      inheritedContextIntegrity: invocation.contextIntegrity,
+    };
+    if (message.type === "stream-request") {
+      try {
+        if (delivery.body) {
+          throw Object.assign(
+            new Error("Streaming request bodies are not supported by this receiver target"),
+            { code: "EACCES" }
+          );
+        }
+        const response = await this.relayTargetStream(
+          invocation.caller,
+          invocation.envelope,
+          message,
+          message.causalParent,
+          delivery.signal,
+          relayScope
+        );
+        await this.streamingRelay.forwardWorkspaceResponse(
+          response,
+          invocation.envelope,
+          {
+            callerId: invocation.envelope.target,
+            callerKind: this.callerKindForRuntimePrincipal(invocation.envelope.target),
+            workspaceId: this.deps.workspaceId,
+          },
+          delivery.send,
+          delivery.signal
+        );
+      } catch (error) {
+        if (delivery.signal.aborted) return;
+        const errorCode = getErrorCode(error);
+        await delivery.send(
+          responseEnvelopeFor(
+            invocation.envelope,
+            {
+              callerId: invocation.envelope.target,
+              callerKind: this.callerKindForRuntimePrincipal(invocation.envelope.target),
+              workspaceId: this.deps.workspaceId,
+            },
+            {
+              type: "stream-frame",
+              requestId: message.requestId,
+              fromId: invocation.envelope.target,
+              frameType: FRAME_ERROR,
+              payload: JSON.stringify({
+                status: errorCode === "EACCES" ? 403 : 500,
+                message: error instanceof Error ? error.message : String(error),
+                ...(errorCode ? { code: errorCode } : {}),
+                errorKind: rpcErrorKindOf(error, "internal"),
+                ...(rpcErrorDataOf(error) !== undefined
+                  ? { errorData: rpcErrorDataOf(error) }
+                  : {}),
+              }),
+            }
+          )
+        );
+      }
+      return;
+    }
+    if (message.type !== "request") {
+      throw Object.assign(new Error("Unsupported workspace RPC delivery"), {
+        code: "EACCES",
+      });
+    }
+    const responder = {
+      callerId: invocation.envelope.target,
+      callerKind: this.callerKindForRuntimePrincipal(invocation.envelope.target),
+      workspaceId: this.deps.workspaceId,
+    };
+    try {
+      const result = await this.relayCall(
+        invocation.caller.runtime.id,
+        invocation.caller.runtime.kind,
+        invocation.envelope.target,
+        message.method,
+        message.args,
+        undefined,
+        {
+          requestId: message.requestId,
+          ...(invocation.envelope.delivery.idempotencyKey
+            ? { idempotencyKey: invocation.envelope.delivery.idempotencyKey }
+            : {}),
+          ...(invocation.envelope.delivery.readOnly ? { readOnly: true } : {}),
+          signal: delivery.signal,
+        },
+        relayScope
+      );
+      await delivery.send(
+        responseEnvelopeFor(invocation.envelope, responder, {
+          type: "response",
+          requestId: message.requestId,
+          result,
+        })
+      );
+    } catch (error) {
+      const errorCode = getErrorCode(error);
+      await delivery.send(
+        responseEnvelopeFor(invocation.envelope, responder, {
+          type: "response",
+          requestId: message.requestId,
+          error: error instanceof Error ? error.message : String(error),
+          errorKind: rpcErrorKindOf(error, "internal"),
+          ...(errorCode ? { errorCode } : {}),
+          ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+        })
+      );
+    }
+  }
+
   /**
    * Close admission and cancel transport-owned work while keeping the
    * workerd→host back-channel available until the ordered service drain has
@@ -5432,7 +5974,9 @@ export class RpcServer {
       waiter.reject(createRelayError(reason, "SERVER_SHUTTING_DOWN"));
     }
     this.connectionReconnectWaiters.clear();
-    this.routedRequestOrigins.clear();
+    for (const requestId of this.routedRequestOrigins.keys())
+      this.deleteRoutedRequestOrigin(requestId);
+    this.activeAuthorityParents.clear();
     this.sessions.clear();
   }
 

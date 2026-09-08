@@ -23,6 +23,7 @@ const projectMethods = (owner: string, methods: ServiceMethodSchemas) =>
       return [
         name,
         {
+          website: method.website,
           capability: method.capability,
           tier: method.tier.tier,
           session: method.tier.session,
@@ -35,7 +36,8 @@ const projectMethods = (owner: string, methods: ServiceMethodSchemas) =>
             : {}),
           effect: method.directEffect ?? {
             kind: "host-capability",
-            capability: method.capability,
+            website: method.website,
+          capability: method.capability,
             resource: { kind: "receiver-object" },
           },
         },
@@ -115,7 +117,7 @@ const generatedTs = await format(
     `export function productBuiltinMethodPolicy(source: string, className: string, method: string) {\n` +
     `  const entry = productBuiltinByIdentity(source, className);\n` +
     `  if (!entry) return null;\n` +
-    `  const methods = ("directMethods" in entry ? entry.directMethods : undefined) as unknown as Record<string, { capability: string; tier: "open" | "gated" | "critical"; session: "family" | "codeOnly"; sensitivity: "read" | "write" | "admin" | "destructive"; principals: readonly ("host" | "user" | "code" | "session" | "mission")[]; presentation: CapabilityPresentation | null; execution?: { harness: "attested-system-test" }; prepared?: { resolver: string; contextBoundary?: { operation: "openPanel" | "replacePanel" | "reload" | "unload" | "close" | "movePanel" | "takeOver" | "rebuildPanel" | "updatePanelState"; targetArgument: number; targetPath?: readonly (string | number)[]; requestedContextPath?: readonly (string | number)[]; requestedContextLookup?: { method: string; arguments: readonly { argument: number; path?: readonly (string | number)[] }[]; resultPath: readonly (string | number)[] } }; leaves: readonly { capability?: string; capabilityPrefix?: string; requirement: import("./authorization.js").AuthorityRequirement | { kind: "selected"; principals: readonly ("host" | "user" | "code" | "session" | "mission")[] }; tier?: "open" | "gated" | "critical" | { selectedFrom: readonly ("gated" | "critical")[] } }[] }; effect: { kind: string } }> | undefined;\n` +
+    `  const methods = ("directMethods" in entry ? entry.directMethods : undefined) as unknown as Record<string, { website: import("@vibestudio/rpc").WebsiteMethodPolicy; capability: string; tier: "open" | "gated" | "critical"; session: "family" | "codeOnly"; sensitivity: "read" | "write" | "admin" | "destructive"; principals: readonly ("host" | "user" | "code" | "session" | "mission")[]; presentation: CapabilityPresentation | null; execution?: { harness: "attested-system-test" }; prepared?: { resolver: string; contextBoundary?: { operation: "openPanel" | "replacePanel" | "reload" | "unload" | "close" | "movePanel" | "takeOver" | "rebuildPanel" | "updatePanelState"; targetArgument: number; targetPath?: readonly (string | number)[]; requestedContextPath?: readonly (string | number)[]; requestedContextLookup?: { method: string; arguments: readonly { argument: number; path?: readonly (string | number)[] }[]; resultPath: readonly (string | number)[] } }; leaves: readonly { capability?: string; capabilityPrefix?: string; requirement: import("./authorization.js").AuthorityRequirement | { kind: "selected"; principals: readonly ("host" | "user" | "code" | "session" | "mission")[] }; tier?: "open" | "gated" | "critical" | { selectedFrom: readonly ("gated" | "critical")[] } }[] }; effect: { kind: string } }> | undefined;\n` +
     `  if (!methods) return null;\n` +
     `  return Object.prototype.hasOwnProperty.call(methods, method) ? methods[method]! : null;\n` +
     `}\n` +

@@ -100,8 +100,9 @@ export type BuildExecutionIdentity = ExecutionArtifactRefV1;
 
 export type ExtensionMethodAuthority = Record<
   string,
-  | { effect: { kind: "open" } }
+  | { website: import("@vibestudio/rpc").WebsiteMethodPolicy; effect: { kind: "open" } }
   | {
+      website: import("@vibestudio/rpc").WebsiteMethodPolicy;
       effect: {
         kind: "userland-capability";
         capability: string;

@@ -177,6 +177,7 @@ export const panelRuntimeViewReportResultSchema = z.enum(["reported", "stale"]);
 
 export const panelRuntimeMethods = defineServiceMethods({
   registerClient: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -191,6 +192,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: REGISTER_ACCESS,
   },
   unregisterClient: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -205,6 +207,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   getSnapshot: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -219,6 +222,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   observeSlot: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -234,6 +238,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getAttempt: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -248,6 +253,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   awaitAttempt: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -267,6 +273,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   awaitSlot: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -281,6 +288,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   acquire: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -295,6 +303,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   takeOver: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -309,6 +318,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   ensureSlot: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -330,6 +340,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   unloadSlot: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -346,6 +357,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   takeOverSlot: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -370,6 +382,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   release: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -384,6 +397,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   reportView: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -399,6 +413,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   reportOwnView: {
+    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

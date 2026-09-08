@@ -65,6 +65,7 @@ export type MirrorObjectsResult = z.infer<typeof mirrorObjectsResultSchema>;
 
 export const mirrorMethods = defineServiceMethods({
   targets: {
+    website: {"kind":"closed","reason":"The mirror receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -80,6 +81,7 @@ export const mirrorMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   objects: {
+    website: {"kind":"closed","reason":"The mirror receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

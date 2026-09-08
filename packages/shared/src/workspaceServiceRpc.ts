@@ -1,3 +1,6 @@
+import type { RpcCallOptions } from "@vibestudio/rpc";
+import { mergeRpcOptions } from "@vibestudio/rpc/internal";
+
 export interface RpcCallerLike {
   call<T = unknown>(
     targetId: string,
@@ -7,10 +10,7 @@ export interface RpcCallerLike {
   ): Promise<T>;
 }
 
-export interface RpcCallOptionsLike {
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}
+export type RpcCallOptionsLike = Pick<RpcCallOptions, "signal" | "timeoutMs" | "destination">;
 
 export interface DORefParam {
   source: string;
@@ -103,44 +103,61 @@ export async function resolveDurableObjectService(
 export function createDurableObjectServiceClient(
   rpc: RpcCallerLike,
   query: string,
-  objectKey?: string | null
+  objectKey?: string | null,
+  defaultOptions?: Pick<RpcCallOptionsLike, "destination">
 ): DurableObjectServiceClient {
-  let resolvedTarget: ResolvedDurableObjectTarget | null = null;
-  let resolvedPromise: Promise<ResolvedDurableObjectTarget> | null = null;
+  const resolvedTargets = new Map<string, ResolvedDurableObjectTarget>();
+  const resolvedPromises = new Map<string, Promise<ResolvedDurableObjectTarget>>();
+  const optionsFor = (options?: RpcCallOptionsLike): RpcCallOptionsLike | undefined => {
+    if (!defaultOptions) return options;
+    if (!options) return defaultOptions;
+    return mergeRpcOptions(defaultOptions, options);
+  };
+  const destinationKey = (options?: RpcCallOptionsLike): string =>
+    JSON.stringify(options?.destination ?? null);
   const resolve = (options?: RpcCallOptionsLike) => {
+    const combined = optionsFor(options);
+    const key = destinationKey(combined);
+    const resolvedTarget = resolvedTargets.get(key);
     if (resolvedTarget) return Promise.resolve(resolvedTarget);
-    if (options) {
+    if (combined?.signal || combined?.timeoutMs !== undefined) {
       // A caller-owned signal must never own the shared resolution flight: its
       // cancellation would otherwise reject unrelated concurrent callers.
-      return resolveDurableObjectService(rpc, query, objectKey, options).then((target) => {
-        resolvedTarget = target;
+      return resolveDurableObjectService(rpc, query, objectKey, combined).then((target) => {
+        resolvedTargets.set(key, target);
         return target;
       });
     }
-    resolvedPromise ??= resolveDurableObjectService(rpc, query, objectKey)
+    const resolvedPromise = resolvedPromises.get(key);
+    if (resolvedPromise) return resolvedPromise;
+    const pending = resolveDurableObjectService(rpc, query, objectKey, combined)
       .then((target) => {
-        resolvedTarget = target;
+        resolvedTargets.set(key, target);
         return target;
       })
-      .catch((error: unknown) => {
-        resolvedPromise = null;
-        throw error;
+      .finally(() => {
+        if (resolvedPromises.get(key) === pending) resolvedPromises.delete(key);
       });
-    return resolvedPromise;
+    resolvedPromises.set(key, pending);
+    return pending;
   };
   return {
     resolve,
     async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
       const service = await resolve();
-      return rpc.call<T>(service.targetId, method, omitTrailingUndefined(args));
+      const options = optionsFor();
+      return options
+        ? rpc.call<T>(service.targetId, method, omitTrailingUndefined(args), options)
+        : rpc.call<T>(service.targetId, method, omitTrailingUndefined(args));
     },
     async callWithOptions<T = unknown>(
       method: string,
       args: unknown[],
       options: RpcCallOptionsLike
     ): Promise<T> {
-      const service = await resolve(options);
-      return rpc.call<T>(service.targetId, method, omitTrailingUndefined(args), options);
+      const combined = optionsFor(options)!;
+      const service = await resolve(combined);
+      return rpc.call<T>(service.targetId, method, omitTrailingUndefined(args), combined);
     },
   };
 }

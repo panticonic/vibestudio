@@ -15,6 +15,7 @@ class ExactSchemaProbeDO extends DurableObjectBase {
   }
 
   @rpc({
+    website: { kind: "eligible", rationale: "Explicit receiver exposure for this test fixture." },
     effect: {
       kind: "host-capability",
       capability: "test.storage.read",

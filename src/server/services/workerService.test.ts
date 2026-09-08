@@ -20,6 +20,9 @@ const TEST_WORKSPACE_SERVICE_PRESENTATION = {
 
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };
 const hostCtx: ServiceContext = { caller: createHostCaller("shell-test", "shell") };
+const foreignPanelCtx: ServiceContext = {
+  caller: { ...createVerifiedCaller("panel-foreign", "panel"), workspaceId: "workspace-source" },
+};
 const ownedPanelCtx: ServiceContext = {
   caller: createVerifiedCaller("panel-owned", "panel", null, null, {
     userId: "usr_alice",
@@ -557,6 +560,109 @@ describe("workerService workspace service resolution", () => {
       routePath: "/api",
       routeBasePath: "/_r/w/workers/stateless-api/api",
     });
+  });
+
+  it("discloses only exact exported and policy-admitted foreign service targets", async () => {
+    const deps = createDeps();
+    const prepareRuntimeImage = vi.fn();
+    const activateDurableObject = vi.fn();
+    const resolveWorkspaceRpcCatalog = vi.fn(async (source: string, className: string) => ({
+      source,
+      unitName: source,
+      className,
+      stateHash: "state:test",
+      effectiveVersion: `ev:${source}`,
+      methods:
+        source === "workers/browser-data"
+          ? [
+              { className, name: "readShared", access: { crossWorkspace: true } },
+              { className, name: "privateOnly", access: {} },
+            ]
+          : [{ className, name: "deniedExport", access: { crossWorkspace: true } }],
+    }));
+    const canDiscoverCrossWorkspaceMethod = vi.fn(
+      (_ctx: ServiceContext, input: { target: string; operation: string }) =>
+        input.target === "workspace-service:browser.data" && input.operation === "readShared"
+    );
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        buildSystem: { ...deps.buildSystem, resolveWorkspaceRpcCatalog },
+        canDiscoverCrossWorkspaceMethod,
+        prepareRuntimeImage,
+        activateDurableObject,
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(foreignPanelCtx, "workers", "listServices", [])
+    ).resolves.toEqual([
+      expect.objectContaining({
+        name: "browser.data",
+        source: "workers/browser-data",
+        defaultObjectKey: "browser-data",
+      }),
+    ]);
+    expect(canDiscoverCrossWorkspaceMethod).toHaveBeenCalledWith(foreignPanelCtx, {
+      target: "workspace-service:browser.data",
+      operation: "readShared",
+    });
+    expect(canDiscoverCrossWorkspaceMethod).toHaveBeenCalledWith(
+      foreignPanelCtx,
+      expect.objectContaining({ operation: "deniedExport" })
+    );
+    expect(canDiscoverCrossWorkspaceMethod).not.toHaveBeenCalledWith(
+      foreignPanelCtx,
+      expect.objectContaining({ operation: "privateOnly" })
+    );
+    expect(resolveWorkspaceRpcCatalog).toHaveBeenCalledTimes(3);
+    expect(prepareRuntimeImage).not.toHaveBeenCalled();
+    expect(activateDurableObject).not.toHaveBeenCalled();
+  });
+
+  it("fails foreign discovery closed before provider inspection without a policy owner", async () => {
+    const deps = createDeps();
+    const resolveWorkspaceRpcCatalog = vi.fn();
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        buildSystem: { ...deps.buildSystem, resolveWorkspaceRpcCatalog },
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(foreignPanelCtx, "workers", "listServices", [])
+    ).resolves.toEqual([]);
+    expect(resolveWorkspaceRpcCatalog).not.toHaveBeenCalled();
+  });
+
+  it("refuses foreign resolution before preparation when the receiver exports no method", async () => {
+    const deps = createDeps();
+    const prepareRuntimeImage = vi.fn();
+    const activateDurableObject = vi.fn();
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        buildSystem: {
+          ...deps.buildSystem,
+          resolveWorkspaceRpcCatalog: vi.fn(async () => ({ methods: [] })),
+        },
+        prepareRuntimeImage,
+        activateDurableObject,
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(foreignPanelCtx, "workers", "resolveService", ["browser.data"])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    expect(prepareRuntimeImage).not.toHaveBeenCalled();
+    expect(activateDurableObject).not.toHaveBeenCalled();
   });
 
   it("uses workspace declarations added after the service is constructed", async () => {

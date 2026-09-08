@@ -499,7 +499,8 @@ describe("ViewManager", () => {
       const overlayHtml = decodeURIComponent(loadedUrl.slice(loadedUrl.indexOf(",") + 1));
       expect(overlayHtml).toContain("Content-Security-Policy");
       expect(overlayHtml).toContain("script-src 'none'");
-      expect(mockWindow.contentView.removeChildView).toHaveBeenCalledWith(overlayView);
+      expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalledWith(overlayView);
+      expect(mockWindow.contentView.children.at(-1)).toBe(overlayView);
       expect(mockWindow.contentView.addChildView).toHaveBeenCalledWith(overlayView);
       expect(panelView.setVisible).toHaveBeenCalledWith(true);
     });

@@ -95,7 +95,10 @@ export class IrohRpcClient {
     listener: (payload: unknown, fromId: string) => void
   ): Promise<() => void> {
     const { rpc } = await this.ensureConnected();
-    return rpc.on(event, (context) => listener(context.payload, context.caller.callerId));
+    return rpc.on(event, (context) => listener(context.payload, context.caller.callerId), {
+      kind: "closed",
+      reason: "This listener consumes host or implementation lifecycle events.",
+    });
   }
 
   async onRecovery(handler: (kind: RecoveryKind) => void | Promise<void>): Promise<() => void> {

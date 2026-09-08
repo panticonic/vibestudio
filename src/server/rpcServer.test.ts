@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import * as http from "node:http";
 import type { ProcessAdapter } from "@vibestudio/process-adapter";
 import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
@@ -64,6 +65,8 @@ import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSoc
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import { bytesToBase64 } from "@vibestudio/rpc";
 import type { StreamFrame } from "./services/egressProxy.js";
+import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
+import { receiveHubWorkspaceRpcHttp } from "./workspaceRpcHubTransport.js";
 
 const fetchHttp = globalThis.fetch;
 const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
@@ -202,6 +205,10 @@ type TestRpcServer = {
   handleAuth(ws: unknown, token: string | null, connectionId: string): Promise<void>;
   handleConnection(ws: unknown): void;
   handleMessage(client: WsClientState, message: WsClientMessage): void;
+  dispatchWorkspaceRpc(
+    delivery: import("./workspaceRpcTransport.js").WorkspaceRpcDelivery
+  ): Promise<void>;
+  relayTargetStream(...args: unknown[]): Promise<Response>;
   handleRoute(
     client: WsClientState,
     targetId: string,
@@ -210,6 +217,13 @@ type TestRpcServer = {
     routeEnvelope: RpcEnvelope
   ): Promise<void> | void;
   handleClose(client: WsClientState, code: number, reason: string): void;
+  checkRelayAuth(
+    callerId: string,
+    callerKind: CallerKind,
+    targetId: string,
+    method?: string,
+    kind?: "method" | "stream"
+  ): { ok: boolean };
   handleRpc(client: WsClientState, message: RpcMessage, envelope: RpcEnvelope): Promise<void>;
   handleEnvelopeRequest(
     callerId: string,
@@ -948,12 +962,21 @@ describe("RpcServer relay behavior", () => {
         message: {
           type: "request",
           requestId: "req-forged-route",
+          authorityParentNonce: expect.any(String),
           fromId: "panel:nav-a",
           method: "tools.invoke",
           args: ["publishRepo", []],
         },
       },
     });
+    const forwarded = (target.ws.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    const nonce = forwarded.envelope.message.authorityParentNonce;
+    expect(
+      testServer(server).authorityParentFor("panel:nav-b", nonce)?.authorizingCaller?.runtime.id
+    ).toBe("panel:nav-a");
+    expect(() => testServer(server).authorityParentFor("panel:other", nonce)).toThrow(
+      /another runtime/
+    );
   });
 
   it.each(["ws:rpc", "ws:route"] as const)(
@@ -990,6 +1013,405 @@ describe("RpcServer relay behavior", () => {
               caller: { callerId: "main", callerKind: "unknown", workspaceId: "foreign-workspace" },
             },
             message: expect.objectContaining({ requestId: "foreign-call", errorCode: "EACCES" }),
+          }),
+        })
+      );
+    }
+  );
+
+  it("routes the existing foreign service catalog as metadata discovery", async () => {
+    const forwardWorkspaceRpc = vi.fn(async (_invocation: unknown) => undefined);
+    const assertWorkspaceRpcAccess = vi.fn();
+    const { server, grantPanel } = createServer({
+      workspaceChildHub: { forwardWorkspaceRpc },
+      assertWorkspaceRpcAccess,
+    });
+    const sourceWs = createTestWs();
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+    sourceWs.emitMessage({
+      type: "ws:rpc",
+      envelope: {
+        from: "panel:nav-a",
+        target: "main",
+        destination: { kind: "workspace", workspaceId: "personal-workspace" },
+        delivery: { caller: { callerId: "panel:nav-a", callerKind: "panel" } },
+        provenance: [],
+        message: {
+          type: "request",
+          requestId: "foreign-discovery",
+          fromId: "panel:nav-a",
+          method: "workers.listServices",
+          args: [],
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(forwardWorkspaceRpc).toHaveBeenCalledOnce());
+    expect(forwardWorkspaceRpc.mock.calls[0]![0]).toMatchObject({
+      operation: "workers.listServices",
+      purpose: "discover",
+    });
+    expect(assertWorkspaceRpcAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ purpose: "discover" })
+    );
+  });
+
+  it.each([
+    ["request", "request-cancel"],
+    ["stream-request", "stream-cancel"],
+  ] as const)(
+    "cancels the original foreign %s delivery when its source request is cancelled",
+    async (requestType, cancelType) => {
+      let forwardedSignal!: AbortSignal;
+      const forwardWorkspaceRpc = vi.fn(async (_invocation, delivery): Promise<void> => {
+        forwardedSignal = delivery.signal;
+        await new Promise<void>((_resolve, reject) => {
+          delivery.signal.addEventListener("abort", () => reject(delivery.signal.reason), {
+            once: true,
+          });
+        });
+      });
+      const { server, grantPanel } = createServer({
+        workspaceChildHub: { forwardWorkspaceRpc },
+        assertWorkspaceRpcAccess: vi.fn(),
+      });
+      const sourceWs = createTestWs();
+      testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+      const envelope = {
+        from: "panel:nav-a",
+        target: "do:workers/calendar:Calendar:main",
+        destination: { kind: "workspace" as const, workspaceId: "personal-workspace" },
+        delivery: { caller: { callerId: "panel:nav-a", callerKind: "panel" as const } },
+        provenance: [],
+        message: {
+          type: requestType,
+          requestId: "cancel-foreign",
+          fromId: "panel:nav-a",
+          method: "calendar.suggest",
+          args: [],
+        },
+      };
+      sourceWs.emitMessage({ type: "ws:route", envelope });
+      await vi.waitFor(() => expect(forwardWorkspaceRpc).toHaveBeenCalledOnce());
+      sourceWs.emitMessage({
+        type: "ws:route",
+        envelope: {
+          ...envelope,
+          message: { type: cancelType, requestId: "cancel-foreign" },
+        },
+      });
+      await vi.waitFor(() => expect(forwardedSignal.aborted).toBe(true));
+    }
+  );
+
+  it("dispatches a transported foreign caller through ordinary receiver authority", async () => {
+    const { server, entityCache } = createServer();
+    entityCache._onActivate(makeRecord("do:workers/calendar:Calendar:main", "do"));
+    const relayCall = vi.fn(async () => ({ slots: ["09:00"] }));
+    testServer(server).relayCall = relayCall;
+    const send = vi.fn<(envelope: RpcEnvelope) => Promise<void>>(async () => undefined);
+    const caller = createVerifiedCaller("panel:project", "panel", null, null, {
+      userId: "user-1",
+      handle: "user1",
+    });
+    const envelope = {
+      from: "panel:project",
+      target: "do:workers/calendar:Calendar:main",
+      destination: { kind: "workspace" as const, workspaceId: "test-workspace" },
+      delivery: {
+        caller: {
+          callerId: "panel:project",
+          callerKind: "panel" as const,
+          userId: "user-1",
+          workspaceId: "project-workspace",
+        },
+      },
+      provenance: [],
+      message: {
+        type: "request" as const,
+        requestId: "transported-call",
+        fromId: "panel:project",
+        method: "calendar.suggest",
+        args: [],
+      },
+    };
+    await testServer(server).dispatchWorkspaceRpc({
+      invocation: {
+        envelope,
+        caller,
+        authorizingCaller: caller,
+        contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
+        operation: "calendar.suggest",
+        purpose: "call",
+      },
+      signal: new AbortController().signal,
+      send,
+    });
+    expect(relayCall).toHaveBeenCalledWith(
+      "panel:project",
+      "panel",
+      "do:workers/calendar:Calendar:main",
+      "calendar.suggest",
+      [],
+      undefined,
+      expect.objectContaining({ requestId: "transported-call" }),
+      expect.objectContaining({
+        authenticatedCaller: caller,
+        authorizingCaller: caller,
+        inheritedContextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
+      })
+    );
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: { kind: "workspace", workspaceId: "project-workspace" },
+        message: expect.objectContaining({
+          type: "response",
+          requestId: "transported-call",
+          result: { slots: ["09:00"] },
+        }),
+      })
+    );
+  });
+
+  it("streams a transported foreign response through the canonical envelope framing", async () => {
+    const { server, entityCache } = createServer();
+    entityCache._onActivate(makeRecord("do:workers/calendar:Calendar:main", "do"));
+    const relayTargetStream = vi.fn(async () => new Response("slot"));
+    testServer(server).relayTargetStream = relayTargetStream;
+    const send = vi.fn<(envelope: RpcEnvelope) => Promise<void>>(async () => undefined);
+    const caller = createVerifiedCaller("panel:project", "panel", null, null, {
+      userId: "user-1",
+      handle: "user1",
+    });
+    await testServer(server).dispatchWorkspaceRpc({
+      invocation: {
+        envelope: {
+          from: "panel:project",
+          target: "do:workers/calendar:Calendar:main",
+          destination: { kind: "workspace", workspaceId: "test-workspace" },
+          delivery: {
+            caller: {
+              callerId: "panel:project",
+              callerKind: "panel",
+              workspaceId: "project-workspace",
+            },
+          },
+          provenance: [],
+          message: {
+            type: "stream-request",
+            requestId: "transported-stream",
+            fromId: "panel:project",
+            method: "calendar.watch",
+            args: [],
+          },
+        },
+        caller,
+        authorizingCaller: caller,
+        contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
+        operation: "calendar.watch",
+        purpose: "call",
+      },
+      signal: new AbortController().signal,
+      send,
+    });
+
+    expect(relayTargetStream).toHaveBeenCalledWith(
+      caller,
+      expect.any(Object),
+      expect.objectContaining({ requestId: "transported-stream" }),
+      undefined,
+      expect.any(AbortSignal),
+      expect.objectContaining({ authenticatedCaller: caller, authorizingCaller: caller })
+    );
+    expect(send.mock.calls.map(([envelope]) => envelope.message)).toEqual([
+      expect.objectContaining({ type: "stream-frame", frameType: FRAME_HEAD }),
+      expect.objectContaining({ type: "stream-frame", frameType: FRAME_DATA }),
+      expect.objectContaining({ type: "stream-frame", frameType: FRAME_END }),
+    ]);
+  });
+
+  it("routes a real framed call from a source session through the hub into the destination dispatcher", async () => {
+    vi.stubGlobal("fetch", fetchHttp);
+    const destination = createServer({
+      workspaceId: "destination-workspace",
+      assertWorkspaceRpcAccess: vi.fn(),
+    });
+    destination.tokenManager.setAdminToken("destination-secret");
+    destination.entityCache._onActivate(makeRecord("do:workers/calendar:Calendar:main", "do"));
+    testServer(destination.server).relayCall = vi.fn(async () => ({ slots: ["09:00"] }));
+    const ownedServers: http.Server[] = [];
+    const listen = async (handler: http.RequestListener): Promise<string> => {
+      const server = http.createServer(handler);
+      ownedServers.push(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP address");
+      return `http://127.0.0.1:${address.port}`;
+    };
+    try {
+      const destinationUrl = await listen((req, res) => {
+        void destination.server.handleWorkspaceRpcHttp(req, res);
+      });
+      const hubUrl = await listen((req, res) => {
+        void receiveHubWorkspaceRpcHttp(req, res, {
+          authenticateSource: () => {
+            if (req.headers.authorization !== "Bearer source-secret") {
+              throw Object.assign(new Error("Source authentication failed"), { code: "EACCES" });
+            }
+            return "source-workspace";
+          },
+          assertAccess: vi.fn(),
+          resolveDestination: async () => ({
+            url: `${destinationUrl}/_r/s/internal/workspace-rpc`,
+            runtimeToken: "destination-secret",
+            assertLive: () => undefined,
+          }),
+        });
+      });
+      const source = createServer({
+        workspaceId: "source-workspace",
+        workspaceChildHub: createWorkspaceChildHubPort({
+          hubUrl,
+          runtimeToken: "source-secret",
+        }),
+        assertWorkspaceRpcAccess: vi.fn(),
+      });
+      const sourceWs = createTestWs();
+      testServer(source.server).handleAuth(sourceWs, source.grantPanel("panel:nav-a"), "conn-1");
+      sourceWs.emitMessage({
+        type: "ws:rpc",
+        envelope: {
+          from: "panel:nav-a",
+          target: "do:workers/calendar:Calendar:main",
+          destination: { kind: "workspace", workspaceId: "destination-workspace" },
+          delivery: { caller: { callerId: "forged", callerKind: "server" } },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "integrated-foreign-call",
+            fromId: "forged",
+            method: "calendar.suggest",
+            args: [],
+          },
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(sourceWs.send.mock.calls.map(([raw]) => JSON.parse(String(raw)))).toContainEqual(
+          expect.objectContaining({
+            type: "ws:rpc",
+            envelope: expect.objectContaining({
+              message: expect.objectContaining({
+                type: "response",
+                requestId: "integrated-foreign-call",
+                result: { slots: ["09:00"] },
+              }),
+            }),
+          })
+        )
+      );
+      expect(testServer(destination.server).relayCall).toHaveBeenCalledWith(
+        "panel:nav-a",
+        "panel",
+        "do:workers/calendar:Calendar:main",
+        "calendar.suggest",
+        [],
+        undefined,
+        expect.objectContaining({ requestId: "integrated-foreign-call" }),
+        expect.objectContaining({
+          authenticatedCaller: expect.objectContaining({
+            runtime: { id: "panel:nav-a", kind: "panel" },
+            workspaceId: "source-workspace",
+          }),
+        })
+      );
+    } finally {
+      await Promise.all(
+        ownedServers.map(
+          (server) =>
+            new Promise<void>((resolve) => {
+              server.closeAllConnections();
+              server.close(() => resolve());
+            })
+        )
+      );
+    }
+  });
+
+  it.each(["ws:rpc", "ws:route"] as const)(
+    "forwards an admitted foreign workspace request through the child hub from %s",
+    async (type) => {
+      const forwardWorkspaceRpc = vi.fn(async (_invocation, delivery) => {
+        await delivery.onEnvelope({
+          from: "do:workers/calendar:Calendar:main",
+          target: "panel:nav-a",
+          destination: { kind: "workspace", workspaceId: "test-workspace" },
+          delivery: {
+            caller: {
+              callerId: "do:workers/calendar:Calendar:main",
+              callerKind: "do",
+              workspaceId: "personal-workspace",
+            },
+          },
+          provenance: [],
+          message: {
+            type: "response",
+            requestId: "foreign-call",
+            result: { slots: ["09:00"] },
+          },
+        });
+      });
+      const assertWorkspaceRpcAccess = vi.fn();
+      const { server, grantPanel } = createServer({
+        workspaceChildHub: { forwardWorkspaceRpc },
+        assertWorkspaceRpcAccess,
+      });
+      const sourceWs = createTestWs();
+      testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+      sourceWs.emitMessage({
+        type,
+        envelope: {
+          from: "forged",
+          target: "do:workers/calendar:Calendar:main",
+          destination: { kind: "workspace", workspaceId: "personal-workspace" },
+          delivery: { caller: { callerId: "forged", callerKind: "server" } },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "foreign-call",
+            fromId: "forged",
+            method: "calendar.suggest",
+            args: [{ day: "Monday" }],
+          },
+        },
+      });
+      await vi.waitFor(() => expect(forwardWorkspaceRpc).toHaveBeenCalledOnce());
+      expect(forwardWorkspaceRpc.mock.calls[0]![0]).toMatchObject({
+        caller: {
+          workspaceId: "test-workspace",
+          runtime: { id: "panel:nav-a", kind: "panel" },
+          subject: { userId: "user-1" },
+        },
+        authorizingCaller: { subject: { userId: "user-1" } },
+        operation: "calendar.suggest",
+        purpose: "call",
+        envelope: {
+          from: "panel:nav-a",
+          destination: { kind: "workspace", workspaceId: "personal-workspace" },
+        },
+      });
+      expect(assertWorkspaceRpcAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ destinationWorkspaceId: "personal-workspace" })
+      );
+      expect(sourceWs.send.mock.calls.map(([raw]) => JSON.parse(String(raw)))).toContainEqual(
+        expect.objectContaining({
+          type: "ws:rpc",
+          envelope: expect.objectContaining({
+            message: expect.objectContaining({
+              type: "response",
+              requestId: "foreign-call",
+              result: { slots: ["09:00"] },
+            }),
           }),
         })
       );
@@ -1333,6 +1755,10 @@ describe("RpcServer relay behavior", () => {
             : null,
         resolveWorkspaceDirectAuthority: async () => [
           {
+            methodWebsite: {
+              kind: "eligible",
+              rationale: "Explicit website receiver policy for this fixture.",
+            } as const,
             capability,
             serviceBinding: "consent",
             methodEffect: {
@@ -1595,6 +2021,10 @@ describe("RpcServer relay behavior", () => {
     const { server, entityCache } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:channel",
           methodEffect: { kind: "open" },
           methodCapability: "workspace-service:channel",
@@ -2371,6 +2801,10 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:channel",
           methodEffect: {
             kind: "userland-capability",
@@ -2533,6 +2967,10 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:channel",
           methodEffect: { kind: "open" },
           methodCapability: "workspace-service:channel",
@@ -2642,6 +3080,10 @@ describe("RpcServer relay behavior", () => {
       capabilityGrantStore,
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:probe",
           methodEffect: { kind: "open" },
           methodTier: "open",
@@ -2698,6 +3140,10 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:channel",
           methodEffect: { kind: "open" },
           methodCapability: "workspace-service:channel",
@@ -2760,6 +3206,10 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:gad.workspace",
           serviceBinding: "declared",
           methodEffect: {
@@ -2832,6 +3282,10 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:flowboard-store",
           serviceBinding: { declaredFor: ["panels/flowboard"] },
           methodEffect: { kind: "open" },
@@ -2905,6 +3359,10 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:models",
           methodEffect: { kind: "open" },
           methodTier: "open",
@@ -3029,6 +3487,10 @@ describe("RpcServer relay behavior", () => {
       isCodeApproved: () => false,
       resolveWorkspaceDirectAuthority: async () => [
         {
+          methodWebsite: {
+            kind: "eligible",
+            rationale: "Explicit website receiver policy for this fixture.",
+          } as const,
           capability: "workspace-service:gad.workspace",
           methodEffect: { kind: "open" },
           methodTier: "open",
@@ -3146,6 +3608,10 @@ describe("RpcServer relay behavior", () => {
     } as const;
 
     const workspaceAuthority = {
+      methodWebsite: {
+        kind: "eligible",
+        rationale: "Explicit website receiver policy for this fixture.",
+      } as const,
       capability: "workspace-service:development",
       serviceBinding: "declared" as const,
       methodEffect: {
@@ -5758,5 +6224,72 @@ describe("RpcServer native process sessions", () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+describe("website dynamic endpoint admission", () => {
+  it("requires connection and an explicit live receiver declaration for each delivery kind", async () => {
+    let connected = true;
+    const { server, entityCache } = createServer({
+      websiteDocuments: {
+        fact: () =>
+          connected
+            ? {
+                subject: "website:subject",
+                userId: "user:user-1",
+                workspaceId: "test-workspace",
+                origin: "https://example.com",
+                binding: { subject: "website:subject", generation: 1, documentId: "document-1" },
+                connected: true,
+              }
+            : null,
+      },
+    });
+    entityCache._onActivate(
+      makeRecord("panel:website", "panel", { repoPath: "browser:https://example.com" })
+    );
+    const receiver = createClient("panel:nav-b");
+    const host = testServer(server);
+    host.connections.addClient(receiver);
+    const allowed = (kind: "method" | "stream" = "method", method = "run") =>
+      host.checkRelayAuth("panel:website", "panel", "panel:nav-b", method, kind).ok;
+    expect(allowed()).toBe(false);
+    const declaration: import("@vibestudio/rpc").RpcExposure = {
+      type: "exposure",
+      entries: [
+        {
+          name: "run",
+          kind: "method",
+          website: { kind: "eligible", rationale: "Accept this bounded website operation." },
+        },
+        {
+          name: "run",
+          kind: "stream",
+          website: { kind: "closed", reason: "The private stream is not published." },
+        },
+        {
+          name: "changed",
+          kind: "event",
+          website: { kind: "eligible", rationale: "Consume public change notifications." },
+        },
+      ],
+    };
+    const envelope = envelopeFromMessage({
+      selfId: "panel:nav-b",
+      from: "panel:nav-b",
+      target: "main",
+      message: declaration,
+    });
+    await host.handleRpc(receiver, declaration, envelope);
+    expect(receiver.ws.close).not.toHaveBeenCalled();
+    expect(allowed()).toBe(true);
+    expect(allowed("stream")).toBe(false);
+    expect(allowed("method", "__event:changed")).toBe(true);
+    connected = false;
+    expect(allowed()).toBe(false);
+    connected = true;
+    host.connections.removeClient(receiver);
+    host.connections.addClient(createClient("panel:nav-b"));
+    expect(allowed()).toBe(false);
   });
 });

@@ -135,7 +135,7 @@ describe("BrowserImportCoordinator", () => {
       hostId: "desktop-a",
       sourceId: "source-a",
       dataTypes: ["bookmarks", "bookmarks"],
-    });
+    }, "public-operation");
     const completed = await coordinator.waitForJob(identity, started.jobId);
     expect(completed.phase).toBe("complete");
     expect(completed.requestedDataTypes).toEqual(["bookmarks"]);
@@ -175,11 +175,15 @@ describe("BrowserImportCoordinator", () => {
 
     let accepted = false;
     const starting = coordinator
-      .start(identity, {
-        hostId: "desktop-a",
-        sourceId: "source-a",
-        dataTypes: ["bookmarks"],
-      })
+      .start(
+        identity,
+        {
+          hostId: "desktop-a",
+          sourceId: "source-a",
+          dataTypes: ["bookmarks"],
+        },
+        "public-operation"
+      )
       .then((job) => {
         accepted = true;
         return job;
@@ -221,11 +225,15 @@ describe("BrowserImportCoordinator", () => {
 
     let accepted = false;
     const starting = coordinator
-      .start(identity, {
-        hostId: "desktop-a",
-        sourceId: "source-a",
-        dataTypes: ["bookmarks"],
-      })
+      .start(
+        identity,
+        {
+          hostId: "desktop-a",
+          sourceId: "source-a",
+          dataTypes: ["bookmarks"],
+        },
+        "public-operation"
+      )
       .then((job) => {
         accepted = true;
         return job;
@@ -263,7 +271,7 @@ describe("BrowserImportCoordinator", () => {
       hostId: "desktop-a",
       sourceId: "source-a",
       dataTypes: ["bookmarks"],
-    });
+    }, "public-operation");
     await vi.waitFor(() => expect(backing.jobs.get(started.jobId)?.phase).toBe("reconciling"));
 
     let completed = false;
@@ -302,7 +310,7 @@ describe("BrowserImportCoordinator", () => {
         hostId: "desktop-a",
         sourceId: "source-a",
         dataTypes: ["bookmarks"],
-      })
+      }, "public-operation")
     ).rejects.toThrow("durable store unavailable");
 
     expect(coordinator.listJobs(identity)[0]).toMatchObject({

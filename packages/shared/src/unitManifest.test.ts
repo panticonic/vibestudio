@@ -38,7 +38,7 @@ describe("validateUnitManifest", () => {
             activationEvents: ["*"],
             dependencyMode: "external",
             methodAuthority: {
-              invoke: { effect: { kind: "open" } },
+              invoke: { website: { kind: "eligible", rationale: "Explicit extension fixture contract." },  effect: { kind: "open" } },
             },
             providerContracts: {
               gitInterop: { methods: ["upstreamStatus", "pushUpstream"] },

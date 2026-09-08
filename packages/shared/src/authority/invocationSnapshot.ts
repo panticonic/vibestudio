@@ -16,6 +16,8 @@ export function sha256Canonical(value: unknown): string {
 export function createInvocationSnapshot(input: InvocationSnapshotInput): InvocationSnapshot {
   return {
     v: 2,
+    ...(input.initiatingWebsite ? { initiatingWebsite: { ...input.initiatingWebsite, binding: { ...input.initiatingWebsite.binding } } } : {}),
+    ...(input.subjectBinding ? { subjectBinding: { ...input.subjectBinding } } : {}),
     ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     ...(input.sourceWorkspaceId ? { sourceWorkspaceId: input.sourceWorkspaceId } : {}),
     service: input.service,
@@ -58,6 +60,8 @@ export function createInvocationSnapshot(input: InvocationSnapshotInput): Invoca
 export function invocationSnapshotDigest(snapshot: InvocationSnapshot): string {
   const digestFields = {
     v: snapshot.v,
+    ...(snapshot.initiatingWebsite ? { initiatingWebsite: snapshot.initiatingWebsite } : {}),
+    ...(snapshot.subjectBinding ? { subjectBinding: snapshot.subjectBinding } : {}),
     ...(snapshot.workspaceId ? { workspaceId: snapshot.workspaceId } : {}),
     ...(snapshot.sourceWorkspaceId ? { sourceWorkspaceId: snapshot.sourceWorkspaceId } : {}),
     service: snapshot.service,

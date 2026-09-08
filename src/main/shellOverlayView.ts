@@ -210,7 +210,6 @@ export class ShellOverlayView {
 
   bringToFront(): void {
     if (!this.window || !this.view || this.view.webContents.isDestroyed() || !this.visible) return;
-    this.window.contentView.removeChildView(this.view);
     this.window.contentView.addChildView(this.view);
   }
 

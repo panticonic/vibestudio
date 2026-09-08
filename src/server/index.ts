@@ -928,6 +928,7 @@ async function main() {
     isLiveExtension: (callerId) =>
       (extensionHostForGateway?.resolveCodeIdentity(callerId) ?? null) !== null,
     isLiveSystemRuntime: isSystemRuntime,
+    isLiveWebsiteExecution: (runtimeId, website) => websiteDocuments.isLive(runtimeId, website),
   });
   const workerdGatewayToken = randomBytes(32).toString("hex");
   serverLogStore.addSecret(workerdGatewayToken);
@@ -993,6 +994,7 @@ async function main() {
     );
     return {
       ...authorizeVerifiedCaller(caller, {
+        initiatingWebsite: verifiedInitiator(ctx).website,
         workspaceId,
         workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
         workspaceRole: workspaceRoleResolver(caller.subject),
@@ -3341,6 +3343,50 @@ async function main() {
       eventService,
     })
   );
+  const { WebsiteDocuments } = await import("./services/websiteDocuments.js");
+  const { createWebsiteHostingService } = await import("./services/websiteHostingService.js");
+  const { isInteractiveChrome } = await import("./services/chromeTrust.js");
+  const websiteChromeTrust = {
+    hasAppCapability: (callerId: string, capability: AppCapability) =>
+      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+  };
+  const websiteDocuments = new WebsiteDocuments({
+    workspaceId,
+    grants: capabilityGrantStore,
+    approvals: approvalQueue,
+    isHostForRuntime: (hostId, runtimeId, user) =>
+      membershipEntryGate(user) &&
+      entityCache.resolveActive(runtimeId)?.source.repoPath.startsWith("browser:") === true &&
+      panelRuntimeCoordinator.resolvePresentationCallerForRuntime(runtimeId) === hostId,
+    retireRuntime: async (runtimeId) => {
+      await rpcServerForGateway?.retireCaller(runtimeId);
+    },
+    changed: (runtimeId, connected, documentId, userId) => {
+      eventService.emitProjected("website:connection-changed", (owner) =>
+        owner.userId === userId &&
+        isInteractiveChrome(
+          {
+            runtime: { id: owner.callerId, kind: owner.callerKind },
+          },
+          websiteChromeTrust
+        )
+          ? {
+              runtimeId,
+              connected,
+              documentId,
+              slotId: panelRuntimeCoordinator.getLease(runtimeId)?.slotId ?? null,
+            }
+          : undefined
+      );
+    },
+  });
+  container.registerRpc(
+    createWebsiteHostingService(
+      websiteDocuments,
+      (runtimeId) => panelRuntimeCoordinator.getLease(runtimeId)?.slotId ?? null,
+      websiteChromeTrust
+    )
+  );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
   container.registerRpc(createCorsApprovalService());
   // ── Relay backhaul: OAuth callbacks + third-party webhooks ride one
@@ -4830,13 +4876,15 @@ async function main() {
         // Membership entry gate (WP2 §4): refuse a non-member of this child's
         // workspace at auth time. Undefined (no-op) in local/dev/hub mode.
         membershipGate: membershipEntryGate,
+        websiteDocuments,
         assertWorkspaceRpcAccess: (input) =>
           assertWorkspaceRpcAccess({
             ...input,
-            destinationWorkspaceId: workspaceId,
+            destinationWorkspaceId: input.destinationWorkspaceId ?? workspaceId,
             identity: identityDb,
             membership: membershipStore,
           }),
+        workspaceChildHub,
         workspaceRoleResolver,
         describeCapability,
         contextIntegrityFactForSession: (sessionId, caller) =>
@@ -5120,6 +5168,10 @@ async function main() {
                 : {}),
               methodTier,
               methodCrossWorkspace: catalogMethod?.access?.crossWorkspace === true,
+              methodWebsite: catalogMethod?.website ?? {
+                kind: "closed",
+                reason: "Receiver has no reviewed website contract.",
+              },
               ...(catalogMethod?.execution ? { methodExecution: catalogMethod.execution } : {}),
               presentation: service.presentation,
               title: service.title ?? service.name,
@@ -5212,6 +5264,7 @@ async function main() {
       return { server };
     },
     async stop(instance: { server: import("./rpcServer.js").RpcServer }) {
+      await websiteDocuments.close();
       await instance?.server?.stop();
     },
   });
@@ -6031,6 +6084,28 @@ async function main() {
             const stateHash = await workspaceVcs.resolveContextState(contextId);
             const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
             return buildWorkspaceDeclarations(config);
+          },
+          canDiscoverCrossWorkspaceMethod: (ctx, { target, operation }) => {
+            try {
+              assertWorkspaceRpcAccess({
+                caller: ctx.caller,
+                destinationWorkspaceId: workspaceId,
+                target,
+                operation,
+                purpose: "discover",
+                identity: identityDb,
+                membership: membershipStore,
+              });
+              return true;
+            } catch (error) {
+              if (
+                error instanceof Error &&
+                (error as Error & { code?: string }).code === "EACCES"
+              ) {
+                return false;
+              }
+              throw error;
+            }
           },
           prepareRuntimeImage: (source, buildRef) => {
             void buildSystemInst

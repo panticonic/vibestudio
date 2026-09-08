@@ -74,6 +74,7 @@ export type AccountProfileUpdate = z.infer<typeof accountProfileUpdateSchema>;
 
 export const accountMethods = defineServiceMethods({
   getProfile: {
+    website: {"kind":"closed","reason":"Account and membership administration belongs to trusted workspace UI."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -90,6 +91,7 @@ export const accountMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   resolveProfiles: {
+    website: {"kind":"closed","reason":"Account and membership administration belongs to trusted workspace UI."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -106,6 +108,7 @@ export const accountMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   isMember: {
+    website: {"kind":"closed","reason":"Account and membership administration belongs to trusted workspace UI."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -122,6 +125,7 @@ export const accountMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listWorkspaceMembers: {
+    website: {"kind":"closed","reason":"Account and membership administration belongs to trusted workspace UI."} as const,
     tier: {
       tier: "open",
       session: "family",

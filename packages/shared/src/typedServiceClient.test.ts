@@ -18,15 +18,22 @@ import {
 import { relationship, requirementForPrincipals } from "./authorization.js";
 
 const methods = defineServiceMethods({
-  ping: { args: z.tuple([]), returns: z.literal("pong") },
-  echo: { args: z.tuple([z.string(), z.number().optional()]) },
-  "units.list": { args: z.tuple([]), returns: z.array(z.object({ name: z.string() })) },
+  ping: {
+    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.literal("pong") } as const,
+  echo: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([z.string(), z.number().optional()]) },
+  "units.list": {
+    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.array(z.object({ name: z.string() })) } as const,
   "units.logs": {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
     args: z.tuple([z.string(), z.object({ limit: z.number() }).optional()]),
   },
-  "hostTargets.selection.get": { args: z.tuple([z.string()]) },
-  voidResult: { args: z.tuple([]), returns: z.void() },
-  nullableResult: { args: z.tuple([]), returns: z.string().nullable() },
+  "hostTargets.selection.get": {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([z.string()]) },
+  voidResult: {
+    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.void() } as const,
+  nullableResult: {
+    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."}, args: z.tuple([]), returns: z.string().nullable() } as const,
 });
 
 describe("createTypedServiceClient", () => {
@@ -63,6 +70,7 @@ describe("createTypedServiceClient", () => {
   it("renders object request fields in outbound schema errors", async () => {
     const objectMethods = defineServiceMethods({
       inspect: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
         args: z.tuple([
           z.object({
             state: z.object({ eventId: z.string() }),
@@ -96,8 +104,10 @@ describe("createTypedServiceClient", () => {
 
   it("rejects method names that collide with a group prefix", () => {
     const colliding = defineServiceMethods({
-      "units.list": { args: z.tuple([]) },
-      units: { args: z.tuple([]) },
+      "units.list": {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]) },
+      units: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]) },
     });
     expect(() => createTypedServiceClient("demo", colliding, async () => null)).toThrow(/collides/);
   });

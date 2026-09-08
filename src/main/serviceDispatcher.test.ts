@@ -49,8 +49,20 @@ function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
     name,
     authority: { principals: ["user", "code", "host"] },
     methods: {
-      hello: { args: z.array(z.unknown()) },
-      run: { args: z.array(z.unknown()) },
+      hello: {
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver policy for this test fixture.",
+        } as const,
+        args: z.array(z.unknown()),
+      },
+      run: {
+        website: {
+          kind: "eligible",
+          rationale: "Explicit receiver policy for this test fixture.",
+        } as const,
+        args: z.array(z.unknown()),
+      },
     },
     handler,
   };
@@ -99,6 +111,10 @@ describe("ServiceDispatcher", () => {
       authority: { principals: ["session"] },
       methods: {
         run: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([]),
           access: { sensitivity: "read" },
           capability: "test:parked-authority",
@@ -294,7 +310,13 @@ describe("ServiceDispatcher", () => {
       name: "typed",
       authority: { principals: ["user"] },
       methods: {
-        greet: { args: z.tuple([z.string()]) },
+        greet: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.string()]),
+        },
       },
       handler: async (_ctx, _method, args) => `hello ${args[0]}`,
     });
@@ -314,8 +336,22 @@ describe("ServiceDispatcher", () => {
       name: "typedReturn",
       authority: { principals: ["user"] },
       methods: {
-        ok: { args: z.tuple([]), returns: z.object({ count: z.number() }) },
-        bad: { args: z.tuple([]), returns: z.object({ count: z.number() }) },
+        ok: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          },
+          args: z.tuple([]),
+          returns: z.object({ count: z.number() }),
+        } as const,
+        bad: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          },
+          args: z.tuple([]),
+          returns: z.object({ count: z.number() }),
+        } as const,
       },
       handler: async (_ctx, method) => (method === "ok" ? { count: 1 } : { count: "one" }),
     });
@@ -333,9 +369,30 @@ describe("ServiceDispatcher", () => {
       name: "voidReturn",
       authority: { principals: ["user"] },
       methods: {
-        okNull: { args: z.tuple([]), returns: z.void() },
-        okUndefined: { args: z.tuple([]), returns: z.void() },
-        badObject: { args: z.tuple([]), returns: z.object({ count: z.number() }) },
+        okNull: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          },
+          args: z.tuple([]),
+          returns: z.void(),
+        } as const,
+        okUndefined: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          },
+          args: z.tuple([]),
+          returns: z.void(),
+        } as const,
+        badObject: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          },
+          args: z.tuple([]),
+          returns: z.object({ count: z.number() }),
+        } as const,
       },
       handler: async (_ctx, method) => {
         if (method === "okUndefined") return undefined;
@@ -357,7 +414,13 @@ describe("ServiceDispatcher", () => {
       name: "workspace",
       authority: { principals: ["user"] },
       methods: {
-        logs: { args: z.tuple([z.string(), z.object({ limit: z.number() })]) },
+        logs: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.string(), z.object({ limit: z.number() })]),
+        },
       },
       handler: async () => {},
     });
@@ -385,6 +448,10 @@ describe("ServiceDispatcher", () => {
       authority: { principals: ["user"] },
       methods: {
         logs: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([z.string(), z.object({ limit: z.number() })]),
           argumentNames: ["unit", "options"],
         },
@@ -429,7 +496,13 @@ describe("ServiceDispatcher", () => {
       name: "norm",
       authority: { principals: ["user"] },
       methods: {
-        m: { args: z.tuple([z.string(), z.number().optional(), z.boolean().optional()]) },
+        m: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.string(), z.number().optional(), z.boolean().optional()]),
+        },
       },
       handler: async (_ctx, _method, args) => {
         seen = args;
@@ -457,6 +530,10 @@ describe("ServiceDispatcher", () => {
       authority: { principals: ["user"] },
       methods: {
         readFile: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.union([
             z.tuple([z.string(), z.string().optional()]),
             z.tuple([z.string(), z.string(), z.string().optional()]),
@@ -523,7 +600,14 @@ describe("ServiceDispatcher", () => {
       name: "svc",
       authority: { principals: ["user"] },
       methods: {
-        doStuff: { args: z.tuple([z.string()]), description: "does stuff" },
+        doStuff: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.string()]),
+          description: "does stuff",
+        },
       },
       handler: async () => {},
     });

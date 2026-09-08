@@ -257,7 +257,8 @@ export abstract class DurableObjectBase {
       }
       return {
         requires: bindMethodCapability(authority.requirement, methodCapability),
-        effect: resolvedEffect,
+        website: wireMethod.website,
+      effect: resolvedEffect,
         tier: tier.tier,
         sensitivity,
         ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
@@ -268,7 +269,8 @@ export abstract class DurableObjectBase {
     if (!codeSource || !authority.principals.includes("code")) {
       return {
         principals: authority.principals,
-        effect: resolvedEffect,
+        website: wireMethod.website,
+      effect: resolvedEffect,
         tier: tier.tier,
         sensitivity,
         ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
@@ -290,6 +292,7 @@ export abstract class DurableObjectBase {
           value: codeSource,
         })
       ),
+      website: wireMethod.website,
       effect: resolvedEffect,
       tier: tier.tier,
       sensitivity,
@@ -493,7 +496,12 @@ export abstract class DurableObjectBase {
       // the open relay; a forgotten `@rpc` fails loud ("not exposed"). The decorator allow-list is
       // the boundary, including the framework methods declared on this base.
       connectionless.client.exposeAll(
-        collectExposableMethods(this, rpcExposedMethodNames(this), Object.prototype)
+        collectExposableMethods(this, rpcExposedMethodNames(this), Object.prototype),
+        Object.fromEntries([...rpcExposedMethodNames(this)].map(name => {
+          const policy = this.rpcAuthorityDeclaration(name, (this.constructor as typeof DurableObjectBase).rpcMethods?.[name]);
+          if (!policy) throw new Error(`RPC method ${name} lacks an authority declaration`);
+          return [name, policy.website];
+        })),
       );
       this.connectionless = connectionless;
     }
@@ -1165,7 +1173,7 @@ export abstract class DurableObjectBase {
     return [];
   }
 
-  @rpc({
+  @rpc({ website: {"kind":"closed","reason":"This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation."},
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -1178,7 +1186,7 @@ export abstract class DurableObjectBase {
   /** Finite delivery into an explicitly resident in-memory operation. The
    * durable sender retains and retries its mailbox row while no receiver is
    * active; channel membership itself owns no stream or residency. */
-  @rpc({
+  @rpc({ website: {"kind":"closed","reason":"This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation."},
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -1188,12 +1196,12 @@ export abstract class DurableObjectBase {
     return acceptResidentChannelDelivery(this.rpcSelfId, input);
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({ website: {"kind":"closed","reason":"This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async acceptChannelInvocation(input: ResidentChannelInvocationInput): Promise<unknown> {
     return acceptResidentChannelInvocation(this.rpcSelfId, input);
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({ website: {"kind":"closed","reason":"This receiver owns workspace orchestration or retained workspace data; websites require a reviewed bounded operation."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async cancelChannelInvocation(input: ResidentChannelCancellationInput): Promise<unknown> {
     return cancelResidentChannelInvocation(this.rpcSelfId, input);
   }

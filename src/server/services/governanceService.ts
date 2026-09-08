@@ -29,6 +29,11 @@ export function createGovernanceService(deps: {
 }): ServiceDefinition {
   const methods = defineServiceMethods({
     list: {
+      website: {
+        kind: "closed",
+        reason:
+          "The governanceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       capability: "governance.read",
       tier: {
         tier: "gated",

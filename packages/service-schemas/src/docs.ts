@@ -1,3 +1,4 @@
+import { PRINCIPAL_KINDS } from "@vibestudio/rpc";
 /**
  * Wire schema for the agent-facing "docs" capability-catalog service.
  *
@@ -75,11 +76,15 @@ const READONLY_ACCESS = {
 // service): the per-service view used by docs.listServices / docs.describeService
 // and by eval's help() + the CLI `services` command. ──
 const serializedAuthoritySchema = z.object({
-  principals: z.array(z.enum(["host", "user", "code", "session", "mission"])),
+  principals: z.array(z.enum(PRINCIPAL_KINDS)),
   description: z.string().optional(),
 });
 
 export const serializedServiceMethodSchema = z.object({
+  website: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("closed"), reason: z.string().min(1) }),
+    z.object({ kind: z.literal("eligible"), rationale: z.string().min(1) }),
+  ]),
   description: z.string().optional(),
   authority: z.record(z.unknown()).optional(),
   access: z.record(z.unknown()).optional(),
@@ -103,6 +108,7 @@ export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema
 
 export const docsMethods = defineServiceMethods({
   search: {
+    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -120,6 +126,7 @@ export const docsMethods = defineServiceMethods({
     examples: [{ args: ["store a blob and get a digest", { limit: 5 }] }],
   },
   describe: {
+    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -137,6 +144,7 @@ export const docsMethods = defineServiceMethods({
     examples: [{ args: ["service:blobstore.putText"] }],
   },
   getSchema: {
+    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -157,6 +165,7 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   listSurfaces: {
+    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -171,6 +180,7 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   listServices: {
+    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -186,6 +196,7 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   describeService: {
+    website: {"kind":"eligible","rationale":"Discovery must project only methods and metadata available to this connected website."} as const,
     tier: {
       tier: "open",
       session: "family",

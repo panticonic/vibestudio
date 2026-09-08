@@ -21,6 +21,7 @@ export function productBuiltinDirectAuthority(input: {
   methodEffect: RpcAuthorityEffect;
   methodCapability: string;
   methodTier: "open" | "gated" | "critical";
+  methodWebsite: import("@vibestudio/rpc").WebsiteMethodPolicy;
   principals: readonly PrincipalKind[];
   presentation: {
     domain: import("@vibestudio/shared/authority/authorityDomains").AuthorityDomainId;
@@ -42,6 +43,7 @@ export function productBuiltinDirectAuthority(input: {
     methodEffect: method.effect as RpcAuthorityEffect,
     methodCapability: method.capability,
     methodTier: method.tier,
+    methodWebsite: method.website,
     principals: service.principals as readonly PrincipalKind[],
     presentation: service.presentation,
     title: service.title,

@@ -149,7 +149,10 @@ function makeHost(
         extension: {
           activationEvents: overrides.activationEvents ?? ["*"],
           methodAuthority: {
-            confirm: { effect: { kind: "open" } },
+            confirm: {
+              website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+              effect: { kind: "open" },
+            },
           },
           providerContracts: overrides.sourceProviderContracts ?? {},
           ...(overrides.buildTargets
@@ -221,7 +224,10 @@ function makeHost(
           providerContracts:
             overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {},
           methodAuthority: {
-            confirm: { effect: { kind: "open" as const } },
+            confirm: {
+              website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+              effect: { kind: "open" as const },
+            },
           },
           externalDeps: {},
         },
@@ -264,7 +270,13 @@ function makeHost(
                       {})
                     : (overrides.activeProviderContracts ?? {}),
                 methodAuthority: {
-                  confirm: { effect: { kind: "open" as const } },
+                  confirm: {
+                    website: {
+                      kind: "eligible",
+                      rationale: "Explicit extension fixture contract.",
+                    },
+                    effect: { kind: "open" as const },
+                  },
                 },
                 externalDeps: overrides.activeExternalDeps ?? {},
               },
@@ -1550,7 +1562,9 @@ describe("ExtensionHost activation", () => {
     const prepare =
       host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
     let settled = false;
-    const preparation = prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []]);
+    const preparation = Promise.resolve(
+      prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []])
+    );
     void preparation.then(
       () => {
         settled = true;
@@ -1841,11 +1855,20 @@ describe("ExtensionHost activation", () => {
     }
     (
       activeBuild.metadata.details as {
-        methodAuthority: Record<string, { effect: { kind: "open" } }>;
+        methodAuthority: Record<
+          string,
+          { website: import("@vibestudio/rpc").WebsiteMethodPolicy; effect: { kind: "open" } }
+        >;
       }
     ).methodAuthority = {
-      first: { effect: { kind: "open" } },
-      second: { effect: { kind: "open" } },
+      first: {
+        website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+        effect: { kind: "open" },
+      },
+      second: {
+        website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+        effect: { kind: "open" },
+      },
     };
     vi.mocked(buildSystem.getBuildByKey).mockReturnValue(activeBuild);
     vi.spyOn(host.processes, "isActive").mockReturnValue(true);

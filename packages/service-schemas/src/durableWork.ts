@@ -48,6 +48,7 @@ export type DurableWorkDriverInspection = z.infer<typeof durableWorkDriverInspec
 
 export const durableWorkMethods = defineServiceMethods({
   inspect: {
+    website: {"kind":"closed","reason":"The durableWork receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

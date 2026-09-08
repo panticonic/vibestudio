@@ -1091,6 +1091,7 @@ export type CredentialAuditParams = AuditParams;
 
 export const credentialsMethods = defineServiceMethods({
   storeCredential: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1130,6 +1131,7 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   connect: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.connect",
     tier: {
       tier: "open",
@@ -1156,6 +1158,7 @@ export const credentialsMethods = defineServiceMethods({
     access: CONNECT_ACCESS,
   },
   configureClient: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "account-providers.configure",
     tier: {
       tier: "open",
@@ -1198,6 +1201,7 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   requestCredentialInput: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.connect",
     tier: {
       tier: "open",
@@ -1242,6 +1246,7 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   getClientConfigStatus: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1258,6 +1263,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   deleteClientConfig: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "account-providers.delete",
     tier: {
       tier: "critical",
@@ -1289,6 +1295,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   forwardOAuthCallback: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1314,6 +1321,7 @@ export const credentialsMethods = defineServiceMethods({
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
   cancelOAuth: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1338,6 +1346,7 @@ export const credentialsMethods = defineServiceMethods({
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
   listStoredCredentials: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1354,6 +1363,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
   summarizeStoredCredentials: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1370,6 +1380,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
   inspectStoredCredentials: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "credentials.audit.read",
     tier: {
       tier: "gated",
@@ -1395,6 +1406,7 @@ export const credentialsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   revokeCredential: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.disconnect",
     tier: {
       tier: "critical",
@@ -1426,6 +1438,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ credentialId: "cred-123" }] }],
   },
   resolveCredential: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1442,6 +1455,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ url: "https://api.example.test/v1" }] }],
   },
   proxyFetch: {
+    website: {"kind":"eligible","rationale":"Proxy use keeps secrets in the host and requires consent for the selected credential and destination."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1459,6 +1473,7 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ url: "https://api.example.com/v1/me", method: "GET" }] }],
   },
   proxyGitHttp: {
+    website: {"kind":"eligible","rationale":"Proxy use keeps secrets in the host and requires consent for the selected credential and destination."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1478,6 +1493,7 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   completeCapture: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "accounts.connect",
     tier: {
       tier: "gated",
@@ -1503,6 +1519,7 @@ export const credentialsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   audit: {
+    website: {"kind":"closed","reason":"The credentials receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "credentials.audit.read",
     tier: {
       tier: "gated",

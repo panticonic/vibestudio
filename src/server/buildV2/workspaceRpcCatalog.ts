@@ -21,7 +21,7 @@ import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient
 
 export type WorkspaceRpcSchemaMetadata = Pick<
   ServiceMethodSchemas[string],
-  "authority" | "tier" | "access" | "directEffect" | "execution" | "crossWorkspace"
+  "website" | "authority" | "tier" | "access" | "directEffect" | "execution" | "crossWorkspace"
 >;
 
 function authorityPrincipals(
@@ -59,6 +59,7 @@ export interface WorkspaceRpcMethodDoc {
         capability: string;
         resource: { kind: "receiver-object" };
       };
+  website: import("@vibestudio/rpc").WebsiteMethodPolicy;
   access?: {
     principals?: string[];
     tier?: "open" | "gated" | "critical";
@@ -212,6 +213,33 @@ function effectResourceOf(
   throw new Error(`${label} has an invalid literal resource selector`);
 }
 
+function websitePolicyOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc["website"] {
+  const object = call.arguments[0];
+  const property =
+    object && ts.isObjectLiteralExpression(object)
+      ? object.properties.find((property) => propertyName(property) === "website")
+      : undefined;
+  if (
+    !property ||
+    !ts.isPropertyAssignment(property) ||
+    !ts.isObjectLiteralExpression(property.initializer)
+  )
+    throw new Error(`${label} requires a literal website exposure decision`);
+  const fields = new Map(
+    property.initializer.properties.flatMap((field) =>
+      ts.isPropertyAssignment(field)
+        ? [[propertyName(field), literalString(field.initializer)] as const]
+        : []
+    )
+  );
+  const kind = fields.get("kind");
+  if (kind === "closed" && fields.get("reason")?.trim())
+    return { kind, reason: fields.get("reason")! };
+  if (kind === "eligible" && fields.get("rationale")?.trim())
+    return { kind, rationale: fields.get("rationale")! };
+  throw new Error(`${label} requires an explained website exposure decision`);
+}
+
 function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
   const object = call.arguments[0];
   if (!object || !ts.isObjectLiteralExpression(object)) return undefined;
@@ -335,6 +363,7 @@ export function collectWorkspaceRpcCatalog(
             const description = methodDescription(member);
             const label = `${path.relative(absoluteWorkerSourcePath, file)}:${name}`;
             let access: WorkspaceRpcMethodDoc["access"];
+            let website: WorkspaceRpcMethodDoc["website"];
             let effect: WorkspaceRpcMethodDoc["effect"];
             let execution: WorkspaceRpcMethodDoc["execution"];
             let handleProduction: { capability: string } | undefined;
@@ -361,14 +390,17 @@ export function collectWorkspaceRpcCatalog(
                 ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
                 ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
               };
+              website = schema.website;
               effect = schema.directEffect;
               execution = schema.execution;
             } else {
+              website = websitePolicyOf(decorator.call, label);
               access = accessOf(decorator.call);
               effect = effectOf(decorator.call, label);
               handleProduction = handleProductionOf(decorator.call, label);
             }
             methods.push({
+              website,
               className: node.name.text,
               name,
               signature: signatureOf(member, source),

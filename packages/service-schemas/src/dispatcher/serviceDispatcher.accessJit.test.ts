@@ -34,11 +34,13 @@ function makeDispatcher(): ServiceDispatcher {
     authority: { principals: ["code", "host"] },
     methods: {
       put: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
         description: "Store a value.",
         args: z.tuple([z.string()]),
         examples: [{ args: ["hello"] }],
       },
       restricted: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
         description: "Restricted op.",
         args: z.tuple([]),
         authority: { principals: ["host"] },
@@ -54,11 +56,13 @@ function makeDispatcher(): ServiceDispatcher {
         },
       },
       workerOnly: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
         description: "Worker only.",
         args: z.tuple([]),
         authority: { principals: ["code"] },
       },
       peek: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
         description: "Read-only peek.",
         args: z.tuple([]),
         access: { sensitivity: "read" },
@@ -157,6 +161,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         write: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           description: "Write a thing",
           args: z.tuple([z.string()]),
           access: {
@@ -213,6 +218,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code", "session"] },
       methods: {
         preflight: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           args: z.tuple([
             z.object({
               service: z.string(),
@@ -233,6 +239,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         write: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           args: z.tuple([]),
           access: { sensitivity: "write" },
         },
@@ -305,6 +312,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         resolve: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           args: z.tuple([z.string()]),
           authority: {
             requirement: requirementForPrincipals(["code"], methodCapability),
@@ -409,6 +417,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         resolve: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           args: z.tuple([]),
           authority: {
             requirement: requirementForPrincipals(["code"], methodCapability),
@@ -464,6 +473,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         use: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           args: z.tuple([z.string()]),
           authority: {
             requirement: requirementForPrincipals(["code"], "service:payload.use"),
@@ -540,6 +550,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       authority: { principals: ["code"] },
       methods: {
         use: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
           args: z.tuple([]),
           authority: {
             requirement: requirementForPrincipals(["code"], "service:deniedPayload.use"),
@@ -620,7 +631,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     d.registerService({
       name: "acquisition",
       authority: { principals: ["code", "user"] },
-      methods: { act: { args: z.tuple([]), access: { sensitivity: "write" } } },
+      methods: { act: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]), access: { sensitivity: "write" } } },
       handler: vi.fn(async () => "effect"),
     });
     d.markInitialized();
@@ -698,7 +710,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     d.registerService({
       name: "preauthorized",
       authority: { principals: ["code"] },
-      methods: { act: { args: z.tuple([]), access: { sensitivity: "write" } } },
+      methods: { act: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, args: z.tuple([]), access: { sensitivity: "write" } } },
       handler,
     });
     d.markInitialized();
@@ -738,8 +751,10 @@ describe("a part waiting on a review that is already open", () => {
       name: "dry",
       authority: { principals: ["code"] },
       methods: {
-        write: { description: "Write", args: z.tuple([z.string()]) },
-        read: { description: "Read", args: z.tuple([]) },
+        write: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, description: "Write", args: z.tuple([z.string()]) },
+        read: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const, description: "Read", args: z.tuple([]) },
       },
       handler: vi.fn(async () => "effect"),
     });

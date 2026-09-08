@@ -1,3 +1,4 @@
+import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";
 import { responseFromDecodedStream } from "./protocol/streamCodec.js";
 import { isLocalRpcDestination, rpcDestinationMatchesCaller } from "./destination.js";
 import type { RpcDestination } from "./types.js";
@@ -14,6 +15,7 @@ import type {
   RpcContextMethods,
   RpcContextStreamingHandler,
   RpcEnvelope,
+  RpcExposure,
   RpcEvent,
   RpcEventContext,
   RpcMessage,
@@ -37,6 +39,8 @@ import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RemoteRpcError, RpcBoundaryError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
 import {
   bindExecutionSession,
+  bindInvocationParent,
+  invocationParentFor,
   mergeRpcOptions,
   executionSessionNonceFor,
   type InternalRpcEvent,
@@ -137,7 +141,7 @@ function createPeer<
     id: targetId,
     ...(options?.destination ? { destination: options.destination } : {}),
     call: createCallProxy<TMethods>((method, args) => client.call(targetId, method, args, options)),
-    on(event, listener) {
+    on(event, listener, website) {
       return client.on(event, (ev) => {
         if (
           ev.caller.callerId === targetId &&
@@ -145,7 +149,7 @@ function createPeer<
         ) {
           listener(ev as never);
         }
-      });
+      }, website);
     },
     emit: (event, payload) => client.emit(targetId, event, payload, options),
     withContract: (_contract, _role) => createPeer(client, targetId, options) as never,
@@ -215,6 +219,29 @@ export function createInternalRpcClient(config: InternalRpcClientConfig): RpcCli
 }
 
 function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
+  let retired = false;
+  const retiredError = (): Error => new Error(`RPC client "${config.selfId}" has been retired`);
+  const requireActive = (): void => {
+    if (retired) throw retiredError();
+  };
+  const operationSignal = (
+    signal?: AbortSignal | null
+  ): { signal: AbortSignal | null; cleanup: () => void } => {
+    if (!config.lifetime) return { signal: signal ?? null, cleanup: () => {} };
+    if (!signal) return { signal: config.lifetime, cleanup: () => {} };
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    config.lifetime.addEventListener("abort", abort, { once: true });
+    signal.addEventListener("abort", abort, { once: true });
+    if (config.lifetime.aborted || signal.aborted) abort();
+    return {
+      signal: controller.signal,
+      cleanup: () => {
+        config.lifetime?.removeEventListener("abort", abort);
+        signal.removeEventListener("abort", abort);
+      },
+    };
+  };
   const selfCaller = callerForSelf(config.selfId, config.callerKind, config.workspaceId);
   const baseProvenance = (config.provenance?.length ? config.provenance : [selfCaller]).map(
     publicCaller
@@ -223,11 +250,120 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     string,
     (request: RpcRequestContext) => unknown | Promise<unknown>
   >();
+  const exposurePolicies = new Map<string, RpcExposure["entries"][number]>();
+  function publishExposures(): void {
+    if (config.publishExposures) void deliverEnvelope(makeEnvelope("main", {
+      type: "exposure", entries: [...exposurePolicies.values()],
+    })).catch(error => console.error("RPC exposure publication failed", error));
+  }
+  function declareExposure(name: string, kind: "method" | "stream" | "event", website: WebsiteMethodPolicy): void {
+    validateWebsiteMethodPolicy(website, name);
+    exposurePolicies.set(`${kind}:${name}`, { name, kind, website: { ...website } });
+  }
   const streamingHandlers = new Map<string, RpcContextStreamingHandler>();
   const eventListeners = new Map<string, Set<(event: RpcEventContext) => void>>();
+  const statusSubscriptions = new Set<{
+    handler: (status: RpcConnectionStatus) => void;
+    unsubscribe: () => void;
+  }>();
+  const settleHeadWithinLifetime = <T>(
+    operation: Promise<T>,
+    disposeLate?: (value: T) => void
+  ): Promise<T> => {
+    if (!config.lifetime) return operation;
+    return new Promise<T>((resolve, reject) => {
+      let aborted = config.lifetime!.aborted;
+      const onAbort = (): void => {
+        aborted = true;
+        reject(retiredError());
+      };
+      if (aborted) reject(retiredError());
+      else config.lifetime!.addEventListener("abort", onAbort, { once: true });
+      operation
+        .then((value) => {
+          if (aborted) disposeLate?.(value);
+          else resolve(value);
+        }, reject)
+        .finally(() => config.lifetime!.removeEventListener("abort", onAbort));
+    });
+  };
+  const responseWithinLifetime = (response: Response, release: () => void): Response => {
+    if (!config.lifetime) {
+      release();
+      return response;
+    }
+    if (!response.body) {
+      release();
+      return response;
+    }
+    return responseFromDecodedStream({
+      status: response.status,
+      statusText: response.statusText,
+      headers: [...response.headers.entries()],
+      finalUrl: response.url,
+      body: bodyWithinLifetime(response.body, release),
+    });
+  };
+  const bodyWithinLifetime = (
+    body: ReadableStream<Uint8Array>,
+    release: () => void = () => {}
+  ): ReadableStream<Uint8Array> => {
+    if (!config.lifetime) {
+      release();
+      return body;
+    }
+    const lifetime = config.lifetime;
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    let ended = false;
+    let onAbort: () => void;
+    const cleanup = (): void => {
+      lifetime.removeEventListener("abort", onAbort);
+      release();
+    };
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        reader = body.getReader();
+        onAbort = () => {
+          if (ended) return;
+          ended = true;
+          void reader.cancel(retiredError()).catch(() => {});
+          controller.error(retiredError());
+          cleanup();
+        };
+        lifetime.addEventListener("abort", onAbort, { once: true });
+        if (lifetime.aborted) onAbort();
+      },
+      async pull(controller) {
+        if (ended) return;
+        try {
+          const next = await reader.read();
+          if (ended) return;
+          if (next.done) {
+            ended = true;
+            cleanup();
+            controller.close();
+          } else {
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          if (ended) return;
+          ended = true;
+          cleanup();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        if (ended) return;
+        ended = true;
+        cleanup();
+        await reader.cancel(reason);
+      },
+    });
+  };
   const observeOutbound = <T>(operation: Promise<T>): Promise<T> => {
-    config.onOutboundOperation?.(operation);
-    return operation;
+    const owned = settleHeadWithinLifetime(operation);
+    config.onOutboundOperation?.(owned);
+    return owned;
   };
   const pendingRequests = new Map<
     string,
@@ -263,11 +399,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   >();
   const activeStreamingHandlers = new Map<
     string,
-    { abort: AbortController; caller: AuthenticatedCaller }
+    { abort: AbortController; caller: AuthenticatedCaller; envelope: RpcEnvelope }
   >();
   const activeRequestHandlers = new Map<
     string,
-    { abort: AbortController; caller: AuthenticatedCaller }
+    { abort: AbortController; caller: AuthenticatedCaller; envelope: RpcEnvelope }
   >();
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? null;
 
@@ -277,6 +413,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     options?: RpcCallOptions | RpcStreamOptions,
     provenance: AuthenticatedCaller[] = baseProvenance
   ): RpcEnvelope {
+    const parent = invocationParentFor(options);
     const executionSessionNonce =
       message.type === "request" || message.type === "stream-request" || message.type === "event"
         ? executionSessionNonceFor(options)
@@ -286,17 +423,17 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     // that happened to start the work: that handler may return while its
     // journaled/background execution is still legitimately running.
     const authorityParentNonce =
-      !executionSessionNonce && (message.type === "request" || message.type === "stream-request")
-        ? config.authorityParentNonce?.()
+      !executionSessionNonce && (message.type === "request" || message.type === "stream-request" || message.type === "event")
+        ? parent?.nonce ?? config.authorityParentNonce?.()
         : undefined;
     const carriedMessage =
       (authorityParentNonce || executionSessionNonce) &&
-      (message.type === "request" || message.type === "stream-request")
+      (message.type === "request" || message.type === "stream-request" || message.type === "event")
         ? ({
             ...message,
             ...(authorityParentNonce ? { authorityParentNonce } : {}),
             ...(executionSessionNonce ? { executionSessionNonce } : {}),
-          } satisfies InternalRpcRequest | InternalRpcStreamRequest)
+          } satisfies InternalRpcRequest | InternalRpcStreamRequest | InternalRpcEvent)
         : executionSessionNonce && message.type === "event"
           ? ({
               ...message,
@@ -308,11 +445,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       target: targetId,
       ...(options?.destination ? { destination: options.destination } : {}),
       delivery: {
-        caller: selfCaller,
+        caller: parent?.caller ?? selfCaller,
         ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
         ...(options?.readOnly ? { readOnly: true } : {}),
       },
-      provenance,
+      provenance: parent?.provenance ? [...parent.provenance] : provenance,
       message: carriedMessage,
     };
   }
@@ -324,26 +461,30 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       ),
       selfCaller
     );
-    return {
+    const parentNonce = (inbound.message as InternalRpcRequest | InternalRpcStreamRequest | InternalRpcEvent).authorityParentNonce;
+    const inheritedOptions = <T extends RpcCallOptions | RpcStreamOptions>(options?: T): T | undefined =>
+      parentNonce ? mergeRpcOptions(options, bindInvocationParent({}, { nonce: parentNonce })) as T : options;
+    const scoped: RpcClient = {
       ...client,
       call: (targetId, method, args, options) =>
-        observeOutbound(callWithProvenance(scopedProvenance, targetId, method, args, options)),
+        observeOutbound(callWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))),
       stream: (targetId, method, args, options) =>
         observeOutbound(
           Promise.resolve().then(() =>
-            streamWithProvenance(scopedProvenance, targetId, method, args, options)
+            streamWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
           )
         ),
       streamReadable: (targetId, method, args, options) =>
         observeOutbound(
           Promise.resolve().then(() =>
-            streamReadableWithProvenance(scopedProvenance, targetId, method, args, options)
+            streamReadableWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
           )
         ),
       emit: (targetId, event, payload, options) =>
-        observeOutbound(emitWithProvenance(scopedProvenance, targetId, event, payload, options)),
-      peer: (targetId, options) => peer(targetId, scopedProvenance, options),
+        observeOutbound(emitWithProvenance(scopedProvenance, targetId, event, payload, inheritedOptions(options))),
+      peer: (targetId, options) => createPeer(scoped, targetId, options),
     };
+    return scoped;
   }
 
   function requestContext(
@@ -372,8 +513,14 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     },
     provenance?: AuthenticatedCaller[]
   ): Promise<void> {
+    requireActive();
     const envelope = makeEnvelope(targetId, message, options, provenance);
-    await deliverEnvelope(envelope, options?.signal);
+    const operation = operationSignal(options?.signal);
+    try {
+      await deliverEnvelope(envelope, operation.signal ?? undefined);
+    } finally {
+      operation.cleanup();
+    }
   }
 
   async function deliverEnvelope(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
@@ -557,6 +704,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   }
 
   function handleRequest(envelope: RpcEnvelope, request: RpcRequest): void {
+    if (retired) return;
     const handler = exposedMethods.get(request.method);
     // A failed response send means the caller's awaiter will hang. We can't
     // recover the delivery here, but the drop MUST be observable rather than
@@ -592,32 +740,42 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     activeRequestHandlers.set(request.requestId, {
       abort,
       caller: publicCaller(envelope.delivery.caller),
+      envelope,
     });
     Promise.resolve()
-      .then(() => handler(requestContext(envelope, request, abort.signal)))
-      .then((result) =>
-        deliverEnvelope(
-          responseEnvelopeFor(envelope, selfCaller, {
-            type: "response",
-            requestId: request.requestId,
-            result,
-          })
-        )
-      )
-      .catch((error) =>
-        deliverEnvelope(
-          responseEnvelopeFor(envelope, selfCaller, {
-            type: "response",
-            requestId: request.requestId,
-            error: error instanceof Error ? error.message : String(error),
-            errorKind: rpcErrorKindOf(error),
-            ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
-            ...(error instanceof Error && typeof (error as ErrorWithCode).code === "string"
-              ? { errorCode: (error as ErrorWithCode).code }
-              : {}),
-            ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
-          })
-        ).catch(logResponseSendFailure)
+      .then(() => {
+        if (activeRequestHandlers.get(request.requestId)?.abort !== abort) return;
+        return handler(requestContext(envelope, request, abort.signal));
+      })
+      .then(
+        (result) => {
+          if (activeRequestHandlers.get(request.requestId)?.abort !== abort) return;
+          activeRequestHandlers.delete(request.requestId);
+          return deliverEnvelope(
+            responseEnvelopeFor(envelope, selfCaller, {
+              type: "response",
+              requestId: request.requestId,
+              result,
+            })
+          ).catch(logResponseSendFailure);
+        },
+        (error) => {
+          if (activeRequestHandlers.get(request.requestId)?.abort !== abort) return;
+          activeRequestHandlers.delete(request.requestId);
+          return deliverEnvelope(
+            responseEnvelopeFor(envelope, selfCaller, {
+              type: "response",
+              requestId: request.requestId,
+              error: error instanceof Error ? error.message : String(error),
+              errorKind: rpcErrorKindOf(error),
+              ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+              ...(error instanceof Error && typeof (error as ErrorWithCode).code === "string"
+                ? { errorCode: (error as ErrorWithCode).code }
+                : {}),
+              ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
+            })
+          ).catch(logResponseSendFailure);
+        }
       )
       .finally(() => {
         if (activeRequestHandlers.get(request.requestId)?.abort === abort) {
@@ -627,6 +785,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   }
 
   function handleStreamRequest(envelope: RpcEnvelope, request: RpcStreamRequest): void {
+    if (retired) return;
     const handler = streamingHandlers.get(request.method);
     const sendFrame = (frameType: number, payload: string): Promise<void> =>
       deliverEnvelope(
@@ -653,8 +812,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     activeStreamingHandlers.set(request.requestId, {
       abort,
       caller: publicCaller(envelope.delivery.caller),
+      envelope,
     });
     const sink = (frame: StreamingMethodFrame): Promise<void> | void => {
+      if (activeStreamingHandlers.get(request.requestId)?.abort !== abort) return;
       if (frame.kind === "head") {
         return sendFrame(
           FRAME_HEAD,
@@ -667,8 +828,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         );
       }
       if (frame.kind === "chunk") return sendFrame(FRAME_DATA, bytesToBase64(frame.bytes));
-      if (frame.kind === "end")
+      if (frame.kind === "end") {
+        activeStreamingHandlers.delete(request.requestId);
         return sendFrame(FRAME_END, JSON.stringify({ bytesIn: frame.bytesIn }));
+      }
+      activeStreamingHandlers.delete(request.requestId);
       return sendFrame(
         FRAME_ERROR,
         JSON.stringify({
@@ -681,9 +845,14 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       );
     };
     Promise.resolve()
-      .then(() => handler(requestContext(envelope, request, abort.signal), sink))
-      .catch((error) =>
-        sendFrame(
+      .then(() => {
+        if (activeStreamingHandlers.get(request.requestId)?.abort !== abort) return;
+        return handler(requestContext(envelope, request, abort.signal), sink);
+      })
+      .catch((error) => {
+        if (activeStreamingHandlers.get(request.requestId)?.abort !== abort) return;
+        activeStreamingHandlers.delete(request.requestId);
+        return sendFrame(
           FRAME_ERROR,
           JSON.stringify({
             status: 502,
@@ -691,8 +860,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
             errorKind: rpcErrorKindOf(error),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
           })
-        ).catch(() => {})
-      )
+        ).catch(() => {});
+      })
       .finally(() => {
         if (activeStreamingHandlers.get(request.requestId)?.abort === abort) {
           activeStreamingHandlers.delete(request.requestId);
@@ -701,6 +870,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   }
 
   function handleEnvelope(envelope: RpcEnvelope): void {
+    if (retired) return;
     if (!isLocalRpcDestination(envelope.destination, config.workspaceId)) return;
     const message = envelope.message;
     switch (message.type) {
@@ -735,6 +905,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<T> {
+    if (retired) return Promise.reject(retiredError());
     if (options?.signal?.aborted) return Promise.reject(new Error("RPC call aborted by caller"));
     const requestId = generateRequestId();
     const request: RpcRequest = {
@@ -848,6 +1019,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     payload: unknown,
     options?: RpcCallOptions
   ): Promise<void> {
+    if (retired) return Promise.reject(retiredError());
     const message: RpcEvent = { type: "event", fromId: config.selfId, event, payload };
     return send(targetId, message, options, provenance);
   }
@@ -859,6 +1031,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    if (retired) return Promise.reject(retiredError());
     // Connectionless transports (HTTP) physically stream the response body, so
     // delegate to their first-class `stream` hook. Socket transports omit it
     // and fall back to the duplex stream-request/stream-frame envelope path.
@@ -878,13 +1051,22 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       );
       // Body-capable transports pump the request body on their native wire;
       // transports that cannot must throw rather than silently dropping it.
-      return config.transport.stream(
-        envelope,
-        options?.signal ?? null,
-        options?.body ?? null,
-        options?.headTimeoutMs,
-        options?.trafficClass
-      );
+      const operation = operationSignal(options?.signal);
+      return settleHeadWithinLifetime(
+        config.transport.stream(
+          envelope,
+          operation.signal,
+          options?.body ? bodyWithinLifetime(options.body) : null,
+          options?.headTimeoutMs,
+          options?.trafficClass
+        ),
+        (late) => void late.body?.cancel(retiredError()).catch(() => {})
+      )
+        .then((response) => responseWithinLifetime(response, operation.cleanup))
+        .catch((error) => {
+          operation.cleanup();
+          throw error;
+        });
     }
     if (options?.body) {
       // The duplex stream-request/stream-frame envelope path (plain WS, panel
@@ -906,7 +1088,16 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           options,
           provenance
         );
-        return config.transport.streamBody(envelope, options?.signal ?? null, options.body);
+        const operation = operationSignal(options?.signal);
+        return settleHeadWithinLifetime(
+          config.transport.streamBody(envelope, operation.signal, bodyWithinLifetime(options.body)),
+          (late) => void late.body?.cancel(retiredError()).catch(() => {})
+        )
+          .then((response) => responseWithinLifetime(response, operation.cleanup))
+          .catch((error) => {
+            operation.cleanup();
+            throw error;
+          });
       }
       throw new Error("This RPC transport cannot stream a request body");
     }
@@ -920,6 +1111,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcStreamOptions
   ) {
+    if (retired) return Promise.reject(retiredError());
     // Prefer a transport-native raw stream (notably React Native Iroh, where
     // whatwg-fetch Response cannot consume a ReadableStream body). Browser and
     // Node transports can losslessly unwrap the ordinary Response path.
@@ -949,13 +1141,28 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       options,
       provenance
     );
-    return config.transport.streamReadable(
-      envelope,
-      options?.signal ?? null,
-      options?.body ?? null,
-      options?.headTimeoutMs,
-      options?.trafficClass
-    );
+    const operation = operationSignal(options?.signal);
+    return settleHeadWithinLifetime(
+      config.transport.streamReadable(
+        envelope,
+        operation.signal,
+        options?.body ? bodyWithinLifetime(options.body) : null,
+        options?.headTimeoutMs,
+        options?.trafficClass
+      ),
+      (late) => void late.body.cancel(retiredError()).catch(() => {})
+    )
+      .then((response) => {
+        if (!config.lifetime) {
+          operation.cleanup();
+          return response;
+        }
+        return { ...response, body: bodyWithinLifetime(response.body, operation.cleanup) };
+      })
+      .catch((error) => {
+        operation.cleanup();
+        throw error;
+      });
   }
 
   function peer<
@@ -987,6 +1194,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     args: unknown[],
     options?: RpcStreamOptions
   ): Promise<Response> {
+    requireActive();
     if (options?.signal?.aborted) throw new Error("Streaming RPC aborted by caller");
     const requestId = generateRequestId();
     let resolveHead!: (head: {
@@ -1007,12 +1215,14 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     });
     let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
     const sendCancel = (): void => {
-      void send(
+      const cancelOptions = options?.destination ? { destination: options.destination } : undefined;
+      const envelope = makeEnvelope(
         targetId,
         { type: "stream-cancel", requestId, fromId: config.selfId },
-        options?.destination ? { destination: options.destination } : undefined,
+        cancelOptions,
         provenance
-      ).catch(() => {});
+      );
+      void deliverEnvelope(envelope).catch(() => {});
     };
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -1087,22 +1297,32 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
 
   const client: RpcClient = {
     selfId: config.selfId,
-    expose(method, handler): void {
+    expose(method, handler, website): void {
+      requireActive();
+      declareExposure(method, "method", website);
       exposedMethods.set(
         method,
         handler as (request: RpcRequestContext) => unknown | Promise<unknown>
       );
+      publishExposures();
     },
-    exposeAll(methods: RpcContextMethods): void {
+    exposeAll(methods: RpcContextMethods, policies: Readonly<Record<string, WebsiteMethodPolicy>>): void {
+      requireActive();
+      for (const name of Object.keys(methods)) validateWebsiteMethodPolicy(policies[name]!, name);
       for (const [name, handler] of Object.entries(methods)) {
+        declareExposure(name, "method", policies[name]!);
         exposedMethods.set(
           name,
           handler as (request: RpcRequestContext) => unknown | Promise<unknown>
         );
       }
+      publishExposures();
     },
-    exposeStreaming(method, handler): void {
+    exposeStreaming(method, handler, website): void {
+      requireActive();
+      declareExposure(method, "stream", website);
       streamingHandlers.set(method, handler);
+      publishExposures();
     },
     call<T = unknown>(
       targetId: string,
@@ -1110,11 +1330,13 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       args: unknown[],
       options?: RpcCallOptions
     ): Promise<T> {
+      if (retired) return Promise.reject(retiredError());
       return observeOutbound(
         callWithProvenance<T>(baseProvenance, targetId, method, args, options)
       );
     },
     stream(targetId, method, args, options): Promise<Response> {
+      if (retired) return Promise.reject(retiredError());
       return observeOutbound(
         Promise.resolve().then(() =>
           streamWithProvenance(baseProvenance, targetId, method, args, options)
@@ -1122,6 +1344,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       );
     },
     streamReadable(targetId, method, args, options) {
+      if (retired) return Promise.reject(retiredError());
       return observeOutbound(
         Promise.resolve().then(() =>
           streamReadableWithProvenance(baseProvenance, targetId, method, args, options)
@@ -1129,33 +1352,54 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       );
     },
     emit(targetId, event, payload, options): Promise<void> {
+      if (retired) return Promise.reject(retiredError());
       return observeOutbound(emitWithProvenance(baseProvenance, targetId, event, payload, options));
     },
-    on(event, listener): () => void {
+    on(event, listener, website): () => void {
+      requireActive();
+      validateWebsiteMethodPolicy(website, event);
+      const previous = exposurePolicies.get(`event:${event}`);
+      if (previous && previous.website.kind !== website.kind)
+        throw new Error(`Event ${event} listeners must agree on website exposure`);
+      declareExposure(event, "event", website);
       let listeners = eventListeners.get(event);
       if (!listeners) {
         listeners = new Set();
         eventListeners.set(event, listeners);
       }
       listeners.add(listener);
+      publishExposures();
       return () => {
         listeners.delete(listener);
-        if (listeners.size === 0) eventListeners.delete(event);
+        if (listeners.size === 0) {
+          eventListeners.delete(event);
+          exposurePolicies.delete(`event:${event}`);
+          if (!retired) publishExposures();
+        }
       };
     },
     peer: (targetId, options) => peer(targetId, baseProvenance, options),
     status(): RpcConnectionStatus {
+      if (retired) return "disconnected";
       return config.transport.status?.() ?? "connected";
     },
     ready(): Promise<void> {
-      return config.transport.ready?.() ?? Promise.resolve();
+      if (retired) return Promise.reject(retiredError());
+      return observeOutbound(config.transport.ready?.() ?? Promise.resolve());
     },
     onStatusChange(handler): () => void {
-      return config.transport.onStatusChange?.(handler) ?? (() => {});
+      requireActive();
+      const unsubscribe = config.transport.onStatusChange?.(handler) ?? (() => {});
+      const subscription = { handler, unsubscribe };
+      statusSubscriptions.add(subscription);
+      return () => {
+        if (!statusSubscriptions.delete(subscription)) return;
+        unsubscribe();
+      };
     },
   };
 
-  config.transport.onMessage(handleEnvelope);
+  const unsubscribeMessage = config.transport.onMessage(handleEnvelope);
 
   // Pending-call policy (§3.4) — "nothing hangs, ever".
   //
@@ -1177,7 +1421,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   // routed request and, at the callee's terminal departure, sends the caller
   // a `routed-response-error` (RECONNECT_GRACE_EXPIRED), which the transport
   // turns into a rejecting response here.
-  config.transport.onStatusChange?.((status) => {
+  const unsubscribeStatus = config.transport.onStatusChange?.((status) => {
+    if (status === "connected" && !retired) publishExposures();
     if (status !== "connected") {
       rejectPendingRequests(isServerTarget, makeConnectionLostError());
     }
@@ -1186,7 +1431,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   // A routed pending is only truly lost on `cold-recover` (server session state
   // gone → no inbox to replay from); reject the remaining routed pendings then.
   // On `resubscribe` the inbox replay settles them, so leave them alone.
-  config.onRecovery?.((kind) => {
+  const unsubscribeRecovery = config.onRecovery?.((kind) => {
+    if (!retired) publishExposures();
     if (kind === "cold-recover") {
       rejectPendingRequests(
         (target, destination) => !isServerTarget(target, destination),
@@ -1194,6 +1440,68 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       );
     }
   });
+
+  const retire = (): void => {
+    if (retired) return;
+    retired = true;
+    const error = retiredError();
+    unsubscribeMessage();
+    unsubscribeStatus?.();
+    unsubscribeRecovery?.();
+    for (const subscription of statusSubscriptions) {
+      subscription.handler("disconnected");
+      subscription.unsubscribe();
+    }
+    statusSubscriptions.clear();
+    for (const [requestId, pending] of pendingRequests) {
+      void deliverEnvelope(
+        makeEnvelope(
+          pending.target,
+          { type: "request-cancel", requestId, fromId: config.selfId },
+          pending.destination ? { destination: pending.destination } : undefined
+        )
+      ).catch(() => {});
+    }
+    rejectPendingRequests(() => true, error);
+    for (const [requestId, pending] of [...pendingStreams]) {
+      pending.bodyClosed = true;
+      if (pending.headEmitted) pending.controller.error(error);
+      else pending.rejectHead(error);
+      pending.cancel();
+      clearPendingStream(requestId);
+    }
+    for (const [requestId, active] of [...activeRequestHandlers]) {
+      activeRequestHandlers.delete(requestId);
+      active.abort.abort(error);
+      void deliverEnvelope(
+        responseEnvelopeFor(active.envelope, selfCaller, {
+          type: "response",
+          requestId,
+          error: error.message,
+          errorKind: "transport",
+        })
+      ).catch(() => {});
+    }
+    for (const [requestId, active] of [...activeStreamingHandlers]) {
+      activeStreamingHandlers.delete(requestId);
+      active.abort.abort(error);
+      void deliverEnvelope(
+        responseEnvelopeFor(active.envelope, selfCaller, {
+          type: "stream-frame",
+          requestId,
+          fromId: config.selfId,
+          frameType: FRAME_ERROR,
+          payload: JSON.stringify({ status: 503, message: error.message, errorKind: "transport" }),
+        })
+      ).catch(() => {});
+    }
+    eventListeners.clear();
+    exposedMethods.clear();
+    exposurePolicies.clear();
+    streamingHandlers.clear();
+  };
+  config.lifetime?.addEventListener("abort", retire, { once: true });
+  if (config.lifetime?.aborted) retire();
 
   return client;
 }

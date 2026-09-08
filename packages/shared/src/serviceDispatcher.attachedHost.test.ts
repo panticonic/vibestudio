@@ -72,6 +72,7 @@ function setup(attachedHost: AttachedHostExecutionFact, throughEvalSession = fal
     authority: { principals: ["session"] },
     methods: {
       write: {
+        website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
         args: z.tuple([]),
         capability: CAPABILITY,
         tier: {

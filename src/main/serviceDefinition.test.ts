@@ -21,6 +21,10 @@ describe("ServiceDispatcher.registerService", () => {
       authority: { principals: ["user"] },
       methods: {
         inspect: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([]),
           tier: {
             tier: "gated",
@@ -47,6 +51,10 @@ describe("ServiceDispatcher.registerService", () => {
       authority: { principals: ["user"] },
       methods: {
         inspect: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           args: z.tuple([]),
           tier: {
             tier: "open",
@@ -67,7 +75,13 @@ describe("ServiceDispatcher.registerService", () => {
       name: "echo",
       authority: { principals: ["user", "code"] },
       methods: {
-        greet: { args: z.tuple([z.string()]) },
+        greet: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.string()]),
+        },
       },
       handler: async (_ctx, method, args) => {
         if (method === "greet") return `hello ${args[0]}`;
@@ -89,7 +103,13 @@ describe("ServiceDispatcher.registerService", () => {
       name: "math",
       authority: { principals: ["user"] },
       methods: {
-        add: { args: z.tuple([z.number(), z.number()]) },
+        add: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.number(), z.number()]),
+        },
       },
       handler: async (_ctx, _method, args) => (args[0] as number) + (args[1] as number),
     };
@@ -112,7 +132,13 @@ describe("ServiceDispatcher.registerService", () => {
       name: "flex",
       authority: { principals: ["user"] },
       methods: {
-        known: { args: z.tuple([z.string()]) },
+        known: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([z.string()]),
+        },
       },
       handler: async (_ctx, method, args) => ({ method, args }),
     };
@@ -173,7 +199,14 @@ describe("ServiceDispatcher.registerService", () => {
       name: "svc",
       authority: { principals: ["user"] },
       methods: {
-        foo: { args: argsSchema, description: "test method" },
+        foo: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: argsSchema,
+          description: "test method",
+        },
       },
       handler: async () => {},
     });

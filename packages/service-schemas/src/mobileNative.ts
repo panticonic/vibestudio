@@ -59,6 +59,7 @@ const execute = (action: string, description: string) => ({
 
 export const mobileNativeMethods = defineServiceMethods({
   doctor: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "Inspect host mobile tooling, attached devices, and the current internal artifact.",
     args: z.tuple([]),
@@ -83,6 +84,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   listDevices: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "List Android devices visible to adb.",
     args: z.tuple([]),
     returns: z.array(device),
@@ -92,12 +94,14 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   listIosSimulators: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "List iOS simulators visible to Xcode.",
     args: z.tuple([]),
     returns: z.array(iosDevice),
     ...inspect("list iOS simulators", "Read identifiers and status for local iOS simulators."),
   },
   buildAndroid: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Build the installed host's Android native shell for selected architectures.",
     args: z.tuple([
       z
@@ -121,6 +125,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   installAndroid: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Build and install the internal Android shell on an attached device.",
     args: z.tuple([
       z
@@ -139,6 +144,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   installIos: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Build and install the iOS shell on a simulator or device.",
     args: z.tuple([
       z
@@ -158,6 +164,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   launchAndroid: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Launch an installed Android package.",
     args: z.tuple([
       z
@@ -169,6 +176,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ...execute("launch the Android app", "Launch Vibestudio on an attached Android device."),
   },
   launchIos: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Launch an installed iOS bundle.",
     args: z.tuple([
       z.object({ device: nonEmpty.optional(), bundleId: nonEmpty.optional() }).strict().optional(),
@@ -177,6 +185,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ...execute("launch the iOS app", "Launch Vibestudio on an iOS simulator or device."),
   },
   clearAndroidApp: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Clear an Android package's application data.",
     args: z.tuple([
       z
@@ -191,6 +200,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   adbReverse: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Configure adb reverse-port mappings.",
     args: z.tuple([
       z
@@ -207,6 +217,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   screenshot: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Capture an Android device screenshot.",
     args: z.tuple([optionalDevice]),
     returns: z.object({ pngBase64: nonEmpty }).strict(),
@@ -216,12 +227,14 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   screenshotIos: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Capture an iOS simulator screenshot.",
     args: z.tuple([optionalDevice]),
     returns: z.object({ pngBase64: nonEmpty }).strict(),
     ...inspect("capture an iOS screenshot", "Read the current screen of an iOS simulator."),
   },
   verify: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Verify Android installation and rendering state.",
     args: z.tuple([
       z
@@ -245,6 +258,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   verifyWorkspaceReady: {
+    website: {"kind":"closed","reason":"The mobileNative receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Wait for the Android workspace shell readiness markers.",
     args: z.tuple([
       z
@@ -272,6 +286,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ),
   },
   logcat: {
+ website: {"kind":"closed","reason":"This host control method is reserved for its authenticated implementation owner."} as const,
     description: "Stream Android logs.",
     args: z.tuple([
       z
@@ -286,6 +301,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ...inspect("stream Android device logs", "Read live logs from an attached Android device."),
   },
   logsIos: {
+ website: {"kind":"closed","reason":"This host control method is reserved for its authenticated implementation owner."} as const,
     description: "Stream iOS simulator logs.",
     args: z.tuple([
       z.object({ device: nonEmpty.optional(), predicate: nonEmpty.optional() }).strict().optional(),
@@ -293,6 +309,7 @@ export const mobileNativeMethods = defineServiceMethods({
     ...inspect("stream iOS simulator logs", "Read live logs from an iOS simulator."),
   },
   shell: {
+ website: {"kind":"closed","reason":"This host control method is reserved for its authenticated implementation owner."} as const,
     description: "Run and stream an Android shell command.",
     args: z.tuple([
       z

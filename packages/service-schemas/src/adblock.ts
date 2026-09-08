@@ -31,6 +31,7 @@ const AdBlockListNameSchema = z.enum(["ads", "privacy", "annoyances", "social"])
 
 export const adblockMethods = defineServiceMethods({
   getConfig: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -44,6 +45,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   setEnabled: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -66,6 +68,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   setListEnabled: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -88,6 +91,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   addCustomList: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -110,6 +114,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   removeCustomList: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -132,6 +137,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   addToWhitelist: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -146,6 +152,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   removeFromWhitelist: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -169,6 +176,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   getStats: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -183,6 +191,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   resetStats: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -205,6 +214,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   rebuildEngine: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -227,6 +237,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   isActive: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -241,6 +252,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   getStatsForPanel: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -255,6 +267,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   isEnabledForPanel: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -269,6 +282,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   setEnabledForPanel: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -292,6 +306,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   resetStatsForPanel: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "adblock.manage",
     tier: {
       tier: "gated",
@@ -315,6 +330,7 @@ export const adblockMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   getPanelUrl: {
+    website: {"kind":"closed","reason":"The adblock receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

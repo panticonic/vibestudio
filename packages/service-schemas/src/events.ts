@@ -15,6 +15,7 @@ const SUBSCRIBE_ACCESS: MethodAccessDescriptor = {
 
 export const eventsMethods = defineServiceMethods({
   watch: {
+    website: {"kind":"closed","reason":"The events receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

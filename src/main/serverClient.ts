@@ -47,12 +47,19 @@ export function exposeServerOriginatedHostMethod(
   method: string,
   handler: HostServiceHandler
 ): void {
-  rpc.expose(method, (request) => {
-    if (!isAuthenticatedServerCaller(request.caller)) {
-      throw new Error(`Host method "${method}" accepts calls only from the authenticated server`);
+  rpc.expose(
+    method,
+    (request) => {
+      if (!isAuthenticatedServerCaller(request.caller)) {
+        throw new Error(`Host method "${method}" accepts calls only from the authenticated server`);
+      }
+      return handler({ args: request.args, signal: request.signal });
+    },
+    {
+      kind: "closed",
+      reason: "This handler controls an internal execution or presentation surface.",
     }
-    return handler({ args: request.args, signal: request.signal });
-  });
+  );
 }
 
 /**
@@ -459,7 +466,10 @@ export async function createServerClient(
       return rpc.stream("main", `${service}.${method}`, args, options);
     },
     onDirectEvent(event, listener) {
-      return rpc.on(event, ({ payload }) => listener(payload as never));
+      return rpc.on(event, ({ payload }) => listener(payload as never), {
+        kind: "closed",
+        reason: "This listener consumes host or implementation lifecycle events.",
+      });
     },
     async callAs(
       caller: ScopedServerCaller,

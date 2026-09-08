@@ -307,6 +307,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     agentFacing: true,
   },
   launch: {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "missions.edit",
     tier: open(
       "mission.create",
@@ -320,6 +321,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     agentFacing: false,
   },
   edit: {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "missions.edit",
     tier: gated("mission.mutate", "Editing replaces the immutable automation revision."),
     presentation: presentation(
@@ -340,6 +342,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     agentFacing: true,
   },
   runNow: {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "missions.run",
     tier: gated("mission.control", "A manual run admits one exact installed revision."),
     presentation: presentation(
@@ -357,6 +360,7 @@ export const missionsMethods = defineReceiverServiceMethods({
   pause: lifecycle("Pause", "pause"),
   resume: lifecycle("Resume", "resume"),
   retire: {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "missions.retire",
     tier: critical(
       "mission.retire",
@@ -375,6 +379,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     agentFacing: true,
   },
   finishRun: {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "missions.run",
     tier: openCode("mission.control", "Only the admitted executor terminalizes its run."),
     description: "Record an admitted executor's terminal result.",
@@ -405,6 +410,7 @@ export const missionsMethods = defineReceiverServiceMethods({
 
 function read(description: string, args: z.ZodTypeAny, returns: z.ZodTypeAny) {
   return {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "missions.read",
     tier: open("mission.read", description),
     description,
@@ -455,6 +461,7 @@ function presentation(title: string, action: string, description: string) {
 }
 function lifecycle(title: string, action: string) {
   return {
+    website: {"kind":"closed","reason":"The missions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: open(
       "mission.control",
       `${title} is a reversible, owner-scoped scheduling control without changing standing authority.`

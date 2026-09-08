@@ -24,6 +24,7 @@ const userAuthority = {
  */
 function direct<T extends MethodSchema & { returns: z.ZodType }>(receiver: T) {
   return {
+    website: {"kind":"closed","reason":"The shellBrowserPrivacy receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: receiver.description,
     args: receiver.args,
     returns: receiver.returns,
@@ -50,6 +51,7 @@ export const shellBrowserPrivacyMethods = defineServiceMethods({
   endBrowserSession: direct(browserDataMethods.endBrowserSession),
   getCookieSiteSummary: direct(browserDataMethods.getCookieSiteSummary),
   getPasswordCountForSite: {
+    website: {"kind":"closed","reason":"The shellBrowserPrivacy receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description: "Count saved passwords for one exact site without returning password material.",
     args: z.tuple([z.string().url()]),
     returns: z

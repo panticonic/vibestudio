@@ -13,6 +13,7 @@ const SHELL_PRESENCE_WRITE_ACCESS: MethodAccessDescriptor = {
 
 export const shellPresenceMethods = defineServiceMethods({
   heartbeat: {
+    website: {"kind":"closed","reason":"The shellPresence receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

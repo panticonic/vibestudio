@@ -157,6 +157,7 @@ export const NotificationShowRequestSchema = z
 
 export const notificationMethods = defineServiceMethods({
   show: {
+    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -172,6 +173,7 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: [{ type: "info", title: "Hello", message: "World" }] }],
   },
   showToUser: {
+    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     agentFacing: false,
     tier: {
       tier: "open",
@@ -188,6 +190,7 @@ export const notificationMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   dismiss: {
+    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -203,6 +206,7 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["notif-123"] }],
   },
   reportAction: {
+    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     agentFacing: false,
     tier: {
       tier: "open",
@@ -219,6 +223,7 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["notif-123", "approve"] }],
   },
   signalUserInbox: {
+    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -235,6 +240,7 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["usr_alice"] }],
   },
   pushUserInbox: {
+    website: {"kind":"closed","reason":"The notification receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     agentFacing: false,
     tier: {
       tier: "open",

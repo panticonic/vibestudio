@@ -76,7 +76,7 @@ export interface PanelOrchestratorDeps {
   cdpHost: {
     registerTarget?(panelId: string, contentsId: number): void;
     cleanupPanelAccess(panelId: string): void;
-    unregisterTarget?(panelId: string): void;
+    unregisterTarget?(panelId: string, contentsId: number): void;
     getAccessibilityTree?(panelId: string): Promise<unknown[]>;
     getBootObservation?(panelId: string): Promise<PanelBootProbeResult>;
   };

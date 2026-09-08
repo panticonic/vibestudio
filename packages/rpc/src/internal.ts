@@ -14,8 +14,11 @@ export type {
 } from "./internal-types.js";
 export {
   bindExecutionSession,
+  bindInvocationParent,
+  invocationParentFor,
   bindVerifiedExternalContext,
   executionSessionNonceFor,
+  mergeRpcOptions,
   verifiedExternalContextFor,
 } from "./internal-types.js";
 export { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "./authority.js";

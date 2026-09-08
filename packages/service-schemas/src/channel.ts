@@ -193,6 +193,7 @@ export const channelHistoryArgsSchema = z
 
 export const channelMethods = defineServiceMethods({
   list: {
+    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     args: z.tuple([]),
     returns: z.array(channelSummarySchema),
     description:
@@ -200,6 +201,7 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   history: {
+    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     args: z.tuple([channelHistoryArgsSchema]),
     returns: z.array(channelHistoryEntrySchema),
     description:
@@ -207,6 +209,7 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   send: {
+    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     args: z.tuple([z.string(), z.string(), channelSendOptsSchema.optional()]),
     returns: channelSendResultSchema,
     description:
@@ -214,6 +217,7 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   roster: {
+    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     args: z.tuple([z.string()]),
     returns: z.array(channelRosterEntrySchema),
     description: "List a channel's current participants (channel DO getParticipants).",

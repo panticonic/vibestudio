@@ -130,7 +130,7 @@ describe("createConnectionlessRpcClient", () => {
     it("dispatches an exposed method and captures the response synchronously", async () => {
       const fetchMock = vi.fn();
       const { client, respond } = makeClient(fetchMock as unknown as typeof fetch);
-      client.expose("ping", (req) => `pong-${(req.args as unknown[])[0]}`);
+      client.expose("ping", (req) => `pong-${(req.args as unknown[])[0]}`, {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
 
       const response = await respond(requestEnvelope("ping", ["x"]));
       expect(response).not.toBeNull();
@@ -155,7 +155,7 @@ describe("createConnectionlessRpcClient", () => {
     it("fires a matching event listener with no response", async () => {
       const { client, deliver } = makeClient(vi.fn() as unknown as typeof fetch);
       const seen: unknown[] = [];
-      client.on("vcs:publication", (ev) => seen.push(ev.payload));
+      client.on("vcs:publication", (ev) => seen.push(ev.payload), {"kind":"eligible","rationale":"This test explicitly permits website receiver entry."});
       deliver({
         from: "main",
         target: SELF,
@@ -185,7 +185,7 @@ class FrameworkBase {
   }
 }
 class IntermediateBase extends FrameworkBase {
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
@@ -196,7 +196,7 @@ class IntermediateBase extends FrameworkBase {
   }
 }
 class ConcreteDO extends IntermediateBase {
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
@@ -235,7 +235,8 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
         new ConcreteDO(),
         rpcExposedMethodNames(new ConcreteDO()),
         FrameworkBase.prototype
-      )
+      ),
+      Object.fromEntries([...rpcExposedMethodNames(new ConcreteDO())].map(name => [name, rpcMethodAuthority(new ConcreteDO(), name)!.website]))
     );
     const ok = await respond(requestEnvelope("run", [41]));
     expect((ok!.message as { result?: unknown }).result).toBe(42);
@@ -248,7 +249,7 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
 
 // Direct authority declarations register both exposure and their compositional requirement.
 class PolicyBase {
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -259,7 +260,7 @@ class PolicyBase {
   }
 }
 class PolicyDO extends PolicyBase {
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     principals: ["user", "code"],
     effect: { kind: "open" },
     tier: "open",
@@ -274,12 +275,14 @@ describe("@rpc direct authority declaration", () => {
   it("returns the complete declaration for own and inherited methods", () => {
     const inst = new PolicyDO();
     expect(rpcMethodAuthority(inst, "broad")).toEqual({
+ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."} as const,
       principals: ["user", "code"],
       effect: { kind: "open" },
       tier: "open",
       sensitivity: "read",
     });
     expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({
+ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."} as const,
       principals: ["host"],
       effect: { kind: "open" },
       tier: "open",

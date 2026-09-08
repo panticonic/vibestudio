@@ -1,3 +1,5 @@
+import { verifiedInitiator } from "@vibestudio/shared/serviceDispatcher";
+import type { CatalogAudience } from "./catalog/buildCatalog.js";
 /**
  * Agent-facing capability-catalog service. Replaces `meta` as the discovery
  * entry point: caller-aware search/describe/getSchema/listSurfaces over the
@@ -8,7 +10,7 @@
  */
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { ServiceDispatcher, CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import { docsMethods, type SerializedServiceDefinition } from "@vibestudio/service-schemas/docs";
 import { createCatalogIndex } from "./catalog/catalogIndex.js";
@@ -26,6 +28,7 @@ export interface LiveWorkspaceServiceDoc {
   methods: readonly {
     name: string;
     signature: string;
+    website: import("@vibestudio/rpc").WebsiteMethodPolicy;
     description?: string;
     access?: Record<string, unknown>;
   }[];
@@ -125,7 +128,7 @@ export function createDocsService(deps: {
   // This is presentation, not an authorization decision.
   const serializeForCaller = (
     def: ServiceDefinition,
-    kind: CallerKind
+    kind: CatalogAudience
   ): SerializedServiceDefinition => {
     const full = serializeDef(def) as SerializedServiceDefinition;
     const methods: SerializedServiceDefinition["methods"] = {};
@@ -141,11 +144,11 @@ export function createDocsService(deps: {
     name: "docs",
     description:
       "Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).",
-    authority: { principals: ["code", "host", "user"] },
+    authority: { principals: ["code", "host", "user", "website"] },
     methods: docsMethods,
     handler: defineServiceHandler("docs", docsMethods, {
       search: async (ctx, [query, opts]) => {
-        const kind = ctx.caller.runtime.kind;
+        const kind = verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind;
         // Host/runtime catalog rows are stable inputs and must never be held
         // behind builds of unrelated, mutable workspace providers. Only an
         // explicitly workspace-scoped (or all-surface) search needs that live
@@ -154,11 +157,14 @@ export function createDocsService(deps: {
         return (await indexFor(ctx, includeWorkspace)).search(query, kind, opts ?? undefined);
       },
       describe: async (ctx, [name]) =>
-        (await indexFor(ctx, name.startsWith("workspace:"))).get(name, ctx.caller.runtime.kind),
+        (await indexFor(ctx, name.startsWith("workspace:"))).get(
+          name,
+          verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+        ),
       getSchema: async (ctx, [name]) => {
         const entry = (await indexFor(ctx, name.startsWith("workspace:"))).get(
           name,
-          ctx.caller.runtime.kind
+          verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
         );
         if (!entry) return null;
         return {
@@ -167,15 +173,27 @@ export function createDocsService(deps: {
         };
       },
       listSurfaces: async (ctx) =>
-        (await indexFor(ctx, true)).listSurfaces(ctx.caller.runtime.kind),
+        (await indexFor(ctx, true)).listSurfaces(
+          verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+        ),
       listServices: (ctx) =>
         deps.dispatcher
           .getServiceDefinitions()
-          .map((def) => serializeForCaller(def, ctx.caller.runtime.kind))
+          .map((def) =>
+            serializeForCaller(
+              def,
+              verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+            )
+          )
           .filter((d) => Object.keys(d.methods).length > 0),
       describeService: (ctx, [name]) => {
         const def = deps.dispatcher.getServiceDefinitions().find((d) => d.name === name);
-        return def ? serializeForCaller(def, ctx.caller.runtime.kind) : null;
+        return def
+          ? serializeForCaller(
+              def,
+              verifiedInitiator(ctx).website ? "website" : ctx.caller.runtime.kind
+            )
+          : null;
       },
     }),
   };

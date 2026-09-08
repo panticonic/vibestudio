@@ -398,6 +398,7 @@ function browserDataMethod<A extends z.ZodType<unknown[]>, R extends z.ZodType>(
         : "browser-data.write";
   const tier = sensitivity === "read" && !options.secret ? "open" : "gated";
   return {
+    website: {"kind":"closed","reason":"Browser profile data requires the browser privacy UI and cannot be exported to websites."} as const,
     description: options.description,
     args,
     returns,

@@ -64,6 +64,7 @@ export const ShellSurfaceKindSchema = z.enum([
 
 export const appMethods = defineServiceMethods({
   getInfo: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -89,6 +90,7 @@ export const appMethods = defineServiceMethods({
     ],
   },
   getSystemTheme: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -103,6 +105,7 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: [], returns: "dark" }],
   },
   setThemeMode: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -118,6 +121,7 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: ["dark"] }],
   },
   openDevTools: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -132,6 +136,7 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   openExternal: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "external.open",
     tier: {
       tier: "gated",
@@ -159,6 +164,7 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: ["https://example.com"] }],
   },
   openWorkspacePath: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -172,6 +178,7 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   openShellSurface: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -187,6 +194,7 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   describeShellSurfaces: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -202,6 +210,7 @@ export const appMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   clearBuildCache: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspace.build-cache.manage",
     tier: {
       tier: "gated",
@@ -228,6 +237,7 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getShellPages: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -242,6 +252,7 @@ export const appMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   applyUpdate: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "application.update",
     tier: {
       tier: "gated",
@@ -269,6 +280,7 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: ["com.example.app"], returns: { applied: true } }],
   },
   listPendingUpdates: {
+    website: {"kind":"closed","reason":"The app receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

@@ -32,6 +32,10 @@ import {
 } from "@vibestudio/shared/panelLocation";
 import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
 import { classifyPanelUrl, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
+import {
+  parseShellSurfaceLink,
+  type ShellSurfaceDescriptor,
+} from "@vibestudio/shared/shellSurface";
 import type { PanelNavigationState, PanelPlacementHint } from "@vibestudio/shared/types";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence
@@ -117,6 +121,7 @@ export class PanelView implements PanelViewLike {
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
   private onPanelLinkError?: (panelId: string, url: string, message: string) => void;
   private openExternal?: (url: string) => Promise<void>;
+  private openShellSurface?: (target: ShellSurfaceDescriptor) => void;
   private requestSiteCapability: (
     contents: Electron.WebContents,
     capability: "popups"
@@ -162,6 +167,7 @@ export class PanelView implements PanelViewLike {
     sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
     onPanelLinkError?: (panelId: string, url: string, message: string) => void;
     openExternal?: (url: string) => Promise<void>;
+    openShellSurface?: (target: ShellSurfaceDescriptor) => void;
     requestSiteCapability(contents: Electron.WebContents, capability: "popups"): Promise<boolean>;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
     onPanelViewTransition?: (panelId: string) => void;
@@ -188,6 +194,7 @@ export class PanelView implements PanelViewLike {
     this.sendPanelEvent = deps.sendPanelEvent;
     this.onPanelLinkError = deps.onPanelLinkError;
     this.openExternal = deps.openExternal;
+    this.openShellSurface = deps.openShellSurface;
     this.requestSiteCapability = deps.requestSiteCapability;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
     this.onPanelViewTransition = deps.onPanelViewTransition;
@@ -552,6 +559,7 @@ export class PanelView implements PanelViewLike {
     const view = this.viewManager.createView({
       id: panelId,
       type: "panel",
+      browser: true,
       preload: this.browserPreloadPath ?? this.autofillPreloadPath ?? null,
       parentId: parentId ?? undefined,
       partition,
@@ -588,7 +596,7 @@ export class PanelView implements PanelViewLike {
 
     // Browser panels navigate freely in their current frame, but auxiliary
     // clicks and target-blank/window.open requests still become panel children.
-    this.setupWindowOpenInterception(panelId, view.webContents, false);
+    this.setupLinkInterception(panelId, view.webContents, false);
     await this.viewManager.navigateView(panelId, url);
   }
 
@@ -868,6 +876,19 @@ export class PanelView implements PanelViewLike {
 
   // ==== Link interception ===================================================
 
+  private handleShellSurfaceLink(panelId: string, url: string): boolean {
+    const parsed = parseShellSurfaceLink(url);
+    if (parsed.kind === "unrelated") return false;
+    try {
+      if (parsed.kind === "error") throw new Error(parsed.reason);
+      if (!this.openShellSurface) throw new Error("Shell surface navigation is unavailable");
+      this.openShellSurface(parsed.target);
+    } catch (error) {
+      this.handlePanelLinkError(panelId, error, url);
+    }
+    return true;
+  }
+
   private setupWindowOpenInterception(
     panelId: string,
     contents: Electron.WebContents,
@@ -875,6 +896,9 @@ export class PanelView implements PanelViewLike {
   ): void {
     contents.setWindowOpenHandler((details) => {
       const url = details.url;
+      if (this.handleShellSurfaceLink(panelId, url)) {
+        return { action: "deny" as const };
+      }
       const parsed = translateManagedLinks ? this.parseManagedPanelUrl(url) : null;
       if (parsed) {
         void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
@@ -904,10 +928,19 @@ export class PanelView implements PanelViewLike {
     });
   }
 
-  private setupLinkInterception(panelId: string, contents: Electron.WebContents): void {
-    this.setupWindowOpenInterception(panelId, contents);
+  private setupLinkInterception(
+    panelId: string,
+    contents: Electron.WebContents,
+    translateManagedLinks = true
+  ): void {
+    this.setupWindowOpenInterception(panelId, contents, translateManagedLinks);
 
     const willNavigateHandler = (event: Electron.Event, url: string) => {
+      if (this.handleShellSurfaceLink(panelId, url)) {
+        event.preventDefault();
+        return;
+      }
+      if (!translateManagedLinks) return;
       const canonical = tryParsePanelLocationLink(url);
       if (canonical) {
         event.preventDefault();

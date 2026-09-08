@@ -50,7 +50,7 @@ export interface PanelPresentationControllerDeps {
   cdpHost: {
     registerTarget?(panelId: string, contentsId: number): void;
     cleanupPanelAccess(panelId: string): void;
-    unregisterTarget?(panelId: string): void;
+    unregisterTarget?(panelId: string, contentsId: number): void;
     getBootObservation?(panelId: string): Promise<PanelBootProbeResult>;
   };
   panelHttpServer: PanelHttpServerLike;
@@ -1098,7 +1098,10 @@ export class PanelPresentationController {
       }
       if (view.hasView(panelId)) {
         this.deps.cdpHost.cleanupPanelAccess(panelId);
-        this.deps.cdpHost.unregisterTarget?.(panelId);
+        const contents = view.getWebContents(panelId) as { id?: unknown } | null;
+        if (typeof contents?.id === "number") {
+          this.deps.cdpHost.unregisterTarget?.(panelId, contents.id);
+        }
         this.viewConnectionBySlot.delete(panelId);
         view.destroyView(panelId);
         this.recordViewMutation();
@@ -1262,8 +1265,11 @@ export class PanelPresentationController {
     this.connectionBySlot.delete(panelId);
     this.viewConnectionBySlot.delete(panelId);
     this.deps.cdpHost.cleanupPanelAccess(panelId);
-    this.deps.cdpHost.unregisterTarget?.(panelId);
     const view = this.deps.getPanelView();
+    const contents = view?.getWebContents(panelId) as { id?: unknown } | null | undefined;
+    if (typeof contents?.id === "number") {
+      this.deps.cdpHost.unregisterTarget?.(panelId, contents.id);
+    }
     if (view?.hasView(panelId)) {
       view.destroyView(panelId);
       this.recordViewMutation();

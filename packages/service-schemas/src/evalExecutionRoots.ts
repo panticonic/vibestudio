@@ -5,6 +5,7 @@ import { executionArtifactRefSchema } from "./build.js";
 /** Host-internal retention ingress for immutable eval execution artifacts. */
 export const evalExecutionRootsMethods = defineServiceMethods({
   retain: {
+    website: {"kind":"closed","reason":"The evalExecutionRoots receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

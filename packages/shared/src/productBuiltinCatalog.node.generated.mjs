@@ -23,6 +23,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     ],
     "methods": {
       "panelTree.rootGroups": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -44,6 +48,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -51,6 +59,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTree.rootsForCaller": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -72,6 +84,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -79,6 +95,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTree.page": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -100,6 +120,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -107,6 +131,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTree.path": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -128,6 +156,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -135,6 +167,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTree.detail": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -156,6 +192,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -163,6 +203,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTree.search": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -184,6 +228,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -191,6 +239,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.get": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -212,6 +264,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -219,6 +275,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.historyRelative": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -240,6 +300,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -247,6 +311,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.historyEntry": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -268,6 +336,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -275,6 +347,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entity.resolveActive": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -296,6 +372,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -303,6 +383,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entity.resolve": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -324,6 +408,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -331,6 +419,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.resolveByEntity": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -352,6 +444,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -359,6 +455,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.create": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -448,6 +548,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -455,6 +559,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.commitPreparedNavigation": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -570,6 +678,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -577,6 +689,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.updateCurrentStateArgs": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -663,6 +779,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -670,6 +790,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.move": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -756,6 +880,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -763,6 +891,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.close": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -849,6 +981,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -856,6 +992,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.closeCleanupPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -877,6 +1017,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -884,6 +1028,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.closeOwnedRoots": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -903,6 +1051,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -910,6 +1062,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slot.closeCleanupAck": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -931,6 +1087,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -938,6 +1098,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panel.search": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -959,6 +1123,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -966,6 +1134,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panel.sourceUsage": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -987,6 +1159,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -994,6 +1170,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panel.index": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1015,6 +1195,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1022,6 +1206,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panel.updateTitle": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1108,6 +1296,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1115,6 +1307,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panel.incrementAccess": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1136,6 +1332,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1143,6 +1343,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panel.rebuildIndex": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1164,6 +1368,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1171,6 +1379,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleLeaseUpsert": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "open",
         "session": "family",
@@ -1191,6 +1403,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1198,6 +1414,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleLeaseClear": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "open",
         "session": "family",
@@ -1218,6 +1438,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1225,6 +1449,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmSet": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "open",
         "session": "family",
@@ -1245,6 +1473,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1252,6 +1484,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmClear": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "open",
         "session": "family",
@@ -1272,6 +1508,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1294,6 +1534,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     "hostCapabilityRequests": [],
     "directMethods": {
       "initializePanels": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1304,6 +1548,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1311,6 +1559,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityActivate": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1321,6 +1573,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1328,6 +1584,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityReserve": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1338,6 +1598,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1345,6 +1609,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityAdvanceExecution": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1355,6 +1623,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1362,6 +1634,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityAdvanceExecutions": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1372,6 +1648,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1379,6 +1659,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityRebindAgentChannel": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1389,6 +1673,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1396,6 +1684,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityRetire": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1406,6 +1698,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1413,6 +1709,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityCleanupComplete": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1423,6 +1723,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1430,6 +1734,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "runtimeResourceBindingsReplace": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1440,6 +1748,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1447,6 +1759,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "runtimeResourceBindingsRelease": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1457,6 +1773,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1464,6 +1784,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "runtimeResourceBindingEntities": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1474,6 +1798,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1481,6 +1809,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityFindIncompleteCleanups": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1491,6 +1823,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1498,6 +1834,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityGc": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1508,6 +1848,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1515,6 +1859,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityResolve": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1525,6 +1873,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1532,6 +1884,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityResolveActive": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1542,6 +1898,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1549,6 +1909,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityResolveContext": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1559,6 +1923,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1566,6 +1934,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotResolveByEntity": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -1587,6 +1959,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -1594,6 +1970,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleLeaseUpsert": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1604,6 +1984,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1611,6 +1995,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleLeaseClear": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1621,6 +2009,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1628,6 +2020,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "durableWorkOwnerRegister": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1638,6 +2034,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1645,6 +2045,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "durableWorkOwnerList": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1655,6 +2059,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1662,6 +2070,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmSet": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1672,6 +2084,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1679,6 +2095,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmClear": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1689,6 +2109,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1696,6 +2120,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmNextWakeAt": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1706,6 +2134,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1713,6 +2145,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmAdoptWorker": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1723,6 +2159,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1730,6 +2170,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmListScheduled": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1740,6 +2184,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1747,6 +2195,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "alarmClaimDue": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1757,6 +2209,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1764,6 +2220,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleListLeases": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1774,6 +2234,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1781,6 +2245,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleOpenEpoch": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1791,6 +2259,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1798,6 +2270,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleRecordOp": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1808,6 +2284,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1815,6 +2295,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleListOps": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1825,6 +2309,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1832,6 +2320,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleCompleteEpoch": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1842,6 +2334,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1849,6 +2345,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "lifecycleListResumeTargets": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1859,6 +2359,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1866,6 +2370,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityListActive": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1876,6 +2384,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1883,6 +2395,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityListActiveByKind": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1893,6 +2409,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1900,6 +2420,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityListPreparing": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1910,6 +2434,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1917,6 +2445,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityListPreparingByKind": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1927,6 +2459,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1934,6 +2470,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityListExecutionRoots": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "gated",
         "session": "family",
@@ -1944,6 +2484,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -1951,6 +2495,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "entityListByContext": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1961,6 +2509,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1968,6 +2520,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "contextEdgeUpsert": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1978,6 +2534,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -1985,6 +2545,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "contextEdgeListByOwner": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -1995,6 +2559,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2002,6 +2570,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "contextEdgeListByChild": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2012,6 +2584,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2019,6 +2595,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "contextEdgeDeleteByChild": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2029,6 +2609,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2036,6 +2620,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTreeRootGroups": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2057,6 +2645,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2064,6 +2656,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTreePage": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2085,6 +2681,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2092,6 +2692,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTreePath": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2113,6 +2717,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2120,6 +2728,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTreeDetail": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2141,6 +2753,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2148,6 +2764,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotCreate": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2237,6 +2857,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2244,6 +2868,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotCommitPreparedNavigation": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2359,6 +2987,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2366,6 +2998,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotUpdateCurrentStateArgs": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2452,6 +3088,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2459,6 +3099,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotMove": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2545,6 +3189,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2552,6 +3200,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotClose": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2638,6 +3290,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2645,6 +3301,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotCloseOwnedRoots": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2664,6 +3324,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2671,6 +3335,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotCloseCleanupPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2692,6 +3360,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2699,6 +3371,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotCloseCleanupAck": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.manage",
         "tier": "gated",
         "session": "family",
@@ -2720,6 +3396,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "receiver-object"
@@ -2727,6 +3407,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotGet": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2748,6 +3432,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2755,6 +3443,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotHistoryRelative": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2776,6 +3468,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2783,6 +3479,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "slotHistoryEntry": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -2804,6 +3504,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         },
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "workspace.runtime-state.inspect",
           "resource": {
             "kind": "receiver-object"
@@ -2835,6 +3539,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     "hostCapabilityRequests": [],
     "directMethods": {
       "listPasswordSummaries": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -2852,6 +3560,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listPasswordSummariesPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -2869,6 +3581,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getPasswordForSite": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -2886,6 +3602,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listPasswordsPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -2903,6 +3623,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "addPassword": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -2920,6 +3644,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "updatePassword": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -2937,6 +3665,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "deletePassword": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -2954,6 +3686,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "addNeverSave": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -2971,6 +3707,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "isNeverSave": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
@@ -2988,6 +3728,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getNeverSaveOrigins": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
@@ -3005,6 +3749,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getNeverSaveOriginsPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
@@ -3022,6 +3770,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "removeNeverSave": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -3039,6 +3791,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "updateLastUsed": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3056,6 +3812,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getFormFillSuggestions": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -3073,6 +3833,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listFormFillValues": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -3090,6 +3854,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listFormFillValuesPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -3107,6 +3875,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "addFormFillValue": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3124,6 +3896,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "updateFormFillValue": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3141,6 +3917,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "markFormFillValueUsed": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3158,6 +3938,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "deleteFormFillValue": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -3175,6 +3959,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "clearFormFillValues": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -3192,6 +3980,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "applyCookieMutations": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3209,6 +4001,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listCookieOrigins": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
@@ -3226,6 +4022,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listCookieOriginsPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
@@ -3243,6 +4043,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getCookiesForOrigin": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -3260,6 +4064,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listCookiesPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
@@ -3277,6 +4085,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "clearCookiesForOrigin": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -3294,6 +4106,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "clearAllCookies": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -3311,6 +4127,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "endBrowserSession": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.delete",
         "tier": "gated",
         "session": "family",
@@ -3328,6 +4148,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getCookieSiteSummary": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
@@ -3345,6 +4169,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "addCookiesBatch": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3362,6 +4190,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "addPasswordsBatch": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3379,6 +4211,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "addFormFillBatch": {
+        "website": {
+          "kind": "closed",
+          "reason": "Browser profile data requires the browser privacy UI and cannot be exported to websites."
+        },
         "capability": "browser-data.write",
         "tier": "gated",
         "session": "family",
@@ -3435,6 +4271,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     ],
     "directMethods": {
       "acquireKernelLease": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3445,6 +4285,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3452,6 +4296,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "attachKernelLeaseHolder": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3462,6 +4310,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3469,6 +4321,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "holdKernelLease": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3479,6 +4335,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3486,6 +4346,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "run": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3496,6 +4360,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3503,6 +4371,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "startRun": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3513,6 +4385,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3520,6 +4396,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "executeRun": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3530,6 +4410,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3537,6 +4421,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getRun": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3547,6 +4435,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3554,6 +4446,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "getRunEvents": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3564,6 +4460,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3571,6 +4471,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "appendAuthorityEvent": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3581,6 +4485,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3588,6 +4496,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "failPendingRun": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3598,6 +4510,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3605,6 +4521,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "readScopeTextPage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3615,6 +4535,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3622,6 +4546,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "deleteScopeValue": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3632,6 +4560,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3639,6 +4571,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "reset": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3649,6 +4585,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3656,6 +4596,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "dispose": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3666,6 +4610,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3673,6 +4621,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "retainExecutionRoot": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3683,6 +4635,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3690,6 +4646,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "listRetainedExecutionRoots": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "open",
         "session": "family",
@@ -3703,6 +4663,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "cancel": {
+        "website": {
+          "kind": "closed",
+          "reason": "Execution engine control is internal to reviewed execution receivers."
+        },
         "capability": "runtime.code-execution.manage",
         "tier": "gated",
         "session": "family",
@@ -3713,6 +4677,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Execution engine control is internal to reviewed execution receivers."
+          },
           "capability": "runtime.code-execution.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3744,6 +4712,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     "hostCapabilityRequests": [],
     "directMethods": {
       "create": {
+        "website": {
+          "kind": "closed",
+          "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "webhooks.manage",
         "tier": "gated",
         "session": "family",
@@ -3754,6 +4726,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "webhooks.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3761,6 +4737,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "get": {
+        "website": {
+          "kind": "closed",
+          "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "webhooks.manage",
         "tier": "gated",
         "session": "family",
@@ -3771,6 +4751,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "webhooks.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3778,6 +4762,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "list": {
+        "website": {
+          "kind": "closed",
+          "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "webhooks.manage",
         "tier": "gated",
         "session": "family",
@@ -3788,6 +4776,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "webhooks.manage",
           "resource": {
             "kind": "receiver-object"
@@ -3795,6 +4787,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "replace": {
+        "website": {
+          "kind": "closed",
+          "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
         "capability": "webhooks.manage",
         "tier": "gated",
         "session": "family",
@@ -3805,6 +4801,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "presentation": null,
         "effect": {
           "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The webhookEngine receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
           "capability": "webhooks.manage",
           "resource": {
             "kind": "receiver-object"

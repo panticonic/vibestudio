@@ -25,7 +25,7 @@ class AlarmProbeDO extends DurableObjectBase {
     return this.nextAlarm;
   }
 
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -36,7 +36,7 @@ class AlarmProbeDO extends DurableObjectBase {
     return "scheduled";
   }
 
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -51,7 +51,7 @@ class AlarmProbeDO extends DurableObjectBase {
     return "deferred";
   }
 
-  @rpc({
+  @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
     principals: ["host"],
     effect: { kind: "open" },
     tier: "open",
@@ -67,6 +67,7 @@ class AlarmProbeDO extends DurableObjectBase {
 class OpenSchemaProbeDO extends DurableObjectBase {
   static override rpcMethods = defineReceiverServiceMethods({
     inspect: {
+ website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
       args: z.tuple([]),
       returns: z.string(),
       authority: { principals: ["host"] },
@@ -117,6 +118,7 @@ describe("DurableObjectBase alarm dispatch", () => {
 
     await expect(call("durableWorkCapabilities")).resolves.toEqual([]);
     expect(rpcMethodAuthority(instance, "durableWorkCapabilities")).toMatchObject({
+      website: { kind: "closed" },
       principals: ["host"],
       effect: { kind: "open" },
       tier: "open",
@@ -128,6 +130,7 @@ describe("DurableObjectBase alarm dispatch", () => {
     const { instance } = await createTestDO(AlarmProbeDO);
 
     expect(rpcMethodAuthority(instance, "acceptChannelDelivery")).toMatchObject({
+      website: { kind: "closed" },
       principals: ["host"],
       effect: { kind: "open" },
       tier: "open",

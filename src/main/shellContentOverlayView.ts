@@ -259,7 +259,8 @@ export class ShellContentOverlayView {
   /** Re-raise above the panels (called after every native layer reconcile). */
   bringToFront(): void {
     if (!this.window || !this.view || this.view.webContents.isDestroyed() || !this.visible) return;
-    this.window.contentView.removeChildView(this.view);
+    // Adding an existing child reorders it without detaching its native widget.
+    // Detachment is a lifetime transition, not a stacking operation.
     this.window.contentView.addChildView(this.view);
   }
 

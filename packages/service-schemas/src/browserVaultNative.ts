@@ -36,6 +36,7 @@ export const browserVaultNativeMethods = defineServiceMethods(
     Object.entries(browserVaultMethods).map(([name, receiver]) => [
       name,
       {
+        website: {"kind":"closed","reason":"Native browser vault access belongs to the attested device owner."} as const,
         description: receiver.description,
         args: receiver.args,
         returns: receiver.returns,

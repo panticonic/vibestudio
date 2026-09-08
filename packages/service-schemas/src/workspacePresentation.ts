@@ -41,6 +41,7 @@ const searchResultSchema = z
 
 export const workspacePresentationMethods = defineReceiverServiceMethods({
   bindSlot: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description:
       "Bind a shell slot to the presented panel and entity, recording the display " +
@@ -55,6 +56,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.void(),
   },
   removeSlots: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description: "Remove presentation bindings for closed shell slots.",
     args: z.tuple([z.array(z.string().min(1)).max(1_000)]),
@@ -62,6 +64,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.void(),
   },
   indexPanel: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description: "Index a panel manifest for workspace search.",
     args: z.tuple([
@@ -73,6 +76,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.string().min(1).nullable(),
   },
   updatePanelTitle: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description: "Update a panel title and its search index entry.",
     args: z.tuple([
@@ -85,6 +89,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.string().min(1),
   },
   setEntityTitle: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description: "Set or clear the title associated with an entity.",
     args: z.tuple([
@@ -96,6 +101,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.void(),
   },
   listEntityTitles: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("read"),
     description: "List the workspace's explicit entity titles.",
     args: z.tuple([]),
@@ -105,6 +111,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     ),
   },
   isEntityTitleExplicit: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("read"),
     description: "Whether an entity title was explicitly selected by its owning runtime.",
     args: z.tuple([z.string().min(1)]),
@@ -112,6 +119,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.boolean(),
   },
   titlesForSlots: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("read"),
     description: "Resolve presented titles for shell slots.",
     args: z.tuple([z.array(z.string().min(1)).max(1_000)]),
@@ -119,6 +127,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.record(z.string(), z.string()),
   },
   incrementAccess: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description: "Record access to a presented panel.",
     args: z.tuple([z.string().min(1)]),
@@ -126,6 +135,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     returns: z.void(),
   },
   sourceUsage: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("read"),
     description: "Summarize recent panel usage by source.",
     args: z.tuple([z.number().int().positive().max(200).optional()]),
@@ -141,6 +151,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     ),
   },
   search: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("read"),
     description: "Search indexed workspace panels.",
     args: z.tuple([
@@ -154,6 +165,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
       .strict(),
   },
   rebuildIndex: {
+    website: {"kind":"closed","reason":"The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     ...method("write"),
     description: "Rebuild the workspace panel search index.",
     args: z.tuple([]),

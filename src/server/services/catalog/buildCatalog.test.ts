@@ -21,6 +21,10 @@ const demo: ServiceDefinition = {
   authority: { principals: ["code", "host"] },
   methods: {
     get: {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Get a value.",
       args: z.tuple([z.string()]),
       argumentNames: ["key"],
@@ -28,12 +32,20 @@ const demo: ServiceDefinition = {
       tier: TEST_OPEN_TIER,
     },
     "admin.wipe": {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Destroy everything (server only).",
       args: z.tuple([]),
       authority: { principals: ["host"] },
       tier: TEST_OPEN_TIER,
     },
     probe: {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "A probe method.",
       args: z.tuple([]),
       authority: { principals: ["code"] },
@@ -41,6 +53,10 @@ const demo: ServiceDefinition = {
       tier: TEST_OPEN_TIER,
     },
     internalTransport: {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Implementation detail.",
       args: z.tuple([]),
       agentFacing: false,
@@ -175,7 +191,14 @@ describe("buildCatalog", () => {
       description: "Internal transport",
       authority: { principals: ["code"] },
       methods: {
-        call: { args: z.tuple([]), agentFacing: false },
+        call: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
+          args: z.tuple([]),
+          agentFacing: false,
+        },
       },
       handler: async () => undefined,
     };

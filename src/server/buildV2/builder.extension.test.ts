@@ -67,7 +67,10 @@ describe("buildUnit extension builds", () => {
           extension: {
             activationEvents: ["*"],
             methodAuthority: {
-              ping: { effect: { kind: "open" } },
+              ping: {
+                website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+                effect: { kind: "open" },
+              },
             },
             providerContracts: {
               gitInterop: { methods: ["ping"] },
@@ -159,7 +162,10 @@ describe("buildUnit extension builds", () => {
           extension: {
             activationEvents: ["*"],
             methodAuthority: {
-              basename: { effect: { kind: "open" } },
+              basename: {
+                website: { kind: "eligible", rationale: "Explicit extension fixture contract." },
+                effect: { kind: "open" },
+              },
             },
           },
         },

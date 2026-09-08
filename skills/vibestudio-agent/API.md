@@ -169,7 +169,7 @@ Authority principals: `host`, `user`
 
 URL-bound userland credential storage and egress
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -210,7 +210,7 @@ Authority principals: `user`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
 
-Authority principals: `code`, `host`, `user`
+Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -313,7 +313,7 @@ Authority principals: `code`, `host`, `user`
 
 Loopback panel-asset fetch bridge (remote shells)
 
-Authority principals: `code`, `user`
+Authority principals: `code`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
@@ -362,6 +362,17 @@ Authority principals: `code`, `user`
 | `hostTerminal.write` | Write ordered terminal input. Retry only the latest sequence with identical bytes; out-of-order input is rejected. |
 | `hostTerminal.resize` | Resize an owned host terminal. |
 | `hostTerminal.close` | Retire terminal control before attempting process cleanup. Host descendants may survive. |
+
+## `hubControl`
+
+Scoped workspace creation through the authenticated owning hub
+
+Authority principals: `code`, `host`, `user`, `website`
+
+| Method | Description |
+|--------|-------------|
+| `hubControl.createWorkspace` | Create and register a workspace from one exact external root template. |
+| `hubControl.workspaceCreationReceipt` | Reconcile one previously submitted workspace creation without creating or opening anything. |
 
 ## `linkedClaude`
 
@@ -609,6 +620,20 @@ Authority principals: `code`, `host`, `user`
 | `vcs.readFile` | Read one file from an exact semantic state. |
 | `vcs.listDirectory` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. |
 | `vcs.listFiles` | Page the exact path-to-file manifest of one repository at one semantic state. |
+
+## `websiteHosting`
+
+Native browser document admission and lifetime
+
+Authority principals: `user`
+
+| Method | Description |
+|--------|-------------|
+| `websiteHosting.list` | Read the live connection states displayed by workspace chrome. |
+| `websiteHosting.begin` | Attest the current top-level browser document from its native presentation host. |
+| `websiteHosting.connect` | Request workspace connection for the attested browser document. |
+| `websiteHosting.forget` | Forget saved access for this website in this workspace and disconnect its live documents. |
+| `websiteHosting.end` | Retire a browser document and all of its live RPC authority. |
 
 ## `workerdInspector`
 

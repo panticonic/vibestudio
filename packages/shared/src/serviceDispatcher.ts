@@ -1,3 +1,4 @@
+import { validateWebsiteMethodPolicy } from "./typedServiceClient.js";
 /**
  * ServiceDispatcher - Unified service dispatch for panels and shell.
  *
@@ -241,6 +242,8 @@ export interface VerifiedCodeIdentity {
  * active runtime entity when installed worker/DO code relays that agent's work.
  */
 export interface VerifiedCaller {
+  /** Host-attested live website initiator. Never copied from an RPC payload. */
+  website?: import("@vibestudio/rpc").WebsiteAuthorityFact;
   /** Ordinary workspace identity attested by the owning host, never from the RPC payload. */
   workspaceId?: string;
   runtime: {
@@ -679,6 +682,7 @@ export class ServiceAccessError extends ServiceError {
 }
 
 export interface HostAuthorityEffect {
+  website: import("./typedServiceClient.js").WebsiteMethodPolicy;
   service: string;
   method: string;
   capability: string;
@@ -737,7 +741,7 @@ export class ServiceDispatcher {
       signal?: AbortSignal
     ): Promise<{
       state: "decided" | "closed";
-      decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
+      decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
       info?: AcquisitionInfo;
     }>;
     acquireMany?(
@@ -745,7 +749,7 @@ export class ServiceDispatcher {
       signal?: AbortSignal
     ): Promise<{
       state: "decided" | "closed";
-      decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
+      decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
       info?: AcquisitionInfo;
     }>;
     consume(grantId: string): boolean;
@@ -920,11 +924,14 @@ export class ServiceDispatcher {
    * as ordinary service dispatch; callers may not provide a precomputed allow.
    */
   async authorizeHostEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> {
-    const methodDef = {
+    this.assertWorkspaceConnection(ctx, effect.service, effect.method);
+    this.assertWebsiteEligibility(ctx, effect.website, effect.service, effect.method);
+    const methodDef: MethodSchema = {
+      website: effect.website,
       description: effect.challenge?.title ?? effect.capability,
       args: z.tuple([]),
       ...(effect.sensitivity ? { access: { sensitivity: effect.sensitivity } } : {}),
-    } as MethodSchema;
+    };
     await this.enforceRequirement(
       ctx,
       effect.service,
@@ -963,6 +970,7 @@ export class ServiceDispatcher {
     const usedPreparers = new Set<string>();
     for (const [method, schema] of Object.entries(def.methods)) {
       const qualifiedMethod = `${def.name}.${method}`;
+      validateWebsiteMethodPolicy(schema.website, qualifiedMethod);
       const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, schema.tier, null);
       if (!reviewedTier.rationale.trim()) {
         throw new Error(`Service method ${qualifiedMethod} has an empty tier rationale`);
@@ -1027,6 +1035,7 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<unknown> {
+    this.assertWorkspaceConnection(ctx, service, method);
     if (!this.initialized && !this.handlers.has(service)) {
       throw new ServiceError(service, method, "Services not yet initialized");
     }
@@ -1044,12 +1053,14 @@ export class ServiceDispatcher {
       if (!methodDef) {
         throw new ServiceError(service, method, "Unknown method");
       }
+      this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
       {
         // Normalize args for wire compatibility: RPC args arrive as JSON arrays
         // where trailing optional args may be omitted (shorter array) or null
         // (JSON serialization of undefined). Pad short arrays to match the
         // tuple length and replace null with undefined so Zod's .optional()
         // accepts them.
+        this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
         const normalized = normalizeServiceArgs(args, methodDef.args);
         const parsed = methodDef.args.safeParse(normalized);
         if (!parsed.success) {
@@ -1136,9 +1147,11 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<AuthorityPreflightResult> {
+    this.assertWorkspaceConnection(ctx, service, method);
     delete ctx.preparedAuthority;
     const methodDef = this.definitions.get(service)?.methods[method];
     if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
+    this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
     const normalized = normalizeServiceArgs(args, methodDef.args);
     const parsed = methodDef.args.safeParse(normalized);
     if (!parsed.success) {
@@ -1174,9 +1187,11 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<void> {
+    this.assertWorkspaceConnection(ctx, service, method);
     delete ctx.preparedAuthority;
     const methodDef = this.definitions.get(service)?.methods[method];
     if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
+    this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
     const normalized = normalizeServiceArgs(args, methodDef.args);
     const parsed = methodDef.args.safeParse(normalized);
     if (!parsed.success) {
@@ -1200,6 +1215,40 @@ export class ServiceDispatcher {
     );
   }
 
+  /** Admission precedes schema lookup, preparation, discovery, and acquisition. */
+  private assertWorkspaceConnection(ctx: ServiceContext, service: string, method: string): void {
+    const website = ctx.caller.website;
+    if (!website) return;
+    if (website.connected) return;
+    const reason = "Connect this website to the workspace before requesting workspace operations.";
+    throw new ServiceAccessError(service, method, reason, "ECONNECTIONREQUIRED", {
+      denied: true,
+      authorityFailure: authorityFailureForDecision(
+        { allowed: false, code: "connection-required", reason },
+        {
+          capability: "workspace.connect",
+          resourceKey: website.workspaceId,
+          tier: "gated",
+        }
+      ),
+    });
+  }
+
+  private assertWebsiteEligibility(
+    ctx: ServiceContext,
+    policy: MethodSchema["website"] | undefined,
+    service: string,
+    method: string
+  ): void {
+    if (ctx.caller.website && policy?.kind !== "eligible")
+      throw new ServiceAccessError(
+        service,
+        method,
+        "This operation is closed to websites",
+        "EACCES"
+      );
+  }
+
   private async assessAuthority(
     ctx: ServiceContext,
     service: string,
@@ -1210,6 +1259,7 @@ export class ServiceDispatcher {
     acquisitionCollector?: CollectedAuthorityAcquisition[],
     suppressGrantedObservations = false
   ): Promise<void | AuthorityPreflightResult> {
+    this.assertWorkspaceConnection(ctx, service, method);
     const assessmentBaseline = baseline ?? captureAuthorityAssessmentBaseline(ctx);
     if (baseline) restoreAuthorityAssessmentBaseline(ctx, baseline);
     if (
@@ -1356,6 +1406,7 @@ export class ServiceDispatcher {
     if (!serviceDef || !methodDef) {
       throw new ServiceError(service, method, "Unknown service method");
     }
+    this.assertWebsiteEligibility(ctx, methodDef.website, service, method);
     const declaration = methodDef?.authority ?? serviceDef?.authority;
     if (!this.authorityResolver) {
       throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
@@ -1603,7 +1654,9 @@ export class ServiceDispatcher {
     for (const additional of "additional" in descriptor ? (descriptor.additional ?? []) : []) {
       if (
         additional.when &&
-        !additional.when.origins.includes(ctx.authorization?.authorizingOrigin.kind ?? "code")
+        !additional.when.origins.includes(
+          primary?.origin ?? ctx.authorization?.authorizingOrigin.kind ?? "code"
+        )
       ) {
         continue;
       }
@@ -1738,6 +1791,7 @@ export class ServiceDispatcher {
     },
     suppressGrantedObservations = false
   ): Promise<{
+    origin: import("@vibestudio/rpc").AuthorizationOrigin["kind"];
     leaf: AuthorityPreflightLeaf;
     wouldPrompt?: AuthorityPreflightResult["wouldPrompt"];
     acquisition?: CollectedAuthorityAcquisition;
@@ -1833,6 +1887,12 @@ export class ServiceDispatcher {
         args: validatedArgs,
         preparedStateDigest,
         callerPrincipal: resolved.context.authorizingOrigin.principal,
+        ...(resolved.context.initiatingWebsite
+          ? { initiatingWebsite: resolved.context.initiatingWebsite }
+          : {}),
+        ...(resolved.context.subjectBinding
+          ? { subjectBinding: resolved.context.subjectBinding }
+          : {}),
         sessionId: resolved.context.session.id,
         ...(resolved.context.session.taskRef ? { taskRef: resolved.context.session.taskRef } : {}),
         ...(resolved.context.session.taskAuthority
@@ -1922,6 +1982,7 @@ export class ServiceDispatcher {
           };
           if (preflight) {
             return {
+              origin: resolved.context.authorizingOrigin.kind,
               leaf: {
                 capability,
                 resourceKey,
@@ -1975,6 +2036,7 @@ export class ServiceDispatcher {
         };
         if (preflight) {
           return {
+            origin: resolved.context.authorizingOrigin.kind,
             leaf: {
               capability,
               resourceKey,
@@ -2017,6 +2079,7 @@ export class ServiceDispatcher {
         }
         if (preflight) {
           return {
+            origin: resolved.context.authorizingOrigin.kind,
             leaf: {
               capability,
               resourceKey,
@@ -2101,6 +2164,7 @@ export class ServiceDispatcher {
         if (preflight) {
           if (runManifest?.approvals === "pregranted-only") {
             return {
+              origin: resolved.context.authorizingOrigin.kind,
               leaf: {
                 capability,
                 resourceKey,
@@ -2121,6 +2185,7 @@ export class ServiceDispatcher {
             };
           }
           return {
+            origin: resolved.context.authorizingOrigin.kind,
             leaf: {
               capability,
               resourceKey,
@@ -2277,6 +2342,7 @@ export class ServiceDispatcher {
       }
       if (preflight) {
         return {
+          origin: resolved.context.authorizingOrigin.kind,
           leaf: {
             capability,
             resourceKey,

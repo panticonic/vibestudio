@@ -1,3 +1,4 @@
+import { validateWebsiteMethodPolicy } from "@vibestudio/rpc";
 import type {
   AuthorizationContext,
   AuthorityFailureInfo,
@@ -16,6 +17,7 @@ import {
 } from "./authorization.js";
 
 export interface ResolvedDirectRpcAuthority {
+  website: import("@vibestudio/rpc").WebsiteMethodPolicy;
   crossWorkspace?: boolean;
   tier: "open" | "gated" | "critical";
   sensitivity: "read" | "write" | "admin" | "destructive";
@@ -26,6 +28,7 @@ export interface ResolvedDirectRpcAuthority {
 }
 
 export interface EventIntakeRule {
+  website: import("@vibestudio/rpc").WebsiteMethodPolicy;
   crossWorkspace?: boolean;
   /** Non-empty topic family. Empty and wildcard catch-alls are invalid. */
   topicPrefix: string;
@@ -55,6 +58,7 @@ export function eventIntakeAuthority(
     if (!topic.startsWith(rule.topicPrefix)) continue;
     return {
       ...(rule.crossWorkspace === true ? { crossWorkspace: true } : {}),
+      website: rule.website,
       tier: rule.tier,
       sensitivity: rule.sensitivity,
       effect: rule.effect,
@@ -75,6 +79,7 @@ export function assertEventIntakeRules(target: { eventIntake?: unknown }): void 
 }
 
 function assertEventIntakeRule(rule: EventIntakeRule): void {
+  validateWebsiteMethodPolicy(rule.website, `event intake ${rule.topicPrefix}`);
   if (
     typeof rule.topicPrefix !== "string" ||
     rule.topicPrefix.length === 0 ||
@@ -194,6 +199,10 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
         },
       },
     };
+  }
+  if (attestation.context.website && declaration.website.kind !== "eligible") {
+    const reason = `${method}: receiver is closed to websites`;
+    return { code: "EACCES", reason, failure: directRpcInvalidAttestationFailure(reason) };
   }
   const now = input.now ?? Date.now();
   if (input.caller?.workspaceId &&

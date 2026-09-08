@@ -11,6 +11,21 @@ import type { ContextIntegrityFact, DirectAuthorityAttestation } from "./authori
 const EXECUTION_SESSION_NONCE = Symbol.for("vibestudio.rpc.executionSessionNonce");
 const VERIFIED_EXTERNAL_CONTEXT = Symbol.for("vibestudio.rpc.verifiedExternalContext");
 
+const INVOCATION_PARENT = Symbol.for("vibestudio.rpc.invocationParent");
+export interface InvocationParentTransport {
+  nonce: string;
+  /** Set only by a host forwarding an authenticated invocation to its receiver. */
+  caller?: AuthenticatedCaller;
+  provenance?: readonly AuthenticatedCaller[];
+}
+export function bindInvocationParent<T extends RpcCallOptions | RpcStreamOptions>(options: T, parent: InvocationParentTransport): T {
+  Object.defineProperty(options, INVOCATION_PARENT, { value: Object.freeze({ ...parent }), enumerable: false });
+  return options;
+}
+export function invocationParentFor(options: RpcCallOptions | RpcStreamOptions | undefined): InvocationParentTransport | undefined {
+  return options ? (options as Record<PropertyKey, unknown>)[INVOCATION_PARENT] as InvocationParentTransport | undefined : undefined;
+}
+
 /**
  * Bind one trusted runtime-created options object to a live evaluated-execution
  * admission. The nonce is deliberately held out-of-band rather than exposed as
@@ -93,6 +108,8 @@ export function mergeRpcOptions(
   const merged = { ...original, ...overrides };
   const nonce = executionSessionNonceFor(overrides) ?? executionSessionNonceFor(original);
   if (nonce !== undefined) bindExecutionSession(merged, nonce);
+  const parent = invocationParentFor(overrides) ?? invocationParentFor(original);
+  if (parent) bindInvocationParent(merged, parent);
   const external = verifiedExternalContextFor(overrides) ?? verifiedExternalContextFor(original);
   if (external) bindVerifiedExternalContext(merged, external);
   return merged;
@@ -117,5 +134,6 @@ export interface InternalRpcStreamRequest extends RpcStreamRequest {
 
 /** Runtime-only evaluated-execution correlation carried on an event. */
 export interface InternalRpcEvent extends RpcEvent {
+  authorityParentNonce?: string;
   executionSessionNonce?: string;
 }

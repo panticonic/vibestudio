@@ -74,6 +74,10 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
 
   // ── This computer ──────────────────────────────────────────────────────────
   { key: "process.execute", notability: "headline" },
+  // Website file grants disclose or modify selected workspace contents.
+  { key: "filesystem.read", notability: "headline" },
+  { key: "filesystem.write", notability: "headline" },
+  { key: "workspaces.creation.read", notability: "everyday" },
   { key: "application.shutdown", notability: "headline" },
   { key: "application.update", notability: "headline" },
   { key: "clipboard", notability: "headline" },

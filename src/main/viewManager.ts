@@ -91,6 +91,7 @@ export interface ViewConfig {
   hostChrome?: boolean;
   /** Workspace source path and effective version for app principals. */
   codeIdentity?: HostedCodeIdentity;
+  browser?: boolean;
 }
 
 interface PanelDisplayDiagnostics {
@@ -176,6 +177,7 @@ interface ManagedView {
   appCapabilities: readonly AppCapability[];
   hostChrome: boolean;
   codeIdentity?: HostedCodeIdentity;
+  browser?: boolean;
   /** Latest requested main-frame target, retained after its load settles. */
   desiredUrl?: string;
   /**
@@ -437,6 +439,7 @@ export class ViewManager {
       injectHostThemeVariables: false,
       appCapabilities: [],
       hostChrome: false,
+      browser: false,
       navigationRevision: 0,
     });
     this.webContentsIdToViewId.set(this.shellView.webContents.id, "shell");
@@ -726,6 +729,7 @@ export class ViewManager {
       hostChrome,
       codeIdentity:
         config.type === "app" || config.type === "panel" ? config.codeIdentity : undefined,
+      browser: config.browser === true,
       navigationRevision: 0,
     };
     this.views.set(config.id, managed);
@@ -2173,7 +2177,6 @@ export class ViewManager {
     }
 
     for (const view of desired) {
-      this.window.contentView.removeChildView(view);
       this.window.contentView.addChildView(view);
     }
 
@@ -2750,6 +2753,7 @@ export class ViewManager {
     bounds: ViewBounds;
     capabilities: readonly AppCapability[];
     codeIdentity?: HostedCodeIdentity;
+    browser?: boolean;
   } | null {
     const managed = this.views.get(id);
     if (!managed) {
@@ -2764,6 +2768,7 @@ export class ViewManager {
       bounds: managed.bounds,
       capabilities: managed.appCapabilities,
       codeIdentity: managed.codeIdentity,
+      browser: managed.browser,
     };
   }
 

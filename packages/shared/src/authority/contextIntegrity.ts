@@ -2,7 +2,8 @@ import type { ContextIntegrityFact } from "@vibestudio/rpc";
 import { compareUtf16CodeUnits, stableSha256Hex } from "@vibestudio/content-addressing";
 
 export type ContentClass = "internal" | "external";
-export type LineageKey = string & { readonly __lineageKey: unique symbol };
+export interface LineageKeyBrand { readonly __lineageKey: unique symbol }
+export type LineageKey = string & LineageKeyBrand;
 export const MAX_LINEAGE_SET_MEMBERS = 65_536;
 
 export interface LineageEntry {

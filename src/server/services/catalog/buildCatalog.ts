@@ -17,6 +17,8 @@ import { serializeMethod } from "./serialize.js";
 import { resolveMethodTierPolicy } from "@vibestudio/shared/serviceAuthority";
 import type { WorkspaceServiceBinding } from "@vibestudio/workspace-contracts/types";
 
+export type CatalogAudience = CallerKind | "website";
+
 export interface BuildCatalogDeps {
   definitions: ServiceDefinition[];
   runtimeSurfaces?: { panel?: RuntimeSurface; workerRuntime?: RuntimeSurface };
@@ -36,6 +38,7 @@ export interface WorkspaceCapabilityCatalogEntry {
   methods?: readonly {
     name: string;
     signature: string;
+    website: MethodSchema["website"];
     description?: string;
     access?: Record<string, unknown>;
   }[];
@@ -66,7 +69,14 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       qualifiedName: def.name,
       title: def.name,
       ...(def.description ? { description: def.description } : {}),
-      access: { principals: def.authority.principals },
+      access: {
+        principals: [
+          ...new Set(agentFacingMethods.flatMap(([, method]) => authorityPrincipals(method, def))),
+        ],
+        website: agentFacingMethods.some(([, method]) => method.website.kind === "eligible")
+          ? { kind: "eligible", rationale: "Contains reviewed website operations." }
+          : { kind: "closed", reason: "No website operations are registered." },
+      },
     });
     for (const [methodName, method] of agentFacingMethods) {
       const qualifiedMethod = `${def.name}.${methodName}`;
@@ -75,6 +85,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       const principals = authorityPrincipals(method, def);
       const access = {
         ...(method.access ?? {}),
+        website: method.website,
         principals,
         tier: reviewedTier.tier,
         sessionAdmission: reviewedTier.session,
@@ -213,6 +224,9 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       ...(methodNames.length > 0 ? { members: methodNames } : {}),
       access: {
         ...bindingAccess,
+        website: declared.methods?.some((method) => method.website.kind === "eligible")
+          ? { kind: "eligible", rationale: "Contains explicitly eligible receiver methods." }
+          : { kind: "closed", reason: "No website receiver methods are declared." },
         principals: [...declared.principals],
         source: declared.source,
         protocols: [...declared.protocols],
@@ -236,6 +250,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         signature: method.signature,
         access: {
           ...bindingAccess,
+          website: method.website,
           principals: [...declared.principals],
           source: declared.source,
           protocols: [...declared.protocols],
@@ -265,6 +280,7 @@ function runtimeMethodAccess(
   const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, method.tier, null);
   return {
     ...(method.access ?? {}),
+    website: method.website,
     principals: authorityPrincipals(method, definition),
     tier: reviewedTier.tier,
     sessionAdmission: reviewedTier.session,
@@ -277,10 +293,17 @@ function runtimeMethodAccess(
  * exports remain filtered by runtime shape because their availability differs
  * by target. Service entries are filtered by compositional principal shape.
  */
-export function isCatalogEntryVisible(entry: CatalogEntry, callerKind: CallerKind): boolean {
+export function isCatalogEntryVisible(entry: CatalogEntry, callerKind: CatalogAudience): boolean {
+  if (
+    callerKind === "website" &&
+    (entry.surface !== "runtime" || entry.access?.["website"] !== undefined) &&
+    (entry.access?.["website"] as { kind?: string } | undefined)?.kind !== "eligible"
+  )
+    return false;
   if (entry.surface === "runtime") {
     const callers = (entry.access as { callers?: CallerKind[] } | undefined)?.callers;
     if (!callers) return true;
+    if (callerKind === "website") return callers.includes("panel");
     if (callers.includes(callerKind)) return true;
     return callerKind === "do" && callers.includes("worker");
   }
@@ -301,8 +324,9 @@ export function authorityPrincipals(
 export function isServiceMethodVisible(
   method: MethodSchema,
   service: Pick<ServiceDefinition, "authority">,
-  callerKind: CallerKind
+  callerKind: CatalogAudience
 ): boolean {
+  if (callerKind === "website" && method.website.kind !== "eligible") return false;
   const available = presentationPrincipals(callerKind);
   return authorityPrincipals(method, service).some((principal) => available.includes(principal));
 }
@@ -318,8 +342,10 @@ function collectRequirementPrincipals(
   return found;
 }
 
-function presentationPrincipals(callerKind: CallerKind): PrincipalKind[] {
+function presentationPrincipals(callerKind: CatalogAudience): PrincipalKind[] {
   switch (callerKind) {
+    case "website":
+      return ["website"];
     case "server":
       return ["host"];
     case "shell":

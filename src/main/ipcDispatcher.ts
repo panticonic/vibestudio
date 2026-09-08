@@ -137,6 +137,8 @@ function callServerAs(
 }
 
 export interface IpcDispatcherDeps {
+  /** Retire document admission before releasing its backing RPC transports. */
+  retireDocuments?: () => Promise<void>;
   /** Authenticated workspace owning this IPC runtime; never inferred from a renderer envelope. */
   workspaceId: string;
   /** Electron-local service dispatcher */
@@ -217,7 +219,7 @@ export class IpcDispatcher {
       // interval; dropping them lets destruction reject the renderer-side
       // promises once, instead of feeding retry loops with synthetic
       // "unresolved sender" responses and flooding shutdown logs.
-      if (this.shuttingDown) return;
+      if (this.shuttingDown || event.senderFrame !== event.sender.mainFrame) return;
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller) {
         console.warn(
@@ -256,6 +258,8 @@ export class IpcDispatcher {
     // streamReadable(). invoke()-backed channels reject loudly on bad callers /
     // malformed messages — a body is never silently dropped.
     ipcMain.handle("vibestudio:rpc:stream-open", (event, msg: BridgeStreamOpen) => {
+      if (event.senderFrame !== event.sender.mainFrame)
+        throw new Error("RPC requires the top-level document");
       const owner = this.deps.resolveCallerForWebContents(event.sender.id);
       if (owner?.callerKind === "app") {
         return this.uiSessions
@@ -267,6 +271,15 @@ export class IpcDispatcher {
             }
           )
           .then(() => {
+            const current = this.deps.resolveCallerForWebContents(event.sender.id);
+            if (
+              event.sender.isDestroyed() ||
+              !current ||
+              current.callerId !== owner.callerId ||
+              current.runtimeId !== owner.runtimeId ||
+              current.workspaceId !== owner.workspaceId
+            )
+              throw new Error("Desktop app document retired");
             this.hookUiTeardown(event.sender, owner);
             this.ensureUiStreamRelay(event.sender, owner).open(msg);
           });
@@ -381,9 +394,41 @@ export class IpcDispatcher {
       });
     }
     if (caller.callerKind === "panel") {
-      // A panel's FULL RPC surface (requests, routed DO calls, events, streams)
-      // rides a dedicated panel-principal session — handleEnvelope's request→main
-      // path is shell/app only. Desktop analogue of the mobile bridge relay.
+      // Service ownership belongs to the host. The renderer sends the same
+      // envelope for native and server services and never needs a routing API.
+      const message = envelope.message;
+      const method = "method" in message ? message.method : "";
+      const dot = method.indexOf(".");
+      const local =
+        envelope.target === "main" &&
+        (message.type === "request" || message.type === "stream-request") &&
+        (!envelope.destination ||
+          workspaceRpcDestination(envelope.destination) === runtime.workspaceId) &&
+        dot > 0 &&
+        runtime.dispatcher.hasService(method.slice(0, dot));
+      if (local && caller.browser)
+        throw new RpcBoundaryError("This native endpoint is closed to websites", "access");
+      const cancelLocal =
+        message.type === "stream-cancel" &&
+        this.activeIpcStreams.has(
+          this.ipcStreamKey(sender.id, message.requestId, runtime.workspaceId)
+        );
+      if (local || cancelLocal) {
+        await this.handleEnvelope(
+          sender,
+          caller.callerId,
+          caller.callerKind,
+          stampEnvelopeCaller(envelope, {
+            callerId: caller.runtimeId ?? caller.callerId,
+            callerKind: caller.callerKind,
+            workspaceId: runtime.workspaceId,
+          }),
+          runtime,
+          caller.runtimeId ?? caller.callerId
+        );
+        return;
+      }
+      // Remote operations retain the panel's dedicated principal and session.
       this.relayPanelEnvelope(sender, caller.callerId, envelope, runtime);
       return;
     }
@@ -443,6 +488,11 @@ export class IpcDispatcher {
             workspaceId: caller.workspaceId ?? this.deps.workspaceId,
           }
         );
+        const workspace = runtime.workspace;
+        const local = workspace
+          ? await this.openLocalBridgeStream(caller, envelope, signal, body, workspace)
+          : null;
+        if (local) return local;
         const session = await this.uiSessions.session(caller, runtime);
         if (!session.streamReadable) throw new Error("Workspace UI upload transport unavailable");
         return session.streamReadable(
@@ -457,6 +507,63 @@ export class IpcDispatcher {
     });
     this.uiStreamRelays.set(caller.callerId, relay);
     return relay;
+  }
+
+  private async openLocalBridgeStream(
+    caller: NativeIpcCaller,
+    envelope: RpcEnvelope,
+    signal: AbortSignal,
+    body: ReadableStream<Uint8Array> | null,
+    runtime: WorkspaceIpcRuntime
+  ) {
+    if (signal.aborted) throw new Error("Bridge stream retired");
+    const request = envelope.message;
+    if (request.type !== "stream-request") return null;
+    const dot = request.method.indexOf(".");
+    if (
+      caller.browser ||
+      envelope.target !== "main" ||
+      dot <= 0 ||
+      (envelope.destination &&
+        workspaceRpcDestination(envelope.destination) !== runtime.workspaceId) ||
+      !runtime.dispatcher.hasService(request.method.slice(0, dot))
+    )
+      return null;
+    const result = await runtime.dispatcher.dispatch(
+      {
+        caller: localVerifiedCaller(
+          caller.callerId,
+          caller.callerKind === "app" ? "shell" : caller.callerKind,
+          this.deps.getCodeIdentityForCaller?.(caller.callerId) ?? null
+        ),
+        requestId: request.requestId,
+        signal,
+        ...(body ? { body } : {}),
+        ...(envelope.delivery.idempotencyKey
+          ? { idempotencyKey: envelope.delivery.idempotencyKey }
+          : {}),
+        ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+      },
+      request.method.slice(0, dot),
+      request.method.slice(dot + 1),
+      request.args
+    );
+    if (!(result instanceof Response)) {
+      throw new Error(`Streaming method ${request.method} did not return a Response`);
+    }
+    return {
+      status: result.status,
+      statusText: result.statusText,
+      finalUrl: result.url,
+      headers: Array.from(result.headers.entries()),
+      body:
+        result.body ??
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+    };
   }
 
   /** Identity replacement/revocation must release sessions before reusing a native view. */
@@ -494,6 +601,7 @@ export class IpcDispatcher {
   async shutdown(): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    const documentRetirement = this.deps.retireDocuments?.();
     for (const relay of this.uiStreamRelays.values()) relay.destroy("Desktop app shutting down");
     this.uiStreamRelays.clear();
     await this.uiSessions.close();
@@ -512,6 +620,7 @@ export class IpcDispatcher {
     }
     this.panelStreamRelays.clear();
 
+    await documentRetirement;
     const sessions = [...this.panelSessions.values()];
     this.panelSessions.clear();
     await Promise.allSettled(
@@ -520,6 +629,14 @@ export class IpcDispatcher {
         await resolved.session.close();
       })
     );
+  }
+
+  retirePanelDocument(callerId: string): void {
+    const pending = this.panelSessions.get(callerId);
+    this.panelSessions.delete(callerId);
+    if (pending) void pending.then((entry) => entry.session.close()).catch(() => {});
+    this.panelStreamRelays.get(callerId)?.destroy("Website document retired");
+    this.panelStreamRelays.delete(callerId);
   }
 
   private requirePanelCaller(
@@ -544,10 +661,25 @@ export class IpcDispatcher {
   private ensurePanelStreamRelay(sender: WebContents, callerId: string): BridgeStreamRelay {
     const existing = this.panelStreamRelays.get(callerId);
     if (existing) return existing;
+    const frame = sender.mainFrame;
+    const documentId = this.deps.resolveCallerForWebContents(sender.id)?.documentId;
+    const isCurrent = () =>
+      !sender.isDestroyed() &&
+      sender.mainFrame === frame &&
+      this.deps.resolveCallerForWebContents(sender.id)?.documentId === documentId &&
+      this.panelStreamRelays.get(callerId) === relay;
     const relay = createBridgeStreamRelay({
       chunkFormat: "binary",
       openStream: async (envelope, signal, body) => {
+        if (!isCurrent()) throw new Error("Panel document retired");
+        const caller = this.deps.resolveCallerForWebContents(sender.id);
+        if (!caller || caller.callerKind !== "panel") throw new Error("Panel document retired");
+        const runtime = await this.sourceRuntime(caller);
+        if (!isCurrent() || signal.aborted) throw new Error("Panel document retired");
+        const local = await this.openLocalBridgeStream(caller, envelope, signal, body, runtime);
+        if (local) return local;
         const session = await this.ensurePanelSession(sender, callerId);
+        if (!isCurrent()) throw new Error("Panel document retired");
         const conn = this.requirePanelRuntimeConnection(callerId);
         if (typeof session.streamReadable !== "function") {
           throw new Error("Streaming request bodies are unavailable on this panel's host session");
@@ -560,7 +692,7 @@ export class IpcDispatcher {
       },
       sendToPanel: (msg) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
-        if (wc && !wc.isDestroyed()) wc.send("vibestudio:rpc:stream-message", msg);
+        if (wc === sender && isCurrent()) wc.send("vibestudio:rpc:stream-message", msg);
       },
     });
     this.panelStreamRelays.set(callerId, relay);
@@ -1185,6 +1317,8 @@ export class IpcDispatcher {
         if (pending) void pending.then((entry) => entry.session.close()).catch(() => undefined);
       });
     }
+    const documentFrame = sender.mainFrame;
+    const documentId = this.deps.resolveCallerForWebContents(sender.id)?.documentId;
     const opening: Promise<PanelSessionEntry> = this.sourceRuntime(
       this.deps.resolveCallerForWebContents(sender.id) ?? { callerId, callerKind: "panel" }
     )
@@ -1196,7 +1330,13 @@ export class IpcDispatcher {
         // panel's current webContents.
         session.onMessage((env) => {
           const wc = this.deps.getWebContentsForCaller(callerId);
-          if (wc && !wc.isDestroyed()) wc.send("vibestudio:rpc:message", env);
+          if (
+            wc &&
+            !wc.isDestroyed() &&
+            wc.mainFrame === documentFrame &&
+            this.deps.resolveCallerForWebContents(sender.id)?.documentId === documentId
+          )
+            wc.send("vibestudio:rpc:message", env);
         });
         return { session, leaseKey: expectedLeaseKey };
       })

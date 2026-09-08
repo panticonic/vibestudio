@@ -89,6 +89,7 @@ const retainedRootSchema = z
 
 const rawEvalEngineMethods = defineServiceMethods({
   acquireKernelLease: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([
       z
@@ -111,11 +112,13 @@ const rawEvalEngineMethods = defineServiceMethods({
       .strict(),
   },
   attachKernelLeaseHolder: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([kernelLeaseIdSchema]),
     returns: z.object({ attached: z.literal(true) }).strict(),
   },
   holdKernelLease: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([kernelLeaseIdSchema]),
     returns: z
@@ -126,11 +129,13 @@ const rawEvalEngineMethods = defineServiceMethods({
       .strict(),
   },
   run: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([evalEngineRunArgsSchema]),
     returns: evalRunResultSchema,
   },
   startRun: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([evalEngineRunArgsSchema.extend({ runId: runIdSchema })]),
     returns: z
@@ -151,16 +156,19 @@ const rawEvalEngineMethods = defineServiceMethods({
       .strict(),
   },
   executeRun: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([runIdSchema]),
     returns: evalRunResultSchema,
   },
   getRun: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("read"),
     args: z.tuple([runIdSchema]),
     returns: evalRunStatusSchema,
   },
   getRunEvents: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("read"),
     args: z.tuple([
       runIdSchema,
@@ -170,16 +178,19 @@ const rawEvalEngineMethods = defineServiceMethods({
     returns: evalEventsPageSchema,
   },
   appendAuthorityEvent: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([runIdSchema, z.enum(["authority-requested", "authority-decided"]), z.unknown()]),
     returns: z.void(),
   },
   failPendingRun: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([runIdSchema, z.string()]),
     returns: evalRunResultSchema.nullable(),
   },
   readScopeTextPage: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("read"),
     args: z.tuple([
       z.string().min(1).max(512),
@@ -199,26 +210,31 @@ const rawEvalEngineMethods = defineServiceMethods({
       .strict(),
   },
   deleteScopeValue: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("destructive"),
     args: z.tuple([z.string().min(1).max(512)]),
     returns: z.object({ ok: z.boolean(), existed: z.boolean() }).strict(),
   },
   reset: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("destructive"),
     args: z.tuple([]),
     returns: okSchema,
   },
   dispose: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("destructive"),
     args: z.tuple([]),
     returns: okSchema,
   },
   retainExecutionRoot: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("write"),
     args: z.tuple([runIdSchema, z.string().min(1), executionArtifactRefSchema]),
     returns: z.void(),
   },
   listRetainedExecutionRoots: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     capability: "runtime.code-execution.manage",
     authority: hostOnly,
     tier: {
@@ -232,6 +248,7 @@ const rawEvalEngineMethods = defineServiceMethods({
     returns: z.array(retainedRootSchema),
   },
   cancel: {
+    website: {"kind":"closed","reason":"Execution engine control is internal to reviewed execution receivers."} as const,
     ...managed("destructive"),
     args: z.tuple([runIdSchema]),
     returns: cancellationSchema,

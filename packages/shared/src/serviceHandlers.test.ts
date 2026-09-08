@@ -6,10 +6,12 @@ import { defineServiceMethods } from "./typedServiceClient.js";
 
 const methods = defineServiceMethods({
   greet: {
+    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
     args: z.tuple([z.string(), z.number().optional()]),
     returns: z.string(),
   },
   count: {
+    website: {"kind":"eligible","rationale":"Explicit receiver policy for this test fixture."} as const,
     args: z.tuple([]),
     returns: z.number(),
   },

@@ -59,6 +59,7 @@ export const PanelContextMenuActionSchema = z.enum([
 
 export const menuMethods = defineServiceMethods({
   showHamburger: {
+    website: {"kind":"closed","reason":"The menu receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -73,6 +74,7 @@ export const menuMethods = defineServiceMethods({
     examples: [{ args: [{ x: 12, y: 40 }] }],
   },
   showContext: {
+    website: {"kind":"closed","reason":"The menu receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -98,6 +100,7 @@ export const menuMethods = defineServiceMethods({
     ],
   },
   showPanelContext: {
+    website: {"kind":"closed","reason":"The menu receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

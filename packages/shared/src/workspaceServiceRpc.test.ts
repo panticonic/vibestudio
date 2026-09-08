@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createDurableObjectServiceClient,
-  type RpcCallerLike,
-} from "./workspaceServiceRpc";
+import { createDurableObjectServiceClient, type RpcCallerLike } from "./workspaceServiceRpc";
 
 function rpcCall(mock: unknown): RpcCallerLike["call"] {
   return mock as RpcCallerLike["call"];
@@ -46,6 +43,38 @@ describe("createDurableObjectServiceClient", () => {
       ([target, method]) => target === "main" && method === "workers.resolveService"
     );
     expect(resolveCalls).toHaveLength(2);
+  });
+
+  it("binds cached resolution and receiver calls to one exact destination", async () => {
+    const call = vi.fn(
+      async <T = unknown>(
+        target: string,
+        method: string,
+        _args: unknown[],
+        options?: { destination?: { kind: "workspace"; workspaceId: string } }
+      ): Promise<T> => {
+        const workspaceId = options?.destination?.workspaceId;
+        if (target === "main" && method === "workers.resolveService") {
+          return { kind: "durable-object", targetId: `do:notes:${workspaceId}` } as T;
+        }
+        return `${target}:${workspaceId}` as T;
+      }
+    );
+    const destinationA = { kind: "workspace" as const, workspaceId: "workspace:a" };
+    const destinationB = { kind: "workspace" as const, workspaceId: "workspace:b" };
+    const client = createDurableObjectServiceClient({ call: rpcCall(call) }, "notes", null, {
+      destination: destinationA,
+    });
+
+    await expect(client.call("read")).resolves.toBe("do:notes:workspace:a:workspace:a");
+    await expect(client.callWithOptions("read", [], { destination: destinationB })).resolves.toBe(
+      "do:notes:workspace:b:workspace:b"
+    );
+    await expect(client.call("read")).resolves.toBe("do:notes:workspace:a:workspace:a");
+
+    const resolutions = call.mock.calls.filter(([, method]) => method === "workers.resolveService");
+    expect(resolutions).toHaveLength(2);
+    expect(resolutions.map((entry) => entry[3]?.destination)).toEqual([destinationA, destinationB]);
   });
 
   it("cancels service resolution and retries cleanly", async () => {

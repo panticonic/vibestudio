@@ -9,6 +9,7 @@ const open = { sensitivity: "read" as const };
 
 export const developmentClientExecutorMethods = defineServiceMethods({
   register: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -34,6 +35,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   claim: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -68,6 +70,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   readArtifact: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -103,6 +106,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   launched: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -126,6 +130,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   attest: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -142,6 +147,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   bindIsolatedManager: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -158,6 +164,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   consumeAttestation: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -181,6 +188,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   fail: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -196,6 +204,7 @@ export const developmentClientExecutorMethods = defineServiceMethods({
     access: open,
   },
   exited: {
+    website: {"kind":"closed","reason":"The developmentClientExecutor receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

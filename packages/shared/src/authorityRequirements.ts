@@ -62,6 +62,8 @@ export function requirementForPrincipals(
       }
       case "session":
         return [allOf(capability("session", capabilityName), relationship("workspace-member"))];
+      case "website":
+        return [allOf(capability("website", capabilityName), relationship("workspace-member"))];
       case "mission":
         return [allOf(capability("mission", capabilityName), relationship("workspace-member"))];
     }

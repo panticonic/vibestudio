@@ -92,6 +92,7 @@ function createHarness(
   };
   const sendPanelEvent = vi.fn();
   const openExternal = vi.fn(async () => undefined);
+  const openShellSurface = vi.fn();
   const panelView = new PanelView({
     nativeStorageScope: "test-host-device",
     viewManager,
@@ -109,6 +110,7 @@ function createHarness(
     panelOrchestrator,
     sendPanelEvent,
     openExternal,
+    openShellSurface,
     requestSiteCapability: vi.fn(async () => true),
     onPreloadFailure: options.onPreloadFailure,
     panelPreloadPath: "/panel-preload.js",
@@ -123,11 +125,54 @@ function createHarness(
     panelOrchestrator,
     sendPanelEvent,
     openExternal,
+    openShellSurface,
     ...wc,
   };
 }
 
 describe("PanelView plain panel links", () => {
+  it("opens shell surface links from installed panels without navigating their document", async () => {
+    const { panelId, panelView, webContents, windowOpen, openShellSurface, panelOrchestrator } =
+      createHarness();
+    await panelView.createViewForPanel(
+      panelId,
+      "http://127.0.0.1:1234/panels/chat/",
+      "ctx-current"
+    );
+    const url = "vibestudio://surface?v=1&kind=workspace-chooser";
+    const event = { preventDefault: vi.fn() };
+    webContents.emit("will-navigate", event, url);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(openShellSurface).toHaveBeenLastCalledWith({ kind: "workspace-chooser" });
+    expect(windowOpen({ url })).toEqual({ action: "deny" });
+    expect(openShellSurface).toHaveBeenCalledTimes(2);
+    expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
+    expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
+  });
+
+  it("opens source review from website links and popups while ordinary navigation stays in the browser", async () => {
+    const { panelId, panelView, webContents, windowOpen, openShellSurface, panelOrchestrator } =
+      createHarness();
+    await panelView.createViewForBrowser(
+      panelId,
+      "https://example.com/",
+      "ctx-current",
+      "persist:browser-test"
+    );
+    const sourceUrl = "https://github.com/example/project";
+    const url = `vibestudio://surface?v=1&kind=workspace-chooser&source=${encodeURIComponent(sourceUrl)}`;
+    const event = { preventDefault: vi.fn() };
+    webContents.emit("will-navigate", event, url);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(openShellSurface).toHaveBeenLastCalledWith({ kind: "workspace-chooser", sourceUrl });
+    expect(windowOpen({ url })).toEqual({ action: "deny" });
+    expect(openShellSurface).toHaveBeenCalledTimes(2);
+    const ordinary = { preventDefault: vi.fn() };
+    webContents.emit("will-navigate", ordinary, "https://example.com/next");
+    expect(ordinary.preventDefault).not.toHaveBeenCalled();
+    expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
+  });
+
   it("reports a panel preload failure from the exact hosted document", async () => {
     const onPreloadFailure = vi.fn();
     const { panelId, panelView, webContents } = createHarness({ onPreloadFailure });

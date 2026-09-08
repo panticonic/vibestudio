@@ -210,6 +210,11 @@ function cdpBoundaryAuthority(method: string) {
 
 const panelCdpMethods = defineServiceMethods({
   getCdpEndpoint: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "panel.inspect",
     tier: {
       tier: "gated",
@@ -235,6 +240,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "admin" },
   },
   stop: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -249,6 +259,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   consoleHistory: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -262,6 +277,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   evaluate: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -282,6 +302,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   reload: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -297,6 +322,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   screenshot: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -315,6 +345,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   "hostProvider.open": {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "panel.inspect",
     tier: {
       tier: "gated",
@@ -340,6 +375,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "admin" as const },
   },
   "hostProvider.send": {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "panel.inspect",
     tier: {
       tier: "gated",
@@ -367,6 +407,11 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "admin" as const },
   },
   "hostProvider.close": {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelCdpService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "panel.inspect",
     tier: {
       tier: "gated",

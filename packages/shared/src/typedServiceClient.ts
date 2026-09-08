@@ -138,7 +138,7 @@ export interface MethodAuthorityDescriptor {
     resource: AuthorityResourceDerivation;
     /** Override the method tier for this independent authority leaf. */
     tier?: "open" | "gated" | "critical";
-    when?: { origins: readonly ("code" | "user" | "host" | "session")[] };
+    when?: { origins: readonly import("@vibestudio/rpc").AuthorizationOrigin["kind"][] };
   }[];
   prepared?: {
     resolver: string;
@@ -197,7 +197,12 @@ export interface MethodError {
  * (not Zod refinements, so `zod-to-json-schema` preserves them) that flow to
  * agents via the capability catalog. The serializer must explicitly emit them.
  */
+import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "@vibestudio/rpc";
+export { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "@vibestudio/rpc";
+
 export interface MethodSchema {
+  /** Exposure ceiling, independent of ordinary operation authority and workspace export. */
+  website: WebsiteMethodPolicy;
   /** Eligible for explicitly gated calls from another workspace. Omitted is closed. */
   crossWorkspace?: boolean;
   description?: string;
@@ -275,6 +280,7 @@ export type ServiceMethodSchemas = Record<string, MethodSchema>;
  * table for client derivation while checking the table's shape.
  */
 export function defineServiceMethods<const M extends ServiceMethodSchemas>(methods: M): M {
+  for (const [name, method] of Object.entries(methods)) validateWebsiteMethodPolicy(method.website, name);
   return methods;
 }
 
@@ -287,6 +293,7 @@ export function defineServiceMethods<const M extends ServiceMethodSchemas>(metho
 export function defineReceiverServiceMethods<const M extends ServiceMethodSchemas>(methods: M): M {
   return Object.fromEntries(
     Object.entries(methods).map(([name, method]) => {
+      validateWebsiteMethodPolicy(method.website, name);
       if (method.directEffect) return [name, method];
       if (method.tier?.tier === "open") {
         return [name, { ...method, directEffect: { kind: "open" as const } }];
@@ -397,9 +404,7 @@ export function describeArgsValidationError(
       message: issue.message,
       ...(expected !== undefined ? { expected } : {}),
       ...(received !== undefined ? { received } : {}),
-      ...(parameter !== undefined
-        ? { parameter, parameterPath: [parameter, ...rest] }
-        : {}),
+      ...(parameter !== undefined ? { parameter, parameterPath: [parameter, ...rest] } : {}),
     };
   });
   const summaries = issues.map((issue) => {
@@ -410,9 +415,7 @@ export function describeArgsValidationError(
         : issue.path.length > 0
           ? issue.path.join(".")
           : "(args)";
-    const named = issue.parameter
-      ? ` (parameter \`${issue.parameterPath!.join(".")}\`)`
-      : "";
+    const named = issue.parameter ? ` (parameter \`${issue.parameterPath!.join(".")}\`)` : "";
     const detail =
       issue.code === "invalid_type"
         ? `expected ${issue.expected}, received ${issue.received}`

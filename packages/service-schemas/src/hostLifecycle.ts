@@ -15,6 +15,7 @@ const SHUTDOWN_ACCESS: MethodAccessDescriptor = {
 
 export const hostLifecycleMethods = defineServiceMethods({
   shutdown: {
+    website: {"kind":"closed","reason":"The hostLifecycle receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "application.shutdown",
     tier: {
       tier: "gated",

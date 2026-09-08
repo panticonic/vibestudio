@@ -107,6 +107,7 @@ export type PhoneProvisionArgs = z.infer<typeof PhoneProvisionArgsSchema>;
 
 export const phoneProvisioningMethods = defineReceiverServiceMethods({
   providers: {
+    website: {"kind":"closed","reason":"The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "List account-scoped desktop capability providers that can access phones attached to them.",
     args: z.tuple([]),
@@ -125,6 +126,7 @@ export const phoneProvisioningMethods = defineReceiverServiceMethods({
     },
   },
   devices: {
+    website: {"kind":"closed","reason":"The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "Discover Android and iOS devices through the selected desktop, including readiness and compatible app state.",
     args: z.tuple([PhoneDeviceQuerySchema]),
@@ -143,6 +145,7 @@ export const phoneProvisioningMethods = defineReceiverServiceMethods({
     },
   },
   provision: {
+    website: {"kind":"closed","reason":"The phoneProvisioning receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "Install when needed, immediately pair through the selected desktop, and wait for the new device to join the current account.",
     args: z.tuple([PhoneProvisionArgsSchema]),

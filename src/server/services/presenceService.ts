@@ -49,6 +49,11 @@ export function createPresenceService(deps: { presence: PresenceTracker }): Serv
   };
   const methods = defineServiceMethods({
     markPanelActive: {
+      website: {
+        kind: "closed",
+        reason:
+          "The presenceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       capability: "panel.presence.update",
       tier: {
         tier: "gated",
@@ -70,6 +75,11 @@ export function createPresenceService(deps: { presence: PresenceTracker }): Serv
       args: z.tuple([z.string()]),
     },
     markPanelsOwned: {
+      website: {
+        kind: "closed",
+        reason:
+          "The presenceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       capability: "panel.presence.update",
       tier: {
         tier: "gated",
@@ -91,6 +101,11 @@ export function createPresenceService(deps: { presence: PresenceTracker }): Serv
       args: z.tuple([z.array(z.string())]),
     },
     getPanelActiveOwner: {
+      website: {
+        kind: "closed",
+        reason:
+          "The presenceService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       capability: "panel.presence.read",
       tier: {
         tier: "gated",

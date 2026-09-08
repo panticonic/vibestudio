@@ -204,6 +204,7 @@ describe("build method effects", () => {
         sourcemap: false,
         workspaceRpcCatalog: [
           {
+ website: {"kind":"eligible","rationale":"Explicit website receiver policy for this fixture."} as const,
             className: "TestWorker",
             name: "runTest",
             signature: "runTest(): Promise<void>",

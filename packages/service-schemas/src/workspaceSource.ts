@@ -889,12 +889,14 @@ export type InspectAgentHealthInput = z.infer<typeof InspectAgentHealthInputSche
  * transport shapes; `gadWireMethods` below owns that internal boundary. */
 export const gadMethods = defineServiceMethods({
   status: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Return compact GAD storage and projection status metrics.",
     args: z.tuple([]),
     returns: z.array(GadStatusMetricSchema),
     access: readAccess,
   },
   ensureBlob: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Ensure that a content digest is registered in GAD blob metadata.",
     args: z.tuple([
       z.string(),
@@ -905,6 +907,7 @@ export const gadMethods = defineServiceMethods({
     access: writeAccess,
   },
   listUserNotificationsForMe: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "List durable notifications for the host-verified current account; unacknowledged only unless includeAcknowledged is set.",
     args: z.tuple([UserNotificationListInputSchema.optional()]),
@@ -912,54 +915,63 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   acknowledgeUserNotification: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Acknowledge one durable notification for the current account.",
     args: z.tuple([z.string()]),
     returns: z.boolean(),
     access: writeAccess,
   },
   putUserNotification: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Create or update one durable account notification from a trusted runtime.",
     args: z.tuple([UserNotificationSchema]),
     returns: UserNotificationSchema,
     access: writeAccess,
   },
   deleteUserNotification: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Withdraw one durable account notification from a trusted runtime.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.boolean(),
     access: writeAccess,
   },
   getTrajectoryBranchHead: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Return the durable head record for one trajectory branch.",
     args: z.tuple([z.object({ trajectoryId: z.string(), branchId: z.string() }).strict()]),
     returns: TrajectoryBranchHeadSchema.nullable(),
     access: readAccess,
   },
   listTrajectoryBranches: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List trajectory branch summaries in descending update order.",
     args: z.tuple([z.object({ limit: optionalLimit }).strict().optional()]),
     returns: z.array(TrajectoryBranchSchema),
     access: readAccess,
   },
   listTrajectoryInvocations: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List invocation summaries for one trajectory branch.",
     args: z.tuple([z.object({ branchId: z.string(), limit: optionalLimit }).strict()]),
     returns: z.array(TrajectoryInvocationSchema),
     access: readAccess,
   },
   listTrajectoryApprovals: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List durable trajectory approval summaries.",
     args: z.tuple([z.object({ limit: optionalLimit }).strict().optional()]),
     returns: z.array(TrajectoryApprovalSchema),
     access: readAccess,
   },
   listChannelEnvelopes: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List compact channel envelope records in durable channel order.",
     args: z.tuple([z.object({ limit: optionalLimit }).strict().optional()]),
     returns: z.array(CompactChannelEnvelopeSchema),
     access: readAccess,
   },
   listTrajectoryEvents: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List hydrated trajectory events after an optional sequence cursor.",
     args: z.tuple([
       z
@@ -975,12 +987,14 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   appendChannelEnvelope: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Atomically append one semantic envelope to a durable channel log.",
     args: z.tuple([ChannelEnvelopeAppendInputSchema]),
     returns: channelEnvelopeSchema,
     access: writeAccess,
   },
   listMessageTypes: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "List active stored custom message-type definitions for a channel. Reference-class fields are hydrated and validated by PubSub before semantic use.",
     args: z.tuple([z.object({ channelId: z.string() }).strict()]),
@@ -988,6 +1002,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   getMessageType: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "Get one stored custom message-type definition from a channel registry. PubSub owns its hydration boundary.",
     args: z.tuple([z.object({ channelId: z.string(), typeId: z.string() }).strict()]),
@@ -995,18 +1010,21 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   getChannelEnvelope: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Get one hydrated channel envelope by its durable id.",
     args: z.tuple([z.object({ envelopeId: z.string(), channelId: optionalString }).strict()]),
     returns: channelEnvelopeSchema.nullable(),
     access: readAccess,
   },
   getTrajectoryForEnvelope: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Resolve the private trajectory lineage that published an envelope.",
     args: z.tuple([z.object({ envelopeId: z.string() }).strict()]),
     returns: EnvelopeLineageSchema.nullable(),
     access: readAccess,
   },
   resolveTrajectoryForkPoint: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "Resolve the last private trajectory sequence published at or before a channel fork point.",
     args: z.tuple([
@@ -1023,6 +1041,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   listPublishedEnvelopesForTrajectory: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List published envelope lineage matching trajectory selectors.",
     args: z.tuple([
       z
@@ -1040,6 +1059,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   getEnvelopesForTrajectory: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List hydrated published envelopes for matching trajectory selectors.",
     args: z.tuple([
       z
@@ -1057,6 +1077,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   getPublishedArtifactsForTurn: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List published artifacts attributed to one durable agent turn.",
     args: z.tuple([
       z
@@ -1072,60 +1093,70 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   getPrivateLineageForPublishedEnvelope: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Return publication lineage plus the private branch events behind an envelope.",
     args: z.tuple([z.object({ envelopeId: z.string() }).strict()]),
     returns: PrivateLineageForPublishedEnvelopeSchema.nullable(),
     access: readAccess,
   },
   getDownstreamConsumers: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List trajectory events that consumed a published envelope.",
     args: z.tuple([z.object({ envelopeId: z.string(), limit: optionalLimit }).strict()]),
     returns: z.array(TrajectoryEventWireSchema),
     access: readAccess,
   },
   readChannelEnvelopes: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one bounded page of hydrated semantic channel envelopes.",
     args: z.tuple([ChannelEnvelopePageRequestSchema]),
     returns: channelEnvelopePageSchema(channelEnvelopeSchema),
     access: readAccess,
   },
   inspectChannelEnvelopes: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one bounded page of compact channel-envelope diagnostics.",
     args: z.tuple([ChannelEnvelopePageRequestSchema]),
     returns: channelEnvelopePageSchema(ChannelEnvelopeInspectionSchema),
     access: readAccess,
   },
   listStoredValueRefs: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List stored-value references matching event, envelope, or digest selectors.",
     args: z.tuple([InspectStoredValueRefsInputSchema.optional()]),
     returns: z.object({ rows: z.array(StoredValueRefSchema) }).strict(),
     access: readAccess,
   },
   inspectStorageDiagnostics: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Inspect oversized or unresolved durable storage rows with bounded output.",
     args: z.tuple([InspectStorageDiagnosticsInputSchema.optional()]),
     returns: z.object({ rows: z.array(StorageDiagnosticSchema) }).strict(),
     access: readAccess,
   },
   inspectPublicationIntegrity: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Inspect publication mappings and sequence integrity.",
     args: z.tuple([InspectPublicationIntegrityInputSchema.optional()]),
     returns: PublicationIntegrityInspectionSchema,
     access: readAccess,
   },
   inspectTurnState: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Inspect open, streaming, and duplicate durable turn state.",
     args: z.tuple([InspectTurnStateInputSchema.optional()]),
     returns: TurnStateInspectionSchema,
     access: readAccess,
   },
   inspectInvocationState: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Inspect projected and journaled invocation lifecycle state.",
     args: z.tuple([InspectInvocationStateInputSchema.optional()]),
     returns: InvocationStateInspectionSchema,
     access: readAccess,
   },
   diagnoseInvocation: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "Return one bounded causal packet joining an exact invocation to its turn, terminal events, semantic commands, effect intents, and receipts.",
     args: z.tuple([DiagnoseInvocationInputSchema]),
@@ -1133,12 +1164,14 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   inspectChannelRoster: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Inspect durable participant membership for one channel.",
     args: z.tuple([InspectChannelRosterInputSchema]),
     returns: ChannelRosterInspectionSchema,
     access: readAccess,
   },
   inspectAgentHealth: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "Return one compact integrity and in-flight activity snapshot for an agent channel.",
     args: z.tuple([InspectAgentHealthInputSchema]),
@@ -1146,6 +1179,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   listAgentDirectory: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "List agent instances from the durable directory. Every entry carries the exact `agent:<handle>@<channelId>` ref that `notify` accepts.",
     args: z.tuple([ListAgentDirectoryInputSchema]),
@@ -1153,6 +1187,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   searchAgentDirectory: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "Search the agent directory by purpose over handles, names, descriptions, and each instance's latest deliberate utterance.",
     args: z.tuple([SearchAgentDirectoryInputSchema]),
@@ -1160,6 +1195,7 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   describeChannels: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description:
       "Describe channels with their directory participants, envelope count, and last envelope time. Channel titles live in the channel DO's own config and are deliberately absent here.",
     args: z.tuple([DescribeChannelsInputSchema]),
@@ -1167,24 +1203,28 @@ export const gadMethods = defineServiceMethods({
     access: readAccess,
   },
   validateGadHashes: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Validate content, manifest, and state hashes without mutating durable state.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: readAccess,
   },
   clearDirtyAfterValidation: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Clear the dirty marker only after durable hash validation succeeds.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(z.string()) }).strict(),
     access: writeAccess,
   },
   checkGadIntegrity: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Run durable GAD integrity checks and return structured errors.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ ok: z.boolean(), errors: z.array(gadIntegrityErrorSchema) }).strict(),
     access: readAccess,
   },
   rebuildTrajectoryProjections: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Rebuild trajectory-derived projections from the durable event log.",
     args: z.tuple([z.object({}).strict().optional()]),
     returns: z.object({ replayed: z.number().int().nonnegative() }).strict(),
@@ -1298,6 +1338,7 @@ function semanticWireMethod(
   const inputSchema = (method.args as z.ZodTuple<[] | [z.ZodTypeAny]>).items[0] ?? z.undefined();
   const resultSchema = method.returns;
   return {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: `Execute the exact ${wireName} semantic workspace operation.`,
     args: z.tuple([
       z
@@ -1615,30 +1656,35 @@ const channelInviteKeySchema = z.object({ channelId: nonemptyText, userId: nonem
 
 const gadInternalWireMethods = defineServiceMethods({
   workspaceSourceInitializeExactSnapshot: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Initialize the provider from one exact root snapshot.",
     args: z.tuple([workspaceInitializationInputSchema]),
     returns: workspaceInitializationInspectionSchema,
     agentFacing: false,
   },
   workspaceSourceResolve: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Resolve an exact source reference.",
     args: z.tuple([z.object({ ref: nonemptyText }).strict()]),
     returns: z.object({ stateHash: nonemptyText }).strict(),
     agentFacing: false,
   },
   workspaceSourceCurrent: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read the current source state.",
     args: z.tuple([]),
     returns: z.object({ stateHash: nonemptyText }).strict().nullable(),
     agentFacing: false,
   },
   workspaceSourceInspectInitialization: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Inspect exact-root initialization.",
     args: z.tuple([]),
     returns: workspaceInitializationInspectionSchema,
     agentFacing: false,
   },
   workspaceSourceHealth: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Check the workspace-source bootstrap protocol.",
     args: z.tuple([]),
     returns: z
@@ -1647,30 +1693,35 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsSemanticEffectAck: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Acknowledge one exact semantic host effect.",
     args: z.tuple([z.object({ acknowledgement: semanticAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
   vcsSemanticHostReadAck: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Resume one exact semantic content host read.",
     args: z.tuple([z.object({ acknowledgement: semanticHostReadAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
   vcsSemanticContentAck: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Resume an exact semantic command after its authored content is available.",
     args: z.tuple([z.object({ acknowledgement: semanticContentAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
   vcsPendingSemanticEffects: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List durable pending semantic effects.",
     args: z.tuple([]),
     returns: z.array(semanticEffectSchema),
     agentFacing: false,
   },
   vcsContentGcRoots: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List content roots retained by semantic state.",
     args: z.tuple([]),
     returns: z
@@ -1679,12 +1730,14 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsListContexts: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List semantic context identifiers.",
     args: z.tuple([z.object({ prefix: z.string().optional() }).strict()]),
     returns: z.array(nonemptyText),
     agentFacing: false,
   },
   vcsReferencesReachable: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Check whether semantic references are reachable from contexts.",
     args: z.tuple([
       z
@@ -1698,6 +1751,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsIsStateDescendant: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Check semantic state ancestry within a bounded traversal.",
     args: z.tuple([
       z
@@ -1712,6 +1766,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsEnsureContext: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Ensure one semantic context and requested projection.",
     args: z.tuple([
       z
@@ -1727,6 +1782,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsContextMaterializationCommand: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Derive the exact repair command for one context projection.",
     args: z.tuple([
       z.object({ contextId: nonemptyText, materializedState: stateRefSchema.nullable() }).strict(),
@@ -1735,6 +1791,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsForkContext: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Fork one semantic context into another exact coordinate.",
     args: z.tuple([
       z
@@ -1750,18 +1807,21 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   vcsDropContext: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Drop one semantic context.",
     args: z.tuple([z.object({ contextId: nonemptyText }).strict()]),
     returns: z.object({ dropped: z.boolean() }).strict(),
     agentFacing: false,
   },
   resolveRef: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Resolve one generic semantic reference.",
     args: z.tuple([z.object({ refName: nonemptyText }).strict()]),
     returns: refRecordSchema.nullable(),
     agentFacing: false,
   },
   updateRef: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Update one generic semantic reference with optional CAS.",
     args: z.tuple([
       z
@@ -1777,18 +1837,21 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   deleteRef: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Delete one generic semantic reference.",
     args: z.tuple([z.object({ refName: nonemptyText }).strict()]),
     returns: z.object({ deleted: z.number().int().min(0).max(1) }).strict(),
     agentFacing: false,
   },
   deleteLogHead: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Delete one exact log head.",
     args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText }).strict()]),
     returns: z.object({ deleted: z.boolean() }).strict(),
     agentFacing: false,
   },
   listRefs: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List generic references by kind or prefix.",
     args: z.tuple([
       z.object({ kind: z.string().nullish(), prefix: z.string().nullish() }).strict().optional(),
@@ -1797,6 +1860,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   listRefLog: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List the mutation log for one generic reference.",
     args: z.tuple([
       z.object({ refName: nonemptyText, limit: z.number().int().positive().nullish() }).strict(),
@@ -1805,12 +1869,14 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   getLogHead: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one exact log head.",
     args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText }).strict()]),
     returns: logHeadSchema.nullable(),
     agentFacing: false,
   },
   getLogLineage: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read the fork lineage of one log head.",
     args: z.tuple([z.object({ logId: nonemptyText, head: nonemptyText.optional() }).strict()]),
     returns: z
@@ -1823,6 +1889,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   readLog: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read a bounded exact log range.",
     args: z.tuple([
       z
@@ -1840,6 +1907,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   getLogEvent: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one exact log envelope.",
     args: z.tuple([
       z.object({ logId: nonemptyText, head: nonemptyText, envelopeId: nonemptyText }).strict(),
@@ -1848,6 +1916,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   hasLogEvents: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Return requested envelope identifiers present in a log lineage.",
     args: z.tuple([
       z
@@ -1862,6 +1931,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   appendLogEvent: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Append exact events to one semantic log.",
     args: z.tuple([
       z
@@ -1880,12 +1950,14 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   forkLog: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Fork one log head into a new exact lineage.",
     args: z.tuple([forkLogInputSchema]),
     returns: forkLogResultSchema,
     agentFacing: false,
   },
   checkLogIntegrity: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Validate durable log chains and head pointers.",
     args: z.tuple([
       z.object({ logId: z.string().nullish(), head: z.string().nullish() }).strict().optional(),
@@ -1894,6 +1966,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   indexMemoryFiles: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Index exact file text for semantic recall.",
     args: z.tuple([
       z
@@ -1909,18 +1982,21 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   getMemoryIndexMarker: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one memory-index state marker.",
     args: z.tuple([z.object({ key: nonemptyText }).strict()]),
     returns: z.object({ value: z.string().nullable() }).strict(),
     agentFacing: false,
   },
   setMemoryIndexMarker: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Write one memory-index state marker.",
     args: z.tuple([z.object({ key: nonemptyText, value: z.string() }).strict()]),
     returns: z.void(),
     agentFacing: false,
   },
   recallMemory: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Search bounded semantic memory with provenance.",
     args: z.tuple([
       z
@@ -1957,12 +2033,14 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   getTrajectoryEvent: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one trajectory event by exact identifier.",
     args: z.tuple([z.object({ eventId: nonemptyText }).strict()]),
     returns: TrajectoryEventWireSchema.nullable(),
     agentFacing: false,
   },
   forkTrajectoryBranch: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Fork one trajectory branch at an exact semantic boundary.",
     args: z.tuple([
       z
@@ -2009,6 +2087,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   putChannelMembership: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Project one versioned channel membership and invite.",
     args: z.tuple([ChannelInviteSchema.extend({ revision: z.number().int().nonnegative() })]),
     returns: z
@@ -2017,6 +2096,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   deleteChannelMembership: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Project one versioned channel membership removal.",
     args: z.tuple([channelInviteKeySchema.extend({ revision: z.number().int().nonnegative() })]),
     returns: z
@@ -2029,24 +2109,28 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   listChannelMembershipsForUser: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List channels indexed for one workspace account.",
     args: z.tuple([z.object({ userId: nonemptyText }).strict()]),
     returns: z.object({ userId: nonemptyText, channelIds: z.array(nonemptyText) }).strict(),
     agentFacing: false,
   },
   purgeRevokedUserChannelIndexes: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Purge remaining channel indexes for a revoked account.",
     args: z.tuple([z.object({ userId: nonemptyText }).strict()]),
     returns: z.void(),
     agentFacing: false,
   },
   deleteChannelInvite: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Delete one channel invite from the workspace inbox.",
     args: z.tuple([channelInviteKeySchema]),
     returns: z.object({ deleted: z.boolean() }).strict(),
     agentFacing: false,
   },
   getChannelInvite: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "Read one pending channel invite.",
     args: z.tuple([channelInviteKeySchema]),
     returns: ChannelInviteSchema.nullable(),
@@ -2061,6 +2145,7 @@ const gadInternalWireMethods = defineServiceMethods({
     agentFacing: false,
   },
   listChannelLogs: {
+    website: {"kind":"closed","reason":"Raw workspace storage and shared transcript indexes require a reviewed public receiver."} as const,
     description: "List canonical channel log identities.",
     args: z.tuple([]),
     returns: z.array(

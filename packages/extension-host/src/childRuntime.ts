@@ -166,7 +166,7 @@ function createExtensionsClient(): ExtensionsClient {
       options?: { signal?: AbortSignal }
     ) => getRuntimeBridge().stream("main", method, args, options),
     on: (eventName: string, listener: (event: import("@vibestudio/rpc").RpcEventContext) => void) =>
-      getRuntimeBridge().on(eventName, listener),
+      getRuntimeBridge().on(eventName, listener, {"kind":"closed","reason":"This listener consumes host or implementation lifecycle events."}),
   };
   const events = new EventsClient(proxyRpc);
   const eventRefcounts = new Map<string, number>();
@@ -434,7 +434,7 @@ function createContext() {
         options?: { signal?: AbortSignal }
       ) => getRuntimeBridge().stream(targetId, method, args, options),
       on: (eventName: string, cb: (event: { payload: unknown }) => void) =>
-        getRuntimeBridge().on(eventName, cb),
+        getRuntimeBridge().on(eventName, cb, {"kind":"closed","reason":"This listener consumes host or implementation lifecycle events."}),
     },
     workers: {
       listServices: () => rpcCall("workers.listServices", []),
@@ -843,7 +843,7 @@ async function main(): Promise<void> {
         });
       }
     });
-  });
+  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
 
   runtimeBridge.expose("extension.invokeProvider", async (req) => {
     assertHostControlCaller(req, "extension.invokeProvider");
@@ -878,7 +878,7 @@ async function main(): Promise<void> {
         });
       }
     });
-  });
+  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
 
   runtimeBridge.exposeStreaming("extension.invokeStream", async (req, sink) => {
     assertHostControlCaller(req, "extension.invokeStream");
@@ -903,20 +903,20 @@ async function main(): Promise<void> {
       }
       throw new Error(`Extension method ${method} did not return a Response or ReadableStream`);
     });
-  });
+  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
 
   runtimeBridge.expose("extension.fetchResponseBodyChunk", async (req) => {
     assertHostControlCaller(req, "extension.fetchResponseBodyChunk");
     const [streamId] = req.args as [string];
     return readNextResponseBodyChunk(streamId);
-  });
+  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
 
   runtimeBridge.expose("extension.fetchResponseBodyClose", async (req) => {
     assertHostControlCaller(req, "extension.fetchResponseBodyClose");
     const [streamId] = req.args as [string];
     await closeResponseBodyStream(streamId);
     return null;
-  });
+  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
 
   runtimeBridge.expose("extension.fetch", async (req) => {
     assertHostControlCaller(req, "extension.fetch");
@@ -963,7 +963,7 @@ async function main(): Promise<void> {
         settleWaitUntil(waitUntil);
       }
     });
-  });
+  }, {"kind":"closed","reason":"This handler controls an internal execution or presentation surface."});
 
   const disposeSubscriptions = () => {
     while (ctx.subscriptions.length) {

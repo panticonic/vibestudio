@@ -36,6 +36,11 @@ const openTier = {
 
 const methods = defineServiceMethods({
   openPublic: {
+    website: {
+      kind: "closed",
+      reason:
+        "The chromiumFetchService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTier,
     description: "Open a cookie-free URL through the managed Chromium host.",
     args: z.tuple([z.string().url()]),
@@ -44,6 +49,11 @@ const methods = defineServiceMethods({
     access: { sensitivity: "read" as const },
   },
   openBrowser: {
+    website: {
+      kind: "closed",
+      reason:
+        "The chromiumFetchService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: BROWSER_FETCH_CAPABILITY,
     tier: openTier,
     presentation: BROWSER_FETCH_PRESENTATION,
@@ -69,6 +79,11 @@ const methods = defineServiceMethods({
     access: { sensitivity: "read" as const },
   },
   read: {
+    website: {
+      kind: "closed",
+      reason:
+        "The chromiumFetchService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTier,
     description: "Read an owner-bound chunk from an open Chromium response.",
     args: z.tuple([
@@ -81,6 +96,11 @@ const methods = defineServiceMethods({
     access: { sensitivity: "read" as const },
   },
   close: {
+    website: {
+      kind: "closed",
+      reason:
+        "The chromiumFetchService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: openTier,
     description: "Close an owner-bound Chromium response.",
     args: z.tuple([z.string().uuid()]),

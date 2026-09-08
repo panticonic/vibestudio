@@ -103,7 +103,7 @@ export interface BrowserDataClient {
   previewSensitiveImport(
     request: SensitiveBrowserImportSelection
   ): Promise<SensitiveBrowserImportPreview>;
-  startImport(selection: NonSensitiveBrowserImportSelection): Promise<ImportJobSnapshot>;
+  startImport(selection: NonSensitiveBrowserImportSelection, operationId: string): Promise<ImportJobSnapshot>;
   startSensitiveImport(
     request: SensitiveBrowserImportRequest
   ): Promise<SensitiveBrowserImportStatus>;
@@ -207,7 +207,7 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     listImportSources: (hostId) => callNative("listImportSources", hostId),
     previewImport: (selection) => callNative("previewImport", selection),
     previewSensitiveImport: (request) => callNative("previewSensitiveImport", request),
-    startImport: (selection) => callNative("startImport", selection),
+    startImport: (selection, operationId) => callNative("startImport", selection, operationId),
     startSensitiveImport: (request) => callNative("startSensitiveImport", request),
     observeSensitiveImport: (operationId) => callNative("observeSensitiveImport", operationId),
     cancelSensitiveImport: (operationId) => callNative("cancelSensitiveImport", operationId),

@@ -58,6 +58,7 @@ export type PushRegisterRequest = z.infer<typeof PushRegisterRequestSchema>;
 
 export const pushMethods = defineServiceMethods({
   register: {
+    website: {"kind":"closed","reason":"The push receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "push.manage",
     tier: {
       tier: "gated",
@@ -89,6 +90,7 @@ export const pushMethods = defineServiceMethods({
     ],
   },
   unregister: {
+    website: {"kind":"closed","reason":"The push receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "push.manage",
     tier: {
       tier: "gated",
@@ -116,6 +118,7 @@ export const pushMethods = defineServiceMethods({
     examples: [{ args: ["client-1"], returns: { unregistered: true } }],
   },
   send: {
+    website: {"kind":"closed","reason":"The push receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "push.send",
     tier: {
       tier: "gated",
@@ -142,6 +145,7 @@ export const pushMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   listRegistrations: {
+    website: {"kind":"closed","reason":"The push receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "push.manage",
     tier: {
       tier: "gated",

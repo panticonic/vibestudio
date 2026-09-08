@@ -6,6 +6,8 @@ import {
   workspaces,
   contextId,
   workspaceConnection,
+  rpc,
+  createConversationClient,
 } from "@workspace/runtime";
 
 /** Shared application source: installed panel entry and ordinary static website entry both render this. */
@@ -18,6 +20,20 @@ export default function App() {
   const [workspaceName, setWorkspaceName] = useState("");
   const [pending, setPending] = useState<Parameters<typeof workspaces.create>[0] | null>(null);
   const [receiptMissing, setReceiptMissing] = useState(false);
+  const [channelId, setChannelId] = useState("");
+  const [message, setMessage] = useState("");
+  const [conversation, setConversation] = useState<unknown[]>([]);
+  const [listening, setListening] = useState(false);
+  const conversationClient = useRef(createConversationClient(rpc));
+  const subscriptionAbort = useRef<AbortController | null>(null);
+  const conversationGeneration = useRef(0);
+  function invalidateConversation() {
+    ++conversationGeneration.current;
+    subscriptionAbort.current?.abort();
+    subscriptionAbort.current = null;
+    setListening(false);
+    setConversation([]);
+  }
   const creationKey = () => `vibestudio:creation:${contextId}`;
   function readPending() {
     const saved = localStorage.getItem(creationKey());
@@ -47,6 +63,7 @@ export default function App() {
       setConnected(workspaceConnection.connected);
       if (!workspaceConnection.connected) {
         ++operation.current;
+        invalidateConversation();
         setBusy(false);
         setInspection(null);
         setPending(null);
@@ -55,6 +72,9 @@ export default function App() {
     });
     return () => {
       ++operation.current;
+      ++conversationGeneration.current;
+      subscriptionAbort.current?.abort();
+      subscriptionAbort.current = null;
       unsubscribe();
     };
   }, []);
@@ -149,6 +169,69 @@ export default function App() {
       if (current === operation.current) setBusy(false);
     }
   }
+  async function loadConversation() {
+    if (!channelId.trim()) return;
+    const current = conversationGeneration.current;
+    setBusy(true);
+    try {
+      const result = await conversationClient.current.history(channelId.trim());
+      if (current !== conversationGeneration.current) return;
+      setConversation(Array.isArray(result) ? result : [result]);
+      setStatus("Conversation history loaded from the connected workspace.");
+    } catch (error) {
+      if (current === conversationGeneration.current)
+        setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (current === conversationGeneration.current) setBusy(false);
+    }
+  }
+  async function sendMessage() {
+    if (!channelId.trim() || !message.trim()) return;
+    const current = conversationGeneration.current;
+    setBusy(true);
+    try {
+      await conversationClient.current.send(channelId.trim(), message.trim());
+      if (current !== conversationGeneration.current) return;
+      setMessage("");
+      setStatus("Message accepted by the ordinary workspace conversation.");
+    } catch (error) {
+      if (current === conversationGeneration.current)
+        setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (current === conversationGeneration.current) setBusy(false);
+    }
+  }
+  async function listenToConversation() {
+    if (!channelId.trim()) return;
+    subscriptionAbort.current?.abort();
+    const abort = new AbortController();
+    subscriptionAbort.current = abort;
+    const current = conversationGeneration.current;
+    setListening(true);
+    try {
+      await conversationClient.current.subscribe(
+        channelId.trim(),
+        "website-participant",
+        { name: "website chat", transport: "rpc" },
+        (record: unknown) => {
+          if (current === conversationGeneration.current && !abort.signal.aborted)
+            setConversation((items) => [...items, record]);
+        },
+        { signal: abort.signal }
+      );
+    } catch (error) {
+      if (!abort.signal.aborted && current === conversationGeneration.current)
+        setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (subscriptionAbort.current === abort) {
+        subscriptionAbort.current = null;
+        setListening(false);
+      }
+    }
+  }
+  function stopListening() {
+    subscriptionAbort.current?.abort();
+  }
   return (
     <main>
       <p className="eyebrow">Vibestudio enabled</p>
@@ -181,7 +264,10 @@ export default function App() {
           </button>
           {workspaceConnection.kind === "website" && (
             <button
-              onClick={() => void disconnectWorkspace().catch((error) => setStatus(String(error)))}
+              onClick={() => {
+                subscriptionAbort.current?.abort();
+                void disconnectWorkspace().catch((error: unknown) => setStatus(String(error)));
+              }}
             >
               Disconnect
             </button>
@@ -231,6 +317,46 @@ export default function App() {
           >
             Create workspace
           </button>
+        </section>
+      )}
+      {connected && (
+        <section aria-labelledby="conversation-heading">
+          <h2 id="conversation-heading">Workspace conversation</h2>
+          <p>Read, send, and stream messages in an existing workspace channel.</p>
+          <label>
+            Channel RPC target
+            <input
+              value={channelId}
+              onChange={(event) => {
+                invalidateConversation();
+                setBusy(false);
+                setChannelId(event.target.value);
+              }}
+            />
+          </label>
+          <div className="actions">
+            <button disabled={busy || !channelId.trim()} onClick={() => void loadConversation()}>
+              Load history
+            </button>
+            <button
+              disabled={busy || listening || !channelId.trim()}
+              onClick={() => void listenToConversation()}
+            >
+              {listening ? "Listening…" : "Stream updates"}
+            </button>
+            {listening && <button onClick={stopListening}>Stop stream</button>}
+          </div>
+          <label>
+            Message
+            <input value={message} onChange={(event) => setMessage(event.target.value)} />
+          </label>
+          <button
+            disabled={busy || !channelId.trim() || !message.trim()}
+            onClick={() => void sendMessage()}
+          >
+            Send message
+          </button>
+          <pre aria-label="Conversation events">{JSON.stringify(conversation, null, 2)}</pre>
         </section>
       )}
     </main>

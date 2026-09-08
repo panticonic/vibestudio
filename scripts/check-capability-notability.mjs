@@ -81,7 +81,7 @@ visitPackageManifests(userlandRoot);
 // review classification belongs beside the service's action and presentation.
 // This is the same declaration the live build and install review consume.
 const workspaceServiceDeclarationGaps = [];
-for (const relativeConfigPath of ["meta/template.yml", "meta/vibestudio.yml"]) {
+for (const relativeConfigPath of ["meta/vibestudio.yml"]) {
   const workspaceConfigPath = path.join(userlandRoot, relativeConfigPath);
   const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
   for (const service of workspaceConfig.services ?? []) {

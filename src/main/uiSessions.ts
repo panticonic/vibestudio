@@ -12,6 +12,8 @@ import type { HostUiSession, ServerClient } from "./serverClient.js";
 /** Native ownership metadata, never supplied by the renderer. */
 export interface NativeIpcCaller {
   callerId: string;
+  browser?: boolean;
+  documentId?: string;
   callerKind: "shell" | "panel" | "app";
   runtimeId?: string;
   workspaceId?: string;

@@ -77,6 +77,7 @@ const LIST_ACCESS: MethodAccessDescriptor = {
 
 export const workspacePresenceMethods = defineServiceMethods({
   list: {
+    website: {"kind":"closed","reason":"The workspacePresence receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

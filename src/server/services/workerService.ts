@@ -109,6 +109,13 @@ export function createWorkerService(deps: {
   workspaceId?: string;
   getCallerContextId?: (callerId: string) => string | null;
   loadContextDeclarations?: (contextId: string) => Promise<WorkspaceDeclarations | null>;
+  /** Decide whether one exact exported receiver operation may be disclosed to
+   * this foreign caller. This is a hard-policy read and must never acquire
+   * authority or activate the receiver. */
+  canDiscoverCrossWorkspaceMethod?: (
+    ctx: ServiceContext,
+    input: { target: string; operation: string }
+  ) => boolean;
   /**
    * Begin immutable artifact preparation for a structurally resolved service.
    * This is cache work only: it must neither execute nor activate the provider.
@@ -234,6 +241,11 @@ export function createWorkerService(deps: {
 
   const methods = defineServiceMethods({
     listSources: {
+      website: {
+        kind: "eligible",
+        rationale:
+          "Service resolution must apply the registered receiver’s website policy and authority.",
+      } as const,
       tier: {
         tier: "open",
         session: "family",
@@ -250,6 +262,11 @@ export function createWorkerService(deps: {
       access: { sensitivity: "read" as const },
     },
     listServices: {
+      website: {
+        kind: "eligible",
+        rationale:
+          "Service resolution must apply the registered receiver’s website policy and authority.",
+      } as const,
       tier: {
         tier: "open",
         session: "family",
@@ -262,9 +279,14 @@ export function createWorkerService(deps: {
         "List manifest-declared workspace services visible in the caller's live context; rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval.",
       args: z.tuple([]),
       argumentNames: [],
-      access: { sensitivity: "read" as const },
+      access: { sensitivity: "read" as const, crossWorkspace: true },
     },
     resolveService: {
+      website: {
+        kind: "eligible",
+        rationale:
+          "Service resolution must apply the registered receiver’s website policy and authority.",
+      } as const,
       tier: {
         tier: "open",
         session: "family",
@@ -277,10 +299,15 @@ export function createWorkerService(deps: {
         "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
       argumentNames: ["query", "objectKey"],
-      access: { sensitivity: "read" as const },
+      access: { sensitivity: "read" as const, crossWorkspace: true },
       authority: preparedResolutionAuthority("resolveService"),
     },
     resolveDurableObject: {
+      website: {
+        kind: "eligible",
+        rationale:
+          "Service resolution must apply the registered receiver’s website policy and authority.",
+      } as const,
       tier: {
         tier: "open",
         session: "family",
@@ -297,6 +324,11 @@ export function createWorkerService(deps: {
       authority: preparedResolutionAuthority("resolveDurableObject"),
     },
     resetStorage: {
+      website: {
+        kind: "closed",
+        reason:
+          "The workerService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       ...storageMaintenancePolicy,
       description:
         "Back up, integrity-check, and reset one exact disposable Durable Object storage target. Intent is required audit context; this is not an upgrade path.",
@@ -305,6 +337,11 @@ export function createWorkerService(deps: {
       returns: z.object({ operationId: z.string() }).strict(),
     },
     listStorageBackups: {
+      website: {
+        kind: "closed",
+        reason:
+          "The workerService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       tier: {
         tier: "open",
         session: "family",
@@ -324,6 +361,11 @@ export function createWorkerService(deps: {
       access: { sensitivity: "read" },
     },
     restoreStorageBackup: {
+      website: {
+        kind: "closed",
+        reason:
+          "The workerService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       ...storageMaintenancePolicy,
       description:
         "Back up the current files, verify a named backup, and restore it to the same exact Durable Object target.",
@@ -349,6 +391,7 @@ export function createWorkerService(deps: {
           String(query),
           objectKey == null ? null : String(objectKey)
         );
+        await assertForeignServiceExported(ctx, scoped.service);
         const { service } = scoped;
         const singleton =
           service.kind === "durable-object"
@@ -473,6 +516,50 @@ export function createWorkerService(deps: {
           (row) =>
             !productQueries.has(row.name) && !row.protocols.some((p) => productQueries.has(p))
         );
+        const foreignCaller =
+          ctx.caller.workspaceId !== undefined &&
+          deps.workspaceId !== undefined &&
+          ctx.caller.workspaceId !== deps.workspaceId;
+        if (foreignCaller) {
+          if (!deps.canDiscoverCrossWorkspaceMethod) return [];
+          const providerCatalogs = new Map<
+            string,
+            Promise<import("../buildV2/index.js").ResolvedWorkspaceRpcCatalog>
+          >();
+          const disclosed = await Promise.all(
+            mainRows.map(async (row): Promise<ServiceListRow | null> => {
+              if (row.kind !== "durable-object") return null;
+              try {
+                const providerKey = `${row.source}\0${row.className}`;
+                let providerCatalog = providerCatalogs.get(providerKey);
+                if (!providerCatalog) {
+                  providerCatalog = buildSystem.resolveWorkspaceRpcCatalog(
+                    row.source,
+                    row.className
+                  );
+                  providerCatalogs.set(providerKey, providerCatalog);
+                }
+                const catalog = await providerCatalog;
+                const target = `workspace-service:${row.name}`;
+                return catalog.methods.some(
+                  (method) =>
+                    method.access?.crossWorkspace === true &&
+                    deps.canDiscoverCrossWorkspaceMethod!(ctx, {
+                      target,
+                      operation: method.name,
+                    })
+                )
+                  ? row
+                  : null;
+              } catch {
+                // Discovery is a filtered projection. Invalid, undisclosed, or
+                // policy-denied providers reveal no row and no diagnostic.
+                return null;
+              }
+            })
+          );
+          return disclosed.filter((row): row is ServiceListRow => row !== null);
+        }
         const scopedContext = await declarationsForCallerContext(ctx);
         if (!scopedContext) return [...productRows, ...mainRows];
         const seen = new Set([...productQueries, ...serviceQueryKeys(workspaceDecls)]);
@@ -487,6 +574,7 @@ export function createWorkerService(deps: {
       },
       resolveService: async (ctx, [query, objectKey]) => {
         const scoped = await resolveWorkspaceServiceForCaller(ctx, query, objectKey);
+        await assertForeignServiceExported(ctx, scoped.service);
         const service = scoped.service;
         if (service.kind === "durable-object") {
           const singleton = scoped.decls.singletons.find(service.source, service.className);
@@ -658,6 +746,33 @@ export function createWorkerService(deps: {
       ...scoped,
       service: resolveWorkspaceService(scoped.decls, query, objectKey),
     };
+  }
+
+  async function assertForeignServiceExported(
+    ctx: ServiceContext,
+    service: ResolvedWorkspaceService
+  ): Promise<void> {
+    if (
+      ctx.caller.workspaceId === undefined ||
+      deps.workspaceId === undefined ||
+      ctx.caller.workspaceId === deps.workspaceId
+    ) {
+      return;
+    }
+    const deny = () => {
+      throw Object.assign(new Error("Cross-workspace RPC is not permitted"), { code: "EACCES" });
+    };
+    if (service.origin !== "workspace" || service.kind !== "durable-object") return deny();
+    try {
+      const catalog = await buildSystem.resolveWorkspaceRpcCatalog(
+        service.source,
+        service.className
+      );
+      if (!catalog.methods.some((method) => method.access?.crossWorkspace === true)) deny();
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "EACCES") throw error;
+      deny();
+    }
   }
 
   async function resolveDurableObjectForCaller(

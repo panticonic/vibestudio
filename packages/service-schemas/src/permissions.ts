@@ -142,6 +142,7 @@ export type PendingAuthorityRequest = z.infer<typeof pendingAuthorityRequestSche
 
 export const permissionsMethods = defineServiceMethods({
   list: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.read",
     tier: {
       tier: "gated",
@@ -166,6 +167,7 @@ export const permissionsMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   revoke: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.revoke",
     tier: {
       tier: "critical",
@@ -197,6 +199,7 @@ export const permissionsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   listAgentProfiles: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.read",
     tier: {
       tier: "gated",
@@ -222,6 +225,7 @@ export const permissionsMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   safetyStatus: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.read",
     tier: {
       tier: "gated",
@@ -248,6 +252,7 @@ export const permissionsMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   listPendingRequests: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.read",
     tier: {
       tier: "gated",
@@ -273,6 +278,7 @@ export const permissionsMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   updateAgentProfile: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.revoke",
     tier: {
       tier: "critical",
@@ -308,6 +314,7 @@ export const permissionsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   setWorkspaceAuthorityLock: {
+    website: {"kind":"closed","reason":"Grant administration belongs to trusted permission management UI."} as const,
     capability: "permissions.revoke",
     tier: {
       tier: "critical",

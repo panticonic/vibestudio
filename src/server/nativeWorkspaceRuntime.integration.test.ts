@@ -26,8 +26,7 @@ it("runs the production disk receiver under its platform execution contract", as
     commit: "a".repeat(40),
     snapshot: `v1-sha256:${"b".repeat(64)}`,
   };
-  vi.stubEnv("VIBESTUDIO_DEV_TEMPLATE_SOURCES", JSON.stringify([{ pin, checkout }]));
-  vi.stubEnv("VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED", "1");
+  vi.stubEnv("VIBESTUDIO_WORKSPACE_SOURCES", JSON.stringify([{ pin, checkout }]));
   const probe = path.join(sourceRoot, "template-probe.cjs");
   await writeFile(
     probe,
@@ -36,8 +35,7 @@ it("runs the production disk receiver under its platform execution contract", as
     const fs = require('node:fs/promises');
     const { execFileSync } = require('node:child_process');
     (async () => {
-      assert.equal(process.env.VIBESTUDIO_DEV_TEMPLATE_SOURCES, undefined);
-      assert.equal(process.env.VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED, undefined);
+      assert.equal(process.env.VIBESTUDIO_WORKSPACE_SOURCES, undefined);
       if (process.platform !== 'win32') {
         await assert.rejects(fs.readFile(${JSON.stringify(checkout + "/template.txt")}, 'utf8'));
       }

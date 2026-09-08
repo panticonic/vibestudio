@@ -10,7 +10,7 @@
  * Filtering reuses `isCatalogEntryVisible` so discovery never advertises what
  * the caller cannot invoke (mirrors the dispatcher's static gate).
  */
-import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { CatalogAudience } from "./buildCatalog.js";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import type { CatalogEntry, CatalogHit, CatalogSurface } from "@vibestudio/service-schemas/docs";
 import { buildCatalog, isCatalogEntryVisible, type BuildCatalogDeps } from "./buildCatalog.js";
@@ -21,9 +21,9 @@ export interface CatalogSearchOpts {
 }
 
 export interface CatalogIndex {
-  search(query: string, callerKind: CallerKind, opts?: CatalogSearchOpts): CatalogHit[];
-  get(id: string, callerKind: CallerKind): CatalogEntry | null;
-  listSurfaces(callerKind: CallerKind): Array<{ surface: CatalogSurface; count: number }>;
+  search(query: string, callerKind: CatalogAudience, opts?: CatalogSearchOpts): CatalogHit[];
+  get(id: string, callerKind: CatalogAudience): CatalogEntry | null;
+  listSurfaces(callerKind: CatalogAudience): Array<{ surface: CatalogSurface; count: number }>;
 }
 
 let nextSourceId = 1;
@@ -48,6 +48,7 @@ function serviceSourceKey(def: CatalogServiceDefinition): string {
         sourceId(method.args),
         method.returns ? sourceId(method.returns) : "",
         JSON.stringify(method.authority ?? null),
+        JSON.stringify(method.website),
         method.access?.sensitivity ?? "",
         method.description ?? "",
       ].join(":")
@@ -164,13 +165,21 @@ export function createCatalogIndex(load: () => BuildCatalogDeps): CatalogIndex {
       // agent which exact entries to open next. Compute this per caller rather
       // than storing all children on the root, so method-level policies never
       // leak restricted capabilities.
-      if (e.surface === "service" && !e.parent) {
+      if (
+        (e.surface === "service" || e.surface === "workspace" || e.surface === "runtime") &&
+        !e.parent
+      ) {
         const members = entries()
           .filter((candidate) => candidate.parent === e.id)
           .filter((candidate) => isCatalogEntryVisible(candidate, callerKind))
-          .map((candidate) => candidate.qualifiedName)
+          .map((candidate) =>
+            e.surface === "service"
+              ? candidate.qualifiedName
+              : candidate.qualifiedName.slice(e.qualifiedName.length + 1)
+          )
           .sort();
-        return { ...e, ...(members.length > 0 ? { members } : {}) };
+        const { members: _unfilteredMembers, ...parent } = e;
+        return { ...parent, ...(members.length > 0 ? { members } : {}) };
       }
       return e;
     },

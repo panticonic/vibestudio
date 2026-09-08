@@ -53,6 +53,7 @@ export function workspaceRpcSchemaMetadata(
     Object.entries(schema).map(([name, method]) => [
       name,
       {
+        website: method.website,
         ...(method.authority ? { authority: method.authority } : {}),
         ...(method.tier ? { tier: method.tier } : {}),
         ...(method.access ? { access: method.access } : {}),
@@ -124,6 +125,7 @@ export function workspaceRpcSchemaVersion(): string {
             return [
               method,
               {
+                website: definition.website,
                 authority: definition.authority ?? null,
                 tier: definition.tier ?? null,
                 access: definition.access ?? null,

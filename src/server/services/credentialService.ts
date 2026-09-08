@@ -1414,7 +1414,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   const definition: ServiceDefinition = {
     name: "credentials",
     description: "URL-bound userland credential storage and egress",
-    authority: { principals: ["user", "code", "host"] },
+    authority: { principals: ["user", "code", "host", "website"] },
     methods: credentialsMethods,
     handler: defineServiceHandler("credentials", credentialsMethods, {
       storeCredential: (ctx, [input]) => storeCredential(ctx, input),

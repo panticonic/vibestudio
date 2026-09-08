@@ -83,6 +83,7 @@ export const ConnectionInfoResponseSchema = z
 
 export const authMethods = defineServiceMethods({
   grantConnection: {
+    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
     capability: "connections.approve",
     tier: {
       tier: "gated",
@@ -110,6 +111,7 @@ export const authMethods = defineServiceMethods({
     access: AUTH_GRANT_ACCESS,
   },
   getConnectionInfo: {
+    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -125,6 +127,7 @@ export const authMethods = defineServiceMethods({
     access: AUTH_READ_ACCESS,
   },
   mintAgentCredential: {
+    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
     capability: "subagents.create",
     tier: {
       tier: "gated",
@@ -166,6 +169,7 @@ export const authMethods = defineServiceMethods({
     examples: [{ args: [{ entityId: "session:s1" }] }],
   },
   revokeAgentCredential: {
+    website: {"kind":"closed","reason":"Transport credentials and principal admission belong to authenticated hosts."} as const,
     tier: {
       tier: "open",
       session: "family",

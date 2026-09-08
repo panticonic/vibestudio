@@ -216,6 +216,7 @@ const childEdgeSchema = z
 
 const rawWorkspaceStateEngineMethods = defineServiceMethods({
   initializePanels: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     description:
       "Initialize distribution panel reservations and slots once in the workspace transaction.",
@@ -226,61 +227,73 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.array(RawPanelDetailSchema),
   },
   entityActivate: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([entityActivationSchema]),
     returns: entityRecordSchema,
   },
   entityReserve: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([entityReservationSchema]),
     returns: entityRecordSchema,
   },
   entityAdvanceExecution: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([entityActivationSchema]),
     returns: entityRecordSchema,
   },
   entityAdvanceExecutions: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.array(entityActivationSchema)]),
     returns: z.array(entityRecordSchema),
   },
   entityRebindAgentChannel: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(1), z.string().min(1).max(200)]),
     returns: entityRecordSchema,
   },
   entityRetire: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("destructive"),
     args: z.tuple([z.string().min(1)]),
     returns: entityRecordSchema.nullable(),
   },
   entityCleanupComplete: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(1)]),
     returns: z.void(),
   },
   runtimeResourceBindingsReplace: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(1), z.array(runtimeResourceBindingSchema).max(16)]),
     returns: z.void(),
   },
   runtimeResourceBindingsRelease: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(1)]),
     returns: z.void(),
   },
   runtimeResourceBindingEntities: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1), z.array(z.string().min(1)).max(256)]),
     returns: z.array(z.string().min(1)),
   },
   entityFindIncompleteCleanups: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(entityRecordSchema),
   },
   entityGc: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("destructive"),
     args: z.tuple([
       z
@@ -295,16 +308,19 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.array(z.string()),
   },
   entityResolve: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1)]),
     returns: entityRecordSchema.nullable(),
   },
   entityResolveActive: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1)]),
     returns: entityRecordSchema.nullable(),
   },
   entityResolveContext: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1)]),
     returns: z.string().nullable(),
@@ -313,51 +329,61 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     ...workspaceStateMethods["slot.resolveByEntity"],
   },
   lifecycleLeaseUpsert: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([LifecycleLeaseSchema]),
     returns: z.void(),
   },
   lifecycleLeaseClear: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([LifecycleKeySchema]),
     returns: z.void(),
   },
   durableWorkOwnerRegister: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([LifecycleKeySchema.extend({ queues: z.array(durableWorkQueueSchema).min(1) })]),
     returns: z.void(),
   },
   durableWorkOwnerList: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(durableWorkReadyHintSchema),
   },
   alarmSet: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([alarmSetInputSchema]),
     returns: z.enum(["accepted", "stale"]),
   },
   alarmClear: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([alarmClearInputSchema]),
     returns: z.enum(["accepted", "stale"]),
   },
   alarmNextWakeAt: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.number().int().nonnegative(), z.array(LifecycleKeySchema).optional()]),
     returns: z.number().int().nonnegative().nullable(),
   },
   alarmAdoptWorker: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(8).max(512)]),
     returns: z.object({ previousWorkerId: z.string().nullable() }).strict(),
   },
   alarmListScheduled: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(LifecycleKeySchema),
   },
   alarmClaimDue: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([
       z
@@ -372,66 +398,79 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.array(alarmClaimSchema),
   },
   lifecycleListLeases: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(lifecycleLeaseResultSchema),
   },
   lifecycleOpenEpoch: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([lifecycleEpochSchema]),
     returns: z.string().min(1),
   },
   lifecycleRecordOp: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([lifecycleOpInputSchema]),
     returns: z.void(),
   },
   lifecycleListOps: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1)]),
     returns: z.array(lifecycleOpResultSchema),
   },
   lifecycleCompleteEpoch: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(1)]),
     returns: z.void(),
   },
   lifecycleListResumeTargets: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(LifecycleKeySchema),
   },
   entityListActive: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(entityRecordSchema),
   },
   entityListActiveByKind: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([entityKindSchema]),
     returns: z.array(entityRecordSchema),
   },
   entityListPreparing: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([]),
     returns: z.array(entityRecordSchema),
   },
   entityListPreparingByKind: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([entityKindSchema]),
     returns: z.array(entityRecordSchema),
   },
   entityListExecutionRoots: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read", "workspace.runtime-state.inspect"),
     args: z.tuple([]),
     returns: z.array(entityRecordSchema),
   },
   entityListByContext: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1)]),
     returns: z.array(entityRecordSchema),
   },
   contextEdgeUpsert: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([
       z
@@ -446,6 +485,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.void(),
   },
   contextEdgeListByOwner: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([
       z
@@ -458,11 +498,13 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.array(ownerEdgeSchema),
   },
   contextEdgeListByChild: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("read"),
     args: z.tuple([z.string().min(1)]),
     returns: z.array(childEdgeSchema),
   },
   contextEdgeDeleteByChild: {
+    website: {"kind":"closed","reason":"Storage and lifecycle engine entry points are internal implementation authority."} as const,
     ...internal("write"),
     args: z.tuple([z.string().min(1)]),
     returns: z.void(),

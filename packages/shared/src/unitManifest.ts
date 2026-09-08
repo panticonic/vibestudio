@@ -6,12 +6,15 @@
  * build, reconcile/install, and boot checks cannot drift by unit kind.
  */
 
+import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "@vibestudio/rpc";
+
 export type UnitKind = "extension" | "app";
 export type WorkspaceAppTarget = "electron" | "react-native" | "terminal";
 
 export type ExtensionMethodAuthorityDeclaration =
-  | { effect: { kind: "open" } }
+  | { website: WebsiteMethodPolicy; effect: { kind: "open" } }
   | {
+      website: WebsiteMethodPolicy;
       effect: {
         kind: "userland-capability";
         capability: string;
@@ -40,17 +43,20 @@ export function parseExtensionMethodAuthority(
     }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       throw new UnitManifestError(
-        `${label}.${method} must contain exactly one effect`,
+        `${label}.${method} must contain one effect and an explicit website policy`,
         "MANIFEST_METHOD_AUTHORITY"
       );
     }
     const declaration = raw as Record<string, unknown>;
-    if (Object.keys(declaration).length !== 1 || !("effect" in declaration)) {
+    if (Object.keys(declaration).sort().join(",") !== "effect,website") {
       throw new UnitManifestError(
-        `${label}.${method} must contain exactly one effect`,
+        `${label}.${method} must contain one effect and an explicit website policy`,
         "MANIFEST_METHOD_AUTHORITY"
       );
     }
+    const website = declaration["website"];
+    try { validateWebsiteMethodPolicy(website, `${label}.${method}`); }
+    catch (error) { throw new UnitManifestError(String(error), "MANIFEST_METHOD_AUTHORITY"); }
     const effect = declaration["effect"];
     if (!effect || typeof effect !== "object" || Array.isArray(effect)) {
       throw new UnitManifestError(
@@ -60,7 +66,7 @@ export function parseExtensionMethodAuthority(
     }
     const record = effect as Record<string, unknown>;
     if (record["kind"] === "open" && Object.keys(record).length === 1) {
-      result[method] = { effect: { kind: "open" } };
+      result[method] = { website, effect: { kind: "open" } };
       continue;
     }
     const resource = record["resource"];
@@ -81,6 +87,7 @@ export function parseExtensionMethodAuthority(
       );
     }
     result[method] = {
+      website,
       effect: {
         kind: "userland-capability",
         capability: record["capability"],

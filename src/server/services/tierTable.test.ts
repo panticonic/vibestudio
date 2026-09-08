@@ -29,6 +29,7 @@ describe("reviewed host method tiers", () => {
     const decisions = new Map<string, { rationale: string; residency: string; family: string }>();
     for (const matrix of [
       readMatrix("./__serviceAuthorityMatrix.golden.json"),
+      readMatrix("../__hubServiceAuthorityMatrix.golden.json"),
       readMatrix("../../main/services/__serviceAuthorityMatrix.golden.json"),
     ]) {
       for (const [service, entry] of Object.entries(matrix)) {

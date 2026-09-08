@@ -57,6 +57,7 @@ function stampMessageFromId(message: RpcMessage, callerId: string): RpcMessage {
     case "request-cancel":
       return { ...message, fromId: callerId };
     case "response":
+    case "exposure":
       return message;
   }
 }

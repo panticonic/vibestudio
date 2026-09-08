@@ -27,14 +27,14 @@ const STREAM_ACCESS: MethodAccessDescriptor = {
 
 export const EXTENSION_METHOD_AUTHORITY_RESOLVER = "extensions.invoke.userland-method";
 const extensionInvocationAuthority = {
-  requirement: requirementForPrincipals(["code", "user", "host"], "service:extensions.invoke"),
+  requirement: requirementForPrincipals(["code", "user", "host", "website"], "service:extensions.invoke"),
   resource: { kind: "literal" as const, key: "service:extensions.invoke" },
   prepared: {
     resolver: EXTENSION_METHOD_AUTHORITY_RESOLVER,
     leaves: [
       {
         capabilityPrefix: "userland:",
-        requirement: selectedPreparedAuthorityRequirement(["code", "user", "host"]),
+        requirement: selectedPreparedAuthorityRequirement(["code", "user", "host", "website"]),
         tier: { selectedFrom: ["gated", "critical"] as const },
       },
     ],
@@ -57,6 +57,7 @@ export const streamChunkEnvelopeSchema = z
 
 export const extensionsMethods = defineServiceMethods({
   invoke: {
+    website: { kind: "eligible", rationale: "The host resolves and enforces the exact sealed extension method policy before invocation." },
     tier: {
       tier: "open",
       session: "family",
@@ -78,6 +79,7 @@ export const extensionsMethods = defineServiceMethods({
     ],
   },
   invokeProvider: {
+    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -96,6 +98,7 @@ export const extensionsMethods = defineServiceMethods({
   // invokeStream intentionally declares no return schema: the result is a raw
   // streaming Response, not a wire-serializable value.
   invokeStream: {
+    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -110,6 +113,7 @@ export const extensionsMethods = defineServiceMethods({
     access: INVOKE_ACCESS,
   },
   streamingMethods: {
+    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -126,6 +130,7 @@ export const extensionsMethods = defineServiceMethods({
     examples: [{ args: ["shell"] }],
   },
   emit: {
+    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -141,6 +146,7 @@ export const extensionsMethods = defineServiceMethods({
     access: EXTENSION_REPORT_ACCESS,
   },
   fetchRequestBodyChunk: {
+    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -157,6 +163,7 @@ export const extensionsMethods = defineServiceMethods({
     authority: extensionInvocationAuthority,
   },
   fetchRequestBodyClose: {
+    website: {"kind":"closed","reason":"The extensions receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",

@@ -24,6 +24,20 @@ const base = () =>
   });
 
 describe("invocation snapshot", () => {
+  it("seals mutable subject, revocation generation, and initiating document into consent", () => {
+    const binding = { subject: "website:site-1" as const, generation: 1, documentId: "doc-1" };
+    const snapshot = { ...base(), subjectBinding: binding };
+    const digest = invocationSnapshotDigest(snapshot);
+    for (const changed of [
+      { ...binding, subject: "website:site-2" as const },
+      { ...binding, generation: 2 },
+      { ...binding, documentId: "doc-2" },
+      undefined,
+    ]) {
+      expect(invocationSnapshotDigest({ ...snapshot, subjectBinding: changed })).not.toBe(digest);
+    }
+  });
+
   it("excludes actor, time, and context lineage from retry identity", () => {
     const left = base();
     const right = {
@@ -72,4 +86,18 @@ describe("invocation snapshot", () => {
       invocationSnapshotDigest({ ...snapshot, codeLineage: { class: "external", chain: [] } })
     ).not.toBe(digest);
   });
+});
+
+
+it("seals initiating website identity independently from receiver grant identity", () => {
+  const website = { subject: "website:site" as const, userId: "user:u" as const,
+    workspaceId: "ws", origin: "https://example.com", connected: true,
+    binding: { subject: "website:site" as const, generation: 0, documentId: "doc1" } };
+  const snapshot = { ...base(), callerPrincipal: "code:receiver@v1" as const, initiatingWebsite: website };
+  const digest = invocationSnapshotDigest(snapshot);
+  for (const change of [undefined, { ...website, origin: "https://other.test" },
+    { ...website, binding: { ...website.binding, documentId: "doc2" } },
+    { ...website, binding: { ...website.binding, generation: 1 } }]) {
+    expect(invocationSnapshotDigest({ ...snapshot, initiatingWebsite: change })).not.toBe(digest);
+  }
 });

@@ -17,6 +17,7 @@ const trustRecordSchema = z
 
 export const contentTrustMethods = defineServiceMethods({
   status: {
+    website: {"kind":"closed","reason":"The contentTrust receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -31,6 +32,7 @@ export const contentTrustMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   list: {
+    website: {"kind":"closed","reason":"The contentTrust receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -45,6 +47,7 @@ export const contentTrustMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   vouch: {
+    website: {"kind":"closed","reason":"The contentTrust receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "content.trust.vouch",
     tier: {
       tier: "gated",
@@ -70,6 +73,7 @@ export const contentTrustMethods = defineServiceMethods({
     access: { sensitivity: "admin" },
   },
   addPolicy: {
+    website: {"kind":"closed","reason":"The contentTrust receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "content.trust.policy.manage",
     tier: {
       tier: "critical",
@@ -104,6 +108,7 @@ export const contentTrustMethods = defineServiceMethods({
     access: { sensitivity: "admin" },
   },
   revoke: {
+    website: {"kind":"closed","reason":"The contentTrust receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "content.trust.policy.manage",
     tier: {
       tier: "critical",

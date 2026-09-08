@@ -17,6 +17,7 @@ import type { UserSubject } from "@vibestudio/identity/types";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { StreamFrame } from "../services/egressProxy.js";
+import { encodeWebSocketStreamFrame } from "./sessionChannel.js";
 import type { WsClientState } from "./connectionRegistry.js";
 import type { AuthenticatedHttpRpcCaller, HttpRpcAdmission } from "./httpRpcHandler.js";
 
@@ -60,6 +61,11 @@ export interface StreamingRelayDeps {
     targetId: string,
     method: string
   ): RelayAuthorization;
+  createHttpContext(
+    caller: VerifiedCaller,
+    request: RpcStreamRequest,
+    extras: StreamContextExtras
+  ): ServiceContext;
   createSessionContext(
     client: WsClientState,
     request: RpcStreamRequest,
@@ -102,6 +108,23 @@ export class StreamingRelay {
   private readonly httpStreamAborts = new Set<AbortController>();
 
   constructor(private readonly deps: StreamingRelayDeps) {}
+
+  async forwardWorkspaceResponse(
+    response: Response,
+    requestEnvelope: RpcEnvelope,
+    responder: import("@vibestudio/rpc").AuthenticatedCaller,
+    send: (envelope: RpcEnvelope) => Promise<void>,
+    signal: AbortSignal
+  ): Promise<void> {
+    await this.pipeResponseToWsFrames(
+      response,
+      (frame) => {
+        const encoded = encodeWebSocketStreamFrame(requestEnvelope, frame, responder);
+        return send(encoded.envelope);
+      },
+      signal
+    );
+  }
 
   cancel(client: WsClientState, requestId: string): void {
     this.sessionStreamAborts.get(client)?.get(requestId)?.abort();
@@ -261,8 +284,7 @@ export class StreamingRelay {
     res.on("close", () => abortController.abort());
     const emitFrame = await this.httpFrameWriter(res);
 
-    const context: ServiceContext = {
-      caller: verifiedCaller,
+    const context = this.deps.createHttpContext(verifiedCaller, request, {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
@@ -275,7 +297,7 @@ export class StreamingRelay {
       // decision settles. This flag is server-owned; no wire field can enable
       // it for an unverified caller.
       authorityAcquisition: "wait",
-    };
+    });
     try {
       await this.deps.dispatcher.assertAuthority(context, "credentials", "proxyFetch", args);
     } catch (error) {
@@ -603,15 +625,14 @@ export class StreamingRelay {
     res.once("close", () => abortController.abort());
     let response: Response;
     try {
-      const context: ServiceContext = {
-        caller,
+      const context = this.deps.createHttpContext(caller, request, {
         ...(request.requestId ? { requestId: request.requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
         signal: abortController.signal,
         authorityAcquisition: "wait",
-      };
+      });
       const result = await this.deps.dispatcher.dispatch(
         context,
         parsed.service,

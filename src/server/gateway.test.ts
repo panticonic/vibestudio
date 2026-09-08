@@ -1,6 +1,6 @@
 import { createConnection } from "node:net";
 import { once } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Gateway } from "./gateway.js";
 
 describe("Gateway lifecycle", () => {
@@ -44,5 +44,25 @@ describe("Gateway lifecycle", () => {
     );
 
     expect(response.status).toBe(404);
+  });
+
+  it("routes the authenticated workspace relay endpoint only to the RPC owner", async () => {
+    const handleWorkspaceRpcHttp = vi.fn((_req, res) => {
+      res.writeHead(204);
+      res.end();
+    });
+    gateway = new Gateway({
+      externalHost: "127.0.0.1",
+      tokenManager: {} as never,
+      rpcHandler: { handleWorkspaceRpcHttp } as never,
+    });
+    const port = await gateway.start(0);
+
+    const response = await fetch(`http://127.0.0.1:${port}/_r/s/internal/workspace-rpc`, {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(204);
+    expect(handleWorkspaceRpcHttp).toHaveBeenCalledOnce();
   });
 });

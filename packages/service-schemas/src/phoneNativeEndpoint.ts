@@ -31,6 +31,7 @@ export type PhoneNativeDesktop = z.infer<typeof PhoneNativeDesktopSchema>;
  * generic method/argument conduit and carries no independent user gate. */
 export const phoneNativeEndpointMethods = defineServiceMethods({
   desktops: {
+    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: openTransport,
     description: "List live desktop endpoints on the initiating user's account.",
     args: z.tuple([]),
@@ -39,6 +40,7 @@ export const phoneNativeEndpointMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   providers: {
+    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: openTransport,
     description: "Read phone capabilities from one exact connected desktop.",
     args: z.tuple([z.object({ clientId: nonEmpty }).strict()]),
@@ -47,6 +49,7 @@ export const phoneNativeEndpointMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   devices: {
+    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: openTransport,
     description: "Discover phones through one exact connected desktop.",
     args: z.tuple([z.object({ clientId: nonEmpty, query: PhoneDeviceQuerySchema }).strict()]),
@@ -55,6 +58,7 @@ export const phoneNativeEndpointMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   provision: {
+    website: {"kind":"closed","reason":"The phoneNativeEndpoint receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: openTransport,
     description: "Run the typed native install-and-pair effect on one exact desktop.",
     args: z.tuple([z.object({ clientId: nonEmpty, input: PhoneProvisionArgsSchema }).strict()]),

@@ -61,7 +61,7 @@ export function callerHasPlatformCapability(
 }
 
 export function callerHasAppCapability(
-  caller: VerifiedCaller,
+  caller: Pick<VerifiedCaller, "runtime">,
   capability: AppCapability,
   deps: Pick<CapabilityTrustDeps, "hasAppCapability">
 ): boolean {
@@ -103,7 +103,7 @@ export function isAuthorizedChrome(
  * not a new mechanism: no publication token is introduced.
  */
 export function isInteractiveChrome(
-  caller: VerifiedCaller,
+  caller: Pick<VerifiedCaller, "runtime">,
   deps: CapabilityTrustDeps = {}
 ): boolean {
   // Workspace apps listed in `trust.chromeApps` are opened by the user and

@@ -22,6 +22,7 @@ const fact = z
 
 export const contextIntegrityMethods = defineServiceMethods({
   ingest: {
+    website: {"kind":"closed","reason":"The contextIntegrity receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -46,6 +47,7 @@ export const contextIntegrityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   fact: {
+    website: {"kind":"closed","reason":"The contextIntegrity receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -60,6 +62,7 @@ export const contextIntegrityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   explain: {
+    website: {"kind":"closed","reason":"The contextIntegrity receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

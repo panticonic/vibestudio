@@ -169,6 +169,7 @@ export type PanelContextSnapshot = z.infer<typeof PanelContextSnapshotSchema>;
 
 export const panelContextMethods = defineServiceMethods({
   describe: {
+    website: {"kind":"closed","reason":"The panelContext receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "panel.inspect",
     tier: {
       tier: "gated",

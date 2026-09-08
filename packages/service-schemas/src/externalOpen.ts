@@ -51,6 +51,7 @@ export const openExternalResultSchema = z.object({
 
 export const externalOpenMethods = defineServiceMethods({
   openExternal: {
+    website: {"kind":"closed","reason":"The externalOpen receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "external.open",
     tier: {
       tier: "open",

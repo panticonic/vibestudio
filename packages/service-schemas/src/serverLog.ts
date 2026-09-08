@@ -78,6 +78,7 @@ const ServerLogStatsSchema = z.object({
 
 export const serverLogMethods = defineServiceMethods({
   query: {
+    website: {"kind":"closed","reason":"The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "server-logs.read",
     tier: {
       tier: "gated",
@@ -108,6 +109,7 @@ export const serverLogMethods = defineServiceMethods({
     ],
   },
   tail: {
+    website: {"kind":"closed","reason":"The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "server-logs.read",
     tier: {
       tier: "gated",
@@ -134,6 +136,7 @@ export const serverLogMethods = defineServiceMethods({
     examples: [{ args: [200] }],
   },
   stats: {
+    website: {"kind":"closed","reason":"The serverLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "server-logs.read",
     tier: {
       tier: "gated",

@@ -39,6 +39,11 @@ export function createWorkerdInspectorService(
 ): ServiceDefinition {
   const methods = defineServiceMethods({
     listTargets: {
+      website: {
+        kind: "closed",
+        reason:
+          "The workerdInspectorService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       tier: {
         tier: "open",
         session: "family",
@@ -50,6 +55,11 @@ export function createWorkerdInspectorService(
       access: { sensitivity: "read" as const },
     },
     getEndpoint: {
+      website: {
+        kind: "closed",
+        reason:
+          "The workerdInspectorService receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+      } as const,
       capability: "runtime.inspect",
       tier: {
         tier: "open",

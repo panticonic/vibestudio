@@ -543,6 +543,11 @@ export type GitPublishRepoResult = z.infer<typeof gitPublishRepoResultSchema>;
 
 export const gitInteropMethods = defineServiceMethods({
   setSharedRemote: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.remotes.manage",
     tier: {
       tier: "gated",
@@ -580,6 +585,11 @@ export const gitInteropMethods = defineServiceMethods({
     ],
   },
   removeSharedRemote: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.remotes.manage",
     tier: {
       tier: "gated",
@@ -610,6 +620,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", "origin"] }],
   },
   setUpstream: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.remotes.manage",
     tier: {
       tier: "gated",
@@ -647,6 +662,11 @@ export const gitInteropMethods = defineServiceMethods({
     ],
   },
   removeUpstream: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.remotes.manage",
     tier: {
       tier: "gated",
@@ -676,6 +696,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit"] }],
   },
   detachUpstream: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.remotes.manage",
     tier: {
       tier: "gated",
@@ -709,6 +734,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { forgetRemote: true }] }],
   },
   setAutoPush: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.remotes.manage",
     tier: {
       tier: "gated",
@@ -739,6 +769,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", true] }],
   },
   upstreamStatus: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -766,6 +801,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: [["projects/bgkit"]] }],
   },
   pushUpstream: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.publish",
     tier: {
       tier: "gated",
@@ -799,6 +839,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { force: false }] }],
   },
   pullUpstream: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.pull",
     tier: {
       tier: "gated",
@@ -832,6 +877,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { dryRun: true }] }],
   },
   publishRepo: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.publish",
     tier: {
       tier: "open",
@@ -859,6 +909,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: [{ repoPath: "projects/bgkit", private: true }] }],
   },
   commitMapping: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -880,6 +935,11 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { limit: 50 }] }],
   },
   importProject: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     capability: "git.project.import",
     tier: {
       tier: "gated",
@@ -938,6 +998,11 @@ export const gitInteropProviderMethods = defineServiceMethods({
   commitMapping: gitInteropMethods.commitMapping,
   importProject: gitInteropMethods.importProject,
   cloneRepo: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Clone one declared workspace dependency and return its semantic candidate.",
     args: z.tuple([
       z
@@ -950,12 +1015,22 @@ export const gitInteropProviderMethods = defineServiceMethods({
     returns: gitImportResultSchema,
   },
   remoteDefaultBranch: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Ask a remote which branch its HEAD points at (ls-remote symref); null when the remote is empty.",
     args: z.tuple([gitRemoteDefaultBranchInputSchema]),
     returns: z.object({ branch: z.string().nullable() }).strict(),
   },
   reconcileUpstreams: {
+    website: {
+      kind: "closed",
+      reason:
+        "The gitInterop receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Queue current-config reconciliation for repositories after protected main or Git tracking configuration changes.",
     args: z.tuple([

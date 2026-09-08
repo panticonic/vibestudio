@@ -71,6 +71,7 @@ export type HostPerformanceSnapshot = z.infer<typeof HostPerformanceSnapshotSche
 
 export const hostPerformanceMethods = defineServiceMethods({
   snapshot: {
+    website: {"kind":"closed","reason":"The hostPerformance receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",

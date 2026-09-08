@@ -16,12 +16,20 @@ const blobstore: ServiceDefinition = {
   authority: { principals: ["code", "host"] },
   methods: {
     putText: {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Store a UTF-8 string and return its digest",
       args: z.tuple([z.string()]),
       returns: z.object({ digest: z.string() }),
       tier: TEST_OPEN_TIER,
     },
     "admin.wipe": {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Delete everything",
       args: z.tuple([]),
       authority: { principals: ["host"] },
@@ -76,7 +84,16 @@ describe("createCatalogIndex", () => {
         name: "demo2",
         description: "d",
         authority: { principals: ["host"] },
-        methods: { ping: { args: z.tuple([]), tier: TEST_OPEN_TIER } },
+        methods: {
+          ping: {
+            website: {
+              kind: "eligible",
+              rationale: "Explicit receiver policy for this test fixture.",
+            },
+            args: z.tuple([]),
+            tier: TEST_OPEN_TIER,
+          },
+        } as const,
         handler: async () => undefined,
       },
     ];
@@ -120,6 +137,10 @@ describe("createCatalogIndex", () => {
         methods: {
           ...blobstore.methods,
           "admin.wipe": {
+            website: {
+              kind: "eligible",
+              rationale: "Explicit receiver policy for this test fixture.",
+            } as const,
             description: "Delete everything, now panel-visible.",
             args: z.tuple([]),
             authority: { principals: ["code", "host"] },
@@ -131,5 +152,43 @@ describe("createCatalogIndex", () => {
 
     const replacement = index.get("service:blobstore.admin.wipe", "panel");
     expect(replacement?.description).toBe("Delete everything, now panel-visible.");
+  });
+});
+
+describe("website receiver discovery", () => {
+  it("projects the exact reviewed methods and removes closed names from the parent", () => {
+    const methods: NonNullable<
+      NonNullable<BuildCatalogDeps["workspaceCapabilities"]>[number]["methods"]
+    > = [
+      {
+        name: "summarize",
+        signature: "summarize(text: string): string",
+        website: { kind: "eligible", rationale: "Returns only a result for the submitted text." },
+      },
+      {
+        name: "history",
+        signature: "history(): string[]",
+        website: { kind: "closed", reason: "Private receiver history." },
+      },
+    ];
+    const index = createCatalogIndex(() => ({
+      definitions: [],
+      workspaceCapabilities: [
+        {
+          name: "notes",
+          source: "workers/notes",
+          protocols: [],
+          principals: ["code", "website"],
+          target: { kind: "durable-object", className: "Notes", defaultObjectKey: "main" },
+          methods,
+        },
+      ],
+    }));
+    expect(index.get("workspace:notes", "website")?.members).toEqual(["summarize"]);
+    expect(index.get("workspace:notes.history", "website")).toBeNull();
+    expect(index.get("workspace:notes.summarize", "website")?.access?.["website"]).toEqual(
+      methods[0]!.website
+    );
+    expect(index.get("workspace:notes", "panel")?.members).toEqual(["history", "summarize"]);
   });
 });

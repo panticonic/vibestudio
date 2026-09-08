@@ -97,7 +97,10 @@ export function parseWorkspaceRpcInvocation(value: unknown): WorkspaceRpcInvocat
     (message.method !== invocation.operation || !Array.isArray(message.args))
   )
     throw denied();
-  if (message.type !== "event" && (typeof message.requestId !== "string" || !message.requestId))
+  if (
+    message.type !== "event" &&
+    (!("requestId" in message) || typeof message.requestId !== "string" || !message.requestId)
+  )
     throw denied();
   const attributed = invocation.envelope.delivery.caller;
   if (
@@ -334,7 +337,7 @@ export async function forwardWorkspaceRpcHttp(options: {
       signal,
     } as RequestInit & { duplex: "half" });
     if (!response.ok) {
-      await response.body?.cancel();
+      await response.body?.cancel().catch(() => undefined);
       throw Object.assign(new Error("Cross-workspace RPC delivery failed"), {
         code: response.status === 401 || response.status === 403 ? "EACCES" : "ETRANSPORT",
       });

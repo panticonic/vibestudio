@@ -19,6 +19,10 @@ describe("desktop host-service publication", () => {
       authority: { principals: ["host"] },
       methods: {
         inspect: {
+          website: {
+            kind: "eligible",
+            rationale: "Explicit receiver policy for this test fixture.",
+          } as const,
           description: "test",
           args: z.tuple([z.string()]),
           returns: z.string(),

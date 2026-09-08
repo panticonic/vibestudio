@@ -664,6 +664,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     const { orchestrator, panelView, shellCore, cdpHost } = createOrchestrator(registry);
     let retained = true;
     panelView.hasView.mockImplementation(() => retained);
+    panelView.getWebContents.mockReturnValue({ id: 42 } as never);
     panelView.getViewPartition.mockReturnValue(
       contextIdToPartition(registry.workspaceId, panel.snapshot.contextId)
     );
@@ -690,7 +691,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(panelView.destroyView).toHaveBeenCalledWith(panel.id);
     expect(panelView.updatePanelCodeIdentity).not.toHaveBeenCalled();
     expect(cdpHost.cleanupPanelAccess).toHaveBeenCalledWith(panel.id);
-    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(panel.id);
+    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(panel.id, 42);
     expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
       buildState: "building",
       buildProgress: "Preparing panel runtime...",
@@ -2891,6 +2892,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, panelView, cdpHost, shellCore } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
+    panelView.getWebContents.mockReturnValue({ id: 42 } as never);
     shellCore.refreshSlotEntity.mockResolvedValue(asPanelEntityId("panel:nav-panel-1"));
 
     await orchestrator.handleRuntimeLeaseChanged({
@@ -2915,7 +2917,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     });
 
     expect(cdpHost.cleanupPanelAccess).toHaveBeenCalledWith(panel.id);
-    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(panel.id);
+    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(panel.id, 42);
     expect(panelView.destroyView).toHaveBeenCalledWith(panel.id);
     expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
       buildState: "pending",

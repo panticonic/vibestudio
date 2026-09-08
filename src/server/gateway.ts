@@ -83,6 +83,8 @@ export interface RpcHandler {
   handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
   /** Handle an HTTP RPC or WebSocket-admission request. */
   handleGatewayHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> | void;
+  /** Receive an authenticated workspace-child relay through the ordinary dispatcher. */
+  handleWorkspaceRpcHttp(req: IncomingMessage, res: ServerResponse): Promise<void> | void;
 }
 
 export interface ExtensionHttpHandler {
@@ -212,6 +214,11 @@ export class Gateway {
       const extensionHttpHandler = this.deps.getExtensionHttpHandler?.();
       const appArtifactHandler = this.deps.getAppArtifactHandler?.();
       const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
+
+      if (url === "/_r/s/internal/workspace-rpc" && rpcHandler) {
+        void rpcHandler.handleWorkspaceRpcHttp(req, res);
+        return;
+      }
 
       // /healthz → liveness + (token-gated) detailed status. No auth for basic
       // probe. Detailed status requires the admin token as a Bearer token.

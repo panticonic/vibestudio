@@ -43,6 +43,10 @@ const CEILING = [
 ];
 const methods = defineServiceMethods({
   write: {
+    website: {
+      kind: "eligible",
+      rationale: "Explicit receiver policy for this test fixture.",
+    } as const,
     args: z.tuple([z.object({ value: z.string() }).strict()]),
     returns: z.object({ written: z.string() }).strict(),
     capability: CAPABILITY,

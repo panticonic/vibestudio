@@ -15,6 +15,7 @@ const presentationTier = {
  * the authenticated desktop shell connection. */
 export const desktopBrowserPrivacyPresentationMethods = defineServiceMethods({
   open: {
+    website: {"kind":"closed","reason":"The desktopBrowserPrivacyPresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: presentationTier,
     description: "Open the Electron-owned protected browser-data manager.",
     args: z.tuple([BrowserPrivacySectionSchema]),

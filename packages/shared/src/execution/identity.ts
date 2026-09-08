@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/content-addressing";
 
 /** Full SHA-256 values are the only executable/security identifiers. */
-export type Sha256 = string & { readonly __sha256: unique symbol };
+export interface Sha256Brand { readonly __sha256: unique symbol }
+export type Sha256 = string & Sha256Brand;
 
 export interface SourceRevisionRef {
   repoPath: string;

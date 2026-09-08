@@ -153,7 +153,7 @@ export class DevelopmentExecutor {
       this.deps.planSource({
         contextId: input.session.contextId,
         repositoryId: input.pair.baseRepositoryId,
-        requiredFiles: ["meta/template.yml", "meta/vibestudio.yml", "pnpm-lock.yaml"],
+        requiredFiles: ["meta/vibestudio.yml", "pnpm-lock.yaml"],
       }),
       this.toolchain(),
     ]);

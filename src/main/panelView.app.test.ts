@@ -170,4 +170,44 @@ describe("PanelView app views", () => {
     warn.mockRestore();
     vi.useRealTimers();
   });
+
+  it("reports failure of the selected privileged app preload", async () => {
+    const onPreloadFailure = vi.fn();
+    const url = "https://server.example/_workspace/dev/_a/app/index.html";
+    const webContents = Object.assign(new EventEmitter(), {
+      id: 14,
+      isDestroyed: vi.fn(() => false),
+      getURL: vi.fn(() => url),
+      setWindowOpenHandler: vi.fn(),
+    });
+    const panelView = new PanelView({
+      nativeStorageScope: "test-host-device",
+      viewManager: {
+        hasView: vi.fn(() => false),
+        getViewUrl: vi.fn(() => null),
+        navigateView: vi.fn(async () => undefined),
+        updateAppView: vi.fn(async () => undefined),
+        createView: vi.fn(() => ({ webContents })),
+      },
+      panelRegistry: { workspaceId: "workspace-test", findParentId: vi.fn(() => null) },
+      serverInfo: { gatewayPort: 1234, externalHost: "server.example" },
+      cdpHost: {
+        registerTarget: vi.fn(),
+        unregisterTarget: vi.fn(),
+        cleanupPanelAccess: vi.fn(),
+      },
+      panelOrchestrator: {},
+      onPreloadFailure,
+      appPreloadPath: "/app-preload.js",
+    } as never);
+
+    await panelView.createViewForApp("@workspace-apps/shell", url);
+    webContents.emit("preload-error", {}, "/app-preload.js", new Error("missing app preload"));
+
+    expect(onPreloadFailure).toHaveBeenCalledWith(
+      "@workspace-apps/shell",
+      14,
+      "missing app preload"
+    );
+  });
 });

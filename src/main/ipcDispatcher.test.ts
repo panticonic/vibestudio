@@ -19,6 +19,7 @@ import {
 } from "./ipcDispatcher.js";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { HOST_COMMAND_CONTRIBUTION_EVENT } from "@vibestudio/shared/hostCommands";
+import { prepareDesktopWorkspaceRuntime } from "./workspaceRuntimeController.js";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
 const ipcInvokeHandlers = new Map<string, (...args: never[]) => unknown>();
@@ -653,6 +654,64 @@ describe("IpcDispatcher", () => {
     await ipcDispatcher.shutdown();
   });
 
+  it("waits for System local-service readiness instead of forwarding the request", async () => {
+    const contents = makeWebContents(58);
+    let releaseStart!: () => void;
+    const dispatch = vi.fn(async () => ({ watching: true }));
+    const destination = {
+      workspaceId: "system",
+      start: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseStart = resolve;
+          })
+      ),
+      close: vi.fn(async () => {}),
+      dispatcher: { hasService: vi.fn(() => true), dispatch },
+      serverClient: { openHostUiSession: vi.fn() },
+    } as unknown as WorkspaceIpcRuntime & { start(): Promise<void>; close(): Promise<void> };
+    const runtimes = new Map<string, Promise<typeof destination>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", destination);
+    const admit = vi.fn(async () => ({
+      destination: { kind: "workspace" as const, workspaceId: "system" },
+      serverClient: destination.serverClient,
+      workspace: await publication.ready,
+    }));
+    const { ipcDispatcher, serverClient } = makeDispatcher({
+      resolve: () => ({
+        callerId: "native:System:shell",
+        runtimeId: "shell-app",
+        workspaceId: "system",
+        callerKind: "app",
+      }),
+      getWebContentsForCaller: () => contents,
+      resolveUiRuntime: admit,
+    });
+
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: contents } as never,
+      rpcEnvelope("shell-app", "app", {
+        type: "request",
+        requestId: "desktop-events-before-ready",
+        fromId: "shell-app",
+        method: "desktopEvents.watch",
+        args: [[]],
+      }) as never
+    );
+    await Promise.resolve();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(serverClient.callAs).not.toHaveBeenCalled();
+    expect(destination.serverClient.openHostUiSession).not.toHaveBeenCalled();
+
+    const starting = publication.start();
+    releaseStart();
+    await starting;
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    expect(serverClient.callAs).not.toHaveBeenCalled();
+    expect(destination.serverClient.openHostUiSession).not.toHaveBeenCalled();
+    await ipcDispatcher.shutdown();
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     ipcHandlers.clear();
@@ -1207,65 +1266,72 @@ describe("IpcDispatcher", () => {
     expect(request).not.toHaveProperty("readOnly");
   });
 
-  it("attaches app source identity to Electron-local service dispatch", async () => {
-    const appWc = makeWebContents(13);
-    let seenContext: ServiceContext | null = null;
-    makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
-      getCodeIdentityForCaller: () => ({
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
-        executionDigest: "a".repeat(64),
-        requested: [
-          {
-            capability: "service:electron-test.getInfo",
-            resource: { kind: "exact", key: "service:electron-test.getInfo" },
-          },
-        ],
-      }),
-      configureDispatcher: (dispatcher) => {
-        dispatcher.registerService({
-          // Deliberately not a well-known name: registration itself determines
-          // that the service is Electron-local.
-          name: "electron-test",
-          description: "test Electron-local service",
-          authority: { principals: ["code"] },
-          methods: {
-            getInfo: {
-              args: z.tuple([]),
-              access: { sensitivity: "read" },
+  it.each(["app", "panel"] as const)(
+    "attaches %s source identity to Electron-local service dispatch",
+    async (callerKind) => {
+      const appWc = makeWebContents(13);
+      let seenContext: ServiceContext | null = null;
+      makeDispatcher({
+        resolve: () => ({ callerId: "@workspace-apps/shell", callerKind }),
+        getCodeIdentityForCaller: () => ({
+          callerId: "@workspace-apps/shell",
+          callerKind,
+          repoPath: "apps/shell",
+          effectiveVersion: "ev-shell",
+          executionDigest: "a".repeat(64),
+          requested: [
+            {
+              capability: "service:electron-test.getInfo",
+              resource: { kind: "exact", key: "service:electron-test.getInfo" },
             },
-          },
-          handler: async (ctx) => {
-            seenContext = ctx;
-            return { ok: true };
-          },
-        });
-      },
-    });
+          ],
+        }),
+        configureDispatcher: (dispatcher) => {
+          dispatcher.registerService({
+            // Deliberately not a well-known name: registration itself determines
+            // that the service is Electron-local.
+            name: "electron-test",
+            description: "test Electron-local service",
+            authority: { principals: ["code"] },
+            methods: {
+              getInfo: {
+                website: {
+                  kind: "eligible",
+                  rationale: "Explicit receiver policy for this test fixture.",
+                } as const,
+                args: z.tuple([]),
+                access: { sensitivity: "read" },
+              },
+            },
+            handler: async (ctx) => {
+              seenContext = ctx;
+              return { ok: true };
+            },
+          });
+        },
+      });
 
-    ipcHandlers.get("vibestudio:rpc:send")?.(
-      { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
-        type: "request",
-        requestId: "req-local",
-        fromId: "@workspace-apps/shell",
-        method: "electron-test.getInfo",
-        args: [],
-      } satisfies RpcMessage) as never
-    );
+      ipcHandlers.get("vibestudio:rpc:send")?.(
+        { sender: appWc } as never,
+        rpcEnvelope("@workspace-apps/shell", callerKind, {
+          type: "request",
+          requestId: "req-local",
+          fromId: "@workspace-apps/shell",
+          method: "electron-test.getInfo",
+          args: [],
+        } satisfies RpcMessage) as never
+      );
 
-    await vi.waitFor(() =>
-      expect(seenContext?.caller.code).toMatchObject({
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
-      })
-    );
-  });
+      await vi.waitFor(() =>
+        expect(seenContext?.caller.code).toMatchObject({
+          callerId: "@workspace-apps/shell",
+          callerKind,
+          repoPath: "apps/shell",
+          effectiveVersion: "ev-shell",
+        })
+      );
+    }
+  );
 
   it("bridges server-originated app messages back to the current app WebContents", async () => {
     const appWc = makeWebContents(12);
@@ -1619,6 +1685,113 @@ describe("IpcDispatcher", () => {
       );
       return wc;
     }
+
+    it("keeps a System desktopEvents stream on its ready local dispatcher", async () => {
+      const contents = makeStreamingPanelWc(59);
+      const caller = {
+        callerId: "native:system:app",
+        runtimeId: "shell-app",
+        workspaceId: "system",
+        callerKind: "app" as const,
+      };
+      const dispatch = vi.fn(
+        async (_context: unknown) =>
+          new Response("watching", {
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+          })
+      );
+      const destination = {
+        workspaceId: "system",
+        dispatcher: { hasService: vi.fn(() => true), dispatch },
+        serverClient: { openHostUiSession: vi.fn() },
+      } as unknown as WorkspaceIpcRuntime;
+      const { ipcDispatcher, serverClient } = makeDispatcher({
+        resolve: () => caller,
+        getWebContentsForCaller: () => contents,
+        resolveUiRuntime: async () => ({
+          destination: { kind: "workspace", workspaceId: "system" },
+          serverClient: destination.serverClient,
+          workspace: destination,
+        }),
+      });
+
+      await ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
+        { sender: contents } as never,
+        {
+          opId: "desktop-events-local",
+          envelope: {
+            ...rpcEnvelope("shell-app", "app", {
+              type: "stream-request",
+              requestId: "desktop-events-local-request",
+              fromId: "shell-app",
+              method: "desktopEvents.watch",
+              args: [["notification:show"], "watch-id"],
+            }),
+            destination: { kind: "workspace", workspaceId: "system" },
+          },
+        } as never
+      );
+
+      await vi.waitFor(() =>
+        expect(contents.send).toHaveBeenCalledWith(
+          "vibestudio:rpc:stream-message",
+          expect.objectContaining({ kind: "end", opId: "desktop-events-local" })
+        )
+      );
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+        caller: { runtime: { id: caller.callerId, kind: "shell" } },
+        requestId: "desktop-events-local-request",
+      });
+      expect(destination.serverClient.openHostUiSession).not.toHaveBeenCalled();
+      expect(serverClient.streamAs).not.toHaveBeenCalled();
+      await ipcDispatcher.shutdown();
+    });
+
+    it("keeps an installed panel bridge stream on its workspace local dispatcher", async () => {
+      const contents = makeStreamingPanelWc(61);
+      const dispatch = vi.fn(async () => new Response("local"));
+      const runtime = {
+        workspaceId: "project",
+        dispatcher: { hasService: vi.fn(() => true), dispatch },
+        serverClient: { openPanelSession: vi.fn() },
+      } as unknown as WorkspaceIpcRuntime;
+      const { ipcDispatcher } = makeDispatcher({
+        resolve: () => ({
+          callerId: "native:project:panel",
+          runtimeId: "panel",
+          workspaceId: "project",
+          callerKind: "panel",
+        }),
+        getWebContentsForCaller: () => contents,
+        resolveWorkspaceRuntime: () => runtime,
+      });
+
+      await ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
+        { sender: contents } as never,
+        {
+          opId: "installed-panel-local",
+          envelope: rpcEnvelope("panel", "panel", {
+            type: "stream-request",
+            requestId: "installed-panel-local-request",
+            fromId: "panel",
+            method: "browserEnvironment.export",
+            args: [],
+          }),
+        } as never
+      );
+
+      await vi.waitFor(() =>
+        expect(contents.send).toHaveBeenCalledWith(
+          "vibestudio:rpc:stream-message",
+          expect.objectContaining({ kind: "end", opId: "installed-panel-local" })
+        )
+      );
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(runtime.serverClient.openPanelSession).not.toHaveBeenCalled();
+      await ipcDispatcher.shutdown();
+    });
 
     it("carries an admitted System UI upload on its destination session and revokes it", async () => {
       const contents = makeStreamingPanelWc(60);

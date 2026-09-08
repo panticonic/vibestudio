@@ -79,7 +79,7 @@ describe("exact userland provider catalogs", () => {
     writeFileSync(
       join(root, "workers/notes/provider.ts"),
       `class NotesDO {
-        @rpc({
+        @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."},
           principals: ["code"],
           effect: { kind: "userland-capability", capability: "notes.delete", resource: { kind: "receiver-object" } },
           tier: "critical",

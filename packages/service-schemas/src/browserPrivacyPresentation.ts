@@ -15,6 +15,7 @@ const presentationTier = {
  * provider. The caller never supplies a device, platform, or endpoint. */
 export const browserPrivacyPresentationMethods = defineServiceMethods({
   open: {
+    website: {"kind":"closed","reason":"The browserPrivacyPresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: presentationTier,
     description:
       "Open the protected browser-data manager on the exact shell that owns the initiating panel.",

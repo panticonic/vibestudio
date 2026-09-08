@@ -1,6 +1,7 @@
 import { app, BaseWindow, dialog, nativeTheme, shell } from "electron";
 import * as path from "node:path";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import type { ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { ViewManager } from "./viewManager.js";
@@ -35,6 +36,7 @@ interface CdpRegistrationAdapter {
 }
 
 export interface WorkspaceWindowServices {
+  openShellSurface?: (target: ShellSurfaceDescriptor) => void;
   panelRegistry: PanelRegistry;
   panelOrchestrator: PanelOrchestrator;
   serverSession: WorkspaceSessionConnection;
@@ -338,6 +340,7 @@ export class ApplicationWindowController {
         : undefined;
       const nativeViews = new WorkspaceNativeViews(services.serverSession.workspaceId, viewManager);
       const panelView = new PanelView({
+        openShellSurface: services.openShellSurface,
         nativeStorageScope: services.serverSession.nativeStorageScope,
         viewManager: nativeViews,
         panelRegistry: services.panelRegistry,

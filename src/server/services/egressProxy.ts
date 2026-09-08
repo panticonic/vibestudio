@@ -1305,6 +1305,10 @@ export class EgressProxy {
     await this.deps.authorizeEffect(
       { caller, signal, authorityAcquisition: "wait" },
       {
+        website: {
+          kind: "eligible",
+          rationale: "The host mediates scoped egress without disclosing its credential.",
+        } as const,
         service: operation.service,
         method: operation.method,
         capability: RAW_EGRESS_CAPABILITY,
@@ -1325,6 +1329,10 @@ export class EgressProxy {
     await this.deps.authorizeEffect(
       { caller, signal, authorityAcquisition: "wait" },
       {
+        website: {
+          kind: "eligible",
+          rationale: "The host mediates scoped egress without disclosing its credential.",
+        } as const,
         service: operation.service,
         method: operation.method,
         capability: "credential.use",
@@ -1607,12 +1615,16 @@ export class EgressProxy {
       await this.deps.authorizeEffect(
         { caller, signal, authorityAcquisition: "wait" },
         {
+          website: {
+            kind: "eligible",
+            rationale: "The host mediates scoped egress without disclosing its credential.",
+          } as const,
           service: "gateway",
           method: "fetch",
           capability: RAW_EGRESS_CAPABILITY,
           resourceKey: origin,
           requirement: requirementForPrincipals(
-            ["host", "user", "code", "session"],
+            ["host", "user", "code", "session", "website"],
             RAW_EGRESS_CAPABILITY
           ),
           tier: "gated",
@@ -2130,12 +2142,16 @@ export class EgressProxy {
         this.deps.authorizeEffect(
           { caller, signal: operation.signal, authorityAcquisition: "wait" },
           {
+            website: {
+              kind: "eligible",
+              rationale: "The host mediates scoped egress without disclosing its credential.",
+            } as const,
             service: "gateway",
             method: "connect",
             capability: CONNECT_CAPABILITY,
             resourceKey: target.resource,
             requirement: requirementForPrincipals(
-              ["host", "user", "code", "session"],
+              ["host", "user", "code", "session", "website"],
               CONNECT_CAPABILITY
             ),
             tier: "gated",

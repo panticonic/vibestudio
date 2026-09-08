@@ -38,7 +38,10 @@ import type {
 } from "@vibestudio/shared/buildProvider";
 import type { PendingUnitInstallReviewApproval, ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
-import type { UnitAuthorityManifest, UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type {
+  UnitAuthorityManifest,
+  UnitAuthorityRequest,
+} from "@vibestudio/shared/authorityManifest";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { readWorkspaceConfig, resolveDeclaredExtensions } from "@vibestudio/workspace/configParser";
 import {
@@ -201,8 +204,9 @@ interface ExtensionBuildMetadataLike {
         providerContracts?: Record<string, { methods: string[] }>;
         methodAuthority?: Record<
           string,
-          | { effect: { kind: "open" } }
+          | { website: import("@vibestudio/rpc").WebsiteMethodPolicy; effect: { kind: "open" } }
           | {
+              website: import("@vibestudio/rpc").WebsiteMethodPolicy;
               effect: {
                 kind: "userland-capability";
                 capability: string;
@@ -266,7 +270,7 @@ interface ApprovalQueueLike {
     resource?: { type: string; label: string; value: string };
     details?: Array<{ label: string; value: string }>;
   }): Promise<
-    "once" | "task" | "mission" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss"
+    import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision | "dismiss"
   >;
   request(req: {
     kind: "unit-install-review";
@@ -931,11 +935,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               "EPROTO"
             );
           }
+          this.assertWebsiteMethod(ctx, entry, method);
           if (declaration.effect.kind === "open") {
             return preparedAuthorityState([], {
               extension: entry.name,
               method,
               effect: "open",
+              executionDigest,
+              website: declaration.website,
             });
           }
           if (!("userlandCapability" in declaration)) {
@@ -966,7 +973,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
                 capability: receiver.canonicalCapability,
                 resourceKey,
                 requirement: requirementForPrincipals(
-                  ["code", "user", "host"],
+                  ["code", "user", "host", "website"],
                   receiver.canonicalCapability
                 ),
                 tier: definition.tier,
@@ -1002,7 +1009,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
                 },
               }),
             ],
-            { extension: entry.name, method, effect: "userland-capability" }
+            {
+              extension: entry.name,
+              method,
+              effect: "userland-capability",
+              executionDigest,
+              website: declaration.website,
+            }
           );
         },
       },
@@ -1055,7 +1068,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
     const entry = await this.requireInvocationEntry(name, operation, ctx.signal);
+    this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.ensureTargetRunning(entry, ctx.signal, operation);
+    ctx.signal?.throwIfAborted();
+    this.assertWebsiteMethod(ctx, entry, invocationMethod);
+    this.assertAdmittedMethod(ctx, entry, invocationMethod);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
     try {
       return await call(entry, invocation);
@@ -1263,6 +1280,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   ): Promise<Response> {
     // See invoke(): stream calls should not wait behind unrelated extension approval/build work.
     const entry = await this.requireInvocationEntry(name, "invokeStream", ctx.signal);
+    this.assertWebsiteMethod(ctx, entry, method);
     this.assertPublicExtensionInvocationAllowed(entry, method, "invokeStream");
     if (!this.deps.extensionTransport.streamCallTarget) {
       throw new ServiceError(
@@ -1273,6 +1291,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       );
     }
     await this.ensureTargetRunning(entry, ctx.signal, "invokeStream");
+    ctx.signal?.throwIfAborted();
+    this.assertWebsiteMethod(ctx, entry, method);
+    this.assertAdmittedMethod(ctx, entry, method);
     const invocation = this.createTrackedInvocation(ctx, entry.name, method);
     try {
       const response = await this.deps.extensionTransport.streamCallTarget(
@@ -1366,6 +1387,49 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     return entry?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata.authority ?? null)
       : null;
+  }
+
+  private assertAdmittedMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
+    const admitted = ctx.preparedAuthority;
+    if (!admitted) return; // Internal host invocations do not pass through the public dispatcher.
+    const build = entry.activeBundleKey
+      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+      : null;
+    const declaration = extensionMetadataDetails(build?.metadata)?.methodAuthority?.[method];
+    const live = {
+      extension: entry.name,
+      method,
+      effect: declaration?.effect.kind,
+      executionDigest: build?.metadata.execution?.executionDigest,
+      website: declaration?.website,
+    };
+    if (
+      admitted.resolver !== EXTENSION_METHOD_AUTHORITY_RESOLVER ||
+      !declaration ||
+      sha256Canonical(admitted.payload) !== sha256Canonical(live)
+    )
+      throw new ServiceError(
+        "extensions",
+        method,
+        "Extension implementation or authority changed after review; submit a fresh invocation",
+        "ESTALE"
+      );
+  }
+
+  private assertWebsiteMethod(ctx: ServiceContext, entry: RegistryEntry, method: string): void {
+    const website = verifiedInitiator(ctx).website;
+    if (!website) return;
+    const build = entry.activeBundleKey
+      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+      : null;
+    const policy = extensionMetadataDetails(build?.metadata)?.methodAuthority?.[method]?.website;
+    if (!website.connected || policy?.kind !== "eligible")
+      throw new ServiceError(
+        "extensions",
+        method,
+        "This extension operation is closed to websites",
+        "EACCES"
+      );
   }
 
   private createTrackedInvocation(

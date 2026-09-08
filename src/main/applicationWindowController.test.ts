@@ -243,14 +243,19 @@ describe("ApplicationWindowController window lifetime", () => {
     const harness = createHarness();
     harness.controller.create();
     const emitters = [vi.fn(), vi.fn()];
+    const openSurfaces = [vi.fn(), vi.fn()];
     for (const [index, workspaceId] of ["personal", "shared"].entries()) {
       harness.controller.attachWorkspaceServices({
         serverSession: { workspaceId },
         eventService: { emit: emitters[index] },
+        openShellSurface: openSurfaces[index],
       } as unknown as WorkspaceWindowServices);
     }
     const personalOptions = vi.mocked(PanelView).mock.calls[0]![0];
     const sharedOptions = vi.mocked(PanelView).mock.calls[1]![0];
+    sharedOptions.openShellSurface?.({ kind: "workspace-chooser" });
+    expect(openSurfaces[1]).toHaveBeenCalledExactlyOnceWith({ kind: "workspace-chooser" });
+    expect(openSurfaces[0]).not.toHaveBeenCalled();
     personalOptions.onPanelLinkError?.("same-panel-id", "https://personal.example", "Unavailable");
     sharedOptions.onPanelLinkError?.("same-panel-id", "https://shared.example", "Denied");
     expect(emitters[0]).toHaveBeenCalledExactlyOnceWith(

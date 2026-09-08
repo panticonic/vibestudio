@@ -521,6 +521,7 @@ const templateExchangeExecuteAuthority = {
 
 export const developmentMethods = defineReceiverServiceMethods({
   openSession: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -552,6 +553,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   getSession: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -564,6 +566,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   listSessions: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -601,6 +604,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   closeSession: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -615,6 +619,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   destroySession: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "development.sessions.destroy",
     tier: {
       tier: "critical",
@@ -639,6 +644,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "destructive" },
   },
   retrySessionCleanup: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "development.sessions.cleanup.retry",
     tier: {
       tier: "critical",
@@ -664,6 +670,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "destructive" },
   },
   keepSessionRepair: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -678,6 +685,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   listRecipes: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -690,6 +698,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   listClientExecutors: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -703,6 +712,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   listNativeTools: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -727,6 +737,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   planTemplateExchange: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: DEVELOPMENT_NATIVE_EXECUTE_CAPABILITY,
     tier: {
       tier: "gated",
@@ -758,6 +769,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   applyTemplateExchange: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: DEVELOPMENT_NATIVE_EXECUTE_CAPABILITY,
     tier: {
       tier: "gated",
@@ -802,6 +814,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   start: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "development.native.execute",
     tier: {
       tier: "gated",
@@ -850,6 +863,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     },
   },
   faultFailBuildAfterSnapshotRetained: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     description:
       "System-test-only fault injection: fail one caller-owned build immediately after its exact snapshot is durably retained.",
     args: z.tuple([
@@ -883,6 +897,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   get: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -895,6 +910,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   list: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -935,6 +951,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   events: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -961,6 +978,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   stop: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -974,6 +992,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   retry: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "development.native.execute",
     tier: {
       tier: "gated",
@@ -1007,6 +1026,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     },
   },
   keepRunRepair: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1020,6 +1040,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   forceRetire: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "development.runs.force-retire",
     tier: {
       tier: "critical",
@@ -1044,6 +1065,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "destructive" },
   },
   forceRetireSession: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "development.sessions.force-retire",
     tier: {
       tier: "critical",
@@ -1068,6 +1090,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "destructive" },
   },
   checkpoint: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1082,6 +1105,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   inspectNative: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1103,6 +1127,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   stopNativeTool: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1117,6 +1142,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   readNativeTerminal: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1156,6 +1182,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   writeNativeTerminal: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1177,6 +1204,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   resizeNativeTerminal: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "family",
@@ -1198,6 +1226,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "write" },
   },
   snapshotExecutionRoots: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",
@@ -1223,6 +1252,7 @@ export const developmentMethods = defineReceiverServiceMethods({
     access: { sensitivity: "read" },
   },
   nativeRunEvent: {
+    website: {"kind":"closed","reason":"The development receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",

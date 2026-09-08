@@ -1,3 +1,4 @@
+import { isPrincipalKind } from "@vibestudio/rpc";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type { PrincipalKind } from "@vibestudio/rpc";
@@ -46,6 +47,7 @@ export interface UserlandServiceAuthorityCatalog {
 }
 
 export interface EffectiveMethodAccess {
+  website: import("@vibestudio/rpc").WebsiteMethodPolicy;
   principals: readonly PrincipalKind[];
   codeOnly: boolean;
   codeReachable: boolean;
@@ -184,18 +186,15 @@ function methodAccess(
   binding: ExactWorkspaceServiceBinding
 ): EffectiveMethodAccess {
   const principals = [
-    ...new Set((doc.access?.principals ?? []).filter(isPrincipal)),
+    ...new Set((doc.access?.principals ?? []).filter(isPrincipalKind)),
   ] as PrincipalKind[];
   return {
+    website: doc.website,
     principals,
     codeOnly: doc.access?.codeOnly === true,
     ...(doc.access?.crossWorkspace === true ? { crossWorkspace: true } : {}),
     codeReachable: binding.principals.includes("code") && principals.includes("code"),
   };
-}
-
-function isPrincipal(value: string): value is PrincipalKind {
-  return ["host", "user", "code", "session", "mission"].includes(value);
 }
 
 function projectMethod(

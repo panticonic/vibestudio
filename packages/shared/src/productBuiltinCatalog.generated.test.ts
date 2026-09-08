@@ -32,6 +32,7 @@ describe("generated product builtin catalog", () => {
       "webhooks.manage"
     );
     expect(productBuiltinMethodPolicy(source, "BrowserVaultDO", "listPasswordSummaries")).toEqual({
+      website: { kind: "closed", reason: "Browser profile data requires the browser privacy UI and cannot be exported to websites." },
       capability: "browser-data.read",
       tier: "gated",
       session: "family",

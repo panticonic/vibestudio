@@ -2512,7 +2512,44 @@ app.on("ready", async () => {
     // Forwards server-service calls to the server, dispatches Electron-local
     // services to the local dispatcher.
     const { IpcDispatcher } = await import("./ipcDispatcher.js");
+    const { WebsiteWorkspaceBridge } = await import("./websiteWorkspaceBridge.js");
+    const websiteWorkspaceBridge = new WebsiteWorkspaceBridge({
+      resolve: (contents) => {
+        const vm = applicationWindow.viewManager;
+        const nativeId = vm?.findViewIdByWebContentsId(contents.id);
+        const info = nativeId ? vm?.getViewInfo(nativeId) : null;
+        if (!info?.browser || !info.workspaceIdentity)
+          throw new Error("This is not a hosted website");
+        const identity = info.workspaceIdentity;
+        const owner = openNativeControllers.get(identity.workspaceId);
+        if (!owner) throw new Error("Workspace presentation is unavailable");
+        const connection = owner.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
+        if (!connection) throw new Error("Website presentation has no active runtime lease");
+        return {
+          runtimeId: connection.runtimeEntityId,
+          client: owner.serverClient,
+          bootstrap: () => owner.orchestrator.getBootstrapConfig(identity.runtimeId),
+        };
+      },
+      retireTransport: (contents) => {
+        const nativeId = applicationWindow.viewManager?.findViewIdByWebContentsId(contents.id);
+        if (nativeId) activeIpcDispatcher?.retirePanelDocument(nativeId);
+      },
+    });
+    ipcMain.handle("vibestudio:website:document", (event) => websiteWorkspaceBridge.begin(event));
+    ipcMain.handle("vibestudio:website:connect", (event, documentId: string) =>
+      websiteWorkspaceBridge.connect(event, documentId)
+    );
+    ipcMain.handle("vibestudio:website:disconnect", (event, documentId: string) =>
+      websiteWorkspaceBridge.disconnect(event, documentId)
+    );
     const ipcDispatcher = new IpcDispatcher({
+      retireDocuments: async () => {
+        ipcMain.removeHandler("vibestudio:website:document");
+        ipcMain.removeHandler("vibestudio:website:connect");
+        ipcMain.removeHandler("vibestudio:website:disconnect");
+        await websiteWorkspaceBridge.close();
+      },
       workspaceId: conn.workspaceId,
       resolveWorkspaceRuntime: ensureDesktopWorkspace,
       resolveUiRuntime: async (caller, destination) => {
@@ -2598,10 +2635,22 @@ app.on("ready", async () => {
           viewManager.findHostedShellViewIdByContentOverlayWebContentsId(webContentsId);
         if (!callerId) return null;
         const viewInfo = viewManager.getViewInfo(callerId);
+        if (viewInfo?.browser) {
+          const contents = viewManager.getWebContents(callerId);
+          if (!contents || !websiteWorkspaceBridge.connected(contents)) return null;
+        }
         const caller = resolveElectronViewCaller(callerId, viewInfo);
         const identity = viewInfo?.workspaceIdentity;
         return caller && identity
-          ? { ...caller, runtimeId: identity.runtimeId, workspaceId: identity.workspaceId }
+          ? {
+              ...caller,
+              browser: viewInfo?.browser === true,
+              documentId: viewInfo?.browser
+                ? websiteWorkspaceBridge.documentId(viewManager.getWebContents(callerId)!)
+                : undefined,
+              runtimeId: identity.runtimeId,
+              workspaceId: identity.workspaceId,
+            }
           : null;
       },
       getCodeIdentityForCaller: codeIdentityForView,
@@ -2968,14 +3017,16 @@ app.on("ready", async () => {
       }
     });
 
-    // Generic Electron service dispatch — lets panels call Electron-local
-    // services (browser-data, autofill, etc.) directly via IPC instead of
-    // going through the server, which may be remote.
+    // Native app bootstrap still owns this direct service entry. Panels use
+    // the common envelope transport, whose host resolves service ownership.
     ipcMain.handle("vibestudio:serviceCall", async (event, method: string, args: unknown[]) => {
       // CallerKind is derived from the IPC sender's webContents id (shell vs
       // panel), and ServiceDispatcher.dispatch now enforces the per-service
       // policy at the choke point — see audit findings #3 / #18 / #19.
       const { callerId, callerKind } = resolveCaller(event);
+      if (callerKind !== "shell" && callerKind !== "app") {
+        throw new Error("Panel service calls require the authenticated RPC envelope transport");
+      }
       const owner = owningRuntime(callerId);
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}". Expected "service.method"`);
@@ -2993,14 +3044,6 @@ app.on("ready", async () => {
           ? createHostCaller(callerId, "shell")
           : createVerifiedCaller(callerId, callerKind, codeIdentityForView(callerId));
       return owner.runtime.dispatcher.dispatch({ caller }, parsed.service, parsed.method, args);
-    });
-    ipcMain.handle("vibestudio:isLocalService", (event, service: unknown) => {
-      const { callerId, callerKind } = resolveCaller(event);
-      if (callerKind !== "shell" && callerKind !== "app" && callerKind !== "panel") return false;
-      return (
-        typeof service === "string" &&
-        owningRuntime(callerId).runtime.dispatcher.hasService(service)
-      );
     });
 
     // Workspace RPC is now registered; the bootstrap shell may leave its

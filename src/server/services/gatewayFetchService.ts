@@ -201,7 +201,7 @@ export function createGatewayFetchService(deps: {
     // loopback gateway (no external origin), so this grants nothing beyond the
     // same gateway-relative assets. The only management-route exception is the
     // exact mobile native bootstrap POST, and only for trusted shell/app callers.
-    authority: { principals: ["user", "code"] },
+    authority: { principals: ["user", "code", "website"] },
     methods: gatewayMethods,
     handler: defineServiceHandler(serviceName, gatewayMethods, {
       fetch: async (ctx, [descriptor]) => {

@@ -26,18 +26,30 @@ const blobstore: ServiceDefinition = {
   authority: { principals: ["code", "host"] },
   methods: {
     putText: {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Store a UTF-8 string and return its digest",
       args: z.tuple([z.string()]),
       returns: z.object({ digest: z.string() }),
       tier: TEST_OPEN_TIER,
     },
     "admin.wipe": {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Delete everything",
       args: z.tuple([]),
       authority: { principals: ["host"] },
       tier: TEST_OPEN_TIER,
     },
     internalTransport: {
+      website: {
+        kind: "eligible",
+        rationale: "Explicit receiver policy for this test fixture.",
+      } as const,
       description: "Internal transport that has a higher-level runtime API",
       args: z.tuple([]),
       agentFacing: false,
@@ -221,6 +233,7 @@ describe("docs service (caller-aware)", () => {
           {
             name: "getNote",
             signature: "getNote(id: string): Promise<string>",
+            website: { kind: "closed", reason: "Private notes are not exported by this fixture." },
             access: { tier: "open", sensitivity: "read", principals: ["code"] },
           },
         ],

@@ -155,7 +155,7 @@ export interface OrdinaryAuthorityAcquirer {
     signal?: AbortSignal
   ): Promise<{
     state: "decided" | "closed";
-    decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
+    decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
     info?: AcquisitionInfo;
   }>;
   acquireMany?(
@@ -163,7 +163,7 @@ export interface OrdinaryAuthorityAcquirer {
     signal?: AbortSignal
   ): Promise<{
     state: "decided" | "closed";
-    decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
+    decision?: import("@vibestudio/shared/approvalContract").AuthorityAcquisitionDecision;
     info?: AcquisitionInfo;
   }>;
   consume(grantId: string): boolean;

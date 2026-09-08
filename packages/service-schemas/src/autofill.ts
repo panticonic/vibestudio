@@ -15,6 +15,7 @@ const CONFIRM_SAVE_ACCESS: MethodAccessDescriptor = {
 
 export const autofillMethods = defineServiceMethods({
   confirmSave: {
+    website: {"kind":"closed","reason":"The autofill receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "browser-passwords.manage",
     tier: {
       tier: "gated",
@@ -42,6 +43,7 @@ export const autofillMethods = defineServiceMethods({
     examples: [{ args: ["panel-abc123", "save"] }],
   },
   confirmFormFill: {
+    website: {"kind":"closed","reason":"The autofill receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "browser-form-fill.manage",
     tier: {
       tier: "gated",

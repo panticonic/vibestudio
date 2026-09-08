@@ -90,6 +90,11 @@ export const templatesMethods = defineServiceMethods({
     access: READ,
   },
   inspect: {
+    website: {
+      kind: "eligible",
+      rationale:
+        "The exact extension method contract requires permission to disclose inspected source metadata; installation is a separate operation.",
+    } as const,
     description:
       "Resolve, acquire, and verify one exact self-contained upstream workspace snapshot.",
     args: z.tuple([templateLocatorSchema]),
@@ -97,6 +102,11 @@ export const templatesMethods = defineServiceMethods({
     access: READ,
   },
   inspectAuthoring: {
+    website: {
+      kind: "closed",
+      reason:
+        "The templates receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Build a reviewed self-contained snapshot plan from protected-main workspace source.",
     args: z.tuple([authoringIntentSchema]),
@@ -104,6 +114,11 @@ export const templatesMethods = defineServiceMethods({
     access: READ,
   },
   authoringParts: {
+    website: {
+      kind: "closed",
+      reason:
+        "The templates receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "List protected-main repositories available for snapshot authoring.",
     args: z.tuple([]),
     returns: z.array(
@@ -112,6 +127,11 @@ export const templatesMethods = defineServiceMethods({
     access: READ,
   },
   publishAuthoring: {
+    website: {
+      kind: "closed",
+      reason:
+        "The templates receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Revalidate and publish a reviewed self-contained workspace snapshot.",
     args: z.tuple([
       z

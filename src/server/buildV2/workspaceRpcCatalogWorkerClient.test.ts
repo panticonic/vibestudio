@@ -30,7 +30,7 @@ describe("WorkspaceRpcCatalogWorkerClient", () => {
       `declare const root: any;
        const generated = root${".value".repeat(12_000)};
        class NotesDO {
-         @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+         @rpc({ website: {"kind":"eligible","rationale":"Explicit receiver exposure for this test fixture."}, principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
          async getNote(): Promise<void> {}
        }`
     );

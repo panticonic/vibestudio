@@ -16,6 +16,7 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
 
 export const workerLogMethods = defineServiceMethods({
   write: {
+    website: {"kind":"closed","reason":"The workerLog receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     tier: {
       tier: "open",
       session: "codeOnly",

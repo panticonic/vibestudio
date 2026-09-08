@@ -10,6 +10,9 @@ describe("product builtin direct authority", () => {
         method: "slotCreate",
       })
     ).toMatchObject({
+      methodWebsite: {
+        kind: "closed",
+      } as const,
       capability: "workspace-service:workspace.state",
       methodCapability: "workspace.runtime-state.manage",
       methodTier: "gated",
