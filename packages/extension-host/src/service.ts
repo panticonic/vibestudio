@@ -908,7 +908,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       authority: { principals: ["code", "user", "host"] },
       methods: extensionsMethods,
       authorityPreparation: {
-        [EXTENSION_METHOD_AUTHORITY_RESOLVER]: async (_ctx, args) => {
+        [EXTENSION_METHOD_AUTHORITY_RESOLVER]: async (ctx, args) => {
           const [name, method] = args;
           if (typeof name !== "string" || typeof method !== "string") {
             throw new ServiceError(
@@ -918,12 +918,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               "EINVAL"
             );
           }
-          await this.whenDeclarationsStaged();
-          await this.prepareTargetBuild(name);
-          const entry = this.lookupForInvoke(name);
-          if (!entry?.activeBundleKey) {
-            throw this.extensionUnavailableError(name, "invoke");
-          }
+          const entry = await this.requireInvocationEntry(name, "invoke", ctx.signal);
           const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
           const details = extensionMetadataDetails(build?.metadata);
           const declaration = details?.methodAuthority?.[method];
@@ -1059,16 +1054,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // can park a low-value call to an already-running extension behind an unrelated pending
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
-    await this.whenDeclarationsStaged();
-    await this.prepareTargetBuild(name);
-    let entry = this.lookupForInvoke(name);
-    if (!entry) {
-      await this.waitForTargetActivation(name, ctx.signal);
-      entry = this.lookupForInvoke(name);
-    }
-    if (!entry) {
-      throw this.extensionUnavailableError(name, operation);
-    }
+    const entry = await this.requireInvocationEntry(name, operation, ctx.signal);
     await this.ensureTargetRunning(entry, ctx.signal, operation);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
     try {
@@ -1276,15 +1262,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     args: unknown[]
   ): Promise<Response> {
     // See invoke(): stream calls should not wait behind unrelated extension approval/build work.
-    await this.whenDeclarationsStaged();
-    let entry = this.lookupForInvoke(name);
-    if (!entry) {
-      await this.waitForTargetActivation(name, ctx.signal);
-      entry = this.lookupForInvoke(name);
-    }
-    if (!entry) {
-      throw this.extensionUnavailableError(name, "invokeStream");
-    }
+    const entry = await this.requireInvocationEntry(name, "invokeStream", ctx.signal);
     this.assertPublicExtensionInvocationAllowed(entry, method, "invokeStream");
     if (!this.deps.extensionTransport.streamCallTarget) {
       throw new ServiceError(
@@ -1441,6 +1419,23 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     } catch {
       return null;
     }
+  }
+
+  /** Authority preparation and invocation consume the same approved target readiness. */
+  private async requireInvocationEntry(
+    name: string,
+    operation: "invoke" | "invokeProvider" | "invokeStream",
+    signal?: AbortSignal
+  ): Promise<RegistryEntry & { activeBundleKey: string }> {
+    await this.whenDeclarationsStaged();
+    await this.prepareTargetBuild(name);
+    let entry = this.lookupForInvoke(name);
+    if (!entry) {
+      await this.waitForTargetActivation(name, signal);
+      entry = this.lookupForInvoke(name);
+    }
+    if (!entry?.activeBundleKey) throw this.extensionUnavailableError(name, operation);
+    return { ...entry, activeBundleKey: entry.activeBundleKey };
   }
 
   /** Pure eligibility lookup: declaration reconciliation owns trust. */

@@ -1542,6 +1542,30 @@ describe("ExtensionHost activation", () => {
     await expect(invocation).resolves.toBe("transport-result");
   });
 
+  it("prepares authority only after the requested approved extension finishes its queued build", async () => {
+    const { host, extensionNode, buildSystem } = makeHost({
+      status: "building",
+      activeBundleKey: null,
+    });
+    const prepare =
+      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+    let settled = false;
+    const preparation = prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []]);
+    void preparation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(buildSystem.getBuildByKey).not.toHaveBeenCalled();
+    host.registry.patch(extensionNode.name, { activeBundleKey: "bundle-key", status: "available" });
+    await expect(preparation).resolves.toMatchObject({ payload: { effect: "open" } });
+  });
+
   it("fails with ENOTREADY when an extension is not running", async () => {
     const { host, extensionNode } = makeHost();
     vi.spyOn(host.processes, "isRunning").mockReturnValue(false);
