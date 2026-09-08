@@ -77,11 +77,13 @@ import { webhookIngressMethods } from "./webhookIngress.js";
 import { webhookEngineMethods } from "./webhookEngine.js";
 import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
+import { workspaceCreationMethods } from "./workspaceCreation.js";
 import { workspacePresenceMethods } from "./workspacePresence.js";
 import { gadWireMethods } from "./workspaceSource.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
 import { workspacePresentationMethods } from "./workspacePresentation.js";
+import { websiteHostingMethods } from "./websiteHosting.js";
 import { RPC_PROGRESS_SEMANTICS } from "./progressSemantics.generated.js";
 
 type ServiceTable = {
@@ -210,6 +212,11 @@ const serviceTables: ServiceTable[] = [
   { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },
+  {
+    service: "workspaceCreation",
+    file: "workspaceCreation.ts",
+    methods: workspaceCreationMethods,
+  },
   { service: "workspaceSource", file: "workspaceSource.ts", methods: gadWireMethods },
   {
     service: "workspacePresence",
@@ -227,6 +234,7 @@ const serviceTables: ServiceTable[] = [
     file: "workspacePresentation.ts",
     methods: workspacePresentationMethods,
   },
+  { service: "websiteHosting", file: "websiteHosting.ts", methods: websiteHostingMethods },
 ];
 
 const approvedReturnlessMethods = new Set([
