@@ -50,6 +50,13 @@ import {
   verifyBlob,
 } from "../storage/blobCas.js";
 import { assertPresent } from "../../lintHelpers";
+import {
+  retainBlob,
+  releaseBlobRetention,
+  retainedBlobDigests,
+  withBlobContentLock,
+} from "../storage/blobRetentions.js";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 const log = createDevLogger("BlobstoreService");
 
@@ -1893,6 +1900,10 @@ export async function materializeTree(
 }
 
 export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithRoutes {
+  // Durable Object identities survive process/build incarnations. Logical keys
+  // are never allowed to choose a different authenticated caller namespace.
+  const retentionNamespace = (caller: VerifiedCaller) =>
+    JSON.stringify([caller.runtime.kind, caller.runtime.id]);
   const definition: ServiceDefinition = {
     name: "blobstore",
     description: "Per-workspace content-addressable blob storage",
@@ -1916,6 +1927,22 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
       },
       grep: (_ctx, [hash, query, options]) => grepBlob(deps.blobsDir, hash, query, options ?? {}),
       putBase64: (_ctx, [content]) => putBytes(deps.blobsDir, Buffer.from(content, "base64")),
+      putRetained: (ctx, [input]) =>
+        withBlobContentLock(deps.blobsDir, async () => {
+          const stored = await putBytes(deps.blobsDir, Buffer.from(input.base64, "base64"));
+          retainBlob(deps.blobsDir, retentionNamespace(ctx.caller), input.owner, stored.digest);
+          return stored;
+        }),
+      retain: (ctx, [input]) =>
+        withBlobContentLock(deps.blobsDir, async () => {
+          if (!(await statBlob(deps.blobsDir, input.digest)))
+            throw new Error("Cannot retain content absent from this workspace");
+          retainBlob(deps.blobsDir, retentionNamespace(ctx.caller), input.owner, input.digest);
+        }),
+      releaseRetention: (ctx, [input]) =>
+        withBlobContentLock(deps.blobsDir, async () => {
+          releaseBlobRetention(deps.blobsDir, retentionNamespace(ctx.caller), input.owner);
+        }),
       getBase64: async (_ctx, [hash]) => {
         const bytes = await getBytes(deps.blobsDir, hash);
         return bytes ? bytes.toString("base64") : null;
@@ -1927,16 +1954,19 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
       diffTrees: (_ctx, [leftHash, rightHash]) => diffTrees(deps.blobsDir, leftHash, rightHash),
       materializeTree: (_ctx, [hash, outDir, options]) =>
         materializeTree(deps.blobsDir, hash, outDir, options),
-      delete: async (_ctx, [hash]) => {
-        const filePath = blobPath(deps.blobsDir, hash);
-        try {
-          await fsp.unlink(filePath);
-          return true;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-          throw error;
-        }
-      },
+      delete: (_ctx, [hash]) =>
+        withBlobContentLock(deps.blobsDir, async () => {
+          if (retainedBlobDigests(deps.blobsDir).includes(hash))
+            throw new Error("Cannot delete retained content; release its owners first");
+          const filePath = blobPath(deps.blobsDir, hash);
+          try {
+            await fsp.unlink(filePath);
+            return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+            throw error;
+          }
+        }),
       list: (_ctx, [options]) => listBlobs(deps.blobsDir, options),
     }),
   };

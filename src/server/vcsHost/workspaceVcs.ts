@@ -87,6 +87,7 @@ import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
+import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
 /**
  * The semantic wire surface, derived from the port rather than mirrored beside
@@ -352,19 +353,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     let committed = false;
     return {
       epoch: options.epoch,
-      commit: async () => {
-        if (committed) throw new Error(`Content GC epoch ${options.epoch} was already committed`);
-        committed = true;
-        // A materialization may finish after the initial read-only preflight
-        // and before the shared epoch commits. Re-read all durable and cached
-        // roots at the destructive boundary so a newly published state cannot
-        // be mistaken for garbage. Keeping the first snapshot as well is
-        // intentional: roots retired during the epoch remain protected until
-        // the normal age grace period expires.
-        const finalReachable = await this.collectGcReachableDigests(options.executionSourceRoots);
-        for (const digest of reachable) finalReachable.add(digest);
-        return sweepUnreachableBlobs(this.deps.blobsDir, finalReachable, options.minAgeMs);
-      },
+      commit: () =>
+        withBlobContentLock(this.deps.blobsDir, async () => {
+          if (committed) throw new Error(`Content GC epoch ${options.epoch} was already committed`);
+          committed = true;
+          // A materialization may finish after the initial read-only preflight
+          // and before the shared epoch commits. Re-read all durable and cached
+          // roots at the destructive boundary so a newly published state cannot
+          // be mistaken for garbage. Keeping the first snapshot as well is
+          // intentional: roots retired during the epoch remain protected until
+          // the normal age grace period expires.
+          const finalReachable = await this.collectGcReachableDigests(options.executionSourceRoots);
+          for (const digest of reachable) finalReachable.add(digest);
+          return sweepUnreachableBlobs(this.deps.blobsDir, finalReachable, options.minAgeMs);
+        }),
     };
   }
 
@@ -389,7 +391,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       paths.add(validated.repoPath ?? "<workspace>");
       executionRootPaths.set(stateHash, paths);
     }
-    const reachable = new Set(semantic.contentHashes);
+    const reachable = new Set([
+      ...semantic.contentHashes,
+      ...retainedBlobDigests(this.deps.blobsDir),
+    ]);
     for (const root of roots) {
       const tree = await collectTreeReachableDigests(this.deps.blobsDir, root, {
         verifyContent: true,
@@ -655,6 +660,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         }
         return (await this.executeHostRead(result.request)) as T;
       }
+      if (result.kind === "host-content") {
+        const request = result.request;
+        result = await withBlobContentLock(this.deps.blobsDir, () =>
+          this.prepareSemanticContent(request)
+        );
+        continue;
+      }
       const effect = result.effects[0];
       if (!effect) throw new Error("semantic command reported effects-pending without an effect");
       const effectStartedAt = performance.now();
@@ -768,7 +780,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       case "observe-content":
         return this.observeContent(effect);
       case "materialize-context": {
-        if (effect.payload["mode"] === "content-only") return this.persistContent(effect);
         const command = effect.payload as unknown as ContextMaterializationCommand;
         const receipt = await this.materializer.materialize(command);
         await this.rememberVerifiedProjection(command.contextId);
@@ -821,47 +832,46 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return { files: observed };
   }
 
-  /**
-   * Persist authored bytes independently of context projection. Semantic-only
-   * contexts deliberately have no filesystem checkout, but their immutable
-   * content is still part of workspace history and must be readable after the
-   * originating request, process, and extension activation have ended.
-   */
-  private async persistContent(effect: SemanticEffect): Promise<Record<string, unknown>> {
-    const version = effect.payload["version"];
-    const blobs = effect.payload["blobs"];
-    if (version !== 1 || !Array.isArray(blobs) || blobs.length === 0) {
-      throw new Error("content persistence effect has an invalid payload");
+  /** Prepared bytes remain transient until the source commits their content identities. */
+  private async prepareSemanticContent(
+    request: Record<string, unknown>
+  ): Promise<SemanticDispatchResult> {
+    const blobs = request["blobs"];
+    if (request["kind"] !== "prepare-semantic-content" || !Array.isArray(blobs)) {
+      throw new Error("semantic content preparation has an invalid request");
     }
     const seen = new Set<string>();
-    const contentHashes = await Promise.all(
-      blobs.map(async (value) => {
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          throw new Error("content persistence effect contains an invalid blob");
-        }
-        const blob = value as Record<string, unknown>;
-        const contentHash = String(blob["contentHash"] ?? "");
-        const base64 = String(blob["base64"] ?? "");
-        if (!/^[0-9a-f]{64}$/u.test(contentHash) || !base64) {
-          throw new Error("content persistence effect contains an invalid content identity");
-        }
-        if (seen.has(contentHash)) {
-          throw new Error(`content persistence effect repeats ${contentHash}`);
-        }
-        seen.add(contentHash);
-        const bytes = Buffer.from(base64, "base64");
-        if (bytes.toString("base64") !== base64) {
-          throw new Error(`content persistence effect has invalid bytes for ${contentHash}`);
-        }
-        const stored = await putBytes(this.deps.blobsDir, bytes);
-        if (stored.digest !== contentHash) {
-          throw new Error(`content persistence effect bytes do not match ${contentHash}`);
-        }
-        return contentHash;
-      })
-    );
-    contentHashes.sort(compareUtf16CodeUnits);
-    return { version: 1, contentHashes };
+    const prepared = blobs.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("semantic content preparation contains an invalid blob");
+      }
+      const { contentHash, base64 } = value as Record<string, unknown>;
+      if (
+        typeof contentHash !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(contentHash) ||
+        typeof base64 !== "string"
+      ) {
+        throw new Error("semantic content preparation contains an invalid content identity");
+      }
+      if (seen.has(contentHash))
+        throw new Error(`semantic content preparation repeats ${contentHash}`);
+      seen.add(contentHash);
+      const bytes = Buffer.from(base64, "base64");
+      if (bytes.toString("base64") !== base64) {
+        throw new Error(`semantic content preparation has invalid bytes for ${contentHash}`);
+      }
+      if (crypto.createHash("sha256").update(bytes).digest("hex") !== contentHash) {
+        throw new Error(`semantic content preparation bytes do not match ${contentHash}`);
+      }
+      return { contentHash, bytes };
+    });
+    // Validate the full request before writing, then await every store before
+    // allowing the source to commit references. The GC lease spans the ack.
+    await Promise.all(prepared.map(({ bytes }) => putBytes(this.deps.blobsDir, bytes)));
+    const contentHashes = prepared
+      .map(({ contentHash }) => contentHash)
+      .sort(compareUtf16CodeUnits);
+    return this.gad().semanticContentAck({ acknowledgement: { request, contentHashes } });
   }
 
   private async executeHostRead(request: Record<string, unknown>): Promise<VcsReadFileResult> {

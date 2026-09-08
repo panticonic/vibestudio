@@ -1178,51 +1178,116 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
   });
 
-  it("persists authored content for a semantic-only context without projecting it", async () => {
+  it("stores every transient blob before resuming semantic content preparation", async () => {
     const { root, blobsDir, vcs } = await harness();
-    const bytes = Buffer.from("semantic-only operation record\n");
-    const contentHash = sha256Hex(bytes);
-    const effect = {
-      effectId: "effect:persist-content",
-      scopeKind: "context" as const,
-      scopeId: "context:semantic-only",
-      commandId: "command:edit",
-      kind: "materialize-context" as const,
-      payloadDigest: "digest:persist-content",
-      payload: {
-        version: 1,
-        mode: "content-only",
-        contextId: "context:semantic-only",
-        targetState: { kind: "application", applicationId: "application:one" },
-        blobs: [{ contentHash, base64: bytes.toString("base64") }],
-      },
-      status: "pending" as const,
+    const contents = [
+      Buffer.from("first authored content"),
+      Buffer.from("second authored content"),
+      Buffer.alloc(0),
+    ];
+    const blobs = contents.map((bytes) => ({
+      contentHash: sha256Hex(bytes),
+      base64: bytes.toString("base64"),
+    }));
+    const request = {
+      kind: "prepare-semantic-content",
+      operation: "edit",
+      input: { contextId: "context:semantic-only", commandId: "command:edit" },
+      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      observed: [{ contentHash: sha256Hex(Buffer.from("old")), text: "old" }],
+      blobs,
     };
-    let receipt: Record<string, unknown> | null = null;
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsEdit") {
-        return { kind: "effects-pending", result: { pending: true }, effects: [effect] };
-      }
-      if (method === "vcsSemanticEffectAck") {
-        receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
-          .acknowledgement.receipt;
+      if (method === "vcsEdit") return { kind: "host-content", request };
+      if (method === "vcsSemanticContentAck") {
+        expect(input).toEqual({
+          acknowledgement: { request, contentHashes: blobs.map((blob) => blob.contentHash).sort() },
+        });
+        for (const [index, blob] of blobs.entries()) {
+          expect(await getBytes(blobsDir, blob.contentHash)).toEqual(contents[index]);
+        }
         return { kind: "complete", result: { ok: true } };
       }
       throw new Error(`unexpected ${method}`);
     });
     await vcs.attachGad(providerFromWireCall(call));
-
     await expect(
-      vcs.semanticCall("vcsEdit", {
-        input: {},
-        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
-      })
+      vcs.semanticCall("vcsEdit", { input: request.input, ingress: request.ingress as never })
     ).resolves.toEqual({ ok: true });
-    await expect(getBytes(blobsDir, contentHash)).resolves.toEqual(bytes);
     await expect(
       fsp.stat(path.join(root, "contexts", "context:semantic-only"))
     ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(receipt).toEqual({ version: 1, contentHashes: [contentHash] });
+    expect(call.mock.calls.map(([method]) => method)).toEqual(["vcsEdit", "vcsSemanticContentAck"]);
+  });
+
+  it("rejects a mismatched prepared content identity without resuming the source", async () => {
+    const { blobsDir, vcs } = await harness();
+    const valid = Buffer.from("valid");
+    const call = vi.fn(async () => ({
+      kind: "host-content",
+      request: {
+        kind: "prepare-semantic-content",
+        operation: "edit",
+        input: {},
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+        blobs: [
+          { contentHash: sha256Hex(valid), base64: valid.toString("base64") },
+          { contentHash: "a".repeat(64), base64: Buffer.from("wrong digest").toString("base64") },
+        ],
+      },
+    }));
+    await vcs.attachGad(providerFromWireCall(call));
+    await expect(vcs.semanticDirectCall("vcsEdit", {})).rejects.toThrow("bytes do not match");
+    expect(call).toHaveBeenCalledOnce();
+    expect(await getBytes(blobsDir, sha256Hex(valid))).toBeNull();
+  });
+
+  it("protects prepared content from GC until its semantic acknowledgement commits", async () => {
+    const { blobsDir, vcs } = await harness();
+    const bytes = Buffer.from("content awaiting semantic commit");
+    const contentHash = sha256Hex(bytes);
+    let committed = false;
+    let acknowledgeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      acknowledgeStarted = resolve;
+    });
+    let finishAcknowledgement!: () => void;
+    const finish = new Promise<void>((resolve) => {
+      finishAcknowledgement = resolve;
+    });
+    const call = vi.fn(async (method: string) => {
+      if (method === "vcsContentGcRoots")
+        return { contentRoots: [], contentHashes: committed ? [contentHash] : [] };
+      if (method === "vcsEdit")
+        return {
+          kind: "host-content",
+          request: {
+            kind: "prepare-semantic-content",
+            operation: "edit",
+            input: {},
+            ingress: {
+              causalParent: null,
+              contextIntegrity: { class: "internal", externalKeys: [] },
+            },
+            blobs: [{ contentHash, base64: bytes.toString("base64") }],
+          },
+        };
+      if (method === "vcsSemanticContentAck") {
+        acknowledgeStarted();
+        await finish;
+        committed = true;
+        return { kind: "complete", result: { ok: true } };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad(providerFromWireCall(call));
+    const gc = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    const edit = vcs.semanticDirectCall("vcsEdit", {});
+    await started;
+    const sweep = gc.commit();
+    finishAcknowledgement();
+    await Promise.all([edit, sweep]);
+    expect(await getBytes(blobsDir, contentHash)).toEqual(bytes);
   });
 
   it("executes a derived repair command directly without journaling or acknowledging it", async () => {

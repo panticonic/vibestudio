@@ -45,7 +45,8 @@ export type WorkspaceSourceSemanticDispatchResult =
       result: unknown;
       effects: WorkspaceSourceSemanticEffect[];
     }
-  | { kind: "host-read"; request: Record<string, unknown> };
+  | { kind: "host-read"; request: Record<string, unknown> }
+  | { kind: "host-content"; request: Record<string, unknown> };
 
 export interface WorkspaceSemanticRequest {
   input: unknown;
@@ -127,6 +128,12 @@ export interface WorkspaceSemanticPort {
     acknowledgement: {
       request: Record<string, unknown>;
       files: Array<{ contentHash: string; text: string }>;
+    };
+  }): Promise<WorkspaceSourceSemanticDispatchResult>;
+  semanticContentAck(input: {
+    acknowledgement: {
+      request: Record<string, unknown>;
+      contentHashes: string[];
     };
   }): Promise<WorkspaceSourceSemanticDispatchResult>;
   pendingSemanticEffects(): Promise<WorkspaceSourceSemanticEffect[]>;
@@ -216,6 +223,7 @@ export function createWorkspaceSemanticPort(
     vcsListFiles: (input) => invoke("vcsListFiles", input),
     semanticEffectAck: (input) => invoke("vcsSemanticEffectAck", input),
     semanticHostReadAck: (input) => invoke("vcsSemanticHostReadAck", input),
+    semanticContentAck: (input) => invoke("vcsSemanticContentAck", input),
     pendingSemanticEffects: () => invokeNoArgs("vcsPendingSemanticEffects"),
     ensureContext: (input) => invoke("vcsEnsureContext", input),
     contextMaterializationCommand: (input) => invoke("vcsContextMaterializationCommand", input),

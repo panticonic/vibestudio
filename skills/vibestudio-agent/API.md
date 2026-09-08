@@ -86,6 +86,9 @@ Authority principals: `code`, `host`, `user`
 | `blobstore.getRangeBytes` | Raw byte slice, base64-encoded on the wire so binary blobs (PDFs, images) round-trip intact. Decode with Buffer.from(result.bytesBase64, 'base64'). |
 | `blobstore.grep` | Search a blob's text for a regex pattern; returns matching lines with optional surrounding context, or null if the blob is absent. |
 | `blobstore.putBase64` | Store raw bytes from exactly one base64 string; returns content digest + byte size (idempotent by content). The blobstore stores bytes only: do not pass MIME/options metadata, and instead carry it alongside the returned digest. |
+| `blobstore.putRetained` | Store bytes and durably retain their digest for this caller's logical owner, atomically with respect to garbage collection. Reusing an owner with different bytes is rejected. |
+| `blobstore.retain` | Retain existing workspace-local content for this caller's logical owner. Multiple owners may retain the same digest; repeated identical requests are idempotent. |
+| `blobstore.releaseRetention` | Release this caller's logical owner idempotently. Does not delete bytes; remaining owners and other garbage-collection roots still protect them. |
 | `blobstore.getBase64` | Full blob contents as a base64 string, or null if absent. |
 | `blobstore.putTree` | Store one immutable directory node in the content-addressed store and return its tree hash. Every referenced file blob and child tree must already exist, so a tree hash cannot name missing objects. Pass {root:true} to also store a content-state root pointer. Content states are build/projection inputs, never semantic revision or ancestry identities. Idempotent by content; build deep trees bottom-up. |
 | `blobstore.getTree` | Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node). |

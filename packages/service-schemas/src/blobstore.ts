@@ -44,14 +44,12 @@ const ADMIN_DESTRUCTIVE_ACCESS: MethodAccessDescriptor = {
 export const DigestSchema = z.string().regex(DIGEST_RE);
 export const Base64Schema = z.string().refine((value) => {
   try {
-    return (
-      bytesToBase64(base64ToBytes(value)).replace(/=+$/u, "") ===
-      value.replace(/=+$/u, "")
-    );
+    return bytesToBase64(base64ToBytes(value)).replace(/=+$/u, "") === value.replace(/=+$/u, "");
   } catch {
     return false;
   }
 }, "Invalid base64 payload");
+const RetentionOwnerSchema = z.string().min(1).max(512);
 export const ListOptsSchema = z
   .object({
     prefix: z.string().regex(PREFIX_RE).optional(),
@@ -367,6 +365,51 @@ export const blobstoreMethods = defineServiceMethods({
     authority: BLOBSTORE_READ_POLICY,
     access: WRITE_ACCESS,
     examples: [{ args: ["iVBORw0KGgo="] }],
+  },
+  putRetained: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale: "Workspace content retained by an authenticated caller's logical owner.",
+    },
+    description:
+      "Store bytes and durably retain their digest for this caller's logical owner, atomically with respect to garbage collection. Reusing an owner with different bytes is rejected.",
+    args: z.tuple([z.object({ base64: Base64Schema, owner: RetentionOwnerSchema }).strict()]),
+    returns: z.object({ digest: DigestSchema, size: z.number().int().nonnegative() }).strict(),
+    authority: BLOBSTORE_READ_POLICY,
+    access: WRITE_ACCESS,
+  },
+  retain: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale: "Workspace content retained by an authenticated caller's logical owner.",
+    },
+    description:
+      "Retain existing workspace-local content for this caller's logical owner. Multiple owners may retain the same digest; repeated identical requests are idempotent.",
+    args: z.tuple([z.object({ digest: DigestSchema, owner: RetentionOwnerSchema }).strict()]),
+    returns: z.void(),
+    authority: BLOBSTORE_READ_POLICY,
+    access: WRITE_ACCESS,
+  },
+  releaseRetention: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale: "Release only this authenticated caller's logical content ownership.",
+    },
+    description:
+      "Release this caller's logical owner idempotently. Does not delete bytes; remaining owners and other garbage-collection roots still protect them.",
+    args: z.tuple([z.object({ owner: RetentionOwnerSchema }).strict()]),
+    returns: z.void(),
+    authority: BLOBSTORE_READ_POLICY,
+    access: WRITE_ACCESS,
   },
   getBase64: {
     tier: {

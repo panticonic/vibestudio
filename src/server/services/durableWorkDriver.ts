@@ -236,7 +236,29 @@ export function createDurableWorkHandlers(
           );
         }
         const target = requireTarget(payload.target);
-        const delivery = payload.delivery as { channelId?: unknown; envelope?: unknown };
+        const reference = payload.delivery as {
+          channelId?: unknown;
+          envelopeId?: unknown;
+          eventSequence?: unknown;
+        };
+        if (typeof reference.envelopeId !== "string") {
+          throw new Error("Channel delivery has no canonical event reference");
+        }
+        const event = (await doDispatch.dispatchHeldWithSignal(
+          owner,
+          signal,
+          "getEnvelope",
+          reference.envelopeId
+        )) as { id?: unknown; messageId?: unknown } | null;
+        if (
+          !event ||
+          event.id !== reference.eventSequence ||
+          event.messageId !== reference.envelopeId
+        ) {
+          throw new Error("Channel delivery canonical event differs from its mailbox reference");
+        }
+        const { envelopeId: _envelopeId, ...fields } = reference;
+        const delivery = { ...fields, envelope: { kind: "log", phase: "live", event } };
         try {
           return await doDispatch.dispatchHeldWithSignal(
             target,

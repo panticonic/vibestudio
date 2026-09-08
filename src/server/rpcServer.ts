@@ -994,10 +994,9 @@ export class RpcServer {
     inheritedTestPolicy?: AgentExecutionTestPolicy | null,
     executionSessionNonce?: string
   ): VerifiedCaller {
-    const activeEntity =
-      callerKind === "worker" || callerKind === "do"
-        ? this.deps.entityCache?.resolveActive(callerId)
-        : undefined;
+    // Every registered executable runtime carries its owning context, including
+    // panels and apps. Context authority must follow that live host record.
+    const activeEntity = this.deps.entityCache?.resolveActive(callerId);
     const resolvedAgentBinding = agentBinding ?? activeEntity?.agentBinding;
     const residentCode =
       callerKind === "extension"

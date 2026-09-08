@@ -67,6 +67,7 @@ import type { StreamFrame } from "./services/egressProxy.js";
 
 const fetchHttp = globalThis.fetch;
 const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
+const originalArtifactRoot = process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
 const testProductAppRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rpc-product-root-"));
 
 beforeAll(() => {
@@ -76,11 +77,14 @@ beforeAll(() => {
     JSON.stringify({ fingerprint: "ab".repeat(32) })
   );
   process.env["VIBESTUDIO_APP_ROOT"] = testProductAppRoot;
+  process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.join(testProductAppRoot, "dist");
 });
 
 afterAll(() => {
   if (originalAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
   else process.env["VIBESTUDIO_APP_ROOT"] = originalAppRoot;
+  if (originalArtifactRoot === undefined) delete process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"];
+  else process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = originalArtifactRoot;
   fs.rmSync(testProductAppRoot, { recursive: true, force: true });
 });
 
@@ -3087,6 +3091,24 @@ describe("RpcServer relay behavior", () => {
       })
     );
   });
+
+  it.each(["panel", "app"] as const)(
+    "inherits the live %s context test policy without granting a session",
+    (kind) => {
+      const policy = { policyId: "test:panel-context", kind: "orchestrator" as const };
+      const { server, entityCache } = createServer({
+        testPolicyForContext: (contextId) => (contextId === "ctx:test-panel" ? policy : null),
+      });
+      const runtimeId = `${kind}:test-context`;
+      entityCache._onActivate(makeRecord(runtimeId, kind, { contextId: "ctx:test-panel" }));
+      const caller = testServer(server).verifiedCallerFor(runtimeId, kind);
+      expect(caller.testPolicy).toEqual(policy);
+      expect(caller.executionSession).toBeUndefined();
+      const ordinaryId = `${kind}:ordinary-context`;
+      entityCache._onActivate(makeRecord(ordinaryId, kind, { contextId: "ctx:ordinary" }));
+      expect(testServer(server).verifiedCallerFor(ordinaryId, kind).testPolicy).toBeUndefined();
+    }
+  );
 
   it("admits hidden workspace-service test seams only for an attested system-test harness", async () => {
     const capability = "service:development.faultFailBuildAfterSnapshotRetained";

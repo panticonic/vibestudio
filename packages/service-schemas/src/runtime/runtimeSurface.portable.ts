@@ -759,6 +759,26 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     undefined,
     gadRuntimeCatalog
   ),
+  images: namespaceEntry(
+    [
+      "generate",
+      "getJob",
+      "cancel",
+      "retry",
+      "forgetJob",
+      "deleteArtDirection",
+      "getAsset",
+      "readAsset",
+      "importAsset",
+      "retain",
+      "release",
+      "putArtDirection",
+      "getArtDirection",
+      "getBytes",
+      "wait",
+    ],
+    "Workspace image assets and durable generation jobs. generate({requestId,prompt,references?,artDirection?}) returns a job; wait(job.id) observes completion. Store the resulting immutable asset reference in application state. GeneratedImage from @workspace/react displays assets in running panels without rebuilding. getBytes performs authenticated reads for custom renderers. retain/release manage application ownership; art direction versions provide reusable style briefs and reference assets."
+  ),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
     "Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string | null. Runtime-only putBytes(Uint8Array | ArrayBuffer) and getBytes(digest) losslessly bridge the wire's base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",

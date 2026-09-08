@@ -8,6 +8,50 @@ import {
 } from "@vibestudio/service-schemas/workspaceSource";
 
 describe("GAD runtime schema", () => {
+  it("transports prepared content and edit observations through transient acknowledgements", () => {
+    const ingress = {
+      causalParent: null,
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const request = {
+      kind: "prepare-semantic-content",
+      operation: "edit",
+      input: {},
+      ingress,
+      observed: [{ contentHash: "old", text: "previous text" }],
+      blobs: [{ contentHash: "new", base64: "bmV3" }],
+    };
+    const result = { kind: "host-content", request };
+    expect(gadWireMethods.vcsEdit.returns!.parse(result)).toEqual(result);
+    expect(gadWireMethods.vcsSemanticHostReadAck.returns.parse(result)).toEqual(result);
+    expect(
+      gadWireMethods.vcsSemanticContentAck.args.parse([
+        { acknowledgement: { request, contentHashes: ["new"] } },
+      ])
+    ).toEqual([{ acknowledgement: { request, contentHashes: ["new"] } }]);
+    const read = {
+      kind: "read-merge-content",
+      operation: "edit",
+      input: {},
+      ingress,
+      contentHashes: ["old"],
+    };
+    expect(
+      gadWireMethods.vcsSemanticHostReadAck.args.parse([
+        {
+          acknowledgement: {
+            request: read,
+            files: [{ contentHash: "old", text: "previous text" }],
+          },
+        },
+      ])
+    ).toEqual([
+      {
+        acknowledgement: { request: read, files: [{ contentHash: "old", text: "previous text" }] },
+      },
+    ]);
+  });
+
   it("exactly implements the portable runtime method manifest", () => {
     expect(Object.keys(gadMethods)).toEqual([...GAD_RUNTIME_METHOD_NAMES]);
   });

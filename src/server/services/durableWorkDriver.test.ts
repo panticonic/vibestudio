@@ -380,7 +380,9 @@ describe("DurableWorkDriver", () => {
   });
 
   it("terminalizes delivery to a retired durable target without retry churn", async () => {
-    const dispatchHeldWithSignal = vi.fn(async () => {
+    const event = { id: 7, messageId: "event-7" };
+    const dispatchHeldWithSignal = vi.fn(async (_owner, _signal, method) => {
+      if (method === "getEnvelope") return event;
       throw Object.assign(new Error("durable target is retired"), {
         code: "DURABLE_OBJECT_RETIRED",
       });
@@ -390,25 +392,27 @@ describe("DurableWorkDriver", () => {
       dispatchHeldWithSignal,
     } as never);
     const work = claim("delivery-retired", 2);
-    const target = owner("retired-agent");
     work.payload = {
-      target,
+      target: owner("retired-agent"),
       delivery: {
         deliveryId: "delivery-retired",
         channelId: "channel-1",
-        envelope: { kind: "log" },
+        envelopeId: "event-7",
+        eventSequence: 7,
       },
     };
-
     await expect(
       record["channel-delivery"].execute(owner("channel-1"), work, new AbortController().signal)
     ).resolves.toEqual({ deliveryId: "delivery-retired", disposition: "retired" });
-    expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
+    expect(dispatchHeldWithSignal).toHaveBeenCalledTimes(2);
   });
 
-  it("delivers the exact normalized channel payload and preserves the recipient start marker", async () => {
+  it("hydrates the exact canonical image payload at delivery and preserves the recipient start marker", async () => {
     const outcome = { processed: true, recipientExecutionStartedAt: 1_234 };
-    const dispatchHeldWithSignal = vi.fn(async () => outcome);
+    const event = { id: 7, messageId: "event-7", payload: { image: "A".repeat(3_000_000) } };
+    const dispatchHeldWithSignal = vi.fn(async (_owner, _signal, method) =>
+      method === "getEnvelope" ? event : outcome
+    );
     const record = createDurableWorkHandlers({
       dispatch: vi.fn(),
       dispatchHeldWithSignal,
@@ -419,20 +423,46 @@ describe("DurableWorkDriver", () => {
       deliveryId: "delivery-direct",
       channelId: "channel-1",
       participantId: "agent-1",
-      envelope: { kind: "log", event: { id: 7 } },
+      envelopeId: "event-7",
+      eventSequence: 7,
       agenticContext: { version: 1 },
     };
     work.payload = { target, delivery };
-
     await expect(
       record["channel-delivery"].execute(owner("channel-1"), work, new AbortController().signal)
     ).resolves.toEqual(outcome);
-    expect(dispatchHeldWithSignal).toHaveBeenCalledWith(
+    expect(dispatchHeldWithSignal).toHaveBeenNthCalledWith(
+      1,
+      owner("channel-1"),
+      expect.any(AbortSignal),
+      "getEnvelope",
+      "event-7"
+    );
+    const { envelopeId: _id, ...fields } = delivery;
+    expect(dispatchHeldWithSignal).toHaveBeenNthCalledWith(
+      2,
       target,
       expect.any(AbortSignal),
       "acceptChannelDelivery",
-      delivery
+      { ...fields, envelope: { kind: "log", phase: "live", event } }
     );
+  });
+
+  it("refuses a canonical event that differs from the leased mailbox reference", async () => {
+    const dispatchHeldWithSignal = vi.fn(async () => ({ id: 8, messageId: "event-7" }));
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
+    } as never);
+    const work = claim("delivery-wrong", 5);
+    work.payload = {
+      target: owner("agent"),
+      delivery: { envelopeId: "event-7", eventSequence: 7 },
+    };
+    await expect(
+      record["channel-delivery"].execute(owner("channel-1"), work, new AbortController().signal)
+    ).rejects.toThrow("differs");
+    expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
   });
 
   it("delivers committed workspace publications to their exact channel target", async () => {
