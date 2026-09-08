@@ -2651,6 +2651,11 @@ export class EvalDO extends DurableObjectBase {
     cleanupPhase?: RunCleanupPhase
   ): Promise<RunResult> {
     const scopeGeneration = this.scopeGeneration;
+    const evalNodeCallbackAbort = new AbortController();
+    let evalNodeCallbackOwnerOpen = true;
+    signal = signal
+      ? AbortSignal.any([signal, evalNodeCallbackAbort.signal])
+      : evalNodeCallbackAbort.signal;
     const execution = this.createExecutionContext({ ...args, runId }, signal, cleanupPhase);
     const engine = await this.ensureEngine(execution);
     const support = await this.ensureRuntimeSupport(execution);
@@ -2846,10 +2851,29 @@ export class EvalDO extends DurableObjectBase {
     if (!runtimeFs || typeof runtimeFs !== "object") {
       throw new Error("eval: hosted runtime did not expose its scoped filesystem");
     }
+    const trackEvalNodeCallbackTask = (task: Promise<void>) => {
+      void task.catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const callbackError = new Error(message, { cause: error });
+        callbackError.name = "EvalGuestCallbackError";
+        Object.assign(callbackError, {
+          errorData: {
+            code: "guest_callback_error",
+            failureKind: "user-code",
+            message,
+          },
+        });
+        evalNodeCallbackAbort.abort(callbackError);
+      });
+    };
     const runLocalModules = Object.fromEntries(
-      Object.entries(createEvalNodeCompat(runtimeFs as Record<string, unknown>)).map(
-        ([specifier, namespace]) => [specifier, freezeModuleNamespace(namespace)]
-      )
+      Object.entries(
+        createEvalNodeCompat(
+          runtimeFs as Record<string, unknown>,
+          trackEvalNodeCallbackTask,
+          () => evalNodeCallbackOwnerOpen && !signal?.aborted
+        )
+      ).map(([specifier, namespace]) => [specifier, freezeModuleNamespace(namespace)])
     );
     const runModuleMap: Record<string, unknown> = {
       ...this.moduleMap,
@@ -2977,6 +3001,7 @@ export class EvalDO extends DurableObjectBase {
         scopeKeys: Object.keys(scopeManager.current),
       };
     } finally {
+      evalNodeCallbackOwnerOpen = false;
       flushLiveConsole();
       streamer?.close();
       await this.settleResidentSessions(execution);
@@ -3668,7 +3693,7 @@ export class EvalDO extends DurableObjectBase {
       rpc: activeRpc,
       fs: support.createRpcFs(activeRpc),
       gatewayConfig,
-      gatewayFetch: support.createGatewayFetch({ ...gatewayConfig, relativeOnly: true }),
+      gatewayFetch: support.createGatewayFetch(gatewayConfig),
       panelRuntime,
       workers: support.createWorkerdClient(activeRpc),
       openExternal: (url: string, options?: unknown) =>

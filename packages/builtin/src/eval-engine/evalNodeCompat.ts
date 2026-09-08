@@ -6,10 +6,51 @@ import * as nodeBuffer from "node:buffer";
 /**
  * Node import aliases available to sandbox eval. Filesystem specifiers resolve
  * to the exact context-bound portable runtime filesystem already injected as
- * `fs`; this loader adds no filesystem behavior, authority, path translation,
- * or lifetime of its own.
+ * `fs`. The direct runtime binding remains Promise-only; this facade adds the
+ * error-first callback shape for its exposed methods and binds those callbacks
+ * to the owning eval run. It adds no authority or path translation.
  */
-export function createEvalNodeCompat(runtimeFs: Record<string, unknown>): Record<string, unknown> {
+export function createEvalNodeCompat(
+  runtimeFs: Record<string, unknown>,
+  trackCallbackTask: (task: Promise<void>) => void,
+  isCallbackOwnerOpen: () => boolean
+): Record<string, unknown> {
+  const fsFacade: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(runtimeFs)) {
+    fsFacade[name] =
+      typeof value === "function"
+        ? (...args: unknown[]) => {
+            const callback = args.at(-1);
+            if (typeof callback !== "function") return value(...args);
+            if (!isCallbackOwnerOpen()) {
+              throw new Error("node:fs callback belongs to a completed eval run");
+            }
+            args.pop();
+            let operation: Promise<unknown>;
+            try {
+              operation = Promise.resolve(value(...args));
+            } catch (error) {
+              operation = Promise.reject(error);
+            }
+            trackCallbackTask(
+              operation.then(
+                (result) => {
+                  if (!isCallbackOwnerOpen()) return;
+                  name === "exists" ? callback(result) : callback(null, result);
+                },
+                (error) => {
+                  if (!isCallbackOwnerOpen()) return;
+                  name === "exists" ? callback(false) : callback(error);
+                }
+              )
+            );
+          }
+        : value;
+  }
+  fsFacade["promises"] = runtimeFs;
+  fsFacade["default"] = fsFacade;
+  Object.defineProperty(fsFacade, "__esModule", { value: true });
+
   // Stable, tenant-neutral values: enough for portable libraries and temp-file
   // recipes without exposing host machine identity or resource telemetry.
   const osFacade: Record<string, unknown> = {
@@ -54,7 +95,7 @@ export function createEvalNodeCompat(runtimeFs: Record<string, unknown>): Record
     // bare aliases. Keep them identity-equal so packages that mix the two
     // spellings share the same scoped facade and never fall through to a host
     // module loader.
-    fs: runtimeFs,
+    fs: fsFacade,
     "fs/promises": runtimeFs,
     buffer: bufferFacade,
     crypto: cryptoFacade,
@@ -63,7 +104,7 @@ export function createEvalNodeCompat(runtimeFs: Record<string, unknown>): Record
     util: utilFacade,
     "node:buffer": bufferFacade,
     "node:crypto": cryptoFacade,
-    "node:fs": runtimeFs,
+    "node:fs": fsFacade,
     "node:fs/promises": runtimeFs,
     "node:os": osFacade,
     "node:path": nodePath,
