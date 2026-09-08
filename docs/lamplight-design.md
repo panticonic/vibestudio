@@ -46,13 +46,13 @@ Storybook landscapes, candlelit interiors, abandoned festival grounds, and dorma
 
 Its identity is theatrical and architectural: brass lifts, faded murals, conservatories, luggage galleries, and windows overlooking a different landscape each morning. While the player explores, guests meet, bargain, argue, steal, and leave. The hotel provides a recurring cast and a bounded center for the simulation without closing off the wider world. Its movement must carry rooms, people, possessions, and ongoing processes through ordinary containment and travel rules. Departures follow communicated fictional schedules; model latency or the player's real-world absence cannot make the hotel abandon them.
 
-| Direction | Main pleasure | Strongest engine showcase | Main design risk |
-| --- | --- | --- | --- |
-| Bellwether | Atmospheric investigation and consequential exploration | Persistent geography, witnesses, faction projects | A beautiful mystery whose clues do not support understandable deductions |
-| Missing Country | Helping people while navigating contradictory institutions | Testimony, identity, social authority, autonomous negotiations | Paperwork and exposition crowding out personal adventure |
-| Dead Letter Office | Finding impossible recipients and seeing what delivery changes | Communication, custody, frontier commitments, branching consequences | A repetitive sequence of errands unless deliveries create lasting relationships |
-| Orchard Beyond Winter | Repairing relationships and discovering humane alternatives | Needs, promises, shared resources, world processes | Reducing people to symbolic puzzles with one correct emotional answer |
-| Walking Hotel | A familiar social world opening onto unfamiliar places | Autonomous cast, containment, schedules, persistent home | Too many simultaneous guest stories becoming difficult to follow |
+| Direction             | Main pleasure                                                  | Strongest engine showcase                                            | Main design risk                                                                |
+| --------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Bellwether            | Atmospheric investigation and consequential exploration        | Persistent geography, witnesses, faction projects                    | A beautiful mystery whose clues do not support understandable deductions        |
+| Missing Country       | Helping people while navigating contradictory institutions     | Testimony, identity, social authority, autonomous negotiations       | Paperwork and exposition crowding out personal adventure                        |
+| Dead Letter Office    | Finding impossible recipients and seeing what delivery changes | Communication, custody, frontier commitments, branching consequences | A repetitive sequence of errands unless deliveries create lasting relationships |
+| Orchard Beyond Winter | Repairing relationships and discovering humane alternatives    | Needs, promises, shared resources, world processes                   | Reducing people to symbolic puzzles with one correct emotional answer           |
+| Walking Hotel         | A familiar social world opening onto unfamiliar places         | Autonomous cast, containment, schedules, persistent home             | Too many simultaneous guest stories becoming difficult to follow                |
 
 **Recommended first campaign: The Dead Letter Office, set in Bellwether.** Keep Lamplight as the app’s working title. Bellwether supplies the atmosphere and geographical coherence; undeliverable letters provide personal stakes and compelling reasons to explore. The central mystery is that the dead have begun answering, and several living people are determined to keep those replies from arriving.
 
@@ -140,19 +140,19 @@ The engine is reusable through components, relations, and executable behaviors, 
 
 Every entity has a stable opaque identity, a schema-validated component set, and provenance. Use a typed relational graph rather than a nested room document: moving an object changes its containment relation, not its identity or history.
 
-| Model family | Representative state and behavior |
-| --- | --- |
-| Identity | Names, descriptions, aliases known to particular observers, visual identity, origin event |
-| Space | Regions, places, local zones, positions, portals, routes, distances, capacity, travel duration |
-| Containment | In, on, worn by, carried by; accessibility, concealment, volume and weight limits |
-| Physical properties | Material, temperature where relevant, wetness, light, sound, integrity, portability |
-| Mechanisms | Inputs, outputs, locks, latches, power or pressure supply, connected parts |
-| Agency | Body, senses, skills, needs, values, goals, commitments, available action time |
-| Social structure | Factions, roles, authority, ownership claims, debts, favors, reputation evidence |
-| Information | Texts, testimony, observations, beliefs, uncertainty, source and acquisition time |
-| Processes | Journeys, work, tides, combustion, deliveries, appointments, deadlines, recurring routines |
-| Story | Established mysteries, clue dependencies, faction projects, unresolved opportunities, pacing history |
-| Presentation | Stable appearance descriptors, scene composition anchors, asset references, pronunciation |
+| Model family        | Representative state and behavior                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| Identity            | Names, descriptions, aliases known to particular observers, visual identity, origin event            |
+| Space               | Regions, places, local zones, positions, portals, routes, distances, capacity, travel duration       |
+| Containment         | In, on, worn by, carried by; accessibility, concealment, volume and weight limits                    |
+| Physical properties | Material, temperature where relevant, wetness, light, sound, integrity, portability                  |
+| Mechanisms          | Inputs, outputs, locks, latches, power or pressure supply, connected parts                           |
+| Agency              | Body, senses, skills, needs, values, goals, commitments, available action time                       |
+| Social structure    | Factions, roles, authority, ownership claims, debts, favors, reputation evidence                     |
+| Information         | Texts, testimony, observations, beliefs, uncertainty, source and acquisition time                    |
+| Processes           | Journeys, work, tides, combustion, deliveries, appointments, deadlines, recurring routines           |
+| Story               | Established mysteries, clue dependencies, faction projects, unresolved opportunities, pacing history |
+| Presentation        | Stable appearance descriptors, scene composition anchors, asset references, pronunciation            |
 
 Relations carry semantics. “Owned by” is a social claim; “carried by” is physical custody. Two people can dispute ownership, but an object cannot occupy two exclusive containers. A route can permit sound while blocking sight. A locked transparent cabinet exposes its contents visually while denying physical access.
 
@@ -197,9 +197,10 @@ export default {
     sortLetter(ctx, { letter }) {
       if (!ctx.world.isInside(letter, ctx.self)) return;
       const address = ctx.world.get(letter, "Address");
-      const tray = address.destination === ctx.bindings.oldVillage
-        ? ctx.bindings.blueTray
-        : ctx.bindings.outgoingTray;
+      const tray =
+        address.destination === ctx.bindings.oldVillage
+          ? ctx.bindings.blueTray
+          : ctx.bindings.outgoingTray;
       const moved = ctx.world.transfer(letter, tray);
       if (!moved.ok) return;
       ctx.state.lettersSorted += 1;
@@ -225,11 +226,11 @@ An observation query is evaluated for one authenticated participant at a particu
 
 Separate these concepts:
 
-* **Truth:** the letter is in the locked drawer.
-* **Observation:** Ada saw someone put a folded paper into the drawer.
-* **Testimony:** the clerk told Ada it was a receipt.
-* **Belief:** Ada suspects it was the missing letter.
-* **Memory:** Ada recalls the incident, with links to the source observations.
+- **Truth:** the letter is in the locked drawer.
+- **Observation:** Ada saw someone put a folded paper into the drawer.
+- **Testimony:** the clerk told Ada it was a receipt.
+- **Belief:** Ada suspects it was the missing letter.
+- **Memory:** Ada recalls the incident, with links to the source observations.
 
 Learning an identity does not grant remote sight. A remembered place returns “last seen” facts unless there is a current sensory or reporting channel. Hidden identifiers and error messages must not act as discovery oracles. “Unavailable” responses for inaccessible targets must not reveal whether a guessed secret entity exists. Targeted searches that uncover new facts are actions with duration and possible witnesses, not unrestricted read queries.
 
@@ -243,14 +244,14 @@ The same domain API supports the panel’s agent, participant agents, determinis
 
 Proposed campaign methods:
 
-| Surface | Purpose |
-| --- | --- |
-| `observe`, `recall`, `describeActions` | Read a permitted perspective, memories, and currently known affordances |
-| `submit`, `commandStatus`, `cancel` | Admit a retry-stable command, inspect its receipt, or stop remaining work |
-| `eventsSince` | Resume a filtered projection from an ordered cursor |
-| `deliverDecision` | Accept one assigned participant decision at an expected revision |
-| `proposeExpansion`, `proposeBehavior` | Accept generated places, objects, and their executable behaviors |
-| `sceneSpec`, `publishArtwork` | Read a visible composition contract and attach an eligible asset |
+| Surface                                | Purpose                                                                   |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `observe`, `recall`, `describeActions` | Read a permitted perspective, memories, and currently known affordances   |
+| `submit`, `commandStatus`, `cancel`    | Admit a retry-stable command, inspect its receipt, or stop remaining work |
+| `eventsSince`                          | Resume a filtered projection from an ordered cursor                       |
+| `deliverDecision`                      | Accept one assigned participant decision at an expected revision          |
+| `proposeExpansion`, `proposeBehavior`  | Accept generated places, objects, and their executable behaviors          |
+| `sceneSpec`, `publishArtwork`          | Read a visible composition contract and attach an eligible asset          |
 
 The player and NPC `eval` tool evaluates JavaScript against a participant-scoped SDK. It is a finite planning environment with immutable permitted observations and an action builder. It has no general filesystem, network, credentials, raw SQL, or canonical state object. Its output is a typed command proposal; the trusted service validates and submits it. A typed client outside eval exposes the same domain contract to authorized programmatic callers.
 
@@ -260,12 +261,12 @@ Illustrative player-agent code:
 // The surrounding tool owns actor identity, revision and commandId.
 // All referenced entities came from this actor's observation or memory.
 const here = world.observe();
-const coat = world.inventory().find(x => x.name === "damp coat");
-const lantern = here.entities.find(x => x.name === "brass lantern");
+const coat = world.inventory().find((x) => x.name === "damp coat");
+const lantern = here.entities.find((x) => x.name === "brass lantern");
 
-return world.plan(plan => {
+return world.plan((plan) => {
   plan.perform("cover", { covering: coat.ref, target: lantern.ref });
-  plan.perform("move", { through: here.exits.find(x => x.name === "archway").ref });
+  plan.perform("move", { through: here.exits.find((x) => x.name === "archway").ref });
 });
 ```
 
@@ -293,12 +294,12 @@ Start with a campaign revision check for command admission. For concurrently pre
 
 Each important participant has a durable identity, values, current goals, relationships, promises, memories, and an agenda. Their runtime is activated for decisions and can sleep between them; persistent agency does not require a permanently running model loop.
 
-| Agent role | Receives | May cause |
-| --- | --- | --- |
-| Player interpreter and narrator | Player instruction, player perception, permitted memories, receipts | Player action proposals and grounded narration |
-| Participant | Own senses, delivered messages, beliefs, needs, goals, commitments | Own actions, speech, plans, and private belief updates |
-| World builder / story master | Full world state, canon, story context; gameplay and execution trajectories for diagnosis | New content and executable behaviors; privileged repair of engine code and any campaign state |
-| Scene artist | Visible scene spec, established visual references, style bible | Images and composition metadata |
+| Agent role                      | Receives                                                                                  | May cause                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Player interpreter and narrator | Player instruction, player perception, permitted memories, receipts                       | Player action proposals and grounded narration                                                |
+| Participant                     | Own senses, delivered messages, beliefs, needs, goals, commitments                        | Own actions, speech, plans, and private belief updates                                        |
+| World builder / story master    | Full world state, canon, story context; gameplay and execution trajectories for diagnosis | New content and executable behaviors; privileged repair of engine code and any campaign state |
+| Scene artist                    | Visible scene spec, established visual references, style bible                            | Images and composition metadata                                                               |
 
 An NPC decision includes an intended action or finite plan, its relevant conditions, and a next reconsideration trigger. Executed routines continue without LLM calls until an observation invalidates them or a consequential choice arises. A ferryman may keep repairing his boat; he thinks again when it is repaired, someone speaks to him, or a guard approaches.
 
@@ -326,9 +327,9 @@ The world pauses at an unresolved player choice and when the campaign is inactiv
 
 Maintain three levels of geographical knowledge:
 
-* **Established detail:** entities, routes, histories, and processes already materialized. These continue running.
-* **Committed frontier:** places not yet detailed but constrained by geography, travel, correspondence, named people, trade, rumors, or prior events.
-* **Unspecified possibility:** remaining space the story master may develop within the campaign’s world rules.
+- **Established detail:** entities, routes, histories, and processes already materialized. These continue running.
+- **Committed frontier:** places not yet detailed but constrained by geography, travel, correspondence, named people, trade, rumors, or prior events.
+- **Unspecified possibility:** remaining space the story master may develop within the campaign’s world rules.
 
 A frontier record holds a stable place identity, connections and travel bounds, regional constraints, true established facts, attributed rumors, pending arrivals, and causal commitments. A rumor that a town has a silver cathedral is recorded as a rumor unless its truth is independently established. The story master can resolve uncertainty; it cannot contradict something already observed.
 
@@ -399,11 +400,11 @@ The player agent should be a capable interpreter, not the protagonist. It can id
 
 Use a short set of standing instructions:
 
-* Distinguish questions, quoted speech, and hypothetical ideas from actions.
-* Preserve explicit constraints such as “without opening the letter” or “don't spend more than five shillings.”
-* Infer routine steps, but stop when a plan reaches a meaningful new choice outside the instruction.
-* Ask a brief clarification only when ambiguity would materially change what happens.
-* Narrate committed results; explain a real limitation or tool failure plainly instead of inventing success.
+- Distinguish questions, quoted speech, and hypothetical ideas from actions.
+- Preserve explicit constraints such as “without opening the letter” or “don't spend more than five shillings.”
+- Infer routine steps, but stop when a plan reaches a meaningful new choice outside the instruction.
+- Ask a brief clarification only when ambiguity would materially change what happens.
+- Narrate committed results; explain a real limitation or tool failure plainly instead of inventing success.
 
 A receipt needs completed steps, what happened, and any remaining work. Keep ordinary validation and infrastructure errors separate from valid unsuccessful actions: a broken tool call must not use fictional time or anger a character. Ground narration in those receipts and let the engine enforce action prerequisites. There is no need for a separate framework of intent classifications and risk scores.
 
@@ -495,30 +496,32 @@ Closing the panel preserves campaign state and stops additional fictional time. 
 
 ## 11. Vibestudio implementation map
 
-Proposed workspace units, all within this examples checkout:
+Shared workspace units, implemented within the examples checkout:
 
 ```text
-packages/adventure-engine/       Pure model, schemas, kernel, rules, perception, scheduler
-packages/adventure-client/       Typed domain client and finite eval SDK
-workers/adventure-world/         Campaign DO, RPC, persistence, jobs, authenticated projections
-workers/adventure-agents/        Player, participant, world-builder/maintainer, and artist adapters
-panels/lamplight/                React panel, journal, map, inventory, scene presentation
-projects/lamplight/              Campaign canon, story and aesthetic resources
+packages/adventure-engine/       Portable model, world API, perception, behaviors and scheduler
+packages/adventure-campaigns/    Campaign canon, story commitments and authored mechanisms
+packages/adventure-ui/           React components, domain client, journal, inventory and scenes
+workers/adventure-world/         Campaign DO, finite eval, persistence and scoped projections
+workers/adventure-agents/        Player, participant, world-builder/maintainer and artist adapters
+panels/dead-letter-office/       Postal mystery, original artwork and brass/petrol presentation
+panels/missing-country/          Embassy mystery, original artwork and ivory/carmine presentation
+panels/wandering-house/          Travelling hotel, original artwork and emerald/Art Deco presentation
 ```
 
 Keep one engine and one simulation path across gameplay, reusable mechanics, and generated behaviors. The world builder maintains that same engine through ordinary development and state tools. Extract additional reusable packages only when another consumer needs them.
 
 ### What the checkout already provides
 
-| Inspected source | Relevant capability and implication |
-| --- | --- |
-| [Workspace development](../../vibestudio-release-work/examples/skills/workspace-dev/SKILL.md) and [workers](../../vibestudio-release-work/examples/skills/workspace-dev/WORKERS.md) | Panel/service composition, Durable Object SQLite, explicit RPC policy, service declarations, and per-consumer authority requests |
-| [Regency agents](../../vibestudio-release-work/examples/workers/regency-agents/index.ts) | `AiChatWorker` specialization, role-specific toolsets, durable service clients, agent-initiated turns, and access to the native imagegen tool |
-| [Regency rule execution](../../vibestudio-release-work/examples/workers/regency-realm/policy.ts) | Finite native EvalDO execution with attenuated authority and `finally` disposal; use the runtime mechanism, while implementing a stricter proposed-action world SDK |
-| [Agentic DO guidance](../../vibestudio-release-work/examples/packages/agentic-do/SKILL.md) | Durable agent runtime and structured observations; observation subscription configuration does not confer channel access control |
-| [Native imagegen tool](../../vibestudio-release-work/examples/packages/harness/src/tools/imagegen.ts) | Reference-image generation/editing, semantic binary writes, image return values, and host-mediated provider credentials |
-| [Living-canvas image tool](../../vibestudio-release-work/examples/packages/living-canvas/src/image-tool.ts) | Existing game integration with native imagegen and stored artwork references; inspect this pattern without coupling the new domain engine to its canvas API |
-| [Grimoire design](../../vibestudio-release-work/examples/panels/grimoire/DESIGN.md) and [Regency design](../../vibestudio-release-work/examples/panels/regency/DESIGN.md) | Existing narrative app precedents, retained game state, independent perspectives, and a reported historical image persistence failure |
+| Inspected source                                                                                                                                                                    | Relevant capability and implication                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Workspace development](../../vibestudio-release-work/examples/skills/workspace-dev/SKILL.md) and [workers](../../vibestudio-release-work/examples/skills/workspace-dev/WORKERS.md) | Panel/service composition, Durable Object SQLite, explicit RPC policy, service declarations, and per-consumer authority requests                                    |
+| [Regency agents](../../vibestudio-release-work/examples/workers/regency-agents/index.ts)                                                                                            | `AiChatWorker` specialization, role-specific toolsets, durable service clients, agent-initiated turns, and access to the native imagegen tool                       |
+| [Regency rule execution](../../vibestudio-release-work/examples/workers/regency-realm/policy.ts)                                                                                    | Finite native EvalDO execution with attenuated authority and `finally` disposal; use the runtime mechanism, while implementing a stricter proposed-action world SDK |
+| [Agentic DO guidance](../../vibestudio-release-work/examples/packages/agentic-do/SKILL.md)                                                                                          | Durable agent runtime and structured observations; observation subscription configuration does not confer channel access control                                    |
+| [Native imagegen tool](../../vibestudio-release-work/examples/packages/harness/src/tools/imagegen.ts)                                                                               | Reference-image generation/editing, semantic binary writes, image return values, and host-mediated provider credentials                                             |
+| [Living-canvas image tool](../../vibestudio-release-work/examples/packages/living-canvas/src/image-tool.ts)                                                                         | Existing game integration with native imagegen and stored artwork references; inspect this pattern without coupling the new domain engine to its canvas API         |
+| [Grimoire design](../../vibestudio-release-work/examples/panels/grimoire/DESIGN.md) and [Regency design](../../vibestudio-release-work/examples/panels/regency/DESIGN.md)           | Existing narrative app precedents, retained game state, independent perspectives, and a reported historical image persistence failure                               |
 
 The current Base implementation exposes `images` from `@workspace/runtime` to panels, workers, and agent eval. The native `imagegen` tool delegates to this same service; its optional `outputPath` exports the original bytes through semantic VCS. The extension named `image-service` supplies decoding, dimensions, and conversion. Provider credentials remain host-managed.
 
@@ -526,7 +529,7 @@ For Lamplight, submit `images.generate({requestId, prompt, references, artDirect
 
 Campaign state contains descriptors and job IDs, never base64 or object URLs. The image service stores bytes in the workspace content-addressed store with explicit retention roots that garbage collection respects. Completed jobs retain their results and references until `forgetJob`; campaign ownership must be established before forgetting. Deleting a campaign releases its roots. Art-direction versions retain their reference assets until explicitly deleted. Stopping a view’s observer does not cancel generation; cancelling a job is explicit, and interrupted provider requests require an explicit retry to avoid accidental repeat charges.
 
-This API is implemented in the external Base checkout; adoption into the examples distribution must use the corresponding platform version. The [runtime image guide](../../vibestudio-release-work/base/packages/runtime/IMAGES.md) documents the concrete integration. The native save/readback and live panel scenarios both passed against the repaired platform.
+This API is implemented in Base and has now been adopted into the examples distribution. The [runtime image guide](../../vibestudio-release-work/examples/packages/runtime/IMAGES.md) documents the concrete integration. The native save/readback and live panel scenarios both passed against the repaired platform.
 
 The reported `SQLITE_TOOBIG` was reproduced during platform integration. The repair keeps large content out of semantic persistence and delivery metadata, storing content separately and using references at those boundaries. The native `native-imagegen-save-read` scenario passed on 8 September 2026 (run `st_faeace8cebf24d71a06e5946a73a62d9`), verifying real generation, canonical save, and exact PNG readback. The separate `image-panel-live-generation` scenario also passed (run `st_fdad7b413188490aba599e57d313bbb8`): two real generations, a reference-based edit, original-image display, reload recovery, unchanged panel source, and complete job cleanup. The owned test instance was stopped after verification. Lamplight should use the repaired platform, without a game-local binary save mechanism.
 
@@ -548,13 +551,13 @@ An optional “Behind the scene” drawer demonstrates the agentic system throug
 
 ## 13. Delivery sequence and acceptance
 
-| Stage | Deliverable | Evidence required before proceeding |
-| --- | --- | --- |
-| 1. Integration proof | Empty panel, real campaign DO, one scoped agent decision, finite eval proposal, native image generation and persistent retrieval | Reopen restores committed data and art; canceled work cannot attach late; native save failure, if present, is diagnosed at its owner |
-| 2. Causal vertical slice | Authored ferry landing and customs house; physical objects, perception, communication, time, two independent NPCs, basic checkpoint recovery | Novel composed solutions, honest unsuccessful attempts, preserved player constraints, hidden conversation isolation, repeated-command safety; fresh players understand a local consequence and care what happens next |
-| 3. Dynamic, self-healing expansion | Generated places and objects, attached executable behaviors, remote arrivals, world-builder maintenance access | New behavior runs in simulation; a letter reaches an initially ungenerated destination; returning preserves state; the builder repairs an injected behavior fault and an engine fault from gameplay evidence, then resumes without duplicating the action |
-| 4. Living story | Faction plans, evidence map, payoff commitments, pacing proposals, optional paths, consequential ending | Early deduction and player deviation survive; losing a route leaves the designed alternatives or an honest partial resolution; NPC autonomy creates understandable consequences; one episode and the central undertaking can actually end |
-| 5. Presentation and release | Style bible, identity assets, stable scene composition, image invalidation, accessible panel, journal, known-world map | Customs-house visual permanence journey passes; the opening playtests in section 8, mobile and keyboard play, restart recovery, and bounded long-session resource use |
+| Stage                              | Deliverable                                                                                                                                  | Evidence required before proceeding                                                                                                                                                                                                                       |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Integration proof               | Empty panel, real campaign DO, one scoped agent decision, finite eval proposal, native image generation and persistent retrieval             | Reopen restores committed data and art; canceled work cannot attach late; native save failure, if present, is diagnosed at its owner                                                                                                                      |
+| 2. Causal vertical slice           | Authored ferry landing and customs house; physical objects, perception, communication, time, two independent NPCs, basic checkpoint recovery | Novel composed solutions, honest unsuccessful attempts, preserved player constraints, hidden conversation isolation, repeated-command safety; fresh players understand a local consequence and care what happens next                                     |
+| 3. Dynamic, self-healing expansion | Generated places and objects, attached executable behaviors, remote arrivals, world-builder maintenance access                               | New behavior runs in simulation; a letter reaches an initially ungenerated destination; returning preserves state; the builder repairs an injected behavior fault and an engine fault from gameplay evidence, then resumes without duplicating the action |
+| 4. Living story                    | Faction plans, evidence map, payoff commitments, pacing proposals, optional paths, consequential ending                                      | Early deduction and player deviation survive; losing a route leaves the designed alternatives or an honest partial resolution; NPC autonomy creates understandable consequences; one episode and the central undertaking can actually end                 |
+| 5. Presentation and release        | Style bible, identity assets, stable scene composition, image invalidation, accessible panel, journal, known-world map                       | Customs-house visual permanence journey passes; the opening playtests in section 8, mobile and keyboard play, restart recovery, and bounded long-session resource use                                                                                     |
 
 Build the general causal spine in stage 2; do not ship a scripted toy and later replace its meaning with a simulation. Bound the first campaign’s content to a small region and a handful of consequential participants while proving the same engine can extend beyond it.
 
@@ -581,3 +584,28 @@ Human playtests assess whether players understand consequences, invent solutions
 The first release is a single-player campaign with multiple autonomous world participants. Multiplayer, a general 3D physics engine, continuous real-time combat, infinite pre-simulated geography, player-editable kernel code, and polished save-branch comparison are outside that release.
 
 The hard problems to retire early are scoped perception during code execution, rich composition through ordinary gameplay operations, coherent frontier commitments, image continuity through the existing native service, and affordable NPC scheduling. If any of these fails, repair the underlying model or platform boundary before adding more content. The product depends on the player discovering that the world has substance behind its prose.
+
+## 15. Shared implementation and three campaigns
+
+The implementation lives in `examples`, with a deliberately small set of reusable units:
+
+| Unit                                                                            | Implemented responsibility                                                                                                                |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/adventure-engine`                                                     | Entities with open components, containment, scoped observations, actions, relations, fictional time, scheduled behavior, world validation |
+| `workers/adventure-world`                                                       | Durable campaign state, command identity, role progression, finite eval, gameplay trajectory, checkpoint and world/engine repair          |
+| `workers/adventure-agents`                                                      | Player interpreter, independent world participants, world builder/maintainer and reference-based scene artist                             |
+| `packages/adventure-campaigns`                                                  | Three authored starting worlds, narrative commitments, visual direction and executable local mechanisms                                   |
+| `packages/adventure-ui`                                                         | Reusable scene, natural-language composer, inspection, inventory, journal, exits and session attachment                                   |
+| `panels/dead-letter-office`, `panels/missing-country`, `panels/wandering-house` | Distinct campaign identities, original opening paintings and thin composition of the shared UI                                            |
+
+The concrete games exercise different parts of the same simulation. **The Dead Letter Office** makes mail custody, a tide bell, a sorting cabinet and a ferry permit causal objects. **The Embassy of a Missing Country** distinguishes an offered promise from accepted protection and institutional recognition. **The House That Crosses the World** contains its rooms and belongings inside one travelling house. Docking connects the selected stop, departure closes those routes, and returning preserves earlier destinations. Its navigation repair and recurring guests give the player a persistent home while the landscape changes. Each includes unresolved locations that the builder can materialize, rather than presenting an endless collection of disconnected generated scenes.
+
+Each panel stores only its campaign key in state arguments. The backend owns the save. The opening painting is imported into the common image service and becomes a reference for the artist; subsequent images arrive as immutable assets in the already running panel. No player action rewrites frontend source to display art.
+
+The engine source itself is stored with the world and evaluated through the same simulation path as player actions and generated behaviors. The builder receives the failing action, completed actions, full state and checkpoint. It repairs the existing world with JavaScript through the privileged world API, and can replace the stored engine source. Maintenance uses the canonical engine without running existing behaviors, so broken local hooks cannot prevent their own repair. The resulting state and actual continuation are checked before installation, and the failed participant resumes from its contribution without repeating committed effects. This makes maintenance available even when the ordinary gameplay API is the part that broke.
+
+See the [implementation guide](../../vibestudio-release-work/examples/packages/adventure-engine/README.md) for composition and verification.
+
+The native `adventure-campaign-play` scenario passed on 8 September 2026 (run `st_5f4d0df73b404bc3b313d632801dd5e6`). It rendered all three panels at 1440×1000 and 390×844, completed real free-text player actions in every campaign, generated and displayed a new postal scene, reopened the same saved journey with its image intact, and verified unchanged panel source and fixture cleanup. The hotel also generated a reference-based update to its lobby. This ran in an isolated Base source checkout containing the exact adventure units and service declaration from Examples; the owned instance was stopped afterward.
+
+Focused checks cover perception, authored mechanisms, hotel round trips, code-generated places and behaviors, stored-engine repair, native agent handoffs, scoped worker image calls, and changing image assets in React. The Examples typecheck reports no adventure errors; its full check still encounters existing missing ledger-test helpers and integration tsconfig files. Human playtests remain necessary to establish enjoyable pacing, long-session continuity and satisfying endings.
