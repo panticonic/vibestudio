@@ -200,6 +200,11 @@ export class PanelManager {
   private readonly registry: PanelRegistry;
   private readonly workspaceState: WorkspaceStateClient;
   private readonly runtime: RuntimeClient;
+  private readonly panelMetadataByRef = new Map<
+    string,
+    { icon?: string; iconVersion?: string; iconState?: string } | null
+  >();
+  private readonly panelMetadataFlights = new Map<string, Promise<void>>();
   private readonly panelMetadata?: PanelMetadataClient;
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
@@ -1539,6 +1544,81 @@ export class PanelManager {
       .stateArgs;
   }
 
+  /** Hydrate derived chrome without blocking panel reads or runtime startup. */
+  refreshPanelDecoration(panelId: string): void {
+    if (!this.panelMetadata) return;
+    const panel = this.registry.getPanel(panelId);
+    if (!panel) return;
+    const snapshot = getCurrentSnapshot(panel);
+    if (browserUrlFromPanelSource(snapshot.source) !== null) return;
+    const ref = getPanelRef(panel) ?? `ctx:${snapshot.contextId}`;
+    this.refreshPanelMetadata(panel.id, snapshot.source, ref);
+  }
+
+  private refreshPanelMetadata(panelId: string, source: string, ref: string): void {
+    const key = `${source}\u0000${ref}`;
+    const cached = this.panelMetadataByRef.get(key);
+    if (cached !== undefined || this.panelMetadataByRef.has(key)) {
+      if (cached) this.applyPanelMetadata(panelId, source, ref, cached);
+      return;
+    }
+    if (this.panelMetadataFlights.has(key)) return;
+
+    const flight = this.panelMetadata!.getPanelMetadata(source, ref)
+      .then((value) => {
+        const metadata = (value ?? null) as {
+          icon?: string;
+          iconVersion?: string;
+          iconState?: string;
+        } | null;
+        this.panelMetadataByRef.set(key, metadata);
+        if (!metadata) return;
+        // One manifest identity can decorate multiple slots. Apply the shared
+        // result to every currently projected panel with that exact identity;
+        // no caller needs to repeat the lookup to populate its own copy.
+        for (const candidate of this.registry.getRootPanels()) {
+          this.applyPanelMetadataTree(candidate, source, ref, metadata);
+        }
+      })
+      .catch((error: unknown) => {
+        log.warn(
+          `Failed to refresh panel metadata for ${source}@${ref}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      })
+      .finally(() => {
+        if (this.panelMetadataFlights.get(key) === flight) {
+          this.panelMetadataFlights.delete(key);
+        }
+      });
+    this.panelMetadataFlights.set(key, flight);
+  }
+
+  private applyPanelMetadataTree(
+    panel: Panel,
+    source: string,
+    ref: string,
+    metadata: { icon?: string; iconVersion?: string; iconState?: string }
+  ): void {
+    this.applyPanelMetadata(panel.id, source, ref, metadata);
+    for (const child of panel.children) this.applyPanelMetadataTree(child, source, ref, metadata);
+  }
+
+  private applyPanelMetadata(
+    panelId: string,
+    source: string,
+    ref: string,
+    metadata: { icon?: string; iconVersion?: string; iconState?: string }
+  ): void {
+    const current = this.registry.getPanel(panelId);
+    if (!current) return;
+    const snapshot = getCurrentSnapshot(current);
+    const currentRef = getPanelRef(current) ?? `ctx:${snapshot.contextId}`;
+    if (snapshot.source !== source || currentRef !== ref) return;
+    this.registry.updateIconDecoration(panelId, metadata);
+  }
+
   private async requireStoredPanel(slotId: PanelSlotId, forceRefresh = false): Promise<Panel> {
     let panel = this.registry.getPanel(slotId) ?? null;
     if (!panel || forceRefresh) {
@@ -1600,6 +1680,7 @@ export class PanelManager {
     }
     if (!panel) throw new Error(`Panel not found: ${slotId}`);
     this.touchRuntimePanel(slotId);
+    this.refreshPanelDecoration(slotId);
     return panel;
   }
 

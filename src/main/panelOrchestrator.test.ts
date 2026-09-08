@@ -181,6 +181,7 @@ function createOrchestrator(
     refreshSlotEntity: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     getPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
     refreshPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
+    refreshPanelDecoration: vi.fn(),
     replaceCurrentSnapshot: vi.fn(async () => undefined),
     syncEntityCachesFromRegistry: vi.fn(() => {}),
     loadViewState: vi.fn(async () => ({ collapsedIds: [] })),
@@ -2165,40 +2166,13 @@ describe("PanelOrchestrator.initializePanelTree", () => {
 });
 
 describe("PanelOrchestrator.readPanelProjection", () => {
-  it("returns immediately and shares one exact-state icon decoration lookup", async () => {
-    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
-    const panel = makePanel("panel:tree/decorated", [], {
-      snapshot: {
-        source: "panels/chat",
-        contextId: "chat-context",
-        options: { ref: "event:chat" },
-      },
-    });
+  it("delegates manifest decoration to the shared panel manager", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const panel = makePanel("panel:tree/decorated");
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, serverClient, shellCore } = createOrchestrator(registry);
-    serverClient.call.mockResolvedValueOnce({
-      icon: "./assets/icon.svg",
-      iconState: "a".repeat(64),
-    } as never);
-
-    await expect(
-      Promise.all([
-        orchestrator.readPanelProjection(panel.id),
-        orchestrator.readPanelProjection(panel.id),
-      ])
-    ).resolves.toEqual([panel, panel]);
-
-    await vi.waitFor(() =>
-      expect(registry.getPanel(panel.id)).toMatchObject({
-        icon: "./assets/icon.svg",
-        iconState: "a".repeat(64),
-      })
-    );
-    expect(serverClient.call).toHaveBeenCalledTimes(1);
-    expect(serverClient.call).toHaveBeenCalledWith("build", "getPanelMetadata", [
-      "panels/chat",
-      "event:chat",
-    ]);
+    const { orchestrator, shellCore } = createOrchestrator(registry);
+    await expect(orchestrator.readPanelProjection(panel.id)).resolves.toBe(panel);
+    expect(shellCore.refreshPanelDecoration).toHaveBeenCalledWith(panel.id);
     expect(shellCore.getPanel).not.toHaveBeenCalled();
   });
 

@@ -132,6 +132,9 @@ export interface RuntimeClient {
 }
 
 export interface PanelMetadata {
+  icon?: string;
+  iconVersion?: string;
+  iconState?: string;
   source: string;
   title: string;
   stateArgs?: unknown;

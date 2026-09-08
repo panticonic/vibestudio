@@ -498,6 +498,50 @@ function makeManagerDeps(workspacePath: string) {
 }
 
 describe("PanelManager", () => {
+  it("hydrates shared exact-reference icons without blocking reads or decorating a navigated slot", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    const creator = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const first = await creator.create("panels/chat", {
+      isRoot: true,
+      addAsRoot: true,
+      ref: "event:chat",
+    });
+    const second = await creator.create("panels/chat", {
+      isRoot: true,
+      addAsRoot: true,
+      ref: "event:chat",
+    });
+    let resolveMetadata!: (value: import("./workspaceStateClient.js").PanelMetadata) => void;
+    const getPanelMetadata = vi.fn(
+      () =>
+        new Promise<import("./workspaceStateClient.js").PanelMetadata>((resolve) => {
+          resolveMetadata = resolve;
+        })
+    );
+    const reader = new PanelManager({ registry, ...deps, panelMetadata: { getPanelMetadata } });
+    const firstPanel = await reader.getPanel(first.panelId);
+    const secondPanel = await reader.getPanel(second.panelId);
+    expect(firstPanel).toBe(registry.getPanel(first.panelId));
+    expect(secondPanel).toBe(registry.getPanel(second.panelId));
+    expect(getPanelMetadata).toHaveBeenCalledTimes(1);
+    expect(getPanelMetadata).toHaveBeenCalledWith("panels/chat", "event:chat");
+    getCurrentSnapshot(secondPanel!).source = "panels/other";
+    resolveMetadata({
+      source: "panels/chat",
+      title: "Chat",
+      icon: "./assets/icon.svg",
+      iconState: "a".repeat(64),
+    });
+    await vi.waitFor(() =>
+      expect(firstPanel).toMatchObject({ icon: "./assets/icon.svg", iconState: "a".repeat(64) })
+    );
+    expect(secondPanel?.icon).toBeUndefined();
+    await reader.getPanel(first.panelId);
+    expect(getPanelMetadata).toHaveBeenCalledTimes(1);
+  });
+
+
   it("opens panels installed into exact workspace state without requiring a disk checkout", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/path/with/no/installed/panels");
