@@ -380,6 +380,7 @@ let electronHostLaunchLastStatusKey: string | null = null;
 let activeIpcDispatcher: import("./ipcDispatcher.js").IpcDispatcher | null = null;
 type DesktopUiWorkspaceRuntime = import("./workspaceRuntimeController.js").DesktopWorkspaceRuntime;
 const desktopWorkspaceRuntimes = new Map<string, Promise<DesktopUiWorkspaceRuntime>>();
+let abortPendingSystemRuntimeStartup: ((error: unknown) => Promise<void>) | null = null;
 let closeWorkspaceCatalogWatch: (() => Promise<void>) | null = null;
 const openNativeControllers = new Map<string, DesktopUiWorkspaceRuntime>();
 const adBlockManager = new AdBlockManager();
@@ -2409,7 +2410,8 @@ app.on("ready", async () => {
     // tell hosted chrome that a native view finished loading.
     // PanelHttpServer is created by serverSession (RPC-backed proxy)
     const conn = assertPresent(serverSession);
-    const { createDesktopWorkspaceRuntime } = await import("./workspaceRuntimeController.js");
+    const { createDesktopWorkspaceRuntime, prepareDesktopWorkspaceRuntime } =
+      await import("./workspaceRuntimeController.js");
     const workspaceController = createDesktopWorkspaceRuntime({
       connection: conn,
       personal: false,
@@ -2471,8 +2473,40 @@ app.on("ready", async () => {
       },
     });
     systemRuntime = workspaceController;
-    desktopWorkspaceRuntimes.set(conn.workspaceId, Promise.resolve(workspaceController));
     openNativeControllers.set(conn.workspaceId, workspaceController);
+    // Compose the complete System service container before publishing runtime
+    // readiness. Hosted shell routing must never observe a partially started
+    // local dispatcher and fall through to the workspace server.
+    const getViewManager = () => assertPresent(applicationWindow.viewManager);
+    const { createAdblockService } = await import("./services/adblockService.js");
+    const electronContainer = workspaceController.container;
+    const { serverClient: sc } = conn;
+    const { createRemoteCredService } = await import("./services/remoteCredService.js");
+    electronContainer.registerRpc(
+      createRemoteCredService({
+        getServerClient: () => serverClientRef,
+        getConnectionMode: () => conn.connectionMode,
+        getViewManager,
+      })
+    );
+    const { createPhoneProvisioningService } =
+      await import("./services/phoneProvisioningService.js");
+    const { getAppUnpackedRoot, getPhysicalAppPath } = await import("./paths.js");
+    const desktopPhoneProvider = createPhoneProvisioningService({
+      appRoot: getAppUnpackedRoot(),
+      appVersion: app.getVersion(),
+      resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
+      hubControlClient: conn.hubControlClient,
+      workspaceName: conn.workspaceName,
+    });
+    electronContainer.registerRpc(desktopPhoneProvider);
+    electronContainer.registerRpc(createAdblockService({ adBlockManager }));
+    const systemRuntimePublication = prepareDesktopWorkspaceRuntime(
+      desktopWorkspaceRuntimes,
+      conn.workspaceId,
+      workspaceController
+    );
+    abortPendingSystemRuntimeStartup = systemRuntimePublication.abort;
 
     // Create IpcDispatcher (replaces Electron-side RpcServer for shell)
     // Forwards server-service calls to the server, dispatches Electron-local
@@ -2627,14 +2661,6 @@ app.on("ready", async () => {
       }, 100);
     };
 
-    // Register all Electron-main RPC services via ServiceContainer. Window-owned
-    // hosts are resolved from their lifecycle owner when an RPC is invoked.
-    const getViewManager = () => assertPresent(applicationWindow.viewManager);
-
-    const { createAdblockService } = await import("./services/adblockService.js");
-    const electronContainer = workspaceController.container;
-    const { serverClient: sc } = conn;
-
     // Native workspace lifetime follows the authenticated catalog, independently
     // of which UI happens to list or select workspaces.
     const catalogEvents = new EventsClient({
@@ -2685,27 +2711,11 @@ app.on("ready", async () => {
     };
     await catalogEvents.subscribe("hub:workspace-catalog-changed");
 
-    const { createRemoteCredService } = await import("./services/remoteCredService.js");
-    electronContainer.registerRpc(
-      createRemoteCredService({
-        getServerClient: () => serverClientRef,
-        getConnectionMode: () => conn.connectionMode,
-        getViewManager,
-      })
-    );
-    const { createPhoneProvisioningService } =
-      await import("./services/phoneProvisioningService.js");
-    const { getAppUnpackedRoot, getPhysicalAppPath } = await import("./paths.js");
-    const desktopPhoneProvider = createPhoneProvisioningService({
-      appRoot: getAppUnpackedRoot(),
-      appVersion: app.getVersion(),
-      resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
-      hubControlClient: conn.hubControlClient,
-      workspaceName: conn.workspaceName,
-    });
-    electronContainer.registerRpc(desktopPhoneProvider);
-    electronContainer.registerRpc(createAdblockService({ adBlockManager }));
-    await workspaceController.start();
+    try {
+      await systemRuntimePublication.start();
+    } finally {
+      abortPendingSystemRuntimeStartup = null;
+    }
     void approvalAttention?.refresh({ quiet: true });
     if (pendingReadyElectronLaunch) await drainPendingReadyElectronLaunch();
 
@@ -3008,6 +3018,9 @@ app.on("ready", async () => {
     console.error("[App] Startup failed:", error);
 
     // Fail-fast: clean up all partial state, show error, and exit.
+    const abortStartup = abortPendingSystemRuntimeStartup;
+    abortPendingSystemRuntimeStartup = null;
+    if (abortStartup) await abortStartup(error);
     const cleanupPromises: Promise<void>[] = [];
     const closeCatalog = closeWorkspaceCatalogWatch;
     closeWorkspaceCatalogWatch = null;
@@ -3163,6 +3176,9 @@ app.on("will-quit", (event) => {
   closeWorkspaceCatalogWatch = null;
   const catalogClose = closeCatalog?.();
   if (catalogClose) stopPromises.push(catalogClose);
+  const abortStartup = abortPendingSystemRuntimeStartup;
+  abortPendingSystemRuntimeStartup = null;
+  if (abortStartup) stopPromises.push(abortStartup(new Error("Application is shutting down")));
   let developmentExecutorClose: Promise<void> | null = null;
 
   if (activeIpcDispatcher) {

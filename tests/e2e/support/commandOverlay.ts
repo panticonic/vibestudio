@@ -16,7 +16,11 @@
  */
 import { expect } from "@playwright/test";
 
-import type { TestApp } from "../../setup/electronSetup";
+import {
+  readPanelInitializationFailure,
+  panelInitializationFailureError,
+  type TestApp,
+} from "../../setup/electronSetup";
 import { retryIdempotentAutomationRead } from "../../setup/automationContext";
 import { clickWindowPointThroughNativeInput } from "../../setup/nativeInput";
 
@@ -46,8 +50,12 @@ export interface CommandOverlaySnapshot {
 export async function waitHostedShellReady(testApp: TestApp): Promise<void> {
   await expect
     .poll(
-      async () =>
-        testApp.app.evaluate(async ({ webContents }) => {
+      async () => {
+        const failure = panelInitializationFailureError(
+          await readPanelInitializationFailure(testApp)
+        );
+        if (failure) throw failure;
+        return testApp.app.evaluate(async ({ webContents }) => {
           const candidates = webContents.getAllWebContents().filter((contents) => {
             if (contents.isDestroyed()) return false;
             const title = contents.getTitle();
@@ -75,7 +83,8 @@ export async function waitHostedShellReady(testApp: TestApp): Promise<void> {
             }
           }
           return false;
-        }),
+        });
+      },
       // A cold workspace builds every unit before the chrome is usable, and on a
       // loaded machine single units have taken 50-95s each. The budget is for
       // that startup, not for anything this spec asserts.

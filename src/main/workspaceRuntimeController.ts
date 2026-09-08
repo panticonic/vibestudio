@@ -36,6 +36,63 @@ import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { PanelPinStore } from "./panelPinStore.js";
 import { PANEL_UI_MAX_LOADED_DESKTOP, PANEL_UI_IDLE_UNLOAD_MS } from "@vibestudio/shared/constants";
 
+type StartableDesktopWorkspaceRuntime = {
+  start(): Promise<void>;
+  close(): Promise<void>;
+};
+
+/** Owns publication and startup at the boundary where local services become ready. */
+export function prepareDesktopWorkspaceRuntime<T extends StartableDesktopWorkspaceRuntime>(
+  runtimes: Map<string, Promise<T>>,
+  workspaceId: string,
+  runtime: T
+): { ready: Promise<T>; start(): Promise<T>; abort(error: unknown): Promise<void> } {
+  let resolveReady!: (value: T) => void;
+  let rejectReady!: (error: unknown) => void;
+  let settled = false;
+  let starting: Promise<T> | null = null;
+  const ready = new Promise<T>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const abort = async (error: unknown) => {
+    if (settled) return;
+    settled = true;
+    if (runtimes.get(workspaceId) === ready) runtimes.delete(workspaceId);
+    rejectReady(error);
+    let failure = error;
+    try {
+      await runtime.close();
+    } catch (cleanupError) {
+      failure = new AggregateError(
+        [error, cleanupError],
+        "Workspace runtime startup and cleanup failed"
+      );
+    }
+    if (failure !== error) throw failure;
+  };
+  const start = () => {
+    if (settled) return ready;
+    return (starting ??= (async () => {
+      try {
+        await runtime.start();
+        if (runtimes.get(workspaceId) !== ready) {
+          throw new Error("Workspace access was removed during startup");
+        }
+        settled = true;
+        resolveReady(runtime);
+        return runtime;
+      } catch (error) {
+        await abort(error);
+        throw error;
+      }
+    })());
+  };
+  runtimes.set(workspaceId, ready);
+  void ready.catch(() => undefined);
+  return { ready, start, abort };
+}
+
 /** A complete workspace runtime beneath the window's single System app. */
 export function createDesktopWorkspaceRuntime(deps: {
   connection: WorkspaceSessionConnection;

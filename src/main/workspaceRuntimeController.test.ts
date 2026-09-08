@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDesktopWorkspaceRuntime } from "./workspaceRuntimeController.js";
+import {
+  createDesktopWorkspaceRuntime,
+  prepareDesktopWorkspaceRuntime,
+} from "./workspaceRuntimeController.js";
 import type { WorkspaceSessionConnection } from "./serverSession.js";
 import type { ApplicationWindowController } from "./applicationWindowController.js";
 import type { CdpHostProvider } from "./cdpHostProvider.js";
@@ -84,6 +87,123 @@ function deferred<T>() {
 }
 
 const closing: Array<ReturnType<typeof createDesktopWorkspaceRuntime>> = [];
+
+describe("prepareDesktopWorkspaceRuntime", () => {
+  it("keeps routing callers behind the local-service readiness boundary", async () => {
+    let releaseStart!: () => void;
+    const startPending = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const runtime = {
+      start: vi.fn(() => startPending),
+      close: vi.fn(async () => {}),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    expect(runtimes.get("system")).toBe(publication.ready);
+    let observed = false;
+    void runtimes.get("system")!.then(() => {
+      observed = true;
+    });
+    await Promise.resolve();
+    expect(observed).toBe(false);
+
+    const starting = publication.start();
+    releaseStart();
+    await expect(starting).resolves.toBe(runtime);
+    expect(observed).toBe(true);
+  });
+
+  it("removes a runtime whose local-service startup rejects", async () => {
+    const failure = new Error("desktop services failed");
+    const runtime = {
+      start: vi.fn(async () => {
+        throw failure;
+      }),
+      close: vi.fn(async () => {}),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    await expect(publication.start()).rejects.toBe(failure);
+    expect(runtimes.has("system")).toBe(false);
+    expect(runtime.close).toHaveBeenCalledOnce();
+  });
+
+  it("closes a startup superseded by workspace removal", async () => {
+    let releaseStart!: () => void;
+    const runtime = {
+      start: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseStart = resolve;
+          })
+      ),
+      close: vi.fn(async () => {}),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    const ready = publication.start();
+    await Promise.resolve();
+    runtimes.delete("system");
+
+    releaseStart();
+    await expect(ready).rejects.toThrow("Workspace access was removed during startup");
+    expect(runtime.close).toHaveBeenCalledOnce();
+  });
+
+  it("terminalizes an aborted publication even when cleanup rejects", async () => {
+    const cleanupFailure = new Error("cleanup failed");
+    const runtime = {
+      start: vi.fn(async () => {}),
+      close: vi.fn(async () => {
+        throw cleanupFailure;
+      }),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+
+    await expect(publication.abort(new Error("startup stopped"))).rejects.toThrow(
+      "Workspace runtime startup and cleanup failed"
+    );
+    await expect(publication.ready).rejects.toThrow("startup stopped");
+    await expect(publication.start()).rejects.toThrow("startup stopped");
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runtime.close).toHaveBeenCalledOnce();
+    expect(runtimes.has("system")).toBe(false);
+  });
+
+  it("rejects readiness before an aborted runtime finishes closing", async () => {
+    let releaseClose!: () => void;
+    const runtime = {
+      start: vi.fn(async () => {}),
+      close: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseClose = resolve;
+          })
+      ),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    const failure = new Error("startup stopped");
+    const aborting = publication.abort(failure);
+    let cleanupFinished = false;
+    void aborting.then(() => {
+      cleanupFinished = true;
+    });
+
+    await expect(publication.ready).rejects.toBe(failure);
+    expect(cleanupFinished).toBe(false);
+    await expect(publication.start()).rejects.toBe(failure);
+    expect(runtime.start).not.toHaveBeenCalled();
+
+    releaseClose();
+    await aborting;
+    expect(cleanupFinished).toBe(true);
+  });
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
