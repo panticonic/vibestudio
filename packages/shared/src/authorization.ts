@@ -515,6 +515,15 @@ export function subjectsForOrigin(
 ): ReadonlySet<AuthorityGrantSubject> {
   const subjects = new Set<AuthorityGrantSubject>([context.authorizingOrigin.principal]);
   if (context.authorizingOrigin.kind === "website") return subjects;
+  if (
+    context.authorizingOrigin.kind === "code" &&
+    context.installation &&
+    context.installation.binding.subject.startsWith("installation:") &&
+    context.installation.codePrincipal === context.authorizingOrigin.principal &&
+    context.executingCode?.principal === context.installation.codePrincipal
+  ) {
+    subjects.add(context.installation.binding.subject);
+  }
   if (context.session.taskAuthority) subjects.add(context.session.taskAuthority);
   if (
     context.authorizingOrigin.kind === "session" &&
@@ -701,8 +710,19 @@ function grantConstraintsMatch(
   providerExecutionDigest: string | undefined
 ): boolean {
   const constraints = grant.constraints;
-  const binding = context.subjectBinding;
-  if (grant.subject.startsWith("website:") && constraints?.subjectGeneration === undefined)
+  const binding = grant.subject.startsWith("installation:")
+    ? context.installation?.binding
+    : context.subjectBinding;
+  if (
+    constraints?.requestingCodePrincipal !== undefined &&
+    (context.authorizingOrigin.kind !== "code" ||
+      context.authorizingOrigin.principal !== constraints.requestingCodePrincipal)
+  )
+    return false;
+  if (
+    (grant.subject.startsWith("website:") || grant.subject.startsWith("installation:")) &&
+    constraints?.subjectGeneration === undefined
+  )
     return false;
   if (
     constraints?.subjectGeneration !== undefined &&

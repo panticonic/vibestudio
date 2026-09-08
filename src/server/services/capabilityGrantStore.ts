@@ -14,6 +14,7 @@ import { scopeCovers } from "@vibestudio/shared/authorization";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { capabilityDomain } from "@vibestudio/shared/authority/authorityDomains";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
+import { isCodePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import { stateLayout } from "../stateLayout.js";
 import { AUTHORITY_GRANTS_SCHEMA, AUTHORITY_GRANTS_MIGRATIONS } from "./authorityGrantSchema.js";
 
@@ -49,6 +50,7 @@ export class CapabilityGrantStore {
   private readonly executions = new Map<
     string,
     import("@vibestudio/rpc").AuthoritySubjectBinding & {
+      installation?: { runtimeId: string; codePrincipal: `code:${string}` };
       isCurrent: () => boolean;
       lifetime: AbortController;
     }
@@ -92,6 +94,16 @@ export class CapabilityGrantStore {
     binding: import("@vibestudio/rpc").AuthoritySubjectBinding,
     isCurrent: () => boolean = () => true
   ): () => void {
+    if (binding.subject.startsWith("installation:"))
+      throw new Error("Installation executions require registerInstallationExecution evidence");
+    return this.registerExecution(binding, isCurrent);
+  }
+
+  private registerExecution(
+    binding: import("@vibestudio/rpc").AuthoritySubjectBinding,
+    isCurrent: () => boolean,
+    installation?: { runtimeId: string; codePrincipal: `code:${string}` }
+  ): () => void {
     const documentId = binding.documentId;
     if (
       !documentId ||
@@ -101,7 +113,7 @@ export class CapabilityGrantStore {
       throw new Error(
         "Subject execution requires a fresh document and current identity generation"
       );
-    const registered = { ...binding, isCurrent, lifetime: new AbortController() };
+    const registered = { ...binding, installation, isCurrent, lifetime: new AbortController() };
     this.executions.set(documentId, registered);
     return () => {
       if (this.executions.get(documentId) === registered) this.executions.delete(documentId);
@@ -168,6 +180,101 @@ export class CapabilityGrantStore {
     return { ...stored, subject: stored.subject as `website:${string}` };
   }
 
+  /**
+   * Host installation owner creates this handle once when admitting a new installation.
+   * Never derive it from a path, repository name or client-supplied identifier. Persist
+   * the returned handle in the installation lifecycle; updates reuse it only after
+   * validating source/adoption continuity. Removal/replacement invalidates it.
+   */
+  createInstallationSubject(input: {
+    userId: `user:${string}`;
+    workspaceId: string;
+  }): StoredAuthoritySubject<`installation:${string}`> {
+    if (!/^user:[^\0]+$/.test(input.userId) || !input.workspaceId.trim())
+      throw new Error("Installation subject requires an authenticated user and workspace");
+    const subject = `installation:${randomBytes(24).toString("hex")}` as const;
+    this.db
+      .prepare(
+        `INSERT INTO authority_subjects
+      (subject, kind, user_id, workspace_id, identity_key, generation, created_at)
+      VALUES (?, 'installation', ?, ?, ?, 0, ?)`
+      )
+      .run(subject, input.userId, input.workspaceId, subject, Date.now());
+    return { subject, ...input, identityKey: subject, generation: 0 };
+  }
+
+  /**
+   * Host-only admission entrypoint. The producer must prove the current exact admitted
+   * code belongs to this installation and provide its actual execution lifetime.
+   * There is deliberately no RPC endpoint accepting these facts from installed code.
+   */
+  registerInstallationExecution(input: {
+    subject: `installation:${string}`;
+    generation: number;
+    executionId: string;
+    runtimeId: string;
+    codePrincipal: `code:${string}`;
+    userId: `user:${string}`;
+    workspaceId: string;
+    isCurrent: () => boolean;
+  }): () => void {
+    const stored = this.getAuthoritySubject(input.subject);
+    if (
+      !stored ||
+      !stored.subject.startsWith("installation:") ||
+      !input.executionId.trim() ||
+      stored.userId !== input.userId ||
+      stored.workspaceId !== input.workspaceId ||
+      !input.runtimeId.trim() ||
+      !isCodePrincipal(input.codePrincipal) ||
+      input.codePrincipal.includes("\0") ||
+      !input.isCurrent()
+    )
+      throw new Error(
+        "Installation execution requires current authenticated installation evidence"
+      );
+    for (const live of this.executions.values()) {
+      if (live.installation?.runtimeId === input.runtimeId)
+        throw new Error(
+          "Runtime already has an installation execution; retire it before replacement"
+        );
+    }
+    return this.registerExecution(
+      { subject: input.subject, generation: input.generation, documentId: input.executionId },
+      input.isCurrent,
+      { runtimeId: input.runtimeId, codePrincipal: input.codePrincipal }
+    );
+  }
+
+  /** Resolve only host-registered evidence that still matches the actual live caller. */
+  installationForCaller(input: {
+    runtimeId: string;
+    codePrincipal: `code:${string}`;
+    userId: `user:${string}`;
+    workspaceId: string;
+  }): import("@vibestudio/rpc").AuthorizationContext["installation"] {
+    for (const live of this.executions.values()) {
+      if (live.installation?.runtimeId !== input.runtimeId) continue;
+      const stored = this.getAuthoritySubject(live.subject);
+      if (
+        !this.isSubjectExecutionCurrent(live) ||
+        live.installation.codePrincipal !== input.codePrincipal ||
+        stored?.userId !== input.userId ||
+        stored.workspaceId !== input.workspaceId
+      )
+        return undefined;
+      return {
+        binding: {
+          subject: live.subject,
+          generation: live.generation,
+          documentId: live.documentId,
+        },
+        codePrincipal: live.installation.codePrincipal,
+      };
+    }
+    return undefined;
+  }
+
   getAuthoritySubject(subject: AuthorityGrantSubject): StoredAuthoritySubject | null {
     const row = this.db.prepare("SELECT * FROM authority_subjects WHERE subject = ?").get(subject);
     return row ? subjectFromRow(row) : null;
@@ -206,6 +313,7 @@ export class CapabilityGrantStore {
     validateGrantInput(input);
     if (
       input.subject.startsWith("website:") ||
+      input.subject.startsWith("installation:") ||
       input.constraints?.subjectGeneration !== undefined ||
       input.constraints?.documentId !== undefined
     ) {
@@ -231,8 +339,8 @@ export class CapabilityGrantStore {
           session_id, invocation_digest, provider_execution_digest, mission_subject,
           agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
-          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          decided_by, decision_surface, task_ref, source_workspace_id, subject_generation, document_id, requesting_code_principal
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -260,7 +368,8 @@ export class CapabilityGrantStore {
         constraints.taskRef ?? null,
         constraints.sourceWorkspaceId ?? null,
         constraints.subjectGeneration ?? null,
-        constraints.documentId ?? null
+        constraints.documentId ?? null,
+        constraints.requestingCodePrincipal ?? null
       );
     return {
       id,
@@ -774,7 +883,7 @@ function subjectFromRow(row: GrantRow): StoredAuthoritySubject {
   const subject = String(row["subject"]);
   const generation = Number(row["generation"]);
   if (
-    !/^(host|user|code|session|mission|agent|task|website):[^\0]+$/.test(subject) ||
+    !/^(host|user|code|session|mission|agent|task|website|installation):[^\0]+$/.test(subject) ||
     subject.slice(0, subject.indexOf(":")) !== row["kind"] ||
     !Number.isSafeInteger(generation) ||
     generation < 0
@@ -792,13 +901,16 @@ function subjectFromRow(row: GrantRow): StoredAuthoritySubject {
 
 function rowToGrant(row: GrantRow): AuthorityGrant {
   const subject = String(row["subject"]) as AuthorityGrantSubject;
-  if (!/^(host|user|code|session|mission|agent|task|website):/.test(subject))
+  if (!/^(host|user|code|session|mission|agent|task|website|installation):/.test(subject))
     throw new Error(`Invalid grant subject ${subject}`);
   const lineage = JSON.parse(String(row["lineage_at_consent"])) as unknown;
   if (!Array.isArray(lineage) || !lineage.every((value) => typeof value === "string")) {
     throw new Error(`Grant ${String(row["id"])} has invalid lineage_at_consent`);
   }
   const constraints = {
+    ...(row["requesting_code_principal"] === null
+      ? {}
+      : { requestingCodePrincipal: String(row["requesting_code_principal"]) as `code:${string}` }),
     ...(row["subject_generation"] === null
       ? {}
       : { subjectGeneration: Number(row["subject_generation"]) }),
@@ -873,8 +985,24 @@ function rowToLock(row: GrantRow): AuthorityLock {
 }
 
 function validateGrantInput(input: IssueAuthorityGrantInput): void {
+  if (
+    input.constraints?.requestingCodePrincipal !== undefined &&
+    (!isCodePrincipal(input.constraints.requestingCodePrincipal) ||
+      input.constraints.requestingCodePrincipal.includes("\0"))
+  )
+    throw new Error("Requesting revision must be an exact code principal");
+  if (input.subject.startsWith("installation:") && input.scope === undefined)
+    throw new Error(
+      "Installation consent requires an explicit scope; continuity is never inferred"
+    );
+  if (
+    input.subject.startsWith("installation:") &&
+    input.scope === "version" &&
+    !input.constraints?.requestingCodePrincipal
+  )
+    throw new Error("Version consent for an installation requires its requesting revision");
   if (!input.capability.trim()) throw new Error("Grant capability is required");
-  if (!/^(host|user|code|session|mission|agent|task|website):.+/.test(input.subject))
+  if (!/^(host|user|code|session|mission|agent|task|website|installation):.+/.test(input.subject))
     throw new Error("Grant subject is not canonical");
   if (
     input.constraints?.subjectGeneration !== undefined &&

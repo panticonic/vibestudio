@@ -71,7 +71,7 @@ describe("CapabilityGrantStore agent authority", () => {
     old.close();
 
     expect(() => new CapabilityGrantStore({ statePath })).toThrow(
-      /cannot be loaded without risking data loss.*schema version is 6, expected 9/iu
+      /cannot be loaded without risking data loss.*schema version is 6, expected 10/iu
     );
   });
 
@@ -90,6 +90,7 @@ describe("CapabilityGrantStore agent authority", () => {
     first.close();
     const legacy = new DatabaseSync(first.databasePath);
     legacy.exec("DROP TABLE authority_subjects");
+    legacy.exec("ALTER TABLE authority_grants DROP COLUMN requesting_code_principal");
     legacy.exec("ALTER TABLE authority_grants DROP COLUMN document_id");
     legacy.exec("ALTER TABLE authority_grants DROP COLUMN subject_generation");
     legacy.exec("ALTER TABLE authority_grants DROP COLUMN source_workspace_id");

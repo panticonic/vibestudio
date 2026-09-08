@@ -79,6 +79,7 @@ export type {
   AuthorityGrant,
   AuthorityGrantSubject,
   TaskGrantPrincipal,
+  InstallationGrantPrincipal,
   AgentGrantPrincipal,
   AuthorityLock,
   AuthorityGrantConstraints,

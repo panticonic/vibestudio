@@ -10,7 +10,12 @@ export function isPrincipalKind(value: string): value is PrincipalKind {
 export type Principal = `${PrincipalKind}:${string}`;
 export type AgentGrantPrincipal = `agent:${string}`;
 export type TaskGrantPrincipal = `task:${string}`;
-export type AuthorityGrantSubject = Principal | AgentGrantPrincipal | TaskGrantPrincipal;
+export type InstallationGrantPrincipal = `installation:${string}`;
+export type AuthorityGrantSubject =
+  | Principal
+  | AgentGrantPrincipal
+  | TaskGrantPrincipal
+  | InstallationGrantPrincipal;
 export type EntityPrincipal = `entity:${string}`;
 
 export type ResourceScope =
@@ -130,7 +135,7 @@ export type AuthorizationOrigin =
 export interface AuthoritySubjectBinding {
   subject: AuthorityGrantSubject;
   generation: number;
-  /** Exact initiating lifetime; forwarded execution retains this identity. */
+  /** Exact subject execution lifetime: a website document or a host-registered installation execution. */
   documentId?: string;
 }
 
@@ -305,6 +310,8 @@ export interface AuthorizationContext {
   /** Host-attested origin attribution for review/audit; never a transitive authority ceiling. */
   initiatingWebsite?: WebsiteAuthorityFact;
   subjectBinding?: AuthoritySubjectBinding;
+  /** Host-registered installation continuity; actual code origin and manifest remain authoritative. */
+  installation?: { binding: AuthoritySubjectBinding; codePrincipal: `code:${string}` };
   /** Authenticated workspace of the initiating caller; `workspace` is the receiver. */
   sourceWorkspaceId?: string;
   authorizingOrigin: AuthorizationOrigin;
@@ -346,9 +353,11 @@ export interface AuthorizationContext {
 }
 
 export interface AuthorityGrantConstraints {
+  /** Optional exact requesting code revision, independent of receiver build restrictions. */
+  requestingCodePrincipal?: `code:${string}`;
   /** Required for mutable subjects; stale generations cannot regain authority. */
   subjectGeneration?: number;
-  /** Initiating document, not the session of a downstream executor. */
+  /** Exact subject execution ID, independent of downstream executor sessions. */
   documentId?: string;
   /** Omitted means the workspace owning this grant; foreign callers require an exact binding. */
   sourceWorkspaceId?: string;

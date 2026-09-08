@@ -28,7 +28,8 @@ export const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   task_ref TEXT,
   source_workspace_id TEXT,
   subject_generation INTEGER CHECK (subject_generation IS NULL OR subject_generation >= 0),
-  document_id TEXT
+  document_id TEXT,
+  requesting_code_principal TEXT
 )`;
 
 const AUTHORITY_SUBJECTS_SQL = `CREATE TABLE authority_subjects (
@@ -66,7 +67,7 @@ const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   )
 )`;
 
-export const AUTHORITY_GRANTS_SCHEMA_VERSION = 9;
+export const AUTHORITY_GRANTS_SCHEMA_VERSION = 10;
 
 export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
   version: AUTHORITY_GRANTS_SCHEMA_VERSION,
@@ -99,6 +100,13 @@ export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
 
 /** Old consent was workspace-local; NULL preserves that meaning. */
 export const AUTHORITY_GRANTS_MIGRATIONS = [
+  {
+    fromVersion: 9,
+    toVersion: 10,
+    migrate(db: import("node:sqlite").DatabaseSync): void {
+      db.exec("ALTER TABLE authority_grants ADD COLUMN requesting_code_principal TEXT");
+    },
+  },
   {
     fromVersion: 8,
     toVersion: 9,

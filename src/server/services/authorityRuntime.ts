@@ -235,7 +235,17 @@ export function authorizeVerifiedCaller(
         : code
           ? ({ kind: "code", principal: code } as const)
           : ({ kind: "user", principal: actingUser ?? (`user:anonymous` as const) } as const);
+  const installation =
+    authorizingOrigin.kind === "code" && actingUser
+      ? facts.grantStore?.installationForCaller({
+          runtimeId: caller.runtime.id,
+          codePrincipal: authorizingOrigin.principal,
+          userId: actingUser,
+          workspaceId: caller.workspaceId ?? facts.workspaceId,
+        })
+      : undefined;
   const context: AuthorizationContext = {
+    ...(installation ? { installation } : {}),
     ...(website ? { website } : {}),
     ...(initiatingWebsite ? { initiatingWebsite } : {}),
     ...(website ? { subjectBinding: website.binding } : {}),
@@ -358,6 +368,7 @@ export function authorizeVerifiedCaller(
     const subjects = [
       authorizingOrigin.principal,
     ] as import("@vibestudio/rpc").AuthorityGrantSubject[];
+    if (installation) subjects.push(installation.binding.subject);
     const bindingId = executionSession?.agentBinding?.bindingId;
     if (bindingId && !website) subjects.push(`agent:${bindingId}`);
     if (facts.tier === "critical" && !subjects.includes(sessionPrincipal)) {
