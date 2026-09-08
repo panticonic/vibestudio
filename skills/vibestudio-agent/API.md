@@ -372,6 +372,8 @@ Authority principals: `code`, `user`
 | Method | Description |
 |--------|-------------|
 | `linkedClaude.start` | Start an authorized linked Claude agent with host-owned runtime and credential materialization; accepts no filesystem paths or executable grants |
+| `linkedClaude.continue` | Continue an owned linked Claude conversation in its retained host profile |
+| `linkedClaude.interrupt` | Stop the active turn of an owned linked Claude conversation without retiring its profile |
 | `linkedClaude.inspect` | Read the bounded state of an owned linked Claude generation |
 | `linkedClaude.stop` | Retire an owned linked Claude generation and reconcile its isolated credential after confirmed exit |
 
