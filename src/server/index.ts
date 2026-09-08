@@ -72,11 +72,8 @@ import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInsta
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
-import {
-  sameWorkspaceTemplatePin,
-  readDefaultWorkspaceTemplates,
-} from "@vibestudio/workspace/baseTemplateRelease";
-import { readDevelopmentTemplateSources } from "@vibestudio/workspace/developmentTemplateSources";
+import { readDefaultWorkspaceTemplates } from "@vibestudio/workspace/baseTemplateRelease";
+import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
@@ -471,7 +468,7 @@ async function main() {
   // intentionally mutable, so it must never be consulted as an identity
   // source after startup.
   const workspaceId = childWorkspaceId;
-  const developmentTemplateSources = readDevelopmentTemplateSources().map((source) => ({
+  const workspaceSources = readWorkspaceSources().map((source) => ({
     ...source,
     checkout: fs.realpathSync(path.resolve(source.checkout)),
   }));
@@ -1516,27 +1513,30 @@ async function main() {
   const acquireWorkspaceTemplate = async (
     pin: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin
   ) => {
-    const developmentSource = developmentTemplateSources.find((source) =>
-      sameWorkspaceTemplatePin(source.pin, pin)
-    );
-    if (developmentSource) {
-      return seedRootTemplateSnapshotFromCheckout({
-        statePath,
-        checkout: developmentSource.checkout,
-        pin,
-        git: createRootTemplateGitClient(pin),
-        sink: {
-          put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
-        },
-      });
-    }
-    return acquireRootTemplateSnapshot({
-      statePath,
+    const { acquireExactWorkspaceSource } =
+      await import("./services/workspaceTemplateSourceService.js");
+    return acquireExactWorkspaceSource({
       pin,
-      git: createRootTemplateGitClient(pin),
-      sink: {
-        put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
-      },
+      sources: workspaceSources,
+      fromCheckout: (source) =>
+        seedRootTemplateSnapshotFromCheckout({
+          statePath,
+          checkout: source.checkout,
+          pin,
+          git: createRootTemplateGitClient(pin),
+          sink: {
+            put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
+          },
+        }),
+      fromRemote: () =>
+        acquireRootTemplateSnapshot({
+          statePath,
+          pin,
+          git: createRootTemplateGitClient(pin),
+          sink: {
+            put: (bytes) => putBootstrapBytes(layout.blobsDir, Buffer.from(bytes)),
+          },
+        }),
     });
   };
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
@@ -2360,6 +2360,14 @@ async function main() {
   const { createWorkspaceCreationService } = await import("./services/workspaceCreationService.js");
   container.registerRpc(
     createWorkspaceCreationService({ workspaceId: entryWorkspaceId, hub: workspaceChildHub })
+  );
+  const { createWorkspaceTemplateSourceService } =
+    await import("./services/workspaceTemplateSourceService.js");
+  container.registerRpc(
+    createWorkspaceTemplateSourceService({
+      systemEpoch: workspaceConfig.systemEpoch,
+      acquire: acquireWorkspaceTemplate,
+    })
   );
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));

@@ -777,6 +777,25 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"]!)).toEqual(creationIntent);
   });
 
+  it("passes registered exact local sources to a newly created child", () => {
+    const source = {
+      pin: {
+        url: "git+https://example.test/local.git",
+        ref: "refs/heads/main",
+        commit: "a".repeat(40),
+        snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+      },
+      checkout: "/instance/workspace-source-inspections/one/0",
+      review: { repositories: ["panels/example"], files: ["meta/vibestudio.yml"] },
+    };
+    const env = buildWorkspaceChildEnv({
+      ...base,
+      childWorkspaceName: "base",
+      workspaceSources: [source],
+    });
+    expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toEqual([source]);
+  });
+
   it("strips obsolete unattended startup policy from the child", () => {
     const env = buildWorkspaceChildEnv({
       ...base,
@@ -1038,6 +1057,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       serverBootId: `boot_${"B".repeat(24)}`,
       adminToken: "hub-admin",
       tokenSource: "generated",
+      workspaceSources: [],
       version: "test",
       buildId: "a".repeat(64),
       gatewayPort: 9,
@@ -1126,41 +1146,47 @@ describe("hub RPC pairing surfacing (§5)", () => {
     }
   });
 
-  it("offers exact selected template reviews without exposing checkout paths", async () => {
+  it("registers only an instance-owned inspected source and reuses its exact coordinate", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);
-    const pin = {
-      url: "git+https://example.test/local.git",
-      ref: "refs/heads/local",
-      commit: "a".repeat(40),
-      snapshot: `v1-sha256:${"b".repeat(64)}`,
+    const instanceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-source-owner-"));
+    const checkout = path.join(instanceRoot, "workspace-source-inspections", "request", "0");
+    fs.mkdirSync(checkout, { recursive: true });
+    const source = {
+      pin: {
+        url: "git+https://example.test/local.git",
+        ref: "refs/heads/local",
+        commit: "a".repeat(40),
+        snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+      },
+      checkout,
+      review: { repositories: ["panels/example"], files: ["meta/vibestudio.yml"] },
     };
-    const review = {
-      presentation: { name: "Local worktree" },
-      repositories: ["panels/example"],
-      files: [],
-    };
-    vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv(
-      "VIBESTUDIO_DEV_TEMPLATE_SOURCES",
-      JSON.stringify([{ pin, checkout: "/private/checkpoint", review }])
-    );
+    vi.stubEnv("VIBESTUDIO_INSTANCE_ROOT", instanceRoot);
     try {
-      let result: unknown;
-      await executeHubControl(
-        state,
-        { userId: rootUserId, handle: "viewer", role: "member" },
-        "listTemplateCandidates",
-        [],
-        (value) => {
-          result = value;
-        }
+      const register = async (candidate: typeof source) => {
+        let result: unknown;
+        await executeHubControl(
+          state,
+          { userId: rootUserId, handle: "viewer", role: "member" },
+          "registerLocalTemplateSource",
+          [candidate],
+          (value) => {
+            result = value;
+          }
+        );
+        return result;
+      };
+      expect(await register(source)).toEqual({ pin: source.pin, ...source.review });
+      expect(await register(source)).toEqual({ pin: source.pin, ...source.review });
+      expect(state.workspaceSources).toEqual([source]);
+      await expect(register({ ...source, checkout: path.dirname(instanceRoot) })).rejects.toThrow(
+        "outside the host-owned inspection root"
       );
-      expect(result).toEqual([{ pin, ...review }]);
-      expect(JSON.stringify(result)).not.toContain("/private/");
     } finally {
       vi.unstubAllEnvs();
       state.identityDb.close();
+      fs.rmSync(instanceRoot, { recursive: true, force: true });
     }
   });
 

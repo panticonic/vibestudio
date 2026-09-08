@@ -8,11 +8,11 @@ import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import type { DevelopmentTemplateSource } from "@vibestudio/workspace/developmentTemplateSources";
-import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
-import { enumerateRootTemplateRepositories } from "../server/workspaceRootTemplateBootstrap.js";
+import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
+import { checkpointWorkspaceSource } from "./workspaceTemplateCheckpoint.js";
+import { enumerateRootTemplateRepositories } from "./server/workspaceRootTemplateBootstrap.js";
 
-export interface DevelopmentTemplateSelection extends DevelopmentTemplateSource {
+export interface WorkspaceSourceInspection extends WorkspaceSource {
   sourceCheckout: string;
   changedPaths: readonly string[];
 }
@@ -43,12 +43,12 @@ export function canonicalTemplateUrlFromCheckout(checkout: string): string {
   }
 }
 
-export async function resolveDevelopmentTemplateSelections(input: {
+export async function inspectWorkspaceSources(input: {
   checkouts: readonly string[];
   checkpointRoot: string;
-}): Promise<DevelopmentTemplateSelection[]> {
+}): Promise<WorkspaceSourceInspection[]> {
   const gitClient = new GitClient();
-  const selections: DevelopmentTemplateSelection[] = [];
+  const selections: WorkspaceSourceInspection[] = [];
   const selectedUrls = new Set<string>();
   for (const [index, requested] of input.checkouts.entries()) {
     const sourceCheckout = fs.realpathSync(path.resolve(requested));
@@ -57,7 +57,7 @@ export async function resolveDevelopmentTemplateSelections(input: {
       throw new Error(`Template checkout selected more than once for ${url}`);
     }
     selectedUrls.add(url);
-    const checkpoint = await prepareDevelopmentTemplateCheckpoint({
+    const checkpoint = await checkpointWorkspaceSource({
       checkout: sourceCheckout,
       target: path.join(input.checkpointRoot, String(index)),
     });

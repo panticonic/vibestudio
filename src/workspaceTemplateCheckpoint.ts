@@ -43,17 +43,17 @@ function isDependencyArtifactPath(relativePath: string): boolean {
   return relativePath.split(/[\\/]/u).includes("node_modules");
 }
 
-export interface DevelopmentTemplateCheckpoint {
+export interface WorkspaceSourceCheckpoint {
   checkout: string;
   sourceCheckout: string;
   changedPaths: readonly string[];
 }
 
 /** Seal the visible worktree into an instance-owned immutable Git commit. */
-export async function prepareDevelopmentTemplateCheckpoint(input: {
+export async function checkpointWorkspaceSource(input: {
   checkout: string;
   target: string;
-}): Promise<DevelopmentTemplateCheckpoint> {
+}): Promise<WorkspaceSourceCheckpoint> {
   const sourceCheckout = fs.realpathSync(path.resolve(input.checkout));
   // Native Git owns developer checkouts, including linked/detached worktrees.
   // Always seal a private clone, so downstream exact readers never observe a

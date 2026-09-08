@@ -88,8 +88,7 @@ interface RepositoryPlan {
 function isWorkspaceInstalledMetadata(repoPath: string, filePath: string): boolean {
   return (
     repoPath === "meta" &&
-    (filePath === "vibestudio.yml" ||
-      filePath === "templates.state.yml" ||
+    (filePath === "templates.state.yml" ||
       filePath === "templates.lock.yml" ||
       filePath.startsWith("templates/"))
   );

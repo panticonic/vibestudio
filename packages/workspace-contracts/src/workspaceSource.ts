@@ -1,3 +1,7 @@
+import { z } from "zod";
+import { WorkspaceTemplatePinSchema } from "./workspaceConfigSchema.js";
+import type { WorkspaceTemplatePin } from "./types.js";
+
 /**
  * Narrow host/workspace ABI for bootstrapping an exact workspace snapshot.
  *
@@ -11,6 +15,35 @@ export interface WorkspaceSourceExactPin {
   commit: string;
   snapshot: `v1-sha256:${string}`;
 }
+
+/** Host-private acquisition transport for one reviewed exact workspace source. */
+export interface WorkspaceSource {
+  pin: WorkspaceTemplatePin;
+  checkout: string;
+  review?: {
+    presentation?: { name?: string; description?: string };
+    repositories: string[];
+    files: string[];
+  };
+}
+
+export const WorkspaceSourceSchema: z.ZodType<WorkspaceSource> = z
+  .object({
+    pin: WorkspaceTemplatePinSchema,
+    checkout: z.string().trim().min(1),
+    review: z
+      .object({
+        presentation: z
+          .object({ name: z.string().optional(), description: z.string().optional() })
+          .strict()
+          .optional(),
+        repositories: z.array(z.string()),
+        files: z.array(z.string()),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 export interface WorkspaceSourceSnapshotRepository {
   repoPath: string;

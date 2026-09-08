@@ -19,6 +19,7 @@ export function extractDevelopmentTemplateCheckoutArguments(argv: readonly strin
     if (arg === "--template-checkout") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) throw new Error("--template-checkout requires a path");
+      if (checkouts.length) throw new Error("--template-checkout may only be selected once");
       checkouts.push(value);
       index += 1;
       continue;
@@ -26,6 +27,7 @@ export function extractDevelopmentTemplateCheckoutArguments(argv: readonly strin
     if (arg.startsWith("--template-checkout=")) {
       const value = arg.slice("--template-checkout=".length);
       if (!value || value.startsWith("--")) throw new Error("--template-checkout requires a path");
+      if (checkouts.length) throw new Error("--template-checkout may only be selected once");
       checkouts.push(value);
       continue;
     }

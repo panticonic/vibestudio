@@ -7,7 +7,6 @@ import {
 import {
   WorkspaceGitCommitSchema,
   WorkspaceGitSnapshotSchema,
-  WorkspaceLogicalCredentialNameSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 export { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
@@ -20,49 +19,11 @@ const digest = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 export const templateLocatorSchema = z.union([
   z.object({ pin: WorkspaceTemplatePinSchema }).strict(),
   z.object({ url: z.string().url(), credential: z.string().trim().min(1).optional() }).strict(),
-  z
-    .object({
-      catalogId: z.string().trim().min(1),
-      registryCommit: WorkspaceGitCommitSchema,
-      registrySnapshot: WorkspaceGitSnapshotSchema,
-    })
-    .strict(),
 ]);
-const catalogEntrySchema = z
+export const templateSourceDeclarationSchema = z
   .object({
-    id: z.string(),
-    name: z.string(),
-    description: z.string(),
     url: z.string().url(),
-    tags: z.array(z.string()),
-    recommended: z.boolean(),
-    promoted: z
-      .object({
-        ref: z.string().startsWith("refs/"),
-        commit: WorkspaceGitCommitSchema,
-        snapshot: WorkspaceGitSnapshotSchema,
-      })
-      .strict(),
-  })
-  .strict();
-export const templateCatalogSnapshotSchema = z
-  .object({
-    version: z.literal(1),
-    revision: z.string().trim().min(1),
-    systemEpoch: z.number().int().nonnegative(),
-    entries: z.array(catalogEntrySchema),
-    coordinates: z
-      .object({
-        url: z.string().trim().min(1),
-        ref: z.string().trim().min(1),
-        commit: WorkspaceGitCommitSchema,
-        snapshot: WorkspaceGitSnapshotSchema,
-      })
-      .strict(),
-    source: z.enum(["verified", "cache"]),
-    stale: z.boolean(),
-    verifiedAt: z.string().datetime(),
-    refreshError: z.string().optional(),
+    credential: z.string().trim().min(1).optional(),
   })
   .strict();
 export const templateInspectionSchema = z
@@ -117,33 +78,15 @@ export const templatePublicationSchema = z
     parts: z.array(z.string()).min(1),
   })
   .strict();
-const registryEntrySchema = z
-  .object({
-    id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/u),
-    name: z.string().trim().min(1),
-    description: z.string().trim().min(1),
-    tags: z.array(z.string().trim().min(1)).min(1),
-    recommended: z.boolean(),
-  })
-  .strict();
-export const templateRegistryContributionSchema = z
-  .object({
-    operationId: z.string(),
-    outcome: z.enum(["pushed", "already-at-remote", "nothing-to-suggest"]),
-    registryUrl: z.string(),
-    baseCommit: WorkspaceGitCommitSchema,
-    branch: z.string().nullable(),
-    headCommit: WorkspaceGitCommitSchema.nullable(),
-    revision: z.string().regex(/^\d{4}-\d{2}-\d{2}\.\d+$/u),
-    entry: catalogEntrySchema,
-  })
-  .strict();
-
 export const templatesMethods = defineServiceMethods({
-  catalog: {
-    description: "Return the verified upstream workspace catalog, optionally refreshing it.",
-    args: z.union([z.tuple([]), z.tuple([z.object({ refresh: z.boolean().optional() }).strict()])]),
-    returns: templateCatalogSnapshotSchema.nullable(),
+  resolveSource: {
+    website: {
+      kind: "closed",
+      reason: "Websites use the reviewed templates.inspect operation.",
+    } as const,
+    description: "Resolve one moving workspace source address into an immutable exact pin.",
+    args: z.tuple([templateSourceDeclarationSchema]),
+    returns: WorkspaceTemplatePinSchema,
     access: READ,
   },
   inspect: {
@@ -189,26 +132,32 @@ export const templatesMethods = defineServiceMethods({
     returns: templatePublicationSchema,
     access: WRITE,
   },
-  suggestRegistryEntry: {
-    description: "Publish a review branch proposing an exact snapshot to the verified catalog.",
-    args: z.tuple([
-      z
-        .object({
-          commandId,
-          catalog: templateCatalogSnapshotSchema,
-          publication: templatePublicationSchema,
-          credential: WorkspaceLogicalCredentialNameSchema.optional(),
-          entry: registryEntrySchema,
-          revision: z.string().regex(/^\d{4}-\d{2}-\d{2}\.\d+$/u),
-        })
-        .strict(),
-    ]),
-    returns: templateRegistryContributionSchema,
-    access: WRITE,
+});
+
+/** Host-owned exact-source acquisition used by reviewed source consumers. */
+export const workspaceTemplateSourceMethods = defineServiceMethods({
+  inspectExact: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspaceTemplateSource.exactSnapshot",
+      rationale:
+        "Reviewed shell and templates-extension flows delegate verified exact source acquisition to the host; their public inspection operation owns disclosure review.",
+    },
+    authority: { principals: ["user", "code"] },
+    website: {
+      kind: "closed",
+      reason: "Host-owned source acquisition is exposed through templates.inspect.",
+    } as const,
+    description:
+      "Acquire and verify one exact workspace source without exposing its host transport.",
+    args: z.tuple([WorkspaceTemplatePinSchema]),
+    returns: templateInspectionSchema,
+    access: READ,
   },
 });
 export type TemplatesClient = TypedServiceClient<typeof templatesMethods>;
-export type TemplateCatalogSnapshot = z.infer<typeof templateCatalogSnapshotSchema>;
 export type TemplateInspection = z.infer<typeof templateInspectionSchema>;
 export type TemplateLocator = z.infer<typeof templateLocatorSchema>;
 export type TemplateExactPin = z.infer<typeof WorkspaceTemplatePinSchema>;

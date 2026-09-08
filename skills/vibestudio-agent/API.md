@@ -676,3 +676,13 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `workspacePresence.list` | List the users with ≥1 live human connection to this workspace, plus recently-departed users with a last-seen time (WP8 §4 host presence). Fed only by the session registry — carries no channel/conversation data. |
+
+## `workspaceTemplateSource`
+
+Host-owned exact workspace source acquisition
+
+Authority principals: `code`, `host`
+
+| Method | Description |
+|--------|-------------|
+| `workspaceTemplateSource.inspectExact` | Acquire and verify one exact workspace source without exposing its host transport. |

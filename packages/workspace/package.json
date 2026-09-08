@@ -10,7 +10,7 @@
     "./baseTemplateRelease": "./src/baseTemplateRelease.ts",
     "./configParser": "./src/configParser.ts",
     "./contextProjections": "./src/contextProjections.ts",
-    "./developmentTemplateSources": "./src/developmentTemplateSources.ts",
+    "./workspaceSources": "./src/workspaceSources.ts",
     "./distribution": "./src/distribution.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./hostLaunchRecord": "./src/hostLaunchRecord.ts",

@@ -296,7 +296,7 @@ export interface EventPayloads {
   "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher":
-    | { template?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin }
+    | { template?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin; sourceUrl?: string }
     | undefined;
   "workspace-focused": { workspaceId: string };
   "open-settings": { section: SettingsSection; workspaceId?: string };

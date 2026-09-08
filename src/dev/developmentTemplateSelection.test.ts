@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
+import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
 
 import { GitClient } from "@vibestudio/git";
 import { sha256Hex } from "@vibestudio/content-addressing";
@@ -63,7 +63,7 @@ describe("development template selection", () => {
       "export const v = 2;\n"
     );
 
-    const [selection] = await resolveDevelopmentTemplateSelections({
+    const [selection] = await inspectWorkspaceSources({
       checkouts: [fx.checkout],
       checkpointRoot: fx.checkpointRoot,
     });
@@ -90,7 +90,7 @@ describe("development template selection", () => {
     const fx = fixture();
     const source = path.join(fx.checkout, "panels/example/index.ts");
     fs.writeFileSync(source, "export const v = 'reviewed local state';\n");
-    const [selection] = await resolveDevelopmentTemplateSelections({
+    const [selection] = await inspectWorkspaceSources({
       checkouts: [fx.checkout],
       checkpointRoot: fx.checkpointRoot,
     });
@@ -125,7 +125,7 @@ describe("development template selection", () => {
     git(fx.checkout, "commit", "-m", "root");
 
     await expect(
-      resolveDevelopmentTemplateSelections({
+      inspectWorkspaceSources({
         checkouts: [fx.checkout],
         checkpointRoot: fx.checkpointRoot,
       })

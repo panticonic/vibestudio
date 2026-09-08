@@ -6,7 +6,7 @@ import {
   INITIAL_WORKSPACE_TEMPLATE_ENV,
   readBaseTemplateRelease,
 } from "@vibestudio/workspace/baseTemplateRelease";
-import { DEVELOPMENT_TEMPLATE_SOURCES_ENV } from "@vibestudio/workspace/developmentTemplateSources";
+import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 import { parseTemplateManifestContent } from "@vibestudio/workspace/templateManifest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { selectDevelopmentBaseCheckout } from "./developmentBaseConfig.js";
@@ -89,6 +89,6 @@ export function developmentBaseSelectionEnv(
   return {
     [DEFAULT_WORKSPACE_TEMPLATES_ENV]: JSON.stringify(selection.pins),
     [INITIAL_WORKSPACE_TEMPLATE_ENV]: JSON.stringify(selection.pins.system),
-    [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(developmentBaseSelectionSources(selection)),
+    [WORKSPACE_SOURCES_ENV]: JSON.stringify(developmentBaseSelectionSources(selection)),
   };
 }

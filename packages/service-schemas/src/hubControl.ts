@@ -11,6 +11,7 @@ import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/de
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { RevokedUserCleanupResultSchema } from "@vibestudio/identity/revocationCleanup";
 import { WorkspaceRpcPolicySchema } from "@vibestudio/identity/workspaceRpcPolicy";
+import { WorkspaceSourceSchema } from "@vibestudio/workspace-contracts/workspaceSource";
 
 import { templateInspectionSchema } from "./templates.js";
 
@@ -338,28 +339,31 @@ export const hubControlMethods = defineServiceMethods({
     returns: z.array(HubWorkspaceEntrySchema),
     access: readAccess,
   },
-  listTemplateCandidates: {
-    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
-    capability: "workspaces.read",
+  registerLocalTemplateSource: {
+    website: {
+      kind: "closed",
+      reason: "Local source registration belongs to the trusted native host.",
+    } as const,
+    capability: "workspaces.create",
     tier: {
       tier: "gated",
       session: "family",
       residency: "identity",
-      family: "hubControl.read",
-      rationale: "Read host-selected workspace sources for review.",
+      family: "hubControl.create",
+      rationale: "Register one host-inspected, instance-owned source before workspace creation.",
     },
     presentation: {
-      title: "View workspace sources",
-      action: "view workspace sources",
-      description: "See exact workspace snapshots selected for this instance.",
+      title: "Use a local workspace source",
+      action: "use a local workspace source",
+      description: "Make an inspected local snapshot available for workspace creation.",
       group: "accounts",
-      authorityCategory: { domain: "files", verb: "see" },
+      authorityCategory: { domain: "files", verb: "act" },
     },
     description:
-      "List validated host-selected snapshots available to create new workspaces; never exposes local acquisition paths.",
-    args: z.tuple([]),
-    returns: z.array(templateInspectionSchema),
-    access: readAccess,
+      "Register one exact host-inspected checkpoint. Local paths are never returned to clients.",
+    args: z.tuple([WorkspaceSourceSchema]),
+    returns: templateInspectionSchema,
+    access: writeAccess,
   },
   routeWorkspace: {
     website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,

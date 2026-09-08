@@ -70,6 +70,7 @@ const vibestudioApp = {
   // operating breadcrumbs, the sidebar, dialogs, or form controls.
   setChromeInteractiveFocus: (active: boolean) =>
     ipcRenderer.send("vibestudio:shell.chrome-interactive-focus", active),
+  inspectWorkspaceFolder: () => ipcRenderer.invoke("vibestudio:inspectWorkspaceFolder"),
 };
 
 contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);

@@ -20,7 +20,7 @@ import {
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { enumerateRootTemplateRepositories } from "../server/workspaceRootTemplateBootstrap.js";
-import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
+import { checkpointWorkspaceSource } from "../workspaceTemplateCheckpoint.js";
 
 export interface BuiltWorkspaceDistribution {
   checkout: string;
@@ -95,7 +95,7 @@ export async function buildWorkspaceDistribution(input: {
   const sourceCheckpoint = path.join(temporaryRoot, "source-checkpoint");
   const git = new GitClient();
   try {
-    const checkpoint = await prepareDevelopmentTemplateCheckpoint({
+    const checkpoint = await checkpointWorkspaceSource({
       checkout: sourceRoot,
       target: sourceCheckpoint,
     });
@@ -173,7 +173,7 @@ export async function prepareDevelopmentWorkspaceDistributions(input: {
   const stagedOutput = path.join(temporaryRoot, "distributions");
   const sourceCheckpoint = path.join(temporaryRoot, "source-checkpoint");
   try {
-    const checkpoint = await prepareDevelopmentTemplateCheckpoint({
+    const checkpoint = await checkpointWorkspaceSource({
       checkout: sourceRoot,
       target: sourceCheckpoint,
     });

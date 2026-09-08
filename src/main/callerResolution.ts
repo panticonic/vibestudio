@@ -9,6 +9,15 @@ export type ElectronViewCallerKind = Extract<CallerKind, "shell" | "panel" | "ap
 
 export interface ElectronViewInfoForCallerResolution {
   type: string;
+  hostChrome?: boolean;
+}
+
+/** Bootstrap shell and its live hosted shell app are the same trusted chrome owner. */
+export function isElectronShellChromeCaller(
+  callerId: string,
+  viewInfo: ElectronViewInfoForCallerResolution | null | undefined
+): boolean {
+  return callerId === "shell" || (viewInfo?.type === "app" && viewInfo.hostChrome === true);
 }
 
 export function callerKindForElectronViewType(

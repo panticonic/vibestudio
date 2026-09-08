@@ -12,7 +12,8 @@ import {
   productDesktopEnvironment,
 } from "./productDesktopLaunch.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
-import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
+import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
+import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -57,7 +58,7 @@ async function main(): Promise<void> {
         "A source product launch needs the linked development Base. Run `pnpm dev:base setup`."
       );
     }
-    const developmentTemplates = await resolveDevelopmentTemplateSelections({
+    const developmentTemplates = await inspectWorkspaceSources({
       checkouts: templateOptions.checkouts,
       checkpointRoot: path.join(temporaryRoot, "template-checkpoints"),
     });
@@ -75,7 +76,18 @@ async function main(): Promise<void> {
     const desktop = new DevInstanceSupervisor({
       sourceRoot: repoRoot,
       command: process.execPath,
-      args: ["scripts/run-electron.mjs", ...forwarded],
+      args: [
+        "scripts/run-electron.mjs",
+        ...forwarded,
+        ...(developmentTemplates[0]
+          ? [
+              createShellSurfaceLink({
+                kind: "workspace-chooser",
+                template: developmentTemplates[0].pin,
+              }),
+            ]
+          : []),
+      ],
       env,
       stdio: "inherit",
       forwardParentSignals: true,

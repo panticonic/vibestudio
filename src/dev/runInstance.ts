@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
@@ -21,7 +22,7 @@ import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
-import { resolveDevelopmentTemplateSelections } from "./developmentTemplateSelection.js";
+import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
 import {
   EPHEMERAL_DEV_WORKSPACE_NAME,
   EPHEMERAL_WORKSPACE_ARG,
@@ -346,7 +347,7 @@ async function main(): Promise<void> {
           "or select the shipped release explicitly with `pnpm dev:production`."
       );
     }
-    const developmentTemplates = await resolveDevelopmentTemplateSelections({
+    const developmentTemplates = await inspectWorkspaceSources({
       checkouts: [
         ...new Set(
           [
@@ -367,6 +368,9 @@ async function main(): Promise<void> {
     if (templateOptions.workspaceCheckout && !targetWorkspace) {
       throw new Error("The requested workspace checkout has no prepared template snapshot");
     }
+    const selectedTemplate = templateOptions.workspaceCheckout
+      ? undefined
+      : developmentTemplates[0];
     const launchArgs = targetWorkspace
       ? [
           ...parsed.forwarded,
@@ -380,7 +384,17 @@ async function main(): Promise<void> {
               30
             )}-${createHash("sha256").update(JSON.stringify(targetWorkspace.pin)).digest("hex").slice(0, 24)}`,
         ]
-      : parsed.forwarded;
+      : [
+          ...parsed.forwarded,
+          ...(mode === "desktop" && selectedTemplate
+            ? [
+                createShellSurfaceLink({
+                  kind: "workspace-chooser",
+                  template: selectedTemplate.pin,
+                }),
+              ]
+            : []),
+        ];
     const sourceCoupled = id === "source" && !disposable;
     const env = developmentInstanceEnvironment({
       parent: process.env,

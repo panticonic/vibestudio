@@ -88,16 +88,14 @@ describe("product desktop source launch", () => {
   it("keeps production runtime semantics while explicitly enabling local template acquisition", () => {
     const env = productDesktopEnvironment({
       parent: {
-        VIBESTUDIO_DEV_TEMPLATE_SOURCES: "stale",
-        VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED: "stale",
+        VIBESTUDIO_WORKSPACE_SOURCES: "stale",
       },
       repoRoot: "/host",
       templates,
     });
     expect(env).toMatchObject({
       NODE_ENV: "production",
-      VIBESTUDIO_DEV_TEMPLATE_SOURCES: JSON.stringify(templates),
-      VIBESTUDIO_DEV_TEMPLATE_SOURCES_ENABLED: "1",
+      VIBESTUDIO_WORKSPACE_SOURCES: JSON.stringify(templates),
     });
   });
 });

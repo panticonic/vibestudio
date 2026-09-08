@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { prepareDevelopmentTemplateCheckpoint } from "./developmentTemplateCheckpoint.js";
+import { checkpointWorkspaceSource } from "../workspaceTemplateCheckpoint.js";
 
 function git(directory: string, args: string[]): string {
   return execFileSync("git", ["-C", directory, ...args], {
@@ -47,7 +47,7 @@ describe("development template checkpoint", () => {
     git(original, ["worktree", "add", "--detach", checkout, "HEAD"]);
     expect(fs.statSync(path.join(checkout, ".git")).isFile()).toBe(true);
     fs.writeFileSync(path.join(checkout, " leading space.txt"), "visible edit\n");
-    const result = await prepareDevelopmentTemplateCheckpoint({ checkout, target });
+    const result = await checkpointWorkspaceSource({ checkout, target });
     expect(result.changedPaths).toEqual([" leading space.txt"]);
     expect(fs.statSync(path.join(target, ".git")).isDirectory()).toBe(true);
     expect(fs.readFileSync(path.join(target, " leading space.txt"), "utf8")).toBe("visible edit\n");
@@ -57,7 +57,7 @@ describe("development template checkpoint", () => {
     const checkout = repository();
     const target = `${checkout}-checkpoint`;
     temporaryRoots.add(target);
-    const result = await prepareDevelopmentTemplateCheckpoint({
+    const result = await checkpointWorkspaceSource({
       checkout,
       target,
     });
@@ -81,7 +81,7 @@ describe("development template checkpoint", () => {
     const target = path.join(path.dirname(checkout), `${path.basename(checkout)}-checkpoint`);
     temporaryRoots.add(target);
 
-    const result = await prepareDevelopmentTemplateCheckpoint({
+    const result = await checkpointWorkspaceSource({
       checkout,
       target,
     });
@@ -103,7 +103,7 @@ describe("development template checkpoint", () => {
     const target = path.join(path.dirname(checkout), `${path.basename(checkout)}-checkpoint`);
     temporaryRoots.add(target);
 
-    const result = await prepareDevelopmentTemplateCheckpoint({
+    const result = await checkpointWorkspaceSource({
       checkout,
       target,
     });

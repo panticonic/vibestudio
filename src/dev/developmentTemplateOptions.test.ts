@@ -2,15 +2,23 @@ import { describe, expect, it } from "vitest";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 
 describe("development template checkout arguments", () => {
-  it("extracts repeatable path options without forwarding them to the product", () => {
+  it("extracts one reviewed source without forwarding it to the product", () => {
     expect(
       extractDevelopmentTemplateCheckoutArguments([
         "--template-checkout",
         "/one",
         "--workspace=demo",
+      ])
+    ).toEqual({ checkouts: ["/one"], forwarded: ["--workspace=demo"] });
+  });
+
+  it("rejects multiple source reviews competing for one launch surface", () => {
+    expect(() =>
+      extractDevelopmentTemplateCheckoutArguments([
+        "--template-checkout=/one",
         "--template-checkout=/two",
       ])
-    ).toEqual({ checkouts: ["/one", "/two"], forwarded: ["--workspace=demo"] });
+    ).toThrow("may only be selected once");
   });
 
   it("rejects an empty checkout option", () => {
@@ -20,7 +28,7 @@ describe("development template checkout arguments", () => {
   });
 });
 
-it("selects a checkout to open and keeps catalog candidates separate", () => {
+it("selects a checkout to open and keeps a reviewed source separate", () => {
   expect(
     extractDevelopmentTemplateCheckoutArguments([
       "--workspace-checkout=/app",

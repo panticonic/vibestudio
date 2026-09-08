@@ -1,4 +1,9 @@
-import { readDevelopmentTemplateSources } from "@vibestudio/workspace/developmentTemplateSources";
+import {
+  WORKSPACE_SOURCES_ENV,
+  readWorkspaceSources,
+  serializeWorkspaceSources,
+  type WorkspaceSource,
+} from "@vibestudio/workspace/workspaceSources";
 import { workspaceRpcDestination } from "@vibestudio/rpc";
 import { nativeWorkspaceCleanup } from "@vibestudio/shared/nativeWorkspaceCleanup";
 import * as fs from "node:fs";
@@ -222,6 +227,8 @@ export interface HubRuntimeState {
   /** Latest live-session projection reported by each workspace child (WP8 §4.4). */
   workspacePresence: Map<string, HubWorkspacePresenceSnapshot>;
   runtimes: Map<string, WorkspaceRuntime | PendingWorkspaceRuntime>;
+  /** Exact local acquisition sources admitted by this hub's trusted native host. */
+  workspaceSources: WorkspaceSource[];
   /** Stable machine-level control/pairing ingress; never owned by a workspace child. */
   controlTransport?: HubControlTransport;
   /** Installed only while a fresh server is waiting for its first/root device. */
@@ -1624,12 +1631,27 @@ export async function executeHubControl(
     });
     return;
   }
-  if (method === "listTemplateCandidates") {
-    respond(
-      readDevelopmentTemplateSources().flatMap(({ pin, review }) =>
-        review ? [{ pin, ...review }] : []
-      )
+  if (method === "registerLocalTemplateSource") {
+    const [source] = hubControlMethods.registerLocalTemplateSource.args.parse(args);
+    const ownedRoot = fs.realpathSync(
+      path.join(getCentralDataPath(), "workspace-source-inspections")
     );
+    const checkout = fs.realpathSync(source.checkout);
+    if (checkout !== ownedRoot && !checkout.startsWith(`${ownedRoot}${path.sep}`)) {
+      throw new Error("Local workspace source is outside the host-owned inspection root");
+    }
+    if (!source.review) throw new Error("Local workspace source has no validated review facts");
+    const coordinate = JSON.stringify([source.pin.url, source.pin.commit, source.pin.snapshot]);
+    const existing = state.workspaceSources.find(
+      (candidate) =>
+        JSON.stringify([candidate.pin.url, candidate.pin.commit, candidate.pin.snapshot]) ===
+        coordinate
+    );
+    if (existing && JSON.stringify(existing) !== JSON.stringify({ ...source, checkout })) {
+      throw new Error("Local workspace source coordinate is already registered differently");
+    }
+    if (!existing) state.workspaceSources.push({ ...source, checkout });
+    respond({ pin: source.pin, ...source.review });
     return;
   }
   if (method === "listWorkspaces") {
@@ -2525,6 +2547,7 @@ export function buildWorkspaceChildEnv(input: {
   workspaceChildToken: string;
   ephemeral: boolean;
   creationIntent?: WorkspaceCreationDescriptor | null;
+  workspaceSources?: readonly WorkspaceSource[];
 }): NodeJS.ProcessEnv {
   const reach = workspaceIrohReachPaths(input.advertisedWorkspaceName);
   const env: NodeJS.ProcessEnv = {
@@ -2557,6 +2580,9 @@ export function buildWorkspaceChildEnv(input: {
   // Readiness belongs to the explicit bootstrap launch arguments. Inheriting
   // it would require ordinary Personal/app workspaces to contain native apps.
   delete env["VIBESTUDIO_REQUIRE_MOBILE_READY"];
+  if (input.workspaceSources) {
+    env[WORKSPACE_SOURCES_ENV] = serializeWorkspaceSources(input.workspaceSources);
+  }
   delete env["VIBESTUDIO_REQUIRE_ELECTRON_READY"];
   delete env["VIBESTUDIO_WORKSPACE_DIR"];
   const rawWriteback = env[DEVELOPMENT_WRITEBACK_ENV]?.trim();
@@ -2765,6 +2791,7 @@ async function startWorkspaceRuntime(
     workspaceChildToken: randomBytes(32).toString("base64url"),
     ephemeral: isEphemeralDevWorkspace === true,
     creationIntent,
+    workspaceSources: state.workspaceSources,
   });
   applyWorkspaceHostRuntimeEnv(childEnv, launchSet);
   const runtimeToken = childEnv["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"];
@@ -3385,6 +3412,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     workspaceChildTokens: new Map(),
     workspacePresence: new Map(),
     runtimes: new Map(),
+    workspaceSources: readWorkspaceSources(),
     shuttingDown: false,
   };
   await flushWorkspaceCreationAudits(state);

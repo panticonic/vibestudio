@@ -52,14 +52,14 @@ describe("development instance environment", () => {
 
   it("passes exact optional-template acquisition sources and replaces ambient values", () => {
     const env = developmentInstanceEnvironment({
-      parent: { VIBESTUDIO_DEV_TEMPLATE_SOURCES: "stale" },
+      parent: { VIBESTUDIO_WORKSPACE_SOURCES: "stale" },
       repoRoot: "/host",
       instanceRoot: "/instance",
       instanceId: "isolated",
       sourceCoupled: false,
       templates,
     });
-    expect(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]).toBe(JSON.stringify(templates));
+    expect(env["VIBESTUDIO_WORKSPACE_SOURCES"]).toBe(JSON.stringify(templates));
   });
 
   it("keeps optional templates read-only in the source-coupled instance", () => {
@@ -73,7 +73,7 @@ describe("development instance environment", () => {
       templates,
     });
 
-    expect(JSON.parse(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]!)).toEqual([
+    expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toEqual([
       { pin: base.pins.base, checkout: base.checkouts.base },
       { pin: base.pins.personal, checkout: base.checkouts.personal },
       { pin: base.pins.system, checkout: base.checkouts.system },
@@ -125,5 +125,5 @@ it("selects an exact additional checkout without changing the private workspace 
   });
   expect(JSON.parse(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]!)).toEqual(templates[0]!.pin);
   expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(base.pins);
-  expect(JSON.parse(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]!)).toContainEqual(templates[0]);
+  expect(JSON.parse(env["VIBESTUDIO_WORKSPACE_SOURCES"]!)).toContainEqual(templates[0]);
 });

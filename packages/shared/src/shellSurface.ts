@@ -50,7 +50,7 @@ export const MANAGEMENT_SURFACES: readonly ManagementSurface[] = ["settings", "w
 /** The object forms; the two management surfaces may also be passed as bare strings. */
 export type ShellSurfaceDescriptor =
   | { kind: "settings"; section?: SettingsSection; workspaceId?: string }
-  | { kind: "workspace-chooser"; template?: WorkspaceTemplatePin }
+  | { kind: "workspace-chooser"; template?: WorkspaceTemplatePin; sourceUrl?: string }
   | {
       kind: "command-agent";
       /** Panel slot id the overlay is about; the focused panel when omitted. */
@@ -120,7 +120,7 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
   }
   const allowed: Record<ShellSurfaceKind, readonly string[]> = {
     settings: ["kind", "section", "workspaceId"],
-    "workspace-chooser": ["kind", "template"],
+    "workspace-chooser": ["kind", "template", "sourceUrl"],
     "command-agent": ["kind", "panelId", "mode", "prompt"],
     about: ["kind", "page"],
     "panel-command": ["kind", "panelId", "commandId"],
@@ -149,13 +149,25 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
         ...(workspaceId !== undefined ? { workspaceId: workspaceId as string } : {}),
       };
     }
-    case "workspace-chooser":
+    case "workspace-chooser": {
+      const sourceUrl = record["sourceUrl"];
+      if (sourceUrl !== undefined) {
+        if (typeof sourceUrl !== "string" || record["template"] !== undefined)
+          throw new Error("Workspace creation accepts one source URL or exact source pin");
+        const parsed = new URL(sourceUrl.replace(/^git\+/, ""));
+        if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password)
+          throw new Error(
+            "Workspace source must be an HTTP(S) Git URL without embedded credentials"
+          );
+      }
       return {
         kind: "workspace-chooser",
+        ...(sourceUrl !== undefined ? { sourceUrl: sourceUrl as string } : {}),
         ...(record["template"] !== undefined
           ? { template: WorkspaceTemplatePinSchema.parse(record["template"]) }
           : {}),
       };
+    }
     case "command-agent": {
       const { panelId, mode, prompt } = record;
       if (
@@ -212,6 +224,7 @@ function encodeParams(descriptor: ShellSurfaceDescriptor): string {
       break;
     case "workspace-chooser":
       pairs.push(["kind", descriptor.kind]);
+      if (descriptor.sourceUrl) pairs.push(["source", descriptor.sourceUrl]);
       if (descriptor.template) pairs.push(["template", JSON.stringify(descriptor.template)]);
       break;
     case "command-agent":
@@ -323,6 +336,7 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
     case "surface":
       candidate = {
         kind: decoded.get("kind"),
+        ...(decoded.has("source") ? { sourceUrl: decoded.get("source") } : {}),
         ...(decoded.has("section") ? { section: decoded.get("section") } : {}),
         ...(decoded.has("workspace") ? { workspaceId: decoded.get("workspace") } : {}),
         ...(decoded.has("template")
@@ -365,6 +379,7 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
     "section",
     "workspace",
     "template",
+    "source",
     "panel",
     "mode",
     "prompt",

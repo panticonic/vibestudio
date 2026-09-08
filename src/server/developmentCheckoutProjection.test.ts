@@ -205,18 +205,12 @@ describe("projectDevelopmentCheckoutPublication", () => {
   it("writes authored meta changes without leaking installed template state", async () => {
     const { blobs, states, publication } = await setup();
     await fsp.mkdir(path.join(root!, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(root!, "meta/template.yml"), "before\n");
-    await fsp.writeFile(path.join(root!, "meta/vibestudio.yml"), "generated before\n");
+    await fsp.writeFile(path.join(root!, "meta/vibestudio.yml"), "before\n");
     blobs.set(digest("after\n"), Buffer.from("after\n"));
     blobs.set(digest("installed\n"), Buffer.from("installed\n"));
-    blobs.set(digest("generated after\n"), Buffer.from("generated after\n"));
-    states.set("state:before", [
-      file("template.yml", "before\n"),
-      file("vibestudio.yml", "generated before\n"),
-    ]);
+    states.set("state:before", [file("vibestudio.yml", "before\n")]);
     states.set("state:after", [
-      file("template.yml", "after\n"),
-      file("vibestudio.yml", "generated after\n"),
+      file("vibestudio.yml", "after\n"),
       file("templates.state.yml", "installed\n"),
       file("templates/workspace.yml", "installed\n"),
     ]);
@@ -233,7 +227,7 @@ describe("projectDevelopmentCheckoutPublication", () => {
         },
       ]),
       inspectRepository: async () => ({
-        files: [file("template.yml", "before\n"), file("vibestudio.yml", "generated before\n")],
+        files: [file("vibestudio.yml", "before\n")],
         skippedPaths: [],
       }),
       readState: async (stateHash) => states.get(stateHash) ?? [],
@@ -241,11 +235,8 @@ describe("projectDevelopmentCheckoutPublication", () => {
     });
 
     expect(result.changedPathCount).toBe(1);
-    expect(await fsp.readFile(path.join(root!, "meta/template.yml"), "utf8")).toBe("after\n");
-    expect(await fsp.readFile(path.join(root!, "meta/vibestudio.yml"), "utf8")).toBe(
-      "generated before\n"
-    );
-    expect(await fsp.readdir(path.join(root!, "meta"))).toEqual(["template.yml", "vibestudio.yml"]);
+    expect(await fsp.readFile(path.join(root!, "meta/vibestudio.yml"), "utf8")).toBe("after\n");
+    expect(await fsp.readdir(path.join(root!, "meta"))).toEqual(["vibestudio.yml"]);
   });
 
   it("keeps imported-template repositories out of the Base checkout", async () => {

@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   templateAuthoringInspectionSchema,
-  templatePublicationSchema,
   type TemplateAuthoringInspection,
-  type TemplateCatalogSnapshot,
   type TemplateLocator,
   type TemplatePublication,
   type TemplatesClient,
@@ -27,13 +25,7 @@ const flag = (name: string, description: string, multiple = false): FlagSpec => 
   ...(multiple ? { multiple: true } : {}),
 });
 const COMMAND_ID = flag("command-id", "Stable retry identity");
-const CATALOG = flag("catalog", "Catalog template id");
 const CREDENTIAL = flag("credential", "Logical credential name");
-const REFRESH: FlagSpec = {
-  name: "refresh",
-  takesValue: false,
-  description: "Refresh the verified registry",
-};
 const PART = flag("part", "Workspace repository to include", true);
 const NAME = flag("name", "Human-readable template name");
 const DESCRIPTION = flag("description", "Template description");
@@ -48,14 +40,6 @@ const PRIVATE: FlagSpec = {
 };
 const CREDENTIAL_ID = flag("credential-id", "Connected-account credential id");
 const RECEIPT = flag("receipt", "Save the exact JSON receipt");
-const ID = flag("id", "Stable catalog id");
-const TAG = flag("tag", "Catalog search tag", true);
-const REVISION = flag("revision", "Registry revision (YYYY-MM-DD.N)");
-const RECOMMENDED: FlagSpec = {
-  name: "recommended",
-  takesValue: false,
-  description: "Mark catalog entry recommended",
-};
 
 function requireClient(): { rpc: RpcClient; templates: TemplatesClient } {
   const credentials = loadCliCredentials();
@@ -133,31 +117,13 @@ function saveReceipt(inv: ParsedInvocation, kind: string, value: unknown): void 
     );
   }
 }
-function target(inv: ParsedInvocation, catalog?: TemplateCatalogSnapshot): TemplateLocator {
-  const catalogId = inv.flags["catalog"];
-  if (typeof catalogId === "string") {
-    if (!catalog) throw new UsageError("refresh the catalog before selecting an entry");
-    return {
-      catalogId,
-      registryCommit: catalog.coordinates.commit,
-      registrySnapshot: catalog.coordinates.snapshot,
-    };
-  }
+function target(inv: ParsedInvocation): TemplateLocator {
   const url = inv.positionals[0]?.trim();
-  if (!url) throw new UsageError("pass a template URL or --catalog ID");
+  if (!url) throw new UsageError("pass a template URL");
   return {
     url,
     ...(typeof inv.flags["credential"] === "string" ? { credential: inv.flags["credential"] } : {}),
   };
-}
-async function resolvedTarget(
-  client: TemplatesClient,
-  inv: ParsedInvocation
-): Promise<TemplateLocator> {
-  if (typeof inv.flags["catalog"] !== "string") return target(inv);
-  const catalog = await client.catalog();
-  if (!catalog) throw new UsageError("no verified template catalog is cached");
-  return target(inv, catalog);
 }
 function renderPlan(plan: TemplateAuthoringInspection): void {
   console.log(`${plan.request.name} authoring receipt ${plan.fingerprint}`);
@@ -173,34 +139,13 @@ function renderPublication(value: TemplatePublication): void {
 export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
-    name: "catalog",
-    summary: "List upstream workspace snapshots from the verified registry",
-    flags: [REFRESH, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        (c) => (inv.flags["refresh"] ? c.catalog({ refresh: true }) : c.catalog()),
-        (catalog) => {
-          if (!catalog)
-            return console.log(
-              "No verified template registry is cached. Run with --refresh to load it."
-            );
-          console.log(`Registry ${catalog.revision}`);
-          catalog.entries.forEach((entry) =>
-            console.log(`  ${entry.id} — ${entry.name}: ${entry.description}`)
-          );
-        }
-      ),
-  },
-  {
-    group: "templates",
     name: "inspect",
     summary: "Resolve and verify an exact upstream workspace snapshot",
-    flags: [CATALOG, CREDENTIAL, JSON_FLAG],
+    flags: [CREDENTIAL, JSON_FLAG],
     run: (inv) =>
       run(
         inv,
-        async (c) => c.inspect(await resolvedTarget(c, inv)),
+        (c) => c.inspect(target(inv)),
         (result) => {
           console.log(`${result.presentation?.name ?? result.pin.url} @ ${result.pin.commit}`);
           console.log(`  repositories: ${result.repositories.join(", ")}`);
@@ -295,47 +240,6 @@ export const templatesCommands: CliCommand[] = [
           return publication;
         },
         renderPublication
-      ),
-  },
-  {
-    group: "templates",
-    name: "registry-suggest",
-    summary: "Suggest an exact published snapshot to the verified registry",
-    flags: [ID, NAME, DESCRIPTION, TAG, RECOMMENDED, REVISION, CREDENTIAL, COMMAND_ID, JSON_FLAG],
-    run: (inv) =>
-      run(
-        inv,
-        async (c) => {
-          const tags = inv
-            .flagsMulti("tag")
-            .map((tag) => tag.trim())
-            .filter(Boolean);
-          if (!tags.length) throw new UsageError("pass at least one --tag");
-          const catalog = await c.catalog({ refresh: true });
-          if (!catalog) throw new UsageError("the workspace has no configured template registry");
-          return c.suggestRegistryEntry({
-            commandId: commandId(inv),
-            catalog,
-            publication: readReceipt(inv, "publication", templatePublicationSchema),
-            ...(typeof inv.flags["credential"] === "string"
-              ? { credential: inv.flags["credential"] }
-              : {}),
-            entry: {
-              id: requiredFlag(inv, "id"),
-              name: requiredFlag(inv, "name"),
-              description: requiredFlag(inv, "description"),
-              tags,
-              recommended: inv.flags["recommended"] === true,
-            },
-            revision: requiredFlag(inv, "revision"),
-          });
-        },
-        (result) =>
-          console.log(
-            result.branch
-              ? `Registry suggestion ready on ${result.branch}.`
-              : `Registry entry ${result.entry.id} already matches this release.`
-          )
       ),
   },
 ];

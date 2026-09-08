@@ -14,6 +14,7 @@ import {
 } from "electron";
 import * as path from "path";
 import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = __dirname;
 import { EventService } from "@vibestudio/shared/eventsService";
 import { SHELL_SURFACE_KINDS, type ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
@@ -163,7 +164,8 @@ import { corsApprovalMethods } from "@vibestudio/service-schemas/corsApproval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
-import { resolveElectronViewCaller } from "./callerResolution.js";
+import { isElectronShellChromeCaller, resolveElectronViewCaller } from "./callerResolution.js";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 import { setMenuWorkspaceResolver, setMenuEventService } from "./menu.js";
 import { getAppRoot } from "./paths.js";
 import { loadCentralEnv } from "@vibestudio/workspace/loader";
@@ -676,10 +678,10 @@ function dispatchShellSurface(
       });
       return;
     case "workspace-chooser":
-      eventService.emit(
-        "open-workspace-switcher",
-        target.template ? { template: target.template } : undefined
-      );
+      eventService.emit("open-workspace-switcher", {
+        ...(target.template ? { template: target.template } : {}),
+        ...(target.sourceUrl ? { sourceUrl: target.sourceUrl } : {}),
+      });
       return;
     case "about":
       workspaceEvents?.emit("navigate-about", { page: target.page });
@@ -2759,8 +2761,8 @@ app.on("ready", async () => {
      * (native dialogs, etc.). Audit finding #43.
      */
     const requireShellSender = (event: Electron.IpcMainInvokeEvent, channel: string): void => {
-      const { callerKind, callerId } = resolveCaller(event);
-      if (callerKind !== "shell") {
+      const callerId = resolveCallerId(event);
+      if (!isElectronShellChromeCaller(callerId, getViewManager().getViewInfo(callerId))) {
         console.warn(`[ipc] Rejecting ${channel} from non-shell sender (callerId=${callerId})`);
         throw new Error(`Channel '${channel}' is shell-only`);
       }
@@ -2896,6 +2898,33 @@ app.on("ready", async () => {
         title: opts?.title ?? "Select Folder",
       });
       return result.canceled ? null : (result.filePaths[0] ?? null);
+    });
+    ipcMain.handle("vibestudio:inspectWorkspaceFolder", async (event) => {
+      requireShellSender(event, "vibestudio:inspectWorkspaceFolder");
+      const result = await dialog.showOpenDialog({
+        properties: ["openDirectory"],
+        title: "Choose workspace source folder",
+      });
+      const checkout = result.canceled ? null : (result.filePaths[0] ?? null);
+      if (!checkout) return null;
+      const { inspectWorkspaceSources } = await import("../workspaceTemplateSource.js");
+      const [source] = await inspectWorkspaceSources({
+        checkouts: [checkout],
+        checkpointRoot: path.join(
+          getCentralDataPath(),
+          "workspace-source-inspections",
+          randomUUID()
+        ),
+      });
+      if (!source?.review) throw new Error("Workspace source inspection produced no review facts");
+      if (conn.connectionMode !== "local") {
+        throw new Error("Local workspace folders require a local Vibestudio server");
+      }
+      return assertPresent(serverSession).hubControlClient.call(
+        "hubControl",
+        "registerLocalTemplateSource",
+        [{ pin: source.pin, checkout: source.checkout, review: source.review }]
+      );
     });
     ipcMain.handle(
       "vibestudio:openFileDialog",

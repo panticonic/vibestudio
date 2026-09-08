@@ -80,3 +80,24 @@ describe("shell surface targets", () => {
     expect(parseShellSurfaceLink("https://vibestudio.app/about?page=x#v=1").kind).toBe("error");
   });
 });
+
+it("round-trips a website workspace source link without granting creation", () => {
+  const target = {
+    kind: "workspace-chooser" as const,
+    sourceUrl: "https://github.com/example/project?ref=main",
+  };
+  for (const carrier of ["scheme", "https"] as const) {
+    expect(parseShellSurfaceLink(createShellSurfaceLink(target, carrier))).toEqual({
+      kind: "ok",
+      target,
+      carrier,
+    });
+  }
+  for (const sourceUrl of [
+    "file:///etc",
+    "javascript:alert(1)",
+    "https://user:secret@example.com/repo",
+  ]) {
+    expect(() => validateShellSurfaceTarget({ kind: "workspace-chooser", sourceUrl })).toThrow();
+  }
+});

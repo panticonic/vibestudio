@@ -1,7 +1,4 @@
-import {
-  DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
-  DEVELOPMENT_TEMPLATE_SOURCES_ENV,
-} from "@vibestudio/workspace/developmentTemplateSources";
+import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
@@ -24,9 +21,7 @@ export function developmentInstanceEnvironment(input: {
   sourceCoupled: boolean;
   base?: DevelopmentBaseEnvironmentSelection;
   initialWorkspaceTemplate?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin;
-  templates?: ReadonlyArray<
-    import("@vibestudio/workspace/developmentTemplateSources").DevelopmentTemplateSource
-  >;
+  templates?: ReadonlyArray<import("@vibestudio/workspace/workspaceSources").WorkspaceSource>;
 }): NodeJS.ProcessEnv {
   const env = { ...input.parent };
   const selectedBase = input.base;
@@ -41,8 +36,7 @@ export function developmentInstanceEnvironment(input: {
   delete env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"];
   delete env[DEFAULT_WORKSPACE_TEMPLATES_ENV];
   delete env[INITIAL_WORKSPACE_TEMPLATE_ENV];
-  delete env[DEVELOPMENT_TEMPLATE_SOURCES_ENV];
-  delete env[DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV];
+  delete env[WORKSPACE_SOURCES_ENV];
   Object.assign(env, {
     NODE_ENV: "development",
     VIBESTUDIO_APP_ROOT: input.repoRoot,
@@ -51,7 +45,7 @@ export function developmentInstanceEnvironment(input: {
     VIBESTUDIO_SOURCE_INSTANCE: input.sourceCoupled ? "1" : "0",
     ...(selectedBase || input.templates?.length
       ? {
-          [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(
+          [WORKSPACE_SOURCES_ENV]: JSON.stringify(
             [...baseSources, ...(input.templates ?? [])].map((source) => ({
               pin: source.pin,
               checkout: source.checkout,

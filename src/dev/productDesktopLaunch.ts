@@ -3,10 +3,7 @@ import {
   DEFAULT_WORKSPACE_TEMPLATES_ENV,
   INITIAL_WORKSPACE_TEMPLATE_ENV,
 } from "@vibestudio/workspace/baseTemplateRelease";
-import {
-  DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
-  DEVELOPMENT_TEMPLATE_SOURCES_ENV,
-} from "@vibestudio/workspace/developmentTemplateSources";
+import { WORKSPACE_SOURCES_ENV } from "@vibestudio/workspace/workspaceSources";
 import {
   EPHEMERAL_WORKSPACE_ARG,
   RESUME_EPHEMERAL_WORKSPACE_ARG,
@@ -64,8 +61,7 @@ export function productDesktopEnvironment(input: {
     "VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK",
     DEFAULT_WORKSPACE_TEMPLATES_ENV,
     INITIAL_WORKSPACE_TEMPLATE_ENV,
-    DEVELOPMENT_TEMPLATE_SOURCES_ENV,
-    DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV,
+    WORKSPACE_SOURCES_ENV,
   ]) {
     delete env[key];
   }
@@ -74,13 +70,12 @@ export function productDesktopEnvironment(input: {
     VIBESTUDIO_APP_ROOT: input.repoRoot,
     ...(distributions || input.templates?.length
       ? {
-          [DEVELOPMENT_TEMPLATE_SOURCES_ENV]: JSON.stringify(
+          [WORKSPACE_SOURCES_ENV]: JSON.stringify(
             [...distributionSources, ...(input.templates ?? [])].map(({ pin, checkout }) => ({
               pin,
               checkout,
             }))
           ),
-          [DEVELOPMENT_TEMPLATE_SOURCES_ENABLED_ENV]: "1",
         }
       : {}),
     ...(distributions
