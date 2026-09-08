@@ -56,4 +56,41 @@ describe("WorkspaceChildHubPort", () => {
     });
     await expect(denied.touchDevice(`dev_${"d".repeat(24)}`)).rejects.toThrow("runtime retired");
   });
+  it("carries only host-attested requester evidence and validates minimal receipts", async () => {
+    const receipt = {
+      operationId: "creation-operation-0001",
+      state: "registered",
+      workspaceId: "ws_new",
+      name: "New",
+    };
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      response(receipt)
+    );
+    const port = createWorkspaceChildHubPort({
+      hubUrl: "http://127.0.0.1:7777",
+      runtimeToken: "child-token",
+      fetchImpl,
+    });
+    const requester = { userId: "alice", subject: "website:site" };
+    await expect(
+      port.createWorkspace({
+        requester,
+        input: { operationId: receipt.operationId, workspace: "New" },
+      })
+    ).resolves.toEqual(receipt);
+    await expect(
+      port.workspaceCreationReceipt({ requester, input: { operationId: receipt.operationId } })
+    ).resolves.toEqual(receipt);
+    expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      "/_r/s/internal/workspace/create",
+      "/_r/s/internal/workspace/creation-receipt",
+    ]);
+    await expect(
+      port.createWorkspace({
+        requester: { ...requester, workspaceId: "forged" },
+        input: { operationId: receipt.operationId, workspace: "New" },
+      } as never)
+    ).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });

@@ -2357,6 +2357,10 @@ async function main() {
   });
   dispatcher.setOpenReviewLookup(unitReviewLookup.forRunningCode);
   const container = new ServiceContainer(dispatcher);
+  const { createWorkspaceCreationService } = await import("./services/workspaceCreationService.js");
+  container.registerRpc(
+    createWorkspaceCreationService({ workspaceId: entryWorkspaceId, hub: workspaceChildHub })
+  );
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
   const lifecycleContextStore: import("./services/lifecycleContextControl.js").LifecycleContextControlStore =

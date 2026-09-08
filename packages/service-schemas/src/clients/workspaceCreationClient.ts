@@ -1,13 +1,21 @@
 import { z } from "zod";
-import { hubControlMethods, WorkspaceCreationOperationIdSchema } from "../hubControl.js";
+import {
+  workspaceCreationMethods,
+  WorkspaceCreationOperationIdSchema,
+} from "../workspaceCreation.js";
 import type { TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import type { WorkspaceTemplatePin, WorkspaceCreationReceipt } from "@vibestudio/workspace-contracts/types";
+import type {
+  WorkspaceTemplatePin,
+  WorkspaceCreationReceipt,
+} from "@vibestudio/workspace-contracts/types";
 import { sameWorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 
-const savedSubmission = z.object({
-  version: z.literal(1),
-  input: hubControlMethods.createWorkspace.args.items[0],
-}).strict();
+const savedSubmission = z
+  .object({
+    version: z.literal(1),
+    input: workspaceCreationMethods.createWorkspace.args.items[0],
+  })
+  .strict();
 
 export function readWorkspaceCreationSubmission(raw: string | null) {
   return raw === null ? null : savedSubmission.parse(JSON.parse(raw)).input;
@@ -19,7 +27,10 @@ export function readWorkspaceCreationSubmission(raw: string | null) {
  * new operation ID. The caller supplies account/workspace-scoped local storage.
  */
 export async function submitWorkspaceCreation(
-  client: Pick<TypedServiceClient<typeof hubControlMethods>, "createWorkspace" | "workspaceCreationReceipt">,
+  client: Pick<
+    TypedServiceClient<typeof workspaceCreationMethods>,
+    "createWorkspace" | "workspaceCreationReceipt"
+  >,
   input: { workspace: string; rootTemplate?: WorkspaceTemplatePin },
   persistence: {
     key: string;
@@ -33,16 +44,46 @@ export async function submitWorkspaceCreation(
   const saved = readWorkspaceCreationSubmission(raw);
   const retained = saved ? { input: saved } : null;
   // A pending operation is never silently replaced by a changed form submission.
-  if (retained && (retained.input.workspace !== input.workspace ||
+  if (
+    retained &&
+    (retained.input.workspace !== input.workspace ||
       (retained.input.rootTemplate && input.rootTemplate
         ? !sameWorkspaceTemplatePin(retained.input.rootTemplate, input.rootTemplate)
-        : Boolean(retained.input.rootTemplate) !== Boolean(input.rootTemplate))))
-    throw new Error(`Workspace creation ${retained.input.operationId} is still unresolved. Reconcile its original name and template before starting another creation.`);
-  const request = retained?.input ?? { ...input,
-    operationId: WorkspaceCreationOperationIdSchema.parse(persistence.newOperationId()) };
-  if (!retained) await persistence.setItem(persistence.key, JSON.stringify({ version: 1, input: request }));
-  const receipt = (retained ? await client.workspaceCreationReceipt({ operationId: request.operationId }) : null)
-    ?? await client.createWorkspace(request);
+        : Boolean(retained.input.rootTemplate) !== Boolean(input.rootTemplate)))
+  )
+    throw new Error(
+      `Workspace creation ${retained.input.operationId} is still unresolved. Reconcile its original name and template before starting another creation.`
+    );
+  const request = retained?.input ?? {
+    ...input,
+    operationId: WorkspaceCreationOperationIdSchema.parse(persistence.newOperationId()),
+  };
+  if (!retained)
+    await persistence.setItem(persistence.key, JSON.stringify({ version: 1, input: request }));
+  const receipt =
+    (retained
+      ? await client.workspaceCreationReceipt({ operationId: request.operationId })
+      : null) ?? (await client.createWorkspace(request));
   await persistence.removeItem(persistence.key);
   return receipt;
+}
+
+import type { RpcCaller } from "@vibestudio/rpc";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
+
+type Creation = TypedServiceClient<typeof workspaceCreationMethods>;
+export interface WorkspaceCreationClient {
+  create: Creation["createWorkspace"];
+  receipt: Creation["workspaceCreationReceipt"];
+}
+
+/** Portable creation only; never exposes hub inventory or routing credentials. */
+export function createWorkspaceCreationClient(rpc: RpcCaller): WorkspaceCreationClient {
+  const client = createLazyTypedServiceClient(
+    "hubControl",
+    ["createWorkspace", "workspaceCreationReceipt"] as const,
+    async () => (await import("../workspaceCreation.js")).workspaceCreationMethods,
+    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+  );
+  return { create: client.createWorkspace, receipt: client.workspaceCreationReceipt };
 }

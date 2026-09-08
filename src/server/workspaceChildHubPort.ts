@@ -20,6 +20,7 @@ import {
 } from "@vibestudio/shared/governance/governanceLog";
 import type { ApprovalResolvedEvent, GovernanceRecord } from "@vibestudio/shared/governance/types";
 import { DEVICE_ID_PATTERN, SERVER_BOOT_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
+import { workspaceCreationMethods } from "@vibestudio/service-schemas/workspaceCreation";
 import { HubPairingInviteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { IssuedAgentCredential } from "./hostCore/deviceAuthStore.js";
 import { governanceListQuerySchema } from "./hostCore/governanceQuery.js";
@@ -123,7 +124,34 @@ export const WorkspaceChildGovernanceQueryResultSchema = z
   .object({ records: z.array(GovernanceRecordSchema) })
   .strict();
 
+/** Caller evidence is supplied only by the authenticated workspace host, never page arguments. */
+const WorkspaceCreationRequesterSchema = z
+  .object({
+    userId: z.string().min(1),
+    subject: z.string().min(1).max(2048),
+  })
+  .strict();
+export const WorkspaceChildCreateInputSchema = z
+  .object({
+    requester: WorkspaceCreationRequesterSchema,
+    input: workspaceCreationMethods.createWorkspace.args.items[0],
+  })
+  .strict();
+export const WorkspaceChildCreationReceiptInputSchema = z
+  .object({
+    requester: WorkspaceCreationRequesterSchema,
+    input: workspaceCreationMethods.workspaceCreationReceipt.args.items[0],
+  })
+  .strict();
+
 export interface WorkspaceChildHubPort {
+  createWorkspace(
+    input: z.infer<typeof WorkspaceChildCreateInputSchema>
+  ): Promise<z.infer<typeof workspaceCreationMethods.createWorkspace.returns>>;
+  workspaceCreationReceipt(
+    input: z.infer<typeof WorkspaceChildCreationReceiptInputSchema>
+  ): Promise<z.infer<typeof workspaceCreationMethods.workspaceCreationReceipt.returns>>;
+
   forwardWorkspaceRpc(
     invocation: WorkspaceRpcInvocation,
     options: {
@@ -165,6 +193,8 @@ export function createWorkspaceChildHubPort(
       | "device/touch"
       | "device/invite"
       | "presence/report"
+      | "workspace/create"
+      | "workspace/creation-receipt"
       | "workspace/creation-complete"
       | "governance/append-approval"
       | "governance/query",
@@ -195,6 +225,20 @@ export function createWorkspaceChildHubPort(
   };
 
   return {
+    createWorkspace: (input) =>
+      post(
+        "workspace/create",
+        WorkspaceChildCreateInputSchema,
+        workspaceCreationMethods.createWorkspace.returns,
+        input
+      ),
+    workspaceCreationReceipt: (input) =>
+      post(
+        "workspace/creation-receipt",
+        WorkspaceChildCreationReceiptInputSchema,
+        workspaceCreationMethods.workspaceCreationReceipt.returns,
+        input
+      ),
     forwardWorkspaceRpc: (invocation, delivery) =>
       forwardWorkspaceRpcHttp({
         ...delivery,

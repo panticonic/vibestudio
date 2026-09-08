@@ -734,6 +734,10 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     undefined,
     WORKERS_RUNTIME_METHOD_CATALOG
   ),
+  workspaces: namespaceEntry(
+    ["create", "receipt"],
+    "Create workspaces from exact inspected template pins and reconcile durable receipts. Available to panels, workers, eval and connected websites under ordinary caller authorization. Creation returns no routing credentials or authority over the new workspace."
+  ),
   workspace: namespaceEntry(
     WORKSPACE_MEMBERS,
     "Workspace configuration, projects, and semantic source operations. Use build.listUnits() for declared source/build readiness, workers.listSources() for launchable workers, and runtime.supervision.list() for exact live entities.",

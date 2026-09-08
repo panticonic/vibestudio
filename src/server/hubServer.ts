@@ -96,6 +96,8 @@ import {
   WorkspaceChildGovernanceQueryInputSchema,
   WorkspaceChildPresenceReportInputSchema,
   WorkspaceChildCreationCompleteInputSchema,
+  WorkspaceChildCreateInputSchema,
+  WorkspaceChildCreationReceiptInputSchema,
 } from "./workspaceChildHubPort.js";
 import { receiveHubWorkspaceRpcHttp } from "./workspaceRpcHubTransport.js";
 import { WORKSPACE_RPC_INTERNAL_ROUTE } from "./workspaceRpcTransport.js";
@@ -1386,6 +1388,48 @@ async function handleInternalRoute(
     if (route === "presence/report") {
       const updated = applyHubWorkspacePresenceReport(state, boundWorkspaceId, rawBody, token);
       sendJson(res, 200, { updated });
+      return;
+    }
+    if (route === "workspace/create" || route === "workspace/creation-receipt") {
+      const body = (
+        route === "workspace/create"
+          ? WorkspaceChildCreateInputSchema
+          : WorkspaceChildCreationReceiptInputSchema
+      ).parse(rawBody);
+      const owner = {
+        userId: body.requester.userId,
+        source: { workspaceId: boundWorkspaceId, subject: body.requester.subject },
+      };
+      const assertLive = () => {
+        if (!token || state.workspaceChildTokens.get(token) !== boundWorkspaceId)
+          throw authError("EACCES", "Workspace child runtime expired", 403);
+      };
+      assertLive();
+      if (route === "workspace/creation-receipt") {
+        sendJson(
+          res,
+          200,
+          state.centralData.workspaceCreationReceipt(owner, body.input.operationId)
+        );
+      } else {
+        const input = WorkspaceChildCreateInputSchema.parse(rawBody).input;
+        const receipt = state.centralData.createWorkspaceOperation(
+          owner,
+          {
+            ...input,
+            workspace: normalizeWorkspaceName(input.workspace),
+          },
+          () =>
+            selectWorkspaceCreationRootTemplate({
+              appRoot: state.appRoot,
+              ...(input.rootTemplate ? { requested: input.rootTemplate } : {}),
+            }),
+          assertLive
+        );
+        await flushWorkspaceCreationAudits(state);
+        emitWorkspaceCatalogChanged(state);
+        sendJson(res, 200, receipt);
+      }
       return;
     }
     if (route === "workspace/creation-complete") {
