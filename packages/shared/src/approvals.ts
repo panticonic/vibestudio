@@ -301,7 +301,12 @@ export interface DiffReviewEntry {
 }
 
 export interface PendingApprovalBase {
-  // principal == { callerId, callerKind, repoPath, effectiveVersion }
+  /** Host-authenticated requesting identity; the decision determines the grant recipient and scope. */
+  authoritySubject?: {
+    principal: import("@vibestudio/rpc").Principal;
+    reviewedVersion?: string;
+    website?: { origin: string; workspaceId: string; documentId: string };
+  };
   approvalId: string;
   callerId: string;
   // "system" is a host-initiated principal (e.g. workspace-startup extension

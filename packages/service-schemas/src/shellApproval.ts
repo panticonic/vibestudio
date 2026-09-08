@@ -1,3 +1,4 @@
+import { PRINCIPAL_KINDS } from "@vibestudio/rpc";
 /**
  * shellApproval service schema — trusted shell/mobile approval resolution and
  * approval queue rehydration.
@@ -164,6 +165,23 @@ const diffReviewSchema = z
   .strict() satisfies z.ZodType<DiffReviewEntry>;
 
 const pendingApprovalBaseShape = {
+  authoritySubject: z
+    .object({
+      principal: z.string().regex(/^(host|user|code|session|mission|website):[^\0]+$/) as z.ZodType<
+        import("@vibestudio/rpc").Principal
+      >,
+      reviewedVersion: z.string().min(1).optional(),
+      website: z
+        .object({
+          origin: z.string().url(),
+          workspaceId: z.string().min(1),
+          documentId: z.string().min(1),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict()
+    .optional(),
   approvalId: z.string(),
   callerId: z.string(),
   callerKind: z.enum(["panel", "app", "worker", "do", "extension", "system"]),
@@ -551,7 +569,7 @@ const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
     z
       .object({
         kind: z.literal("capability"),
-        principal: z.enum(["host", "user", "code", "session", "mission"]),
+        principal: z.enum(PRINCIPAL_KINDS),
         capability: z.string(),
         codeOnly: z.literal(true).optional(),
       })
@@ -590,6 +608,18 @@ const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
 export const invocationSnapshotSchema = z
   .object({
     v: z.literal(2),
+    subjectBinding: z
+      .object({
+        subject: z
+          .string()
+          .regex(/^(host|user|code|session|mission|website|agent|task):[^\0]+$/) as z.ZodType<
+          import("@vibestudio/rpc").AuthorityGrantSubject
+        >,
+        generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        documentId: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     workspaceId: z.string().min(1).optional(),
     sourceWorkspaceId: z.string().min(1).optional(),
     service: z.string(),
@@ -917,6 +947,7 @@ const protectedInputAuthority = presenterAuthority(
 
 export const shellApprovalMethods = defineServiceMethods({
   resolve: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -954,6 +985,7 @@ export const shellApprovalMethods = defineServiceMethods({
    * cannot ask for more than it was offered (§8).
    */
   resolveInstallReview: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -985,6 +1017,7 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { decision: "cancel" }] }],
   },
   resolveTaskRules: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -1014,6 +1047,7 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
   },
   resolveBootstrap: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "approvals.decide",
     tier: {
       tier: "open",
@@ -1049,6 +1083,7 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: [["approval-123"], "deny"] }],
   },
   submitClientConfig: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "protected-input.submit",
     tier: {
       tier: "open",
@@ -1077,6 +1112,7 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { clientId: "abc", clientSecret: "shh" }] }],
   },
   submitCredentialInput: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "protected-input.submit",
     tier: {
       tier: "open",
@@ -1105,6 +1141,7 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { token: "secret-value" }] }],
   },
   submitSecretInput: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "protected-input.submit",
     tier: {
       tier: "open",
@@ -1133,6 +1170,7 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { value: "secret-value" }] }],
   },
   listPending: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "approvals.read",
     tier: {
       tier: "open",
@@ -1160,6 +1198,7 @@ export const shellApprovalMethods = defineServiceMethods({
     access: LIST_PENDING_ACCESS,
   },
   getWorkspaceCreationReviewState: {
+    website: {"kind":"closed","reason":"Consent decisions and pending requests belong to trusted approval UI."} as const,
     capability: "approvals.read",
     tier: {
       tier: "open",

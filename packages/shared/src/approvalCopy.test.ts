@@ -8,6 +8,7 @@ import {
   formatNetworkDestination,
   formatServiceName,
   getApprovalAttribution,
+  getApprovalIdentityDetails,
   getApprovalCallerPresentation,
   getApprovalCategoryLabel,
   getApprovalCopy,
@@ -93,9 +94,9 @@ describe("approvalCopy", () => {
     expect(getApprovalCopy(approval).summary).toContain(
       "Windows host with the host account's permissions"
     );
-    expect(
-      getApprovalCopy({ ...approval, executionPlatform: "linux" }).summary
-    ).toContain("run in a sandbox on the Linux host");
+    expect(getApprovalCopy({ ...approval, executionPlatform: "linux" }).summary).toContain(
+      "run in a sandbox on the Linux host"
+    );
   });
 
   const fixtures: Array<{
@@ -728,6 +729,70 @@ describe("approvalCopy", () => {
     ).toBe(
       "Covers this action in “Trello-style task board” until you reset this chat's permissions."
     );
+  });
+
+  it("defaults reviewed credential use to its version without making all versioned operations persistent", () => {
+    const operation: PendingCapabilityApproval = {
+      ...base,
+      kind: "capability",
+      title: "Use account",
+      capability: "credential.use",
+      authoritySubject: { principal: "code:panels/demo@v1", reviewedVersion: "v1" },
+      allowedDecisions: ["once", "version", "deny"],
+    };
+    expect(getRecommendedStandardDecision(operation)).toBe("version");
+    expect(getRecommendedStandardDecision({ ...operation, capability: "git.publish" })).toBe(
+      "once"
+    );
+    expect(getRecommendedStandardDecision({ ...operation, capability: "workspaces.delete" })).toBe(
+      "once"
+    );
+    expect(
+      getRecommendedStandardDecision({ ...operation, allowedDecisions: ["once", "deny"] })
+    ).toBe("once");
+  });
+
+  it("presents remembered website permission as future code access, with no version choice", () => {
+    const operation: PendingCapabilityApproval = {
+      ...base,
+      kind: "capability",
+      title: "Use account",
+      capability: "credential.use",
+      authoritySubject: {
+        principal: "website:site-1",
+        website: {
+          origin: "https://example.com",
+          workspaceId: "project",
+          documentId: "doc-1",
+        },
+      },
+      allowedDecisions: ["once", "session", "always", "deny"],
+    };
+    expect(getRecommendedStandardDecision(operation)).toBe("once");
+    expect(getApprovalCallerPresentation(operation).label).toBe("https://example.com");
+    expect(getApprovalIdentityDetails(operation)).toEqual([
+      { label: "Requesting identity", value: "website:site-1" },
+      { label: "Website origin", value: "https://example.com" },
+      { label: "Source workspace", value: "project" },
+      { label: "Initiating document", value: "doc-1" },
+    ]);
+    const actions = getStandardApprovalDecisionActions(operation);
+    expect(actions.some((action) => action.decision === "version")).toBe(false);
+    expect(actions.find((action) => action.decision === "always")?.description).toContain(
+      "future pages and code from https://example.com"
+    );
+  });
+
+  it("keeps reviewed receiver credential permission version-bound while showing its website initiator", () => {
+    const operation: PendingCapabilityApproval = {
+      ...base, kind: "capability", title: "Use account", capability: "credential.use",
+      authoritySubject: { principal: "code:workers/helper@v1", reviewedVersion: "v1",
+        website: { origin: "https://example.com", workspaceId: "project", documentId: "doc-1" } },
+      allowedDecisions: ["once", "version", "deny"],
+    };
+    expect(getRecommendedStandardDecision(operation)).toBe("version");
+    expect(getStandardApprovalDecisionActions(operation).map(action => action.decision)).toContain("version");
+    expect(getApprovalIdentityDetails(operation)).toContainEqual({ label: "Website origin", value: "https://example.com" });
   });
 
   it("identifies a browser permission by its website origin rather than its native mediator", () => {

@@ -15,6 +15,7 @@ export type ApprovalDecisionId = (typeof APPROVAL_DECISIONS)[number];
 
 /** Decisions that can settle an authority acquisition rendezvous. */
 export const AUTHORITY_ACQUISITION_DECISIONS = [
+  "always",
   "once",
   "task",
   "mission",

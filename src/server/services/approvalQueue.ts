@@ -88,6 +88,7 @@ export type GrantedDecision =
   | "deny";
 /** Terminal queue result. Dismiss is deliberately distinct from an explicit deny. */
 export type AuthorityApprovalQueueDecision =
+  | "always"
   | "once"
   | "task"
   | "mission"
@@ -117,6 +118,7 @@ export interface ApprovalResolver {
 }
 
 interface ApprovalQueueRequestBase {
+  authoritySubject?: PendingApproval["authoritySubject"];
   callerId: string;
   callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
@@ -1333,6 +1335,7 @@ export function createApprovalQueue(deps: {
     const callerTitle = requester?.title ?? resolveTitle(req.callerId);
     const operation = req.operation ?? defaultOperationFor(req);
     const base = {
+      ...(req.authoritySubject ? { authoritySubject: req.authoritySubject } : {}),
       approvalId: randomUUID(),
       callerId: req.callerId,
       callerKind: req.callerKind,
@@ -2007,7 +2010,11 @@ export function createApprovalQueue(deps: {
       }
       if (
         entry.approval.kind !== "browser-permission" &&
-        (decision === "always" || decision === "block")
+        (decision === "always" || decision === "block") &&
+        !(
+          (entry.approval.kind === "capability" || entry.approval.kind === "credential") &&
+          entry.approval.allowedDecisions?.some((offered) => offered === decision)
+        )
       ) {
         throw new Error(`Approval kind '${entry.approval.kind}' does not accept '${decision}'`);
       }

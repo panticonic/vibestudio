@@ -1,6 +1,8 @@
 import { capabilityDomain } from "./authorityDomains.js";
 
 export interface ReceiverAuthorityPolicy {
+  /** Preferred continuity when the authenticated subject can enforce it. */
+  preferredContinuity: "operation" | "task" | "reviewed-version";
   agentScope: "offer" | "never";
   irreversible: boolean;
   missionGrant: boolean;
@@ -68,6 +70,7 @@ export function receiverAuthorityPolicy(
   if (capability.startsWith("workspace-service:")) {
     const requiresSubstance = dynamic?.domain === "sharing";
     return {
+      preferredContinuity: "task",
       agentScope: "offer",
       irreversible: false,
       missionGrant: true,
@@ -78,6 +81,11 @@ export function receiverAuthorityPolicy(
   const irreversible = IRREVERSIBLE.has(capability);
   const agentScope = AGENT_SCOPE_OFFERABLE.has(capability) && !irreversible ? "offer" : "never";
   return {
+    preferredContinuity: irreversible
+      ? "operation"
+      : capability === "credential.use"
+        ? "reviewed-version"
+        : "task",
     agentScope,
     irreversible,
     missionGrant: !irreversible,

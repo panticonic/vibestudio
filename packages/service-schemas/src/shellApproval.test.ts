@@ -1,9 +1,64 @@
 import { describe, expect, it } from "vitest";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/promptRegistry";
+import { createInvocationSnapshot } from "@vibestudio/shared/authority/invocationSnapshot";
 import { shellApprovalMethods, templateInstallResolutionSchema } from "./shellApproval.js";
 
 describe("shellApproval service contract", () => {
+  it("preserves website identity and document-bound consent across the approval wire", () => {
+    const binding = { subject: "website:site-1" as const, generation: 2, documentId: "doc-1" };
+    const approval = {
+      approvalId: "approval-website",
+      callerId: "browser:doc-1",
+      callerKind: "panel" as const,
+      repoPath: "",
+      effectiveVersion: "",
+      requestedAt: 1,
+      kind: "capability" as const,
+      capability: "credential.use",
+      title: "Use account",
+      allowedDecisions: ["once", "session", "always", "deny"],
+      authoritySubject: {
+        principal: binding.subject,
+        website: {
+          origin: "https://example.com",
+          workspaceId: "project",
+          documentId: binding.documentId,
+        },
+      },
+      snapshot: createInvocationSnapshot({
+        service: "credentials",
+        method: "fetch",
+        capability: "credential.use",
+        capabilityDefinitionDigest: "-",
+        resourceType: "account",
+        provider: "-",
+        providerExecutionDigest: "-",
+        resourceKey: "account:1",
+        args: [],
+        preparedStateDigest: "-",
+        callerPrincipal: binding.subject,
+        subjectBinding: binding,
+        sessionId: "session:doc-1",
+        missionSubject: "-",
+        snippetDigest: "-",
+        codeLineage: { class: "unknown", chain: [] },
+        contextLineage: { class: "external", latchEpoch: 1, externalKeys: ["https://example.com"] },
+        initiatorChain: [binding.subject],
+        at: 1,
+      }),
+    };
+    expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
+    expect(
+      shellApprovalMethods.listPending.returns.safeParse([
+        {
+          ...approval,
+          snapshot: { ...approval.snapshot, subjectBinding: { ...binding, generation: -1 } },
+        },
+      ]).success
+    ).toBe(false);
+  });
+
   it("carries popup permission approvals across listPending", () => {
     const approval = {
       approvalId: "approval-popup",

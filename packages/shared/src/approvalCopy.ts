@@ -10,6 +10,7 @@ import type {
   PendingUnitInstallReviewApproval,
 } from "./approvals.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
+import { receiverAuthorityPolicy } from "./authority/receiverAuthorityPolicy.js";
 
 /** Both git transports carry `gitOperation` metadata from the egress proxy. */
 function isGitCredentialUse(use: unknown): boolean {
@@ -43,6 +44,7 @@ function userFacingCallerLabel(value: string | undefined): string | undefined {
 }
 
 function isIdentityScopedVersionApproval(approval: PendingApproval): boolean {
+  if (approval.authoritySubject) return approval.authoritySubject.reviewedVersion === undefined;
   if (
     approval.requester?.category === "eval" ||
     approval.requester?.category === "internal-service"
@@ -118,6 +120,14 @@ function basename(path: string): string {
 export function getApprovalCallerPresentation(
   approval: PendingApproval
 ): ApprovalCallerPresentation {
+  if (approval.authoritySubject?.website) {
+    return {
+      label: approval.authoritySubject.website.origin,
+      kindLabel: "Website request",
+      kind: "browser",
+      shortId: truncateId(approval.callerId),
+    };
+  }
   // The native browser mediates this request; the website is the requester
   // shown to the user. Generic runtime titles must not disguise its origin.
   if (approval.kind === "browser-permission") {
@@ -256,7 +266,10 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.capability === "workspace-project-import") {
     return HOST_APPROVAL_COPY.categories.projectImport;
   }
-  if (approval.capability === "network.response.read" || approval.capability === "network.connect") {
+  if (
+    approval.capability === "network.response.read" ||
+    approval.capability === "network.connect"
+  ) {
     return HOST_APPROVAL_COPY.categories.networkAccess;
   }
   if (approval.capability === "workerd.inspector") {
@@ -283,7 +296,7 @@ export interface ApprovalActionCopy {
 
 export type StandardApprovalDecision = Extract<
   ApprovalDecision,
-  "once" | "session" | "task" | "mission" | "agent" | "version" | "deny" | "lock"
+  "once" | "session" | "task" | "mission" | "agent" | "version" | "always" | "deny" | "lock"
 >;
 
 export interface StandardApprovalDecisionAction {
@@ -305,6 +318,7 @@ export function getAllowedStandardApprovalDecisions(
         decision === "mission" ||
         decision === "agent" ||
         decision === "version" ||
+        decision === "always" ||
         decision === "deny" ||
         decision === "lock"
     );
@@ -374,6 +388,14 @@ export function getStandardApprovalDecisionActions(
       description: `Always allow this for ${agentName}. You can change it in Permissions.`,
     },
     ...(copy.version ? [{ decision: "version" as const, ...copy.version }] : []),
+    {
+      decision: "always",
+      label: approval.kind === "capability" && approval.capability === "workspace.connect"
+        ? "Remember this connection" : "Remember this permission",
+      description: approval.authoritySubject?.website
+        ? `Applies to future pages and code from ${approval.authoritySubject.website.origin} in this workspace. You can revoke it in Permissions.`
+        : "Remember for this identity, including future executions. You can revoke it in Permissions.",
+    },
     {
       decision: "deny",
       label: templateActions?.deny ?? (critical ? "Cancel" : "Don't allow"),
@@ -605,6 +627,29 @@ function buildCapabilityActionCopy(approval: PendingCapabilityApproval): Approva
 export function getStandardActionCopy(
   approval: PendingCredentialApproval | PendingCapabilityApproval
 ): ApprovalActionCopy {
+  if (approval.kind === "capability" && approval.capability === "workspace.connect" && approval.authoritySubject?.website) {
+    return {
+      once: { label: "Connect", description: "Connect this website to this workspace." },
+      session: { label: "Connect this page", description: "Ends when this page disconnects or is replaced." },
+      version: null,
+      denyDescription: "Keep this website disconnected from the workspace.",
+    };
+  }
+  if ((approval.authoritySubject?.website && !approval.authoritySubject.reviewedVersion) || (approval.kind === "capability" && approval.snapshot?.subjectBinding)) {
+    const document = approval.authoritySubject?.website?.documentId ??
+      (approval.kind === "capability" ? approval.snapshot?.subjectBinding?.documentId : undefined);
+    return {
+      once: { label: "Allow once", description: "Allow only this exact operation." },
+      session: document
+        ? {
+            label: "Allow for this page",
+            description: "Ends when this page disconnects or is replaced.",
+          }
+        : null,
+      version: null,
+      denyDescription: "Do not allow this operation.",
+    };
+  }
   const copy = buildStandardActionCopy(approval);
   if (
     !copy.version ||
@@ -623,22 +668,36 @@ export function getStandardActionCopy(
 }
 
 /**
- * A task grant is the normal choice whenever the approval offers one: it lets
- * the agent finish the current task without turning an ordinary approval into
- * standing trust. Durable reviewed-subject grants remain the recommendation
- * only for approvals that do not have a task-scoped option. Once-only
- * operations such as force pushes do not offer either reusable choice.
+ * The operation's policy chooses continuity; available authenticated evidence
+ * only determines which choices can actually be offered. A version's mere
+ * existence is not a reason to recommend persistent permission.
  */
 export function getRecommendedStandardDecision(
   approval: PendingCredentialApproval | PendingCapabilityApproval
-): Extract<StandardApprovalDecision, "once" | "session" | "task" | "agent" | "version"> {
+): StandardApprovalDecision {
   const allowed = getAllowedStandardApprovalDecisions(approval);
   const copy = getStandardActionCopy(approval);
-  if (allowed.includes("task")) return "task";
+  const policy = receiverAuthorityPolicy(
+    approval.kind === "credential" ? "credential.use" : approval.capability
+  );
+  if (
+    policy.preferredContinuity === "reviewed-version" &&
+    copy.version &&
+    !isIdentityScopedVersionApproval(approval) &&
+    allowed.includes("version")
+  )
+    return "version";
+  if (policy.preferredContinuity !== "operation" && allowed.includes("task")) return "task";
+  if (allowed.includes("once")) return "once";
+  if (copy.session && allowed.includes("session")) return "session";
+  // A receiver may offer only reusable choices, but never recommend a control
+  // that was removed by its contract or has no truthful presentation.
   if (copy.version && allowed.includes("version")) return "version";
   if (allowed.includes("agent")) return "agent";
-  if (allowed.includes("once")) return "once";
-  return "session";
+  if (allowed.includes("deny")) return "deny";
+  const available = getStandardApprovalDecisionActions(approval)[0];
+  if (!available) throw new Error("Approval has no available decision");
+  return available.decision;
 }
 
 /**
@@ -701,6 +760,32 @@ export function getInstallReviewActionCopy(
 export interface ApprovalAttribution {
   relation?: "for" | "using" | "as" | "on";
   target?: string;
+}
+
+/** Authenticated identity facts for the same developer details on every surface. */
+export function getApprovalIdentityDetails(
+  approval: PendingApproval
+): Array<{ label: string; value: string }> {
+  const identity = approval.authoritySubject;
+  if (identity) {
+    const details: Array<{ label: string; value: string }> = [
+      { label: "Requesting identity", value: identity.principal },
+    ];
+    if (identity.website) {
+      details.push(
+        { label: "Website origin", value: identity.website.origin },
+        { label: "Source workspace", value: identity.website.workspaceId },
+        { label: "Initiating document", value: identity.website.documentId }
+      );
+    }
+    if (identity.reviewedVersion)
+      details.push({ label: "Reviewed version", value: identity.reviewedVersion });
+    return details;
+  }
+  return [
+    { label: "Requester repo", value: approval.repoPath },
+    { label: "Requester version", value: approval.effectiveVersion },
+  ];
 }
 
 export function getApprovalAttribution(approval: PendingApproval): ApprovalAttribution {
@@ -868,8 +953,7 @@ const CAPABILITY_COPY_HANDLERS: Record<
   "runtime.code-execution.manage"(approval) {
     return {
       title: approval.title,
-      summary:
-        `Start, watch, or stop a workspace program. ${HOST_APPROVAL_COPY.installReview.nativeCodeWarning(approval.executionPlatform)}`,
+      summary: `Start, watch, or stop a workspace program. ${HOST_APPROVAL_COPY.installReview.nativeCodeWarning(approval.executionPlatform)}`,
     };
   },
   "workspace-service:channel"(approval) {

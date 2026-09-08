@@ -104,6 +104,78 @@ function createHarness() {
 }
 
 describe("permissions service", () => {
+  it("names mutable subjects from host records and distinguishes page from continuing consent", async () => {
+    const h = createHarness();
+    try {
+      const subject = h.capabilityGrants.ensureWebsiteSubject({
+        userId: "user:usr_123456789012345678901234",
+        workspaceId: "workspace-test",
+        origin: "https://example.test",
+      });
+      for (const [id, documentId] of [
+        ["remembered", undefined],
+        ["page", "document-1"],
+      ] as const)
+        h.capabilityGrants.issue({
+          id,
+          subject: subject.subject,
+          effect: "allow",
+          capability: "workspace.connect",
+          resource: { kind: "exact", key: "workspace-test" },
+          scope: documentId ? "session" : "system",
+          constraints: {
+            sourceWorkspaceId: subject.workspaceId,
+            lineageAtConsent: [],
+            subjectGeneration: subject.generation,
+            ...(documentId ? { documentId } : {}),
+          },
+          issuedBy: subject.userId,
+          provenance: "acquisition",
+        });
+      const grants = (await h.definition.handler(context(), "list", [])) as Array<{
+        id: string;
+        callerLabel: string;
+        scopeLabel: string;
+        duration: string;
+      }>;
+      const remembered = grants.find((grant) => grant.id === "remembered")!;
+      const page = grants.find((grant) => grant.id === "page")!;
+      expect(remembered.callerLabel).toBe("https://example.test");
+      expect(remembered.duration).toContain("future code for this identity");
+      expect(page.duration).toContain("For this page");
+      expect(page.duration).not.toContain("future code");
+      expect(grants.every((grant) => !grant.scopeLabel.includes("version"))).toBe(true);
+    } finally {
+      h.capabilityGrants.close();
+    }
+  });
+
+  it("retains the requesting-code revision alongside session and expiry bounds", async () => {
+    const h = createHarness();
+    try {
+      h.capabilityGrants.issue({
+        id: "bounded-code",
+        subject: "code:panels/example@reviewed-v1",
+        effect: "allow",
+        capability: "external.open",
+        resource: { kind: "origin", origin: "https://example.test" },
+        scope: "session",
+        constraints: { sessionId: "session-1", lineageAtConsent: [] },
+        expiresAt: Date.now() + 60_000,
+        issuedBy: "user:usr_123456789012345678901234",
+        provenance: "acquisition",
+      });
+      const grants = (await h.definition.handler(context(), "list", [])) as Array<{
+        duration: string;
+      }>;
+      expect(grants[0]!.duration).toContain("this session");
+      expect(grants[0]!.duration).toContain("exact reviewed version");
+      expect(grants[0]!.duration).toContain("expiry time");
+    } finally {
+      h.capabilityGrants.close();
+    }
+  });
+
   it("explains every saved grant in human terms", async () => {
     const harness = createHarness();
     harness.capabilityGrants.issue({

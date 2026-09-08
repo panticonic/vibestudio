@@ -50,6 +50,38 @@ function unitInstallReviewRequest(
 }
 
 describe("approvalQueue", () => {
+  it("accepts remembered identity consent only when the reviewed capability offers it", async () => {
+    const { queue } = createQueue();
+    const input = {
+      kind: "capability" as const,
+      callerId: "panel:website",
+      callerKind: "panel" as const,
+      repoPath: "",
+      effectiveVersion: "",
+      requestedByUserId: "usr_alice",
+      capability: "workspace.connect",
+      title: "Connect this site?",
+      description: "Future pages from this origin may reconnect after explicit connection.",
+      authoritySubject: {
+        principal: "website:one" as const,
+        website: {
+          origin: "https://example.test",
+          workspaceId: "workspace-test",
+          documentId: "document-1",
+        },
+      },
+    };
+    const selected = queue.request({ ...input, allowedDecisions: ["session", "always", "deny"] });
+    await queue.resolve(queue.listPending()[0]!.approvalId, "always");
+    await expect(selected).resolves.toBe("always");
+    const bounded = queue.request({ ...input, allowedDecisions: ["session", "deny"] });
+    await expect(queue.resolve(queue.listPending()[0]!.approvalId, "always")).rejects.toThrow(
+      /does not accept/
+    );
+    await queue.resolve(queue.listPending()[0]!.approvalId, "deny");
+    await expect(bounded).resolves.toBe("deny");
+  });
+
   it("seals the executing server platform instead of accepting requester presentation", () => {
     const { queue } = createQueue({ executionPlatform: "darwin" });
     void queue.request({

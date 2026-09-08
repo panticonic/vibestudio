@@ -84,7 +84,14 @@ export function createPermissionsService(deps: {
         const reviewingUserId = ctx.caller.subject?.userId;
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listActiveAuthorityGrants()
-          .map((grant) => savedAuthorityGrant(grant, reviewingUserId, deps.admissionProvenance));
+          .map((grant) =>
+            savedAuthorityGrant(
+              grant,
+              reviewingUserId,
+              deps.admissionProvenance,
+              deps.capabilityGrants.getAuthoritySubject(grant.subject)?.identityKey
+            )
+          );
         const credentialUse: SavedPermissionGrant[] = deps.credentialUseGrants
           .listAll()
           .map((grant) => ({
@@ -380,24 +387,18 @@ function agentBindingLabel(bindingId: string): string {
 function savedAuthorityGrant(
   grant: AuthorityGrant,
   reviewingUserId?: string,
-  admissionProvenance?: UnitAdmissionProvenanceLookup
+  admissionProvenance?: UnitAdmissionProvenanceLookup,
+  identityLabel?: string
 ): SavedPermissionGrant {
   if (!grant.id) throw new Error("Persisted authority grant has no id");
   const code = codeSubject(grant.subject);
   const origin = authorityGrantOrigin(grant, code, admissionProvenance);
-  const sessionScoped = Boolean(grant.constraints?.sessionId);
+  const duration = authorityGrantDuration(grant, identityLabel !== undefined);
   return {
     id: grant.id,
     kind: "capability",
-    callerLabel: authoritySubjectLabel(grant.subject),
-    scopeLabel:
-      grant.effect === "deny"
-        ? sessionScoped
-          ? "Blocked until you close Vibestudio"
-          : "Blocked for this version"
-        : sessionScoped
-          ? "Allowed until you close Vibestudio"
-          : "Remembered for this version",
+    callerLabel: identityLabel ?? authoritySubjectLabel(grant.subject),
+    scopeLabel: `${grant.effect === "deny" ? "Blocked" : "Allowed"} · ${duration}`,
     capability: describeCapability(grant.capability).title,
     resource: authorityResourceLabel(grant.resource),
     ...(code ? { repoPath: code.repoPath, effectiveVersion: code.effectiveVersion } : {}),
@@ -407,7 +408,7 @@ function savedAuthorityGrant(
     why: authorityGrantReason(grant),
     ...(origin ? { origin } : {}),
     approvedBy: humanizeDecisionPrincipal(grant.decidedBy ?? grant.issuedBy, reviewingUserId),
-    duration: authorityGrantDuration(grant),
+    duration,
     revokeEffect:
       grant.scope === "agent"
         ? "The next matching action asks again, and this agent's active protected work is stopped."
@@ -500,24 +501,27 @@ function authorityGrantReason(grant: AuthorityGrant): string {
   return "Allows the protected action you reviewed when it was requested.";
 }
 
-function authorityGrantDuration(grant: AuthorityGrant): string {
-  if (grant.expiresAt) return "Until the shown expiry time or until you revoke it";
-  switch (grant.scope) {
-    case "once":
-      return "For one matching action";
-    case "task":
-      return "For the current approved task";
-    case "session":
-      return "Until this session ends or you revoke it";
-    case "agent":
-      return "Until you revoke it, or after 3 months without use";
-    case "mission":
-      return "Until the automation changes, ends, or you revoke it";
-    case "version":
-      return "Until this exact installed version changes or you revoke it";
-    default:
-      return "Until you revoke it";
-  }
+function authorityGrantDuration(grant: AuthorityGrant, continuingIdentity = false): string {
+  // Display independent enforced bounds together. Neither a legacy scope label
+  // nor the presence of an expiry erases an exact requesting-code restriction.
+  const bounds: string[] = [];
+  const constraints = grant.constraints;
+  if (grant.scope === "once") bounds.push("For one matching action");
+  if (constraints?.documentId) bounds.push("For this page");
+  if (constraints?.sessionId || (grant.scope === "session" && !constraints?.documentId))
+    bounds.push("Until this session ends");
+  if (constraints?.taskAuthority || constraints?.taskRef || grant.scope === "task")
+    bounds.push("For the current approved task");
+  if (constraints?.missionSubject || grant.scope === "mission")
+    bounds.push("Until the automation changes or ends");
+  if (grant.scope === "agent") bounds.push("Expires after 3 months without use");
+  if (codeSubject(grant.subject)) bounds.push("Only for this exact reviewed version");
+  if (constraints?.providerExecutionDigest) bounds.push("Only for the approved provider build");
+  if (grant.expiresAt !== undefined) bounds.push("Until the shown expiry time");
+  if (bounds.length === 0 && continuingIdentity)
+    bounds.push("Continuing access includes future code for this identity");
+  bounds.push("Revoking this permission ends its access");
+  return bounds.join("; ");
 }
 
 /** What the acquisition coordinator can tell Permissions about a waiting request. */
@@ -576,7 +580,8 @@ function authoritySubjectLabel(subject: AuthorityGrantSubject): string {
   if (subject.startsWith("mission:")) return "This agent mission";
   if (subject.startsWith("agent:")) return "This agent";
   if (subject.startsWith("user:")) return "Your account";
-  return "Vibestudio";
+  if (subject.startsWith("host:")) return "Vibestudio";
+  return "Authority identity unavailable";
 }
 
 function authorityResourceLabel(resource: ResourceScope): string {
