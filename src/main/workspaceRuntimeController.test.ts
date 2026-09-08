@@ -140,13 +140,17 @@ function fixture(workspaceId: string, personal = false) {
     onConnectionStatusChange: vi.fn((_listener: (status: string) => void) => release),
   };
   const send = vi.fn();
+  const chromeSend = vi.fn();
   const ownPanel = { getWebContents: vi.fn(() => ({ isDestroyed: () => false, send })) };
   const window = {
     getWorkspacePanelView: vi.fn((id: string) => (id === workspaceId ? ownPanel : null)),
     attachWorkspaceServices: vi.fn(),
     detachWorkspace: vi.fn(),
     handleWebsiteNotificationAction: vi.fn(),
-    viewManager: { getViewInfo: vi.fn((): unknown => null) },
+    viewManager: {
+      getViewInfo: vi.fn((): unknown => null),
+      getHostedShellWebContents: () => ({ isDestroyed: () => false, send: chromeSend }),
+    },
   };
   const events = {
     onNotificationAction: vi.fn(async () => undefined),
@@ -192,6 +196,7 @@ function fixture(workspaceId: string, personal = false) {
     serverClient,
     window,
     send,
+    chromeSend,
     managedStop,
     release,
     directEvents,
@@ -361,7 +366,8 @@ describe("workspace runtime ownership", () => {
       expect(owner.runtime.dispatcher.hasService("desktopEvents")).toBe(true);
       await owner.runtime.recover("cold-recover");
       expect(owner.window.getWorkspacePanelView).toHaveBeenCalledWith(id);
-      expect(owner.send).toHaveBeenCalledWith("vibestudio:rpc:recovery", "cold-recover");
+      expect(owner.send).toHaveBeenCalledWith("vibestudio:rpc:recovery", "cold-recover", id);
+      expect(owner.chromeSend).toHaveBeenCalledWith("vibestudio:rpc:recovery", "cold-recover", id);
       expect(owner.watch.recover).toHaveBeenCalledOnce();
       expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledWith({
         loadFocusedView: false,

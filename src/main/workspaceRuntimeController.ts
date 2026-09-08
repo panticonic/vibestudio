@@ -207,8 +207,11 @@ export function createDesktopWorkspaceRuntime(deps: {
     if (closed || epoch !== semanticRecoveryEpoch) return;
     for (const { panelId } of controller.registry.listPanels()) {
       const contents = window.getWorkspacePanelView(workspaceId)?.getWebContents(panelId);
-      if (contents && !contents.isDestroyed()) contents.send("vibestudio:rpc:recovery", kind);
+      if (contents && !contents.isDestroyed())
+        contents.send("vibestudio:rpc:recovery", kind, workspaceId);
     }
+    const chrome = window.viewManager?.getHostedShellWebContents();
+    if (chrome && !chrome.isDestroyed()) chrome.send("vibestudio:rpc:recovery", kind, workspaceId);
     recoveryPending = false;
     publishConnectionStatus("connected");
     await deps.onRecovered?.(kind);

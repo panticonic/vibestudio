@@ -31,7 +31,10 @@ export type TransportBridge = {
   ready?: () => Promise<void>;
   send: (envelope: RpcEnvelope, signal?: AbortSignal) => Promise<void>;
   onMessage: (handler: EnvelopeHandler) => () => void;
-  onRecovery: (kind: RecoveryKind, handler: () => void | Promise<void>) => () => void;
+  onRecovery: (
+    kind: RecoveryKind,
+    handler: (workspaceId?: string) => void | Promise<void>
+  ) => () => void;
 };
 
 export interface WsTransportConfig {

@@ -41,8 +41,16 @@ export function createIpcTransport(): TransportBridge {
       return () => listeners.delete(handler);
     },
 
-    onRecovery(): () => void {
-      return () => {};
+    onRecovery(kind, handler): () => void {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        recoveredKind: string,
+        workspaceId?: string
+      ) => {
+        if (kind === recoveredKind) void handler(workspaceId);
+      };
+      ipcRenderer.on("vibestudio:rpc:recovery", listener);
+      return () => ipcRenderer.off("vibestudio:rpc:recovery", listener);
     },
   };
 }
