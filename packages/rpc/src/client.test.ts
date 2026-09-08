@@ -1185,6 +1185,37 @@ describe("createRpcClient", () => {
     expect(response.status).toBe(206);
     await expect(response.text()).resolves.toBe("streamed-bytes");
   });
+
+  it("unwraps native transport streaming for raw reads without switching to framed delivery", async () => {
+    const send = vi.fn(async () => {
+      throw new Error("This transport delivers streams through its native hook");
+    });
+    const stream = vi.fn(async () => new Response("native-body", { status: 206 }));
+    const rpc = createRpcClient({
+      selfId: "panel:raw-reader",
+      transport: { send, onMessage: () => () => {}, stream },
+    });
+    const abort = new AbortController();
+    const body = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+    const result = await rpc.streamReadable("main", "upload", [], {
+      signal: abort.signal,
+      body,
+      headTimeoutMs: 500,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "main",
+        message: expect.objectContaining({ method: "upload" }),
+      }),
+      abort.signal,
+      body,
+      500,
+      undefined
+    );
+    expect(result.status).toBe(206);
+    await expect(new Response(result.body).text()).resolves.toBe("native-body");
+  });
 });
 
 describe("createRpcClient — pending-call policy (§3.4)", () => {

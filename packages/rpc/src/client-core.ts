@@ -894,7 +894,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     // whatwg-fetch Response cannot consume a ReadableStream body). Browser and
     // Node transports can losslessly unwrap the ordinary Response path.
     if (!config.transport.streamReadable) {
-      return streamImpl(provenance, targetId, method, args, options).then((response) => {
+      return streamWithProvenance(provenance, targetId, method, args, options).then((response) => {
         if (!response.body) throw new Error("Streaming RPC response has no readable body");
         return {
           status: response.status,
