@@ -2788,6 +2788,33 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       "route-delayed-new",
       expect.any(Object),
     ]);
+
+    serverClient.call.mockClear();
+    await expect(
+      orchestrator.reportPanelPreloadFailure(panel.id, 71, "stale preload failed")
+    ).resolves.toBe(false);
+    expect(serverClient.call).not.toHaveBeenCalled();
+
+    await expect(
+      orchestrator.reportPanelPreloadFailure(panel.id, 72, "ENOENT: panelPreload.cjs")
+    ).resolves.toBe(true);
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "reportView", [
+      next.runtimeEntityId,
+      "route-delayed-new",
+      {
+        url: "",
+        loading: false,
+        boot: { kind: "unavailable" },
+        failure: {
+          reporter: "host",
+          failure: {
+            stage: "navigation",
+            code: "navigation_failed",
+            message: "Panel preload failed: ENOENT: panelPreload.cjs",
+          },
+        },
+      },
+    ]);
   });
 
   it("publishes a terminal view failure when same-slot replacement cannot load", async () => {

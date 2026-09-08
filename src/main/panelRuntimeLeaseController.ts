@@ -1308,9 +1308,27 @@ export class PanelPresentationController {
     }
   }
 
+  async reportPanelPreloadFailure(
+    panelId: string,
+    contentsId: number,
+    message: string
+  ): Promise<boolean> {
+    const lease = this.connectionBySlot.get(panelId);
+    const contents = this.deps.getPanelView()?.getWebContents(panelId) as
+      | { id?: unknown; isDestroyed?: () => boolean }
+      | null
+      | undefined;
+    if (!lease || !contents || contents.isDestroyed?.() || contents.id !== contentsId) return false;
+    return this.reportPanelMaterializationFailure(
+      panelId,
+      { runtimeEntityId: asPanelEntityId(lease.runtimeEntityId), connectionId: lease.connectionId },
+      `Panel preload failed: ${message}`
+    );
+  }
+
   private async reportPanelMaterializationFailure(
     panelId: string,
-    lease: PanelRuntimeLease,
+    lease: Pick<PanelRuntimeLease, "runtimeEntityId" | "connectionId">,
     message: string
   ): Promise<boolean> {
     const current = this.connectionBySlot.get(panelId);

@@ -81,6 +81,80 @@ describe("panelRuntimeService attempt waits", () => {
     expect(observeHostSlot).not.toHaveBeenCalled();
   });
 
+  it("does not publish a code panel route before its exact RPC session connects", async () => {
+    const { coordinator, service } = setup();
+    coordinator.setBuildState("panel:tree/a", {
+      state: "ready",
+      buildKey: "build-a",
+    });
+
+    await expect(
+      service.handler(desktopCtx, "reportView", [
+        "panel:nav-a",
+        "route-a",
+        {
+          url: "http://panel/",
+          loading: false,
+          boot: { kind: "observed", observation: { phase: "ready" } },
+        },
+      ])
+    ).resolves.toBe("reported");
+    await expect(
+      service.handler(desktopCtx, "observeSlot", ["panel:tree/a"])
+    ).resolves.toMatchObject({
+      attempt: { phase: "ready" },
+      route: { reachable: false, connectionId: "route-a" },
+    });
+
+    const beforeConnect = coordinator.observeSlotLifecycle("panel:tree/a");
+    const connected = service.handler(desktopCtx, "awaitSlot", [
+      "panel:tree/a",
+      beforeConnect.version,
+    ]);
+    coordinator.markConnected("panel:nav-a", "route-a");
+    await expect(connected).resolves.toMatchObject({
+      attempt: { phase: "ready" },
+      route: { reachable: true, connectionId: "route-a" },
+    });
+
+    const beforeDisconnect = coordinator.observeSlotLifecycle("panel:tree/a");
+    const disconnected = service.handler(desktopCtx, "awaitSlot", [
+      "panel:tree/a",
+      beforeDisconnect.version,
+    ]);
+    coordinator.markDisconnected("panel:nav-a", "route-a");
+    await expect(disconnected).resolves.toMatchObject({
+      route: { reachable: false, connectionId: "route-a" },
+    });
+  });
+
+  it("publishes an external browser route from its host observation", async () => {
+    const { coordinator, service } = setup({
+      browserSource: "browser:https://example.com",
+    });
+    coordinator.setBuildState("panel:tree/a", {
+      state: "ready",
+      buildKey: "build-a",
+    });
+
+    await expect(
+      service.handler(desktopCtx, "reportView", [
+        "panel:nav-a",
+        "route-a",
+        {
+          url: "https://example.com/",
+          loading: false,
+          boot: { kind: "unavailable" },
+        },
+      ])
+    ).resolves.toBe("reported");
+    await expect(
+      service.handler(desktopCtx, "observeSlot", ["panel:tree/a"])
+    ).resolves.toMatchObject({
+      route: { reachable: true, connectionId: "route-a" },
+    });
+  });
+
   it("returns the exact snapshot from awaitAttempt with no re-observe round trip", async () => {
     const { coordinator, service, attempt } = setup();
     const waiting = service.handler(desktopCtx, "awaitAttempt", [

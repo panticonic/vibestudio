@@ -48,6 +48,7 @@ function createHarness(
     externalHost?: string;
     gatewayServerUrl?: string;
     managedNavigationInFlight?: boolean;
+    onPreloadFailure?: (panelId: string, contentsId: number, message: string) => void;
   } = {}
 ) {
   const panelId = options.viewType === "app" ? "@workspace-apps/shell" : "panel:tree/current";
@@ -109,6 +110,8 @@ function createHarness(
     sendPanelEvent,
     openExternal,
     requestSiteCapability: vi.fn(async () => true),
+    onPreloadFailure: options.onPreloadFailure,
+    panelPreloadPath: "/panel-preload.js",
     appPreloadPath: "/app-preload.js",
   } as never);
 
@@ -125,6 +128,19 @@ function createHarness(
 }
 
 describe("PanelView plain panel links", () => {
+  it("reports a panel preload failure from the exact hosted document", async () => {
+    const onPreloadFailure = vi.fn();
+    const { panelId, panelView, webContents } = createHarness({ onPreloadFailure });
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    webContents.emit("preload-error", {}, "/other-preload.js", new Error("other failed"));
+    expect(onPreloadFailure).not.toHaveBeenCalled();
+
+    webContents.emit("preload-error", {}, "/panel-preload.js", new Error("ENOENT"));
+    expect(onPreloadFailure).toHaveBeenCalledOnce();
+    expect(onPreloadFailure).toHaveBeenCalledWith(panelId, 10, "ENOENT");
+  });
+
   it("materializes a workspace panel at DOM readiness without waiting for all subresources", async () => {
     const { panelId, panelView, viewManager, webContents } = createHarness();
     let finishNavigation!: () => void;

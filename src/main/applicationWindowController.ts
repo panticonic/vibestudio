@@ -23,6 +23,7 @@ import {
 import { setMenuEventService, setMenuViewManager, setupMenu } from "./menu.js";
 import { getResourcesPath } from "./paths.js";
 import { assertPresent } from "../lintHelpers";
+import { recordPanelInitializationFailure } from "./panelInitializationFailure.js";
 
 const log = createDevLogger("ApplicationWindowController");
 
@@ -384,6 +385,39 @@ export class ApplicationWindowController {
               error: error instanceof Error ? error.message : String(error),
             });
           });
+        },
+        onPreloadFailure: (panelId, contentsId, message) => {
+          if (!services.panelRegistry.getPanel(panelId)) {
+            const currentContents = nativeViews.getWebContents(panelId);
+            if (
+              !currentContents ||
+              currentContents.isDestroyed() ||
+              currentContents.id !== contentsId
+            ) {
+              return;
+            }
+            recordPanelInitializationFailure(
+              `hosted-app-preload:${panelId}`,
+              new Error(message),
+              "host-launch"
+            );
+            services.eventService.emit("notification:show", {
+              id: `app-preload-error:${panelId}:${Date.now()}`,
+              type: "error",
+              title: "App failed to start",
+              message,
+              ttl: 10_000,
+            });
+            return;
+          }
+          void services.panelOrchestrator
+            .reportPanelPreloadFailure(panelId, contentsId, message)
+            .catch((error) => {
+              log.warn("Failed to publish panel preload failure", {
+                panelId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
         },
         onPanelDocumentCommitted: (panelId, url) => {
           services.panelOrchestrator.onExternalDocumentCommitted(panelId, url);

@@ -1283,6 +1283,14 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.runtime.reportPanelViewTransition(panelId);
   }
 
+  reportPanelPreloadFailure(
+    panelId: string,
+    contentsId: number,
+    message: string
+  ): Promise<boolean> {
+    return this.runtime.reportPanelPreloadFailure(panelId, contentsId, message);
+  }
+
   async readPanelProjection(panelId: string): Promise<Panel | null> {
     let panel = this.registry.getPanel(panelId);
 

@@ -123,6 +123,7 @@ export class PanelView implements PanelViewLike {
   ) => Promise<boolean>;
   private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
   private onPanelViewTransition?: (panelId: string) => void;
+  private onPreloadFailure?: (viewId: string, contentsId: number, message: string) => void;
   private onPanelDocumentCommitted?: (panelId: string, url: string) => void;
   private formFillManager?: FormFillManagerLike;
   private browserFaviconObserver?: BrowserFaviconObserverLike;
@@ -164,6 +165,7 @@ export class PanelView implements PanelViewLike {
     requestSiteCapability(contents: Electron.WebContents, capability: "popups"): Promise<boolean>;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
     onPanelViewTransition?: (panelId: string) => void;
+    onPreloadFailure?: (viewId: string, contentsId: number, message: string) => void;
     onPanelDocumentCommitted?: (panelId: string, url: string) => void;
     formFillManager?: FormFillManagerLike;
     browserFaviconObserver?: BrowserFaviconObserverLike;
@@ -189,6 +191,7 @@ export class PanelView implements PanelViewLike {
     this.requestSiteCapability = deps.requestSiteCapability;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
     this.onPanelViewTransition = deps.onPanelViewTransition;
+    this.onPreloadFailure = deps.onPreloadFailure;
     this.onPanelDocumentCommitted = deps.onPanelDocumentCommitted;
     this.formFillManager = deps.formFillManager;
     this.browserFaviconObserver = deps.browserFaviconObserver;
@@ -360,7 +363,7 @@ export class PanelView implements PanelViewLike {
       codeIdentity: identity,
     });
 
-    this.setupBrowserStateTracking(panelId, view.webContents);
+    this.setupBrowserStateTracking(panelId, view.webContents, this.panelPreloadPath ?? null);
 
     // Register immediately so CDP access checks pass before dom-ready.
     // Root panels are CDP targets too; parentage is no longer an auth input.
@@ -446,7 +449,7 @@ export class PanelView implements PanelViewLike {
       codeIdentity: identity,
     });
 
-    this.setupBrowserStateTracking(appId, view.webContents);
+    this.setupBrowserStateTracking(appId, view.webContents, this.appPreloadPath);
     this.setupLinkInterception(appId, view.webContents);
     await this.viewManager.navigateView(appId, url);
   }
@@ -558,7 +561,11 @@ export class PanelView implements PanelViewLike {
       injectHostThemeVariables: false,
     });
 
-    this.setupBrowserStateTracking(panelId, view.webContents);
+    this.setupBrowserStateTracking(
+      panelId,
+      view.webContents,
+      this.browserPreloadPath ?? this.autofillPreloadPath ?? null
+    );
 
     // Register immediately so CDP access checks pass before dom-ready.
     // Root panels are CDP targets too; parentage is no longer an auth input.
@@ -605,7 +612,11 @@ export class PanelView implements PanelViewLike {
 
   // ==== Browser state tracking ==============================================
 
-  private setupBrowserStateTracking(panelId: string, contents: Electron.WebContents): void {
+  private setupBrowserStateTracking(
+    panelId: string,
+    contents: Electron.WebContents,
+    essentialPreloadPath: string | null
+  ): void {
     let pendingState: Partial<PanelNavigationState> = {};
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let transientMainFrameLoadRetries = 0;
@@ -720,6 +731,10 @@ export class PanelView implements PanelViewLike {
       renderProcessGone: (_e: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
         console.warn(`[PanelView] Panel ${panelId} render process gone: ${details.reason}`);
       },
+      preloadError: (_event: Electron.Event, preloadPath: string, error: Error) => {
+        if (!essentialPreloadPath || preloadPath !== essentialPreloadPath) return;
+        this.onPreloadFailure?.(panelId, contents.id, error.message);
+      },
       unresponsive: () => {
         console.warn(`[PanelView] Panel ${panelId} became unresponsive`);
         this.onPanelResponsivenessChanged?.(panelId, false);
@@ -768,6 +783,7 @@ export class PanelView implements PanelViewLike {
     contents.on("did-navigate-in-page", handlers.didNavigateInPage);
     contents.on("did-fail-load", handlers.didFailLoad);
     contents.on("render-process-gone", handlers.renderProcessGone);
+    contents.on("preload-error", handlers.preloadError);
     contents.on("unresponsive", handlers.unresponsive);
     contents.on("responsive", handlers.responsive);
     contents.on("did-start-loading", handlers.didStartLoading);
@@ -787,6 +803,7 @@ export class PanelView implements PanelViewLike {
         contents.off("did-navigate-in-page", handlers.didNavigateInPage);
         contents.off("did-fail-load", handlers.didFailLoad);
         contents.off("render-process-gone", handlers.renderProcessGone);
+        contents.off("preload-error", handlers.preloadError);
         contents.off("unresponsive", handlers.unresponsive);
         contents.off("responsive", handlers.responsive);
         contents.off("did-start-loading", handlers.didStartLoading);

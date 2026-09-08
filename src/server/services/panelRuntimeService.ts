@@ -277,7 +277,12 @@ export function createPanelRuntimeService(deps: {
         assertOwnsClientSession(ctx.caller.runtime.id, lease.clientSessionId);
         const normalized = await normalizeHostObservation(lease.slotId, observation);
         if (!normalized) return "stale" as const;
-        return deps.coordinator.reportView(panelId, connectionId, normalized, "host")
+        const source = await deps.browserSourceForSlot?.(lease.slotId);
+        const evidence =
+          source && isBrowserPanelSource(source)
+            ? ({ principal: "host", route: "hosted-external" } as const)
+            : ({ principal: "host", route: "presentation-only" } as const);
+        return deps.coordinator.reportView(panelId, connectionId, normalized, evidence)
           ? ("reported" as const)
           : ("stale" as const);
       },
@@ -293,12 +298,9 @@ export function createPanelRuntimeService(deps: {
         if (!lease || !ctx.connectionId || ctx.connectionId !== lease.connectionId) {
           return "stale" as const;
         }
-        return deps.coordinator.reportView(
-          runtimeEntityId,
-          ctx.connectionId,
-          observation,
-          "renderer"
-        )
+        return deps.coordinator.reportView(runtimeEntityId, ctx.connectionId, observation, {
+          principal: "renderer",
+        })
           ? ("reported" as const)
           : ("stale" as const);
       },

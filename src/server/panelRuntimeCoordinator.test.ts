@@ -537,7 +537,7 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
           observation: { phase: "failed", message: "no cfg", failureStage: "config" },
         },
       },
-      "renderer"
+      { principal: "renderer" }
     );
     expect(
       coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
@@ -565,7 +565,7 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
             failure: { stage: "navigation", code: "navigation_failed", message: "load failed" },
           },
         },
-        "host"
+        { principal: "host", route: "presentation-only" }
       )
     ).toBe(true);
     expect(
@@ -594,7 +594,7 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
           failure: { stage: "renderer-crash", code: "render_crashed" },
         },
       },
-      "renderer"
+      { principal: "renderer" }
     );
     expect(
       coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })

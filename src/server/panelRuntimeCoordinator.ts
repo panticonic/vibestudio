@@ -439,7 +439,12 @@ export class PanelRuntimeCoordinator {
         failure: PanelAttemptFailure;
       };
     },
-    deliveryPrincipal: "renderer" | "host" = "host"
+    evidence:
+      | { principal: "renderer" }
+      | { principal: "host"; route: "hosted-external" | "presentation-only" } = {
+      principal: "host",
+      route: "presentation-only",
+    }
   ): boolean {
     const entityId = asPanelEntityId(runtimeEntityId);
     const lease = this.leases.get(entityId);
@@ -511,12 +516,14 @@ export class PanelRuntimeCoordinator {
     if (observedBoot?.buildKey) {
       this.buildStates.set(lease.slotId, { state: "ready", buildKey: observedBoot.buildKey });
     }
-    this.routeReachability.set(connectionId, true);
+    if (evidence.principal === "renderer" || evidence.route === "hosted-external") {
+      this.routeReachability.set(connectionId, true);
+    }
     this.routeViews.set(attempt.attemptId, nextPage);
     // A host may originate its own typed failure (navigation, renderer crash)
     // alongside the observed page state. The renderer principal cannot: its
     // failures travel inside the boot record it owns.
-    if (input.failure && deliveryPrincipal === "host") {
+    if (input.failure && evidence.principal === "host") {
       const reported = this.reportAttemptPhase(attempt.attemptId, {
         phase: "failed",
         reporter: input.failure.reporter,
@@ -548,7 +555,7 @@ export class PanelRuntimeCoordinator {
           : undefined;
       advanced = this.reportAttemptPhase(attempt.attemptId, {
         phase: observedBoot.phase,
-        reporter: deliveryPrincipal,
+        reporter: evidence.principal,
         ...(failure ? { failure } : {}),
         ...(observedBoot.buildKey ? { buildKey: observedBoot.buildKey } : {}),
         ...(observedBoot.effectiveVersion
@@ -556,12 +563,13 @@ export class PanelRuntimeCoordinator {
           : {}),
       });
     }
-    if (!advanced && (pageChanged || buildChanged || !wasReachable)) {
+    const isReachable = this.routeReachability.get(connectionId) === true;
+    if (!advanced && (pageChanged || buildChanged || wasReachable !== isReachable)) {
       this.nextSlotObservationVersion(lease.slotId);
       this.emitSlotObservationChanged(lease.slotId);
     }
     const current = this.attempts.get(attempt.attemptId);
-    if (current?.phase === "pending" && this.hasReachableRoute(current)) {
+    if (current?.phase === "pending" && this.hasPresentedView(current)) {
       // A concrete host view means assignment and materialization have begun.
       // From this point a missing loader boot record is itself observable
       // no-progress and must converge on a typed terminal outcome. Previously
@@ -1288,7 +1296,7 @@ export class PanelRuntimeCoordinator {
       ...(report.stopReason ? { stopReason: report.stopReason } : {}),
     };
     this.attempts.set(next.attemptId, next);
-    if ((next.phase === "loading" || next.phase === "booting") && this.hasReachableRoute(next)) {
+    if ((next.phase === "loading" || next.phase === "booting") && this.hasPresentedView(next)) {
       this.ensureSupervision(next);
     } else if (next.phase === "failed" || next.phase === "stopped" || next.phase === "ready") {
       this.stopSupervision(next.attemptId);
@@ -1355,12 +1363,12 @@ export class PanelRuntimeCoordinator {
     this.startSupervision(attempt);
   }
 
-  private hasReachableRoute(attempt: PanelAttempt): boolean {
+  private hasPresentedView(attempt: PanelAttempt): boolean {
     const lease = this.leaseForSlot(asPanelSlotId(attempt.slotId));
     return Boolean(
       lease &&
       this.routeBindings.get(lease.connectionId) === attempt.attemptId &&
-      this.routeReachability.get(lease.connectionId) === true
+      this.routeViews.has(attempt.attemptId)
     );
   }
 
@@ -1473,7 +1481,10 @@ export class PanelRuntimeCoordinator {
         }
         const lease = this.leaseForSlot(asPanelSlotId(attempt.slotId));
         if (report && lease && this.routeBindings.get(lease.connectionId) === attemptId) {
-          this.reportView(attempt.runtimeEntityId, lease.connectionId, report, "host");
+          this.reportView(attempt.runtimeEntityId, lease.connectionId, report, {
+            principal: "host",
+            route: "presentation-only",
+          });
         }
       } catch (error) {
         this.deps.onError?.(error, `probe panel attempt ${attemptId}`);
