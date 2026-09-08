@@ -47,14 +47,19 @@ mirror.
 
 ## Remaining review gaps
 
-The ordinary conversation storage/access API and its website-facing delivery
-boundary still need a separate bounded integration. Native mobile/device
+The ordinary conversation storage/access API now has a bounded portable client
+and explicit channel replay/send/subscribe eligibility. Declaration tests cover
+that boundary; a real connected website channel exchange remains unverified.
+The shared scaffold uses that client for durable history, message send, and cancellable live delivery.
+Model launch and credential-backed inference acceptance remain open: this slice
+does not claim that a website can start a model turn or that credential review
+has been exercised through the shared application. Native mobile/device
 acceptance, full callback delivery acceptance, and end-to-end website creation
 receipt reconciliation remain outside this policy-only review. The
-workspace-creation approval prompt also needs a bounded presentation follow-up:
-`createWorkspace` currently presents generic "Create a workspace" copy and
-derives its target from `operationId`, so the user-facing card does not yet
-identify the requested name or exact root-template pin. The broad
+workspace-creation approval now identifies the requested workspace name and supplied
+exact template URL/ref/commit/snapshot through a shared prepared authority resolver
+(Host `ba985cd36`). A request without a pin explicitly identifies the host-selected
+default instead. The operation ID remains the durable grant/receipt key. The broad
 userland receiver census has explicit annotations, but each receiver's
 method-level effect review should continue as those APIs become public.
 

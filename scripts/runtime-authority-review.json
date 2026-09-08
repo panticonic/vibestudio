@@ -852,7 +852,7 @@
     },
     "host:hubControl.createWorkspace": {
       "review": "durable-owner-scoped-workspace-creation",
-      "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace. The shared prepared resolver seals the parsed workspace name and exact template coordinates into the same operation-scoped review; it retains the existing workspaces.create principal requirement and gated tier."
+      "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace. The transport leaf is open so it cannot create a second generic prompt; the shared prepared resolver seals the parsed workspace name and exact template coordinates into the single gated workspaces.create leaf with the existing principal requirement."
     },
     "host:hubControl.workspaceCreationReceipt": {
       "review": "durable-owner-scoped-workspace-creation",

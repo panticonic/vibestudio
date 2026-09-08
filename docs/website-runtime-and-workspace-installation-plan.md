@@ -34,6 +34,21 @@ and eval receiver-policy guidance. Relative links and current API signatures wer
 
 Further implemented slices (2026-09-08):
 
+- Host `ba985cd36` seals the workspace name and supplied exact template details into
+  one prepared creation approval shared by hub and workspace callers. An unpinned
+  request explicitly names the host-selected default. Host `08578e09a` verifies the
+  visible name/source/commit in native consent. The native installation, reload,
+  reconnect and receipt sequence passes, along with 79 focused tests and commit checks.
+
+- Base `fe03585` and `017e081` add a portable conversation client for existing
+  host-resolved channel targets: history, send, and cancellable NDJSON subscription.
+  Panels and workers export the same client used by the website scaffold. Stream
+  framing/cancellation and channel eligibility declarations have focused tests;
+  the generated static scaffold passes strict type checking and builds independently.
+  Workspace authoring skills document connection, grants and ordinary workspace storage.
+  This is channel plumbing: connected website exchange, model launch and
+  credential-backed inference acceptance remain outstanding.
+
 - Desktop native document attestation, explicit connection approval, same-document
   reconnection with fresh execution identity, and navigation/disconnect retirement.
   Host `059d0a376`; 29 tests cover native origin/frame evidence, stale challenges,
