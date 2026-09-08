@@ -42,6 +42,8 @@ export interface CommandOverlaySnapshot {
    * conversation. A message here has been through the channel.
    */
   transcript: string[];
+  /** The visible conversation/command failure, if an operation terminated. */
+  error: string | null;
   /** Whole-surface text, so a test can assert on an error banner verbatim. */
   text: string;
 }
@@ -161,7 +163,7 @@ export async function probeCommandOverlay(
       const SNAPSHOT = `(() => {
         if (!globalThis.__vibestudioContentOverlay) return null;
         const card = document.querySelector(".quickfire-card");
-        if (!card) return { open: false, activeMode: null, rows: [], conversation: false, transcript: [], text: "" };
+        if (!card) return { open: false, activeMode: null, rows: [], conversation: false, transcript: [], error: null, text: "" };
         const active = card.querySelector(".quickfire-mode[aria-pressed='true']");
         return {
           open: true,
@@ -172,6 +174,7 @@ export async function probeCommandOverlay(
             '[data-testid="quickfire-transcript"] [data-testid^="quickfire-card-"]'
           ))
             .map((message) => message.textContent.trim()),
+          error: card.querySelector('[data-testid="quickfire-error"], .quickfire-error')?.textContent?.trim() || null,
           text: card.textContent ?? "",
         };
       })()`;

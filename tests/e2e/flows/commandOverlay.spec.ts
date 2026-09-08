@@ -196,15 +196,30 @@ test.describe("command overlay", () => {
     // delivery — the exact chain that failed with 403s, a 500, and a closure
     // missing its plumbing.
     await expect
-      .poll(async () => (await probeCommandOverlay(testApp))?.transcript ?? [], {
-        timeout: 300_000,
-        intervals: [1000, 2000, 5000],
-      })
-      .toEqual(
-        expect.arrayContaining([expect.stringContaining("why is this panel laid out this way?")])
-      );
+      .poll(
+        async () => {
+          const conversationSnapshot = await probeCommandOverlay(testApp);
+          return Boolean(
+            conversationSnapshot?.error ||
+            conversationSnapshot?.transcript.some((message) =>
+              message.includes("why is this panel laid out this way?")
+            )
+          );
+        },
+        {
+          timeout: 300_000,
+          intervals: [1000, 2000, 5000],
+        }
+      )
+      .toBe(true);
 
     const snapshot = await probeCommandOverlay(testApp);
+    // A visible terminal error should fail with its real reason immediately,
+    // rather than waiting five minutes for a transcript that cannot arrive.
+    expect(snapshot?.error).toBeNull();
+    expect(snapshot?.transcript).toEqual(
+      expect.arrayContaining([expect.stringContaining("why is this panel laid out this way?")])
+    );
     expect(snapshot?.conversation).toBe(true);
     expect(snapshot?.text).not.toMatch(/no authority branch admits/i);
     expect(snapshot?.text).not.toMatch(/DO dispatch failed/i);
@@ -236,6 +251,22 @@ test.describe("command overlay", () => {
         intervals: [250, 500, 1000],
       })
       .toBe(true);
+
+    // Reopening the conversation chrome alone is insufficient: a replacement
+    // subscription must restore its transcript, not only its conversation ID.
+    await expect
+      .poll(
+        async () => {
+          const resumed = await probeCommandOverlay(testApp);
+          if (resumed?.error) return resumed.error;
+          return resumed?.transcript.some((message) =>
+            message.includes("why is this panel laid out this way?")
+          );
+        },
+        { timeout: 30_000, intervals: [250, 500, 1000] }
+      )
+      .toBe(true);
+    expect((await probeCommandOverlay(testApp))?.error).toBeNull();
   });
 
   test("promotes the same conversation into a ready chat panel", async () => {
