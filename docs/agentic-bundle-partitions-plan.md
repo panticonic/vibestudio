@@ -2,16 +2,70 @@
 
 > Isolation planning (2026-09-06): [Native execution and isolation](isolation-plan.md) is canonical for platform execution, trust assumptions and release acceptance. This document owns product and RPC protocol requirements, including workspace ownership, Base extraction, template simplification and website behavior. Its application authority rules do not establish stronger native containment than the platform contract.
 
-Status: implementation in progress, 2026-09-07. The user accepted rules 1–5 below.
+Status: implementation in progress, 2026-09-08. The user accepted rules 1–5 below.
 The full runtime, cross-workspace integration, client UX, and verification work is
 not complete. The existing filename remains so hand-off links continue to work.
+
+## Current workspace-source decision (2026-09-08)
+
+The user approved removing the template catalog/registry subsystem, with no
+backward compatibility. This decision supersedes earlier catalog revision,
+cache, promotion and onboarding catalog requirements in the historical progress
+entries below. Service discovery and the agentic test catalog are unrelated and
+remain necessary.
+
+**Add workspace** opens creation directly; existing workspaces remain in the
+sidebar. Source choices are a host folder or a Git URL, with ordinary example
+source addresses where useful. Browser panels can offer an Add workspace link
+through the existing shell-surface protocol with a `source` URL parameter. Links
+prefill review; they do not create or approve a workspace. Desktop and mobile
+use the same source semantics. A host-picked folder is checkpointed from its
+visible bytes and acquired through the existing exact-source owner, including
+uncommitted files; it must not silently fall back to cloning remote Git.
+
+Root Base commit `a40f14d` implements the direct UI, source-session ownership,
+mobile URL review, native picker handoff, and template skill migration. Base
+`5b82d4d` removes onboarding catalog state/routing; `7c1d3dc` removes remaining
+active catalog guidance and updates RPC examples with explicit website policy.
+Current focused evidence: 18 desktop/folder review tests, 10 mobile creation
+tests, 28 Host protocol/panel-link tests, and all three Base type projections.
+The folder-source Host owner has 74 focused passing tests. Native folder run
+`20260908T095652908Z-3153492-3a1f0a14` passed the actual picker, dirty-source
+checkpoint, hub registration, exact review and created panel flow, with owned
+runtime cleanup confirmed. Browser-link/onboarding native replay and the updated
+creation-card visual acceptance remain outstanding.
+
+Base `cfe46e9` documents the shared creation workflow and removes stale skill
+routing. The latest UI uses selectable **Start fresh** (configured Base),
+**Folder**, and **Git URL** cards; desktop offers matching secret-free connected
+account summaries instead of a raw credential-name field. Desktop focused tests
+18/18, mobile tests 10/10, and all three Base type projections pass. The UI was independently reviewed and committed as Base `9789427`. Native
+folder replay `20260908T100402915Z-3167632-facba606` passes with the new controls;
+root inspected its clear post-picker review screenshot. Source-launch/candidate
+ownership is still being simplified before complete native acceptance.
+
+Base `711c456` repairs four additional multiline worker RPC documentation examples
+that omitted mandatory website decisions. A new Host test validates all fenced
+receiver declarations across the actual skills through the production build
+parser; it passes and has been independently reviewed.
+
+The broad agentic slate recorded 51 distinct tests. Four initial nonpasses need
+resolution: binary input, a retired catalog test to replace, worker SQL with stale
+RPC documentation, and an atomic panel/store fixture missing an explicit website
+decision. Fresh exact reruns are active; this is not yet a passing 50-test gate.
+
+Remote template source publication remains unfinished: old released source
+revisions still contain `meta/template.yml`. Removing the registry does not
+publish the migrated source repositories. Validate and publish the current
+standalone sources before claiming remote URL creation works end to end.
 
 Latest regression audit (September 7): evaluate failures against the user's working
 workflow, then inspect every caller of the owning mechanism. A successful build or
 an agent's completion message does not prove that a panel can use its backing service.
-The current catalog has no scenario that jointly creates a panel, its store and service
-declaration, publishes them, and drives a persistent UI effect without unexpected
-approval. Add that exact acceptance case; separate service and app-building tests do
+The catalog now includes `atomic-panel-store-install-clearance`, which jointly creates
+a panel, its store and service declaration, publishes them, and drives a persistent UI
+effect without unexpected approval. The scenario has run, but its final publication
+and store-UI verdict remains outstanding; separate service and app-building tests do
 not close this gap. The reported task-board panel contains the exact declared store
 request. The owning defect was confirmed: candidate publication used the live capability
 presentation resolver, which could not describe a service introduced by the same
@@ -20,7 +74,7 @@ service facts through review rendering and grant issuance, including direct requ
 without a protocol. Missing dynamic services remain explicit negative facts; actual
 product services come from the generated builtin catalog. The UI-to-grant regression
 passes (18 tests), as does the subsequent candidate classification coverage (52).
-The atomic generated-app acceptance case remains required.
+A passing atomic generated-app acceptance run remains required.
 
 Regression reviews must distinguish declarations, granted authority, and observed
 effects. The generated-app harness must inspect the actual installed version and
@@ -84,7 +138,8 @@ verified. Directory failures exposed missing discoverability of scoped runtime
 filesystem operations. The remove scenario asks only for a temporary tree; the agent
 invented an OS `/tmp` path after reading terminal guidance. Repair that owning guidance
 and preserve the scoped filesystem validator, rather than granting native shell access.
-The sweep's owned instance remains active; final cleanup is required.
+The sweep's owned instance has been stopped and cleaned up. Fresh runs must provision
+an owned instance from the current Host and Base sources.
 
 A wider notification audit found that the multi-workspace refactor retained the old
 Personal-only bridge lifecycle. Every browser page exposes the notification API, but
@@ -129,26 +184,20 @@ errors and separately observe challenge, queued request and visible card; a stri
 containing `approval-required` is not evidence that the approval UI received a request.
 
 That distinction exposed a product defect, not only a harness defect: the Electron
-main dispatcher installs an authority resolver without an acquirer. Its fallback
-`EACQUIRE` explicitly carries `pending: false`, so no request exists for the shared
-queue to display. The real workspace-members UI uses this same local boundary.
-Repair acquisition through the existing coordinator and preserve hub-side enforcement;
-do not synthesize a test approval or add another grant store. Audit all gated methods
-at this dispatcher, and prove the request reaches the System review UI before approving
-and completing the original action. This fix and native acceptance remain outstanding.
+main dispatcher previously resolved authority without acquiring it, returning
+`EACQUIRE` with `pending: false`. Canonical acquisition and explicit native UI owner
+routing now use the existing coordinator, approval queue and grant store; Host
+`60cd127e7` covers native UI session ownership. This does not establish acceptance
+for every gated main-local method. Native tests must still prove that the request
+reaches the review UI and the original operation completes after approval.
 
 The improved GC diagnostics exposed another retained integrated-workspace assumption:
-every workspace's mandatory `development-run` root provider calls the optional
-`vibestudio.development.v1` service, now distributed only with System. The provider
-was introduced by the earlier userland-service cutover (`f59064794`); the workspace
-split exposed its assumption rather than creating the retention mechanism. Personal
-and ordinary workspaces consequently refuse collection. Collection remains fail-closed,
-so this evidence shows blocked reclamation, not deletion of retained data. The repair
-must derive emptiness from the actual run owner, including persisted runs after restart
-or service removal. Returning no roots merely because the current service declaration
-is absent would introduce a data-loss bug. Audit the other mandatory providers and
-optional-service startup bindings under the same ownership rule; this repair remains
-open pending a coherent retained-run ownership design.
+the mandatory development-run root census depended on an optional service distributed
+only with System. Host `b9d921d75` replaces that dependency with durable native run
+markers and publication-journal ownership. Artifacts are reserved before asynchronous
+owner writes; migration, publication and retirement serialize around the same owner.
+An empty workspace now has an authoritative empty census without the optional service.
+Collection previously failed closed; there is no evidence that retained data was deleted.
 
 The sibling retention audit also found that runtime entities and panel history
 resolved only the current metadata for a build key, ignoring their recorded exact
@@ -654,38 +703,38 @@ acceptance evidence; fresh pairing does not establish them.
 
 Implementation is recorded in targeted local commits; nothing has been published:
 
-| Checkout | Commits | Scope |
-| --- | --- | --- |
-| Host | `f5286e222`, `2c80d8dc0` | Native build containment, ownership/identity, standalone bootstrap and authority. |
-| Host | `b445eda44`, `18c72ed69` | Desktop and mobile native clients. |
-| Host | `15b8decc5` | Request lifecycle and reproducible native cancellation repair inputs; production binding unchanged. |
-| Host | `40e4c054b`, `7113aefc8`, `8a4641d52` | Exact private-workspace smoke label, native QUIC path diagnostics and current mobile readiness detection. |
-| Host | `6555a57`, `b8bcfc93f`, `367149dca` | Shared streamed gateway contract, authoritative lease outcome versions and verified native view authority. |
-| Host | `57657347d`, `ffd8e0c70` | One native IPC stream listener with independent response lifetimes; native pairing smoke with settled workspace focus and complete cleanup. |
-| Host | `3dfa1f2f2`, `4c6bd9484` | Shared approval selection, exact pending source reviews, account-only development startup, durable initial panels, viewer-bound panel grants and reconnect fixes. |
-| Host | `179bdcf73` | Canonical panel IDs for distribution seeds, verified through real runtime lease acquisition. |
-| Host | `4fee76409`, `257594f01` | Common desktop workspace runtime, scoped events and native ownership, with document-owned website notifications. |
-| Host | `01cd923ac`, `f3d00c40d` | Preserve typed connection loss across carriers; capture exact runtime owners for native navigation, readiness, attention and the shared desktop test API. |
-| Host | `8b1f26ed7` | Restore automatic Personal onboarding requirements in existing template, desktop startup and mobile smoke tests; derive exact per-workspace fixtures and retain separate New Panel coverage. Desktop automatic startup is verified; Android and remaining recovery journeys are outstanding. |
-| Host | `ed5af7f93` | Canonical Iroh close error identity and strict visible-Personal onboarding screenshot assertion; native replay outstanding. |
-| Host | `6004aac5d`, `f03136c0c`, `f9d7611ea`, `070dabc7d` | Retain existing workspace-owned E2E journeys, align native test actions with admitted chrome, and preserve interactive identity in panel authority. |
-| Base | `1461b9a`, `391cc98` | Standalone source inventories, retained source integration and System-test ownership. |
-| Base | `0d801e2`, `731f20f`, `08ecf0e` | Desktop and mobile workspace UI, including persistent mobile Settings navigation. |
-| Base | `c572456`, `5dbcd61` | Workspace-owned desktop imagery/focus and mobile retained-view lease lifetime. |
-| Base | `c88bc3b` | Shared approval presentation and visible notifications across workspaces, compact desktop navigation, full panel viewport, and server-owned initial panel consumption. |
-| Base | `faf70e2` | Workspace-owned command execution and connected-session effects on desktop and mobile. |
-| Base | `cfe498d`, `23cd6cd`, `6c6c7b0` | Restored Personal onboarding and its local setup dependencies; real opening-tool execution in deterministic E2E; shared client recovery ownership and scoped native navigation. |
-| Base | `4a8d3d6`, `1a88c51` | Share hydrated model history and advertised schemas with deterministic inference; existing automatic-onboarding E2E passes with the rendered setup overview. |
-| Base | `3da9db9`, `4d02f94`, `b571799` | Keep toast actions clear of navigation; preserve import error identity and deliver the existing panel recovery signal on mobile. Native replay outstanding. |
-| Base | `de377ae`, `cdaf3f1`, `e73496f` | Mobile app-info contract and inline-source recovery on channel reconnection; native replay outstanding. |
-| Base | `7746210`, `946c56d` | Explain separate workspace creation in onboarding and include local Help in Base and Personal. |
-| Host / Base | `0322ca4ed` / `6bfd508` | Website approval requester identity from verified origin and native globe presentation. |
-| Examples / Google | `662dc22` / `30e8d16` | Complete standalone source snapshots. |
-| News / Spectrolite | `74200f3` / `2b48cc2` | Complete standalone source snapshots; unrelated local edits preserved. |
+| Checkout           | Commits                                            | Scope                                                                                                                                                                                                                                                                                        |
+| ------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host               | `f5286e222`, `2c80d8dc0`                           | Native build containment, ownership/identity, standalone bootstrap and authority.                                                                                                                                                                                                            |
+| Host               | `b445eda44`, `18c72ed69`                           | Desktop and mobile native clients.                                                                                                                                                                                                                                                           |
+| Host               | `15b8decc5`                                        | Request lifecycle and reproducible native cancellation repair inputs; production binding unchanged.                                                                                                                                                                                          |
+| Host               | `40e4c054b`, `7113aefc8`, `8a4641d52`              | Exact private-workspace smoke label, native QUIC path diagnostics and current mobile readiness detection.                                                                                                                                                                                    |
+| Host               | `6555a57`, `b8bcfc93f`, `367149dca`                | Shared streamed gateway contract, authoritative lease outcome versions and verified native view authority.                                                                                                                                                                                   |
+| Host               | `57657347d`, `ffd8e0c70`                           | One native IPC stream listener with independent response lifetimes; native pairing smoke with settled workspace focus and complete cleanup.                                                                                                                                                  |
+| Host               | `3dfa1f2f2`, `4c6bd9484`                           | Shared approval selection, exact pending source reviews, account-only development startup, durable initial panels, viewer-bound panel grants and reconnect fixes.                                                                                                                            |
+| Host               | `179bdcf73`                                        | Canonical panel IDs for distribution seeds, verified through real runtime lease acquisition.                                                                                                                                                                                                 |
+| Host               | `4fee76409`, `257594f01`                           | Common desktop workspace runtime, scoped events and native ownership, with document-owned website notifications.                                                                                                                                                                             |
+| Host               | `01cd923ac`, `f3d00c40d`                           | Preserve typed connection loss across carriers; capture exact runtime owners for native navigation, readiness, attention and the shared desktop test API.                                                                                                                                    |
+| Host               | `8b1f26ed7`                                        | Restore automatic Personal onboarding requirements in existing template, desktop startup and mobile smoke tests; derive exact per-workspace fixtures and retain separate New Panel coverage. Desktop automatic startup is verified; Android and remaining recovery journeys are outstanding. |
+| Host               | `ed5af7f93`                                        | Canonical Iroh close error identity and strict visible-Personal onboarding screenshot assertion; native replay outstanding.                                                                                                                                                                  |
+| Host               | `6004aac5d`, `f03136c0c`, `f9d7611ea`, `070dabc7d` | Retain existing workspace-owned E2E journeys, align native test actions with admitted chrome, and preserve interactive identity in panel authority.                                                                                                                                          |
+| Base               | `1461b9a`, `391cc98`                               | Standalone source inventories, retained source integration and System-test ownership.                                                                                                                                                                                                        |
+| Base               | `0d801e2`, `731f20f`, `08ecf0e`                    | Desktop and mobile workspace UI, including persistent mobile Settings navigation.                                                                                                                                                                                                            |
+| Base               | `c572456`, `5dbcd61`                               | Workspace-owned desktop imagery/focus and mobile retained-view lease lifetime.                                                                                                                                                                                                               |
+| Base               | `c88bc3b`                                          | Shared approval presentation and visible notifications across workspaces, compact desktop navigation, full panel viewport, and server-owned initial panel consumption.                                                                                                                       |
+| Base               | `faf70e2`                                          | Workspace-owned command execution and connected-session effects on desktop and mobile.                                                                                                                                                                                                       |
+| Base               | `cfe498d`, `23cd6cd`, `6c6c7b0`                    | Restored Personal onboarding and its local setup dependencies; real opening-tool execution in deterministic E2E; shared client recovery ownership and scoped native navigation.                                                                                                              |
+| Base               | `4a8d3d6`, `1a88c51`                               | Share hydrated model history and advertised schemas with deterministic inference; existing automatic-onboarding E2E passes with the rendered setup overview.                                                                                                                                 |
+| Base               | `3da9db9`, `4d02f94`, `b571799`                    | Keep toast actions clear of navigation; preserve import error identity and deliver the existing panel recovery signal on mobile. Native replay outstanding.                                                                                                                                  |
+| Base               | `de377ae`, `cdaf3f1`, `e73496f`                    | Mobile app-info contract and inline-source recovery on channel reconnection; native replay outstanding.                                                                                                                                                                                      |
+| Base               | `7746210`, `946c56d`                               | Explain separate workspace creation in onboarding and include local Help in Base and Personal.                                                                                                                                                                                               |
+| Host / Base        | `0322ca4ed` / `6bfd508`                            | Website approval requester identity from verified origin and native globe presentation.                                                                                                                                                                                                      |
+| Examples / Google  | `662dc22` / `30e8d16`                              | Complete standalone source snapshots.                                                                                                                                                                                                                                                        |
+| News / Spectrolite | `74200f3` / `2b48cc2`                              | Complete standalone source snapshots; unrelated local edits preserved.                                                                                                                                                                                                                       |
 
 ### RPC owner routing verification follow-up (2026-09-07)
 
-The pending routing migration uses a typed destination instead of a workspace ID
+The committed routing migration uses a typed destination instead of a workspace ID
 for every transport owner. A hub destination cannot be confused with a workspace
 named `hub`. The RPC contract version advances to 4 so mixed-version endpoints
 reject admission instead of silently ignoring an address. The retained desktop
@@ -698,6 +747,195 @@ transport/server checks passed 258 tests; subsequent IPC rejection coverage pass
 The shell acquisition repair has focused scoped-client and real extension-child
 coverage; actual browser-import approval presentation and resumed import remain
 native acceptance work.
+
+Host commits `7e310414a` and `60cd127e7` connect the hub queue to its live
+account audience and extend the existing native UI session owner to typed hub
+and workspace destinations. Revocation or replacement settles pending unary and
+streaming calls with `CONNECTION_LOST`, including replacement first discovered
+by an arriving response. Duplex ownership lasts until both directions finish;
+failure cancels an unfinished upload without closing sibling workspace sessions.
+Independent review and 57 focused native IPC/session/extension tests passed,
+along with the normal repository commit checks. Commit `c5b5a4621` retains
+extension-child acquisition wait/retry coverage in Node and native-workspace
+modes. These checks do not establish visible browser-import acceptance.
+
+Base commit `9d8323c` distinguishes the RPC owner from workspace display context
+in desktop and mobile approval selection and decisions. It retains the shared
+queue, represents account-owned requests directly, and displays queue failures
+with owner-specific retry. Focused desktop coverage passes 60 tests, mobile
+coverage passes 43 tests, and all three userland type projections pass. Actual
+mobile native presentation remains unverified.
+
+Host `7419fd2f4` binds approval presentation keys to typed RPC owners and ignores
+obsolete refresh failures. Host `0fdc0c7f3` binds native session lifetime to the
+authenticated catalog and makes accepted panel snapshots own native focus. The
+final lifecycle suite passes 288 tests; earlier combined approval/lifecycle
+coverage passed 311 before the catalog-admission race tests were added.
+
+An intermediate native acceptance run failed with
+`[hubControl.listWorkspaces] Unknown service`, before exercising browser import.
+Investigation confirmed that the smoke harness defaulted an omitted destination
+to the current workspace even for hub calls. The harness now requires explicit
+typed destinations and checks reply ownership (three behavioral tests pass).
+This failure did not establish a production hub registration defect.
+
+The next native run reached Browser Migration but failed to present an approval:
+the queue rejected its requester's scope membership. Live checks confirmed both
+the canonical workspace ID and the panel owner's membership; hypotheses based on
+the directory name or TestApi panel ownership were disproven. Source inspection
+then found a lost verified parent subject on extension-to-service calls, while
+the corresponding extension-to-DO route already carried that subject. The repair
+preserves the extension's executing/code principal and attaches only the verified
+parent's human subject (Host `318804356`). Host `7b3040b16` returns presentation
+failures through the existing owner wait as RPC errors rather than ordinary
+closed requests that lose the cause. The fixes pass 134 RPC server tests and 47
+acquisition/service tests respectively, plus normal commit checks. The next native
+attempt opened Personal's launcher but stopped on an undefined polling helper in
+the harness; it did not exercise the repaired approval. The helper and an obsolete
+category-selection assumption are corrected. The user subsequently verified browser
+import successfully in the running UI. This is manual acceptance of the reported
+workflow; the automated native regression run remains outstanding. Terminated
+harness runs cleaned up their owned instances.
+
+The user confirmed browser import works in the running UI. A subsequent automated
+native attempt ended before import on Iroh connection loss; it supplies no import
+verdict. Its owned process and temporary profile were removed. A fresh managed doctor
+also caught a separate strict RPC schema omission in the new host-platform approval
+copy: the queue emitted `executionPlatform`, but `shellApproval.listPending` rejected
+it. The platform-specific copy commit (`8a9dc5663`) therefore requires a contract
+follow-up before further acceptance; focused copy/type tests did not cover that wire
+boundary. The failed doctor instance was stopped, and neither catalog nor atomic
+acceptance ran on it.
+
+Artifact reconciliation found 50 distinct named tests in the original agentic slate.
+Fresh cached-catalog acceptance now passes as `st_bb755a831b7b48229216e5ad63cda7f8`
+(1/1, zero unexpected tool failures) after a successful managed doctor on the fixed
+approval schema. Together with the other 49 latest valid passing results, every
+original slate test has passing evidence. This is a per-test historical ledger,
+not a claim that all 50 were rerun on today's source. The separate atomic
+panel/store regression remains in progress.
+
+Fresh `remove` acceptance passes as `st_43c12ae66bd340408e7ce1e07ca9c52e`.
+The remaining cached-catalog test exposed explicit `null` loss in eval serialization.
+Base `a5718bf` preserves null and only uses the default export for undefined;
+48 sandbox tests and all userland type projections pass. The original catalog
+validator then rejected an authentic wrapped null result. Base `0e9afcb` replaces
+return-field guessing with independent catalog observation through the existing public
+RPC and verifies the agent report against it (14 focused tests pass). The fresh
+agentic acceptance above confirms the corrected flow. Atomic panel/store acceptance is also still unproven;
+unit results do not substitute for that workflow.
+
+The later atomic run `st_5a6616d442a14ac29db77027ce60e29c` was cancelled after
+repeated failed publications. Its generated panel requested a service protocol absent
+from the exact meta binding; this was not evidence of the collection dependency defect.
+The run also exposed a harness problem: its scaffold helper publishes before subsequent
+agent customization, so that setup cannot prove one atomic panel/store/meta publication.
+A deterministic fixture using the existing snapshot-import and ordinary push paths is
+being prepared; agent-authored task-management coverage remains separate and retained.
+The cancelled instance and all its child processes and temporary data were removed.
+
+The user's collection/browser-data publication diagnostics exposed a different mismatch:
+the workspace authority index already carries library service declarations, but the exact
+unit fold checked dependency-origin calls against the executable consumer's declarations.
+Host commit `4fbfc5402` selects declarations by source package and keeps dependency capability effects
+charged to the executable consumer. The two collection-orchestration consumers additionally
+receive exact dependency-scoped channel request rows in Base commit `9d8eba9`.
+An independent review found no widened grant or source-attribution regression.
+Generic fold tests pass 23 cases.
+Fresh real Personal validation on `collection-validation-20260907` confirmed both exact
+units in the inventory, then obtained `status: ok` and empty diagnostics for
+`about/collection` and `extensions/browser-data`. The managed instance was stopped and
+its processes removed. Empty/skipped default Base reports were excluded from this evidence.
+CLI commit `05f9ef6d5` exposes the existing idempotent private-workspace preparation
+operation as `remote ensure-user-workspaces`, followed by explicit workspace selection;
+this uses the same authenticated hub control path as the clients.
+
+Host commit `614e3d874` preserves TypeScript's configured program roots and adds
+sealed first-party executable modules as required roots. This addresses the
+unrelated mobile test helpers previously pulled into protected publication
+checking, without allowing configuration to hide executable code. Its focused
+coverage passes 28 tests; fresh atomic publication acceptance is still required.
+
+The integrated browser-import diagnostic with the local repaired Iroh addon reached
+and clicked the store approval, but its harness read the same approval ID before the
+asynchronous decision settled. This did not prove a repeated product acquisition.
+The harness now awaits removal of that exact ID before checking for a new request
+with the same operation identity; six focused harness tests pass. Approval screenshots
+now capture the exact visible card rather than an unrelated app page. The failed run's
+owned processes, temporary root, and ready record were removed. A complete replay
+remains required; the local addon cannot establish production Iroh acceptance.
+
+A subsequent live-user rebuild stall was inspected without restarting or mutating the
+user's workspace. The runtime build completed in 49 ms; the deferred eval remained
+parked while the replacement panel connected, was superseded, and stayed pending with
+an unreachable route. The periodic effect-outbox wake checks the deferred eval rather
+than rerunning it. Host commit `b8c3fe3e5` targets exact lease-connection identity in
+native presentation reuse and separates execution readiness from presentation
+demand. Independent review and 103 focused orchestrator/event-bridge tests pass, as do
+host and workerd type checks. The real atomic fixture now additionally rebuilds the
+saved panel, takes its snapshot, and checks persisted DOM state; that acceptance is running. A proposed server-side reorder was rejected because it could publish a lease
+before failed activation or return a stale lease after revocation. No timeout is being
+added to conceal the ownership failure. Focused regressions pass; real rebuild
+acceptance remains required before claiming end-to-end repair.
+
+Committed-object history places execution-before-assignment in `7072e86eb` and
+`94458a911`, and connection-insensitive presentation reuse in `e7746e462`. The old
+activation path also unconditionally requested presentation. These findings establish
+older interacting assumptions; they do not prove that the recent workspace split
+introduced every part of the failure. A reviewer initially claimed a committed demand
+guard existed; checking HEAD and history disproved that claim. The committed guard
+is new work, not a restoration of a previously committed guard.
+
+The sibling mobile audit found that the native WebView key omitted connection identity.
+Replacing a same-URL connection could also retain the retired document's error and
+bridge state. Base commit `60300aa` remounts the inner native document while preserving
+outer lease ownership. An opaque document owner fences delayed native callbacks and
+bridge replies, including A→B→A navigation and unmount; URL navigation retains queued
+envelopes, while connection replacement retires the old queue. Five focused mobile
+lifecycle tests, the complete userland type projection, seed checks, and independent
+review pass. Actual native device acceptance remains separate.
+
+The broader host audit found another ownerless wait: load-on-assignment refreshed
+panel metadata before entering the presentation attempt's failure/report/release path.
+A refresh rejection was only logged by the event bridge, leaving the assigned runtime
+attempt pending with no renderer. Both event and snapshot assignment paths contain
+this gap (`e7746e462` in committed history). Host commit `1c5203f8e` moves preparation under the same
+presentation owner; failure settles the exact attempt without affecting a replacement.
+Its 87 orchestrator regressions, 75 coordinator/service/event-bridge tests, host/workerd
+type checks and normal commit checks pass. This is an event-driven lifecycle repair,
+not a timeout.
+
+Atomic fixture run `st_130a3e77845542cca787809aa6b6d3a1` stopped at the build gate
+before publication/open because its appended authority declaration omitted required
+`evidence`. The fixture now calls the canonical authority parser before importing,
+and its 11 focused tests pass. This failure is a fixture defect, not a verdict on runtime grant or rebuild behavior.
+The subsequent run `st_dfc353adfc3e4cd598fe36aea8b4f758` built both atomic units but
+failed the broader full-Base `dev` candidate gate after the mobile build. Personal was
+then selected and verified in a fresh managed instance, but its distribution correctly
+omits `workers/system-test-runner`; that runner cannot execute there unchanged. The
+existing native desktop rebuild test already provisions Personal and is the faithful
+client acceptance path. No test runner was installed into Personal to bypass this gap.
+
+Shared-runtime run `st_0ba0e29c89474b60bc8192bb5d86dd6a` reproduced the broader gate
+failure. Before cleanup, `build.getBuildReport` recovered 53 exact mobile diagnostics:
+52 concern the runtime compiler's library/type environment, and one reports an absent
+direct `browser-import` capability declaration. Both atomic units built successfully.
+These mobile defects remain under repair; the owned managed instances are stopped.
+Investigation locates the compiler mismatch in the source mobile tsconfig (ES2020
+versus the ES2022/types environment used by the normal mobile projection), exposed
+by exact configured-program enforcement in Host `614e3d874`. Base `ba1e9e4` aligns
+that source environment and declares the existing browser-import capability. Host
+`f449b0c1f` adds the configured-library regression and makes launcher logs report the
+actual selected workspace. Focused tests, type checks and independent review pass;
+live acceptance subsequently exposed missing review vocabulary for browser-import.
+
+The missing postmortem diagnostic was a separate test-harness defect: atomic orchestration
+caught `RemoteRpcError` and returned only its message, bypassing the runner's typed error
+serializer. It now retains the existing bounded/redacting `systemTestFailure` result,
+including candidate, affected units and diagnostic handles. Focused coverage proves
+credential-like fields remain redacted. Base `30071bc` applies the same existing
+contract to eval, template, and self-development orchestration catches and cleanup
+failures. Its 84 focused scenario tests and all userland type configurations pass.
 
 The production Iroh check passed 39 of 40 tests but timed out in the streaming
 upload/cancellation case and reported an unhandled connection-close rejection.
@@ -826,12 +1064,12 @@ access to an upstream's private history, credentials or grants. A moving reposit
 not an exact adopted revision. Each workspace owns its materialized source and runs without
 the upstream being available.
 
-| Retain and simplify | Remove or disentangle |
-| --- | --- |
-| Normalized upstream URLs, exact commit/snapshot pins, safe names/descriptions | Treating a template name, ancestry or manifest as execution authority |
-| Exact source acquisition and workspace creation from snapshots | Installing unrelated applications as composed layers in an existing workspace |
-| Source provenance and baselines used by ordinary explicit compare/merge | Composition graphs, precedence, contribution ownership and automatic recomposition |
-| Manifests, APIs, CLI/UI and tests serving those retained responsibilities | Entry points and generated metadata whose only purpose is removed composition behavior |
+| Retain and simplify                                                           | Remove or disentangle                                                                  |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Normalized upstream URLs, exact commit/snapshot pins, safe names/descriptions | Treating a template name, ancestry or manifest as execution authority                  |
+| Exact source acquisition and workspace creation from snapshots                | Installing unrelated applications as composed layers in an existing workspace          |
+| Source provenance and baselines used by ordinary explicit compare/merge       | Composition graphs, precedence, contribution ownership and automatic recomposition     |
+| Manifests, APIs, CLI/UI and tests serving those retained responsibilities     | Entry points and generated metadata whose only purpose is removed composition behavior |
 
 The current root-template path prepares Composer metadata even for creation. Separate its
 source acquisition/initialization from that composition contract; do not keep an entire
@@ -884,22 +1122,22 @@ These are inspected starting points, not a completed boundary audit. Recheck cur
 source before implementing; other work is in progress and older plans contain
 superseded contracts.
 
-| Area | Starting point and implication |
-| --- | --- |
-| Workspaces | [hubServer.ts](../src/server/hubServer.ts) already tracks workspace identity, membership, and child runtimes. Reuse this container and route several workspaces to the same client. |
-| Client selection | [appHost.ts](../src/server/appHost.ts) resolves workspace `hostTargets`. Restrict client-app activation to the admitted System source instead of accepting client ownership from whichever workspace is selected. |
-| System-page namespace | [aboutNamespace.ts](../packages/workspace-contracts/src/aboutNamespace.ts) currently describes path-derived privilege for `about/*`; [runtimeResourceBindings.ts](../src/server/services/runtimeResourceBindings.ts) consumes it. Replace path-based privilege with ordinary navigation to a local page, verified caller identity and explicit operation authority; no page-role registry is required. |
-| Contexts | [runtime.ts](../packages/service-schemas/src/runtime.ts) defines context creation and cloning. Base's semantic store has a workspace-local main; contexts branch within it. An unrelated bundle needs fresh workspace creation, not a personal-context fork. |
-| Template identity and acquisition | [templateCoordinates.ts](../packages/workspace/src/templateCoordinates.ts) supplies normalized identities; [acquireRootTemplateSnapshot.ts](../src/server/acquireRootTemplateSnapshot.ts) acquires exact immutable snapshots. Retain these mechanisms and useful names/contracts for upstream templates. |
-| Root creation and relationship state | [rootTemplate.ts](../packages/workspace/src/rootTemplate.ts) prepares a standalone source snapshot. Composer relationship state and `templateState.ts` have been removed; exact upstream identity and ordinary semantic source baselines remain. |
-| External Base | [External Base cutover](external-base-cutover-and-self-development-plan.md) records host/Base separation and source acquisition. Preserve the useful source boundary, not the template composition system. |
-| Semantic integration | Base's `workers/workspace-source` owns semantic operations; [workspaceVcs.ts](../src/server/vcsHost/workspaceVcs.ts) supplies host projections/publication. Inventory and reuse actual copy/compare/merge behavior. Do not make new selective-history merge machinery a prerequisite for source adoption. |
-| Panel ownership | [treeIndex.ts](../packages/shared/src/panel/treeIndex.ts) and [workspaceStateService.ts](../src/server/services/workspaceStateService.ts) retain user-owned root groups. Stacked sections preserve these and hub membership filtering. |
-| Browser storage | [contextIdToPartition.ts](../packages/shared/src/contextIdToPartition.ts) maps contexts to Electron session partitions. Electron terminology is an implementation detail; preserve required browser/context isolation. |
-| Authority | [authority.ts](../packages/rpc/src/authority.ts) and [contextBoundary.ts](../src/server/services/contextBoundary.ts) carry current identity and boundary rules. Workspace location, tree placement, or source equality must not become implicit website authority. |
-| Context-aware RPC reuse | [runtime.ts](../packages/service-schemas/src/runtime.ts) binds entity context/source identity; [runtimeService.ts](../src/server/services/runtimeService.ts) preserves those bindings; [rpcServer.ts](../src/server/rpcServer.ts) dispatches existing targets and explicitly permits supported cross-context DO calls. Extend workspace qualification and authority around that routing, with no main-only restriction. |
-| RPC and provider capabilities | [rpcServer.ts](../src/server/rpcServer.ts) and [workspace-owned capabilities](permission-system.md#workspace-owned-capabilities) are starting points for dispatch and protected provider methods. Extend their identity, routing and authority path; do not add a second integration bus or permission engine. Existing local handles are not portable across workspaces. |
-| Retention | [Execution retention](runtime-foundations/execution-retention.md) records owned artifact lifetimes. Shared immutable objects remain readable only through authorized owned references. |
+| Area                                 | Starting point and implication                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Workspaces                           | [hubServer.ts](../src/server/hubServer.ts) already tracks workspace identity, membership, and child runtimes. Reuse this container and route several workspaces to the same client.                                                                                                                                                                                                                                                                                                                                                                                |
+| Client selection                     | [appHost.ts](../src/server/appHost.ts) resolves workspace `hostTargets`. Restrict client-app activation to the admitted System source instead of accepting client ownership from whichever workspace is selected.                                                                                                                                                                                                                                                                                                                                                  |
+| System-page namespace                | [aboutNamespace.ts](../packages/workspace-contracts/src/aboutNamespace.ts) currently describes path-derived privilege for `about/*`; [runtimeResourceBindings.ts](../src/server/services/runtimeResourceBindings.ts) consumes it. Replace path-based privilege with ordinary navigation to a local page, verified caller identity and explicit operation authority; no page-role registry is required.                                                                                                                                                             |
+| Contexts                             | [runtime.ts](../packages/service-schemas/src/runtime.ts) defines context creation and cloning. Base's semantic store has a workspace-local main; contexts branch within it. An unrelated bundle needs fresh workspace creation, not a personal-context fork.                                                                                                                                                                                                                                                                                                       |
+| Template identity and acquisition    | [templateCoordinates.ts](../packages/workspace/src/templateCoordinates.ts) supplies normalized identities; [acquireRootTemplateSnapshot.ts](../src/server/acquireRootTemplateSnapshot.ts) acquires exact immutable snapshots. Retain these mechanisms and useful names/contracts for upstream templates.                                                                                                                                                                                                                                                           |
+| Root creation and relationship state | [rootTemplate.ts](../packages/workspace/src/rootTemplate.ts) prepares a standalone source snapshot. Composer relationship state and `templateState.ts` have been removed; exact upstream identity and ordinary semantic source baselines remain.                                                                                                                                                                                                                                                                                                                   |
+| External Base                        | [External Base cutover](external-base-cutover-and-self-development-plan.md) records host/Base separation and source acquisition. Preserve the useful source boundary, not the template composition system.                                                                                                                                                                                                                                                                                                                                                         |
+| Semantic integration                 | Base's `workers/workspace-source` owns semantic operations; [workspaceVcs.ts](../src/server/vcsHost/workspaceVcs.ts) supplies host projections/publication. Inventory and reuse actual copy/compare/merge behavior. Do not make new selective-history merge machinery a prerequisite for source adoption.                                                                                                                                                                                                                                                          |
+| Panel ownership                      | [treeIndex.ts](../packages/shared/src/panel/treeIndex.ts) and [workspaceStateService.ts](../src/server/services/workspaceStateService.ts) retain user-owned root groups. Stacked sections preserve these and hub membership filtering.                                                                                                                                                                                                                                                                                                                             |
+| Browser storage                      | [contextIdToPartition.ts](../packages/shared/src/contextIdToPartition.ts) maps contexts to Electron session partitions. Electron terminology is an implementation detail; preserve required browser/context isolation.                                                                                                                                                                                                                                                                                                                                             |
+| Authority                            | [authority.ts](../packages/rpc/src/authority.ts) and [contextBoundary.ts](../src/server/services/contextBoundary.ts) carry current identity and boundary rules. Workspace location, tree placement, or source equality must not become implicit website authority.                                                                                                                                                                                                                                                                                                 |
+| Context-aware RPC reuse              | [runtime.ts](../packages/service-schemas/src/runtime.ts) binds entity context/source identity; [runtimeService.ts](../src/server/services/runtimeService.ts) preserves those bindings; [rpcServer.ts](../src/server/rpcServer.ts) dispatches existing targets and explicitly permits supported cross-context DO calls. Preserve existing branch/context selectors. Typed workspace qualification currently addresses authenticated native UI sessions; public cross-workspace application forwarding remains closed until the accepted reviewed-receiver contract below is implemented and verified. |
+| RPC and provider capabilities        | [rpcServer.ts](../src/server/rpcServer.ts) and [workspace-owned capabilities](permission-system.md#workspace-owned-capabilities) are starting points for dispatch and protected provider methods. Extend their identity, routing and authority path; do not add a second integration bus or permission engine. Existing local handles are not portable across workspaces.                                                                                                                                                                                          |
+| Retention                            | [Execution retention](runtime-foundations/execution-retention.md) records owned artifact lifetimes. Shared immutable objects remain readable only through authorized owned references.                                                                                                                                                                                                                                                                                                                                                                             |
 
 The configured development Base at inspection was
 `/home/werg/vibestudio-release-work/base`. Resolve the current selection through the
@@ -913,19 +1151,20 @@ belongs below the untrusted code. The canonical isolation plan owns that impleme
 
 ## 4. Personal, System, Base, and about-page contracts
 
-### Three default distributions; a private Personal/System pair per user
+### Personal and System distributions plus Base upstream source
 
-A distribution is a ready-to-create workspace snapshot. The three default distributions
-are self-contained, with ordinary source ancestry; there is no
+A distribution is a ready-to-create workspace snapshot. Personal and System are the
+two default running workspaces; Base is an exact source upstream for ordinary
+workspaces. Each snapshot is self-contained, with ordinary source ancestry; there is no
 composition DAG, installed contribution state, or live Base dependency. Retained template
 identity/acquisition describes their upstream source without composing runtime layers. A collaboration-oriented distribution may be added later as
 another ordinary snapshot, not another execution or permission model.
 
-| Distribution | Purpose | Presence in the default environment |
-| --- | --- | --- |
-| Personal | The user's normal home/root workspace: personal agent, collections, browsing/personal workflows, and ordinary projects. Includes the minimal common source it needs. | One per user on the selected server/hub, ensured by the client. Exclusively owned by that user; workspace sharing and additional members are prohibited. |
-| System | Client applications and system-relevant functionality: desktop/mobile/system CLI, device/environment management, and most host-known management pages. Includes its own required runtime source. | One per user on the selected server/hub, ensured by installed bootstrap/client startup. Exclusively owned by that user; sharing and additional members are prohibited. |
-| Base | The stripped-down common agentic source and required workspace-local page implementations, suitable for deriving an ordinary app workspace. | Available as an exact source snapshot/upstream. No running Base workspace is required; authoring it may create an ordinary workspace deliberately. |
+| Distribution | Purpose                                                                                                                                                                                          | Presence in the default environment                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Personal     | The user's normal home/root workspace: personal agent, collections, browsing/personal workflows, and ordinary projects. Includes the minimal common source it needs.                             | One per user on the selected server/hub, ensured by the client. Exclusively owned by that user; workspace sharing and additional members are prohibited.               |
+| System       | Client applications and system-relevant functionality: desktop/mobile/system CLI, device/environment management, and most host-known management pages. Includes its own required runtime source. | One per user on the selected server/hub, ensured by installed bootstrap/client startup. Exclusively owned by that user; sharing and additional members are prohibited. |
+| Base         | The stripped-down common agentic source and required workspace-local page implementations, suitable for deriving an ordinary app workspace.                                                      | Available as an exact source snapshot/upstream. No running Base workspace is required; authoring it may create an ordinary workspace deliberately.                     |
 
 Personal and System are private by contract, not merely created with private defaults.
 The receiver must reject invitations, membership additions, transfers to a shared role,
@@ -1000,14 +1239,14 @@ selection does not authorize an action, lend Project's grants, or turn the navig
 an application RPC into System. Decisions stay at protected host receivers with initiating
 user/workspace/website attribution. Later focus changes cannot retarget a pending decision.
 
-| Page or command | Panel and source workspace | Resource behavior |
-| --- | --- | --- |
-| New (`about/new`) | Current workspace; minimal implementation supplied by Base | Lists and launches content locally. Personal may have a richer local implementation. |
-| Help, shortcuts, product about, device/system management | Acting user's System | Open/focus a System panel. Device/account/host effects require their normal authorization. |
-| Permissions and credential management | Acting user's System | Explicitly select the workspace/account being managed, initially the initiating workspace where appropriate. Approval remains host-controlled. |
-| Workspace files/history and local diagnostics | Current workspace | Inspect local resources under ordinary access checks. Distinct system-management roles open in System. |
-| Browser history, bookmarks, downloads and personal import UI | Acting user's Personal | Open/focus Personal panels; device-level operations retain protected host checks. |
-| Collections and app-specific about pages | Owning workspace | Ordinary local content and authority. |
+| Page or command                                              | Panel and source workspace                                 | Resource behavior                                                                                                                              |
+| ------------------------------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| New (`about/new`)                                            | Current workspace; minimal implementation supplied by Base | Lists and launches content locally. Personal may have a richer local implementation.                                                           |
+| Help, shortcuts, product about, device/system management     | Acting user's System                                       | Open/focus a System panel. Device/account/host effects require their normal authorization.                                                     |
+| Permissions and credential management                        | Acting user's System                                       | Explicitly select the workspace/account being managed, initially the initiating workspace where appropriate. Approval remains host-controlled. |
+| Workspace files/history and local diagnostics                | Current workspace                                          | Inspect local resources under ordinary access checks. Distinct system-management roles open in System.                                         |
+| Browser history, bookmarks, downloads and personal import UI | Acting user's Personal                                     | Open/focus Personal panels; device-level operations retain protected host checks.                                                              |
+| Collections and app-specific about pages                     | Owning workspace                                           | Ordinary local content and authority.                                                                                                          |
 
 Adjust existing commands to open the appropriate workspace and local route during extraction.
 A required local page missing from a bundle is a contract error, not a reason to fetch it
@@ -1039,12 +1278,12 @@ when actual personal/system coupling requires it, not merely because some generi
 unused by one app. No byte-count target, exhaustive minimality proof or package-by-package
 pruning is required. Personal/system workflows and private state must still be extracted.
 
-| Responsibility | Owner |
-| --- | --- |
-| Essential agent harness, local source/runtime tools, common protocols, and essential instructions | Minimal Base source, included in each app's distributable workspace closure. |
-| Desktop/mobile clients, provisioning, system settings, environment management, and System-owned about pages | Acting user's designated System workspace; shared host administration retains separate operator authority. Never inherited by every app workspace. |
-| Personal browsing/import workflows, collections, ordinary projects, and personal assistant memory | Personal distribution/workspace; device-level effects use the existing bounded System/native mechanisms. Other app workspaces receive only deliberately disclosed resources. |
-| Development, diagnostics, onboarding, and optional product features | Their appropriate owning workspace/system application, outside common Base unless they are cohesive generic runtime functionality. |
+| Responsibility                                                                                              | Owner                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Essential agent harness, local source/runtime tools, common protocols, and essential instructions           | Minimal Base source, included in each app's distributable workspace closure.                                                                                                 |
+| Desktop/mobile clients, provisioning, system settings, environment management, and System-owned about pages | Acting user's designated System workspace; shared host administration retains separate operator authority. Never inherited by every app workspace.                           |
+| Personal browsing/import workflows, collections, ordinary projects, and personal assistant memory           | Personal distribution/workspace; device-level effects use the existing bounded System/native mechanisms. Other app workspaces receive only deliberately disclosed resources. |
+| Development, diagnostics, onboarding, and optional product features                                         | Their appropriate owning workspace/system application, outside common Base unless they are cohesive generic runtime functionality.                                           |
 
 Trace real dependencies. If a generic runtime package imports personal/system product
 code, separate the generic responsibility from that implementation. Hiding a panel,
@@ -1136,14 +1375,14 @@ execution. A live shared document has one owning workspace and authorized operat
 a copied artifact becomes independently owned by its destination. Source personalization
 uses the existing reviewed source operations above.
 
-| Use case | User action | Boundary contract |
-| --- | --- | --- |
-| Personal research into a shared project | Send selected documents to Project | Copy the reviewed selection with provenance and receiving-audience disclosure. |
-| Personal calendar from a project | Ask Personal for meeting-time suggestions | Send a bounded request; return permitted slots, not credentials or private event details. Creating an event is a separate effect. |
-| Another workspace's agent helps | Ask Research to investigate a question | Start a bounded task there with selected context and an attributed result; do not migrate the sender's live agent or memory. |
-| Personal dashboard follows project progress | Follow selected milestones | Establish an authorized subscription; disclose selected events while its authority remains valid. |
-| Personalize an app workspace | Apply selected agent setup | Review and copy or use a supported merge locally; do not copy governing state or grants. |
-| Open a referenced document elsewhere | Open in its owning workspace | Explicit client navigation under access checks; no panel reparenting, agent relocation or automatic connection. |
+| Use case                                    | User action                               | Boundary contract                                                                                                                 |
+| ------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Personal research into a shared project     | Send selected documents to Project        | Copy the reviewed selection with provenance and receiving-audience disclosure.                                                    |
+| Personal calendar from a project            | Ask Personal for meeting-time suggestions | Send a bounded request; return permitted slots, not credentials or private event details. Creating an event is a separate effect. |
+| Another workspace's agent helps             | Ask Research to investigate a question    | Start a bounded task there with selected context and an attributed result; do not migrate the sender's live agent or memory.      |
+| Personal dashboard follows project progress | Follow selected milestones                | Establish an authorized subscription; disclose selected events while its authority remains valid.                                 |
+| Personalize an app workspace                | Apply selected agent setup                | Review and copy or use a supported merge locally; do not copy governing state or grants.                                          |
+| Open a referenced document elsewhere        | Open in its owning workspace              | Explicit client navigation under access checks; no panel reparenting, agent relocation or automatic connection.                   |
 
 ### Addressing, exports and discovery
 
@@ -1204,12 +1443,12 @@ authorized role, and exported operation, with discovery separately scoped. New s
 remain closed unless deliberately included. Resource-specific consent stays in the existing
 capability model; the boundary being open is never a resource grant.
 
-| Boundary result | Ordinary operation authority | Outcome |
-| --- | --- | --- |
+| Boundary result    | Ordinary operation authority | Outcome                                       |
+| ------------------ | ---------------------------- | --------------------------------------------- |
 | Either side blocks | Any, including a prior grant | Deny before method entry; no approval prompt. |
-| Both sides permit | Missing but acquirable | Ask the appropriate authorized approver. |
-| Both sides permit | Already granted | Execute within that grant. |
-| Both sides permit | Independently prohibited | Deny without an approval escape. |
+| Both sides permit  | Missing but acquirable       | Ask the appropriate authorized approver.      |
+| Both sides permit  | Already granted              | Execute within that grant.                    |
+| Both sides permit  | Independently prohibited     | Deny without an approval escape.              |
 
 Manage boundary settings through the user's System UI, but store and enforce governing
 policy below mutable workspace code. Imports, source merges and System edits cannot change
@@ -1282,16 +1521,21 @@ applicable restrictions. Shared agents cannot pool members' private grants or se
 whichever user's System/account has broader access. A member must explicitly consent to
 use of their personal resources; membership or administrator approval alone is insufficient.
 
-**Implementation design decision pending:** the existing sandbox isolates a whole workspace,
-and RPC receivers are long-lived workers with ordinary workspace authority. A receiving
+**Accepted implementation design:** trust deliberately exported, reviewed receiver
+implementations to stay within their intended authority: the approved operation's selected
+resource use and result disclosure. Retain hard workspace ingress/egress checks and ordinary
+receiver authorization. Separate per-invocation execution and credential isolation is not
+required by this contract.
+
+The existing sandbox isolates a whole workspace, and RPC receivers are long-lived workers
+with ordinary workspace authority. A receiving
 worker can omit an optional invocation-parent nonce and start an independent call; native
 workspace code can also use its workspace filesystem outside the causal RPC chain. Therefore
 invocation attribution or an additional grant constraint cannot enforce the paragraph above
-against a malicious receiving implementation. The proposed simpler contract trusts deliberately
-exported, reviewed receiver methods to enforce the selected resource use and disclosure, while
-retaining hard workspace ingress/egress and ordinary receiver authorization. A stronger
-per-invocation guarantee requires separate execution and credential isolation. This choice
-has been presented to the user; cross-workspace forwarding remains closed pending resolution.
+against a malicious receiving implementation. Staying within the approved operation is a
+reviewed receiver obligation, not a claim of confinement against malicious receiver code.
+Cross-workspace forwarding may proceed under this trust contract once its required boundary
+checks and authority propagation are implemented and verified.
 
 ### Transfers, results and calls through other workspaces
 
@@ -1488,14 +1732,14 @@ not a forced identical screen layout.
 
 #### New, open and return: small flows with visible destinations
 
-| Intent | Interaction | Completion and return behavior |
-| --- | --- | --- |
-| Create a panel | New in the current workspace, or New on a workspace heading | Open that workspace's local `about/new`; show New in Project. No workspace picker for an already known destination. |
-| Open a template/bundle link | Existing Open workspace flow shows source, name and Create workspace | Create an ordinary workspace using retained template acquisition; focus its local landing/New panel. No transfer of the previous workspace's data or grants. |
-| Start an empty workspace | Existing creation command with the appropriate Base source | Focus the new workspace; preserve the previous workspace as a return destination. No setup tour or required agent conversation. |
-| Open settings for Project | Settings command captures Project as its managed resource | Open/focus a local System settings panel. Header says System / Settings and Managing Project. Back returns to the initiating panel when it still exists. |
-| Open personal browser history | Existing browser-history command | Open/focus a Personal panel. Do not load Personal source into the current workspace. |
-| Return to recent work | Select its workspace heading or a labeled command result | Restore its existing view. If the target was deleted or access changed, explain and offer the remaining workspace list; never act on a same-named replacement. |
+| Intent                        | Interaction                                                          | Completion and return behavior                                                                                                                                 |
+| ----------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create a panel                | New in the current workspace, or New on a workspace heading          | Open that workspace's local `about/new`; show New in Project. No workspace picker for an already known destination.                                            |
+| Open a template/bundle link   | Existing Open workspace flow shows source, name and Create workspace | Create an ordinary workspace using retained template acquisition; focus its local landing/New panel. No transfer of the previous workspace's data or grants.   |
+| Start an empty workspace      | Existing creation command with the appropriate Base source           | Focus the new workspace; preserve the previous workspace as a return destination. No setup tour or required agent conversation.                                |
+| Open settings for Project     | Settings command captures Project as its managed resource            | Open/focus a local System settings panel. Header says System / Settings and Managing Project. Back returns to the initiating panel when it still exists.       |
+| Open personal browser history | Existing browser-history command                                     | Open/focus a Personal panel. Do not load Personal source into the current workspace.                                                                           |
+| Return to recent work         | Select its workspace heading or a labeled command result             | Restore its existing view. If the target was deleted or access changed, explain and offer the remaining workspace list; never act on a same-named replacement. |
 
 Opening a bundle link presents source information and the existing creation action; it is
 not a new permission gate or a promise that publisher identity makes native code safe.
@@ -1588,14 +1832,14 @@ restriction. Do not add a special collaboration setup wizard.
 
 #### Calm state changes and accessible polish
 
-| State | UI treatment |
-| --- | --- |
-| Workspace opening | Keep its name/tree position visible; show progress in that section and a content placeholder. Other workspaces remain navigable. Do not display a permission request as loading. |
-| No panels | Local New page offers existing create/open actions with the workspace name. No invented activity dashboard. |
-| Disconnected server/workspace | Retain identifiable view state with a clear disconnected label. Existing reconnect behavior applies; disable effects that require live validation rather than promising an offline queue. |
-| Access removed or panel deleted | Remove inaccessible content/metadata through existing revocation paths, clear its active target, explain the change and let the user select an accessible workspace. Never silently redirect a pending action to Personal. |
-| Workspace stopped | Distinguish stopped from closed/collapsed. Existing Open/Start behavior resumes it under current authority; no new install/uninstall state. |
-| Shared result or background completion | Quiet workspace-attributed badge/toast; explicit Open action. No automatic workspace switch. |
+| State                                  | UI treatment                                                                                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace opening                      | Keep its name/tree position visible; show progress in that section and a content placeholder. Other workspaces remain navigable. Do not display a permission request as loading.                                           |
+| No panels                              | Local New page offers existing create/open actions with the workspace name. No invented activity dashboard.                                                                                                                |
+| Disconnected server/workspace          | Retain identifiable view state with a clear disconnected label. Existing reconnect behavior applies; disable effects that require live validation rather than promising an offline queue.                                  |
+| Access removed or panel deleted        | Remove inaccessible content/metadata through existing revocation paths, clear its active target, explain the change and let the user select an accessible workspace. Never silently redirect a pending action to Personal. |
+| Workspace stopped                      | Distinguish stopped from closed/collapsed. Existing Open/Start behavior resumes it under current authority; no new install/uninstall state.                                                                                |
+| Shared result or background completion | Quiet workspace-attributed badge/toast; explicit Open action. No automatic workspace switch.                                                                                                                               |
 
 Reuse theme tokens and restrained active accents. Preserve sidebar position during status
 changes; avoid reshuffling workspaces by live activity. Use text/icon plus color for shared,
@@ -1701,14 +1945,14 @@ The implementation hand-off is a change to existing machinery. Keep existing RPC
 authority storage, lifecycle and source semantics unless a demonstrated incompatibility
 requires a concrete change. A narrower new interface is not automatically simpler.
 
-| Existing area | Required change | Preserve/reuse |
-| --- | --- | --- |
-| Workspace registry and client | Ensure each user's private Personal/System IDs; implement section 6's stacked desktop trees, mobile drawer, captured actions and workspace-attributed approval UI without relaunch on selection. | Existing creation, membership, runtime and lifecycle; no installed-app object or special System principal. |
-| Base/template source | Extract personal/system coupling so ordinary app workspaces run independently; retain upstream identity/acquisition and remove composition-driven installation. | Cohesive common packages and existing source operations; no dependency-minimization project, update, release recovery or selective-history merger. |
-| Page navigation | Adjust existing commands to open local routes in their owning workspace; System panels select explicit target resources. | Existing navigation, panel/context ownership and host authorization; no page-role registry or cross-workspace source resolver. |
-| RPC addressing and discovery | Qualify the destination workspace and resolve its existing target; filter the existing catalog by deliberate exposure and disclosure policy. | Existing method definitions, schemas, contexts, calls, streams, events, origin facts and transport behavior. |
-| RPC authority and settings | Apply source egress/destination ingress as hard ceilings before ordinary approval. System ingress stays closed. Present connections as views over those policies/grants. | Existing authority records, acquisition and management paths; no second connection or export registry. |
-| Website requests | Carry verified website/workspace identity through the existing local capability and agent/tool paths. | Existing document/bridge and host resource checks; no inherited grants or parallel approval engine. |
+| Existing area                 | Required change                                                                                                                                                                                  | Preserve/reuse                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace registry and client | Ensure each user's private Personal/System IDs; implement section 6's stacked desktop trees, mobile drawer, captured actions and workspace-attributed approval UI without relaunch on selection. | Existing creation, membership, runtime and lifecycle; no installed-app object or special System principal.                                         |
+| Base/template source          | Extract personal/system coupling so ordinary app workspaces run independently; retain upstream identity/acquisition and remove composition-driven installation.                                  | Cohesive common packages and existing source operations; no dependency-minimization project, update, release recovery or selective-history merger. |
+| Page navigation               | Adjust existing commands to open local routes in their owning workspace; System panels select explicit target resources.                                                                         | Existing navigation, panel/context ownership and host authorization; no page-role registry or cross-workspace source resolver.                     |
+| RPC addressing and discovery  | Qualify the destination workspace and resolve its existing target; filter the existing catalog by deliberate exposure and disclosure policy.                                                     | Existing method definitions, schemas, contexts, calls, streams, events, origin facts and transport behavior.                                       |
+| RPC authority and settings    | Apply source egress/destination ingress as hard ceilings before ordinary approval. System ingress stays closed. Present connections as views over those policies/grants.                         | Existing authority records, acquisition and management paths; no second connection or export registry.                                             |
+| Website requests              | Carry verified website/workspace identity through the existing local capability and agent/tool paths.                                                                                            | Existing document/bridge and host resource checks; no inherited grants or parallel approval engine.                                                |
 
 The first product milestone uses two users on one server, each with a private
 Personal/System pair, and an ordinary workspace shared by both. Run local Quickfire,
@@ -1732,16 +1976,40 @@ publication, deployment, or obsolete-state compatibility framework.
 
 ## 8. Verification and remaining concrete decisions
 
+Captured checkpoint evidence (2026-09-08): Host/workerd type-checking and
+all three Base type-check projects passed together. The authorization,
+authority runtime, durable grant store and acquisition coordinator suites pass
+98 tests. These cover the existing website authority foundations, not live
+website admission or downstream agent effects.
+
+Base `7f725ae` fixes a pre-existing panel-runtime subscription leak: teardown
+now removes its shell state-args listener. All 12 initialization tests pass,
+including live state delivery followed by listener removal and no post-destroy
+delivery. Independent review found no issues. This is not evidence that the
+separate Android activation stall or native process shutdown gaps are resolved.
+
 Current completion gates are explicit:
 
-| Gate | Current state |
-| --- | --- |
-| Receiver authority contract | User choice pending between trusted reviewed exports and separate per-invocation isolation; public forwarding remains closed. |
-| Website → agent/tool effects | End-to-end authority propagation and acceptance remain incomplete. |
-| Desktop | Restored automatic onboarding including completed first turn and visible setup overview passes in the existing E2E. Existing browser startup, panel rebuild and restart persistence also pass. Strict reconnect diagnostics and open-approval membership revocation remain outstanding. |
-| Mobile | Full Android native onboarding, exact document retention, browser isolation, app restart and server restart pass at host `a3e07451c` / Base `06acdb6`, with recovered setup card visually inspected. Subsequent icon metadata propagation has focused mobile/type-check coverage. iOS runtime acceptance needs an Apple environment. |
-| Native dependency | Repaired local Linux/Android artifacts are verified; production platform pins still select upstream 1.1.0 and need a coherent dependency release. |
-| Distribution | Clean source closures pass; exact Base/Personal/System publication receipts are required for packaged startup. Nothing has been published. |
+Current-tree audit (2026-09-08): the numbered requirements below remain the
+completion contract. Passing template typechecks does not close runtime,
+multi-user, cross-workspace, website, mobile, or native dependency acceptance.
+The requested **at least 50 distinct agentic system tests** also require a
+consolidated run ledger with exact results; conventional test totals are not a
+substitute. A dedicated agent is executing a 51-name slate on its own managed
+instance. `tests/e2e/flows/crossWorkspaceRpc.spec.ts` now retains the recovered
+scenario, including a permitted call and outgoing-policy removal. Its generated
+receiver and panel mounting contracts have been updated, but current native
+acceptance still needs to pass. That one-user scenario does not cover the full
+two-user contract. Existing failed native runs remain failed evidence.
+
+| Gate                         | Current state                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Receiver authority contract  | Reviewed receiver implementations are the accepted trust contract; per-invocation isolation is not required. Public forwarding still needs boundary checks, authority propagation, and acceptance.                                                                                                                                                                                                        |
+| Website → agent/tool effects | Current source now includes the document-bound website workspace provider and native bridge (`src/preload/websiteWorkspaceProvider.ts`, `src/main/websiteWorkspaceBridge.ts`). The older claim that no production entry point exists is superseded. Complete website → agent/tool → effect, revocation and positive/negative native acceptance remains unproven; active website source is still changing.                                                                                                                                                                                                                                                                   |
+| Desktop                      | Restored automatic onboarding including completed first turn and visible setup overview passes in the existing E2E. Existing browser startup, panel rebuild and restart persistence also pass. Strict reconnect diagnostics and open-approval membership revocation remain outstanding.                                              |
+| Mobile | Android r4 passes automatic onboarding, document/focus retention, browser isolation, cold-start and server-restart recovery, and visibly correct Chat icons after Host `e1acfc82b` / Base `544a51a`. The intermittent five-minute System activation stall remains unresolved; this replay initialized in ~0.2–0.3 seconds. Tree-row alignment is changed but awaits native visual verification. iOS runtime acceptance needs an Apple environment. |
+| Native dependency            | Repaired local Linux/Android artifacts are verified. The retained pending-read cancellation regression fails against pinned upstream 1.1.0 and passes with the repaired Linux artifact. Production platform pins need a coherent dependency release; a loader override does not close this gate.                                                                                                                                                                                    |
+| Distribution                 | Examples, Google, News and Spectrolite have coherent standalone closures and pass current focused typechecks. News/Spectrolite initial renders pass, but settled functional readiness remains under test. Product seed receipts must be regenerated from the final source; concurrent edits invalidate older receipts. Packaged startup still requires exact pins and receipts. Base remains source-only.                                                                                                           |
 
 Record the smallest relevant product evidence alongside canonical platform acceptance.
 The following denials concern authenticated application paths; record native host access
@@ -1883,3 +2151,892 @@ Base remains adopted local source, with no provider-selection or remote executio
 mechanism. Controlled collaboration and gated discovery do not change that. Unrestricted
 discovery and implicit agent delegation remain outside the selected communication
 and integration operations; do not rebuild a dependency/service framework preemptively.
+
+
+### Latest native rebuild verification (2026-09-08)
+
+The unchanged exact test `visible desktop rebuild replaces the exact attempt and
+reaches ready` ran once in Personal under E2E run
+`panel-rebuild-personal-20260908-root`. It failed before rebuild during System startup:
+`build.listUnits` reported that `browser-import` had no reviewed authority presentation.
+The screenshot and attached server log agree. The visible startup error was obscured
+by the E2E helper trying to resolve a workspace before reading initialization failure,
+which surfaced as a generic automation timeout. Both the missing capability review
+metadata and startup failure observation are under repair. The owned application,
+Xvfb, and temporary root were cleaned up. This run is not rebuild acceptance.
+
+After repairing the requested native capability presentation census in Host
+`826fbc778` and recording host-launch failures in the existing startup ledger in
+`f4232939f`, the unchanged test passed in Personal under
+`panel-rebuild-personal-20260908-review-fixed`: one test passed, none skipped.
+It verified ready presentation before and after rebuild, a new runtime entity and
+presentation attempt, and the same panel identity. The owned Electron process,
+display, and temporary root were cleaned up. This establishes native Personal
+rebuild acceptance; it does not establish the separate atomic publication/store
+persistence scenario or mobile device acceptance.
+
+### Quickfire conversation identity repair (2026-09-08, verification ongoing)
+
+Quickfire's userland service creates the channel using the panel's resource binding,
+but its session result omitted the exact channel target. The client then discovered
+the creator-scoped channel again through the observing shell, which has no creator
+context. This is an identity propagation defect, not a missing user approval. The
+existing PubSub `channelTargetId` contract already avoids that redundant lookup.
+The slot repair returns the created target and requires desktop/mobile shared
+Quickfire to preserve it; malformed results fail before attempting discovery.
+
+The relevant recent semantic change is Host `b445eda44` (September 7): hosted app
+RPC previously used `sendAs` and the workspace app's scoped connection. Retained
+System chrome instead opens an authenticated `openHostUiSession`, stamps a shell
+caller, and routes to the selected workspace as the user. That changes context
+resolution and authorizing origin, not merely the destination address. Existing
+Quickfire consumers and channel receivers were not adapted together. Older code
+annotations or omitted target fields alone do not explain a previously working
+flow regressing; the new routing/identity boundary exposed their incompatibility.
+
+The same omission exists in notification-opened conversations: notification data,
+conversation description, opening, and connection carried only a channel ID. The
+repair must carry the producer-owned exact target through that whole path, using
+the existing channel client and RPC contract. Do not derive provider identity in
+clients, supply a default creator context, or introduce a second authority path.
+This sibling repair and native conversation acceptance remain in progress. The
+initial review missed this sibling and was withdrawn; focused slot tests alone do
+not establish that all conversation entry points work.
+
+The exact native command-overlay test then failed in
+`quickfire-personal-20260908-root` after creation/subscription: the visible error
+was `publish: no authority branch admits the user origin (receiver-rejected)`.
+The channel admitted a host-verified human subscriber but declared message
+publication code-only. Repair the human participant operations as one coherent
+receiver contract, retaining participant ownership and provider-only settlement
+checks. The E2E still requires an actual rendered transcript, and now observes a
+visible terminal failure rather than waiting the full transcript polling budget.
+No model response is required by this test. The failed run's Electron, owned
+Xvfb, and temporary root were verified cleaned up; no native Quickfire pass is
+claimed yet.
+
+
+### Quickfire native acceptance and current regression follow-up (2026-09-08)
+
+The repaired native run `quickfire-conversation-20260908-repaired` passed all four
+selected existing command-overlay cases: typed prose reaches the actual channel
+transcript, conversation exits appear, reopening resumes the same conversation,
+and promotion opens that conversation in a ready chat panel. Results record four
+expected, zero unexpected, zero skipped. Owned Electron, Xvfb, and temporary state
+were verified removed. Channel receiver coverage passed 98 tests; the human
+publication regression crosses actual receiver dispatch and verifies durable
+message content, rather than replacing dispatch with a no-op. Host notification
+contracts were committed in `32abd5a2b`; paired Base source changes remain pending
+review/commit. This supersedes the earlier “no native Quickfire pass” status above,
+not the remaining mobile-device or full-plan acceptance requirements.
+
+The local-checkout template flag seals and validates visible worktree bytes, but
+the standalone workspace migration retained acquisition without reconnecting
+candidate discovery. The host now exposes sanitized exact snapshot reviews via
+`hubControl.listTemplateCandidates`; desktop and mobile select those reviews and
+create a new workspace using the existing exact root pin contract. No local path
+is exposed, and an unpublished checkpoint must not be sent to remote Git for
+inspection. Desktop settings hands off to the canonical workspace chooser rather
+than duplicating creation. Host tests cover source changes after review (creation
+still acquires the reviewed bytes), path-free candidate discovery, and existing hub
+behavior. Native examples-checkout acceptance and the one-manifest migration are
+still outstanding. The user explicitly requires no backward compatibility and
+updated onboarding instructions/behavior.
+
+The running desktop supplied two further regression families. Panel lifecycle
+commit `867603061` (August 7, not the recent workspace migration) let a host view
+report establish RPC reachability before the panel socket existed. Repair must
+separate presented view, boot state, and authenticated route connection, including
+waiter notifications and supervision. Separately, live logs contain a missing
+`dist/panelPreload.cjs`: normal builds clean dist while existing desktops lazily
+load preloads there. Exact missing-preload causation for the latest panel is not
+yet proven. Do not call a readiness-only fix a blank-page fix, preserve individual
+artifacts as a workaround, or mix live build generations. Preload errors also need
+to terminate the exact panel attempt visibly.
+
+Read-only inspection of the live semantic database established a compare/merge
+failure involving sibling integration commits sharing a post-base application.
+Comparison subtracted shared applications without regard to the selected base,
+leaving an uncovered file-content transition. The integrity guard is correct;
+repair history attribution and test the actual integration shape. These live
+instances must remain untouched while isolated verification proceeds.
+
+### Follow-up verification and onboarding handoff (2026-09-08)
+
+Personal onboarding now links directly to the host workspace chooser. The skill
+and getting-started recipe distinguish exact local checkout candidates from
+optional, user-initiated registry browsing. Creating a workspace preserves the
+Personal conversation. Base commit `9241a22` contains this change; 12 focused
+onboarding tests pass.
+
+Native Examples acceptance found that desktop creation only routed a server
+connection without opening its retained client owner. The chooser now invokes
+the same workspace-opening action as the sidebar, including authoritative catalog
+refresh for a newly created ID, owner opening, routing, and focus. All failures
+are presented by the owner and propagated to the chooser. Exact local pins use
+the host's validated inspection instead of remote Git inspection. Component
+coverage passed 21 tests before an additional catalog-failure case; the desktop
+owner suite now passes 9 tests, and all userland type projections pass.
+
+The isolated native replay `template-examples-checkout-20260908-r4` verified a
+separate workspace, unchanged existing IDs, the exact reviewed root pin, and a
+populated panel tree. Its final navigation assertion was hidden by the new
+workspace's startup-unit review. The test now completes that visible review and
+requires the new workspace to be focused; a full passing replay remains pending.
+
+That replay subsequently passed as `template-examples-checkout-20260908-r5`.
+The stronger `template-examples-checkout-20260908-r7` also waits for initial
+`about/new` content in the actual panel WebContents, after native view creation.
+Both checks passed and their owned processes exited. The captured host-page
+screenshot does not composite the separate native panel view; panel content is
+verified directly rather than inferred from that screenshot. Mobile exact-pin
+handoffs now consult host candidates before remote inspection; its six focused
+creation tests pass. Desktop discovery failure is terminal for a supplied pin,
+so an unavailable candidate list cannot redirect a local checkpoint to remote
+Git; seven chooser tests pass.
+
+Distribution closure also omitted panel build-template dependencies because they
+are not workspace package dependencies. It now includes explicit template
+references and the supplied default template. Examples contains the three build
+templates used by its panels. Six distribution tests and standalone Examples
+inventory validation pass (1,387 files). This is distinct from the removal of
+the second workspace source manifest: `meta/vibestudio.yml` is the sole manifest.
+
+Panel connection/presentation and preload-failure repairs passed 173 focused
+tests and host/workerd types. Immutable host artifact generations passed focused
+tests and review, but their real build/runtime acceptance remains pending. No
+running user instance was rebuilt, restarted, or modified for these checks.
+
+### Cross-workspace RPC integration audit (2026-09-08)
+
+The transport and policy components exist, but their passing tests do not prove
+an application can make an admitted cross-workspace call. The current
+`RpcServer` rejects every foreign destination in both `ws:rpc` and `ws:route`
+before dispatch. `WorkspaceChildHubPort.forwardWorkspaceRpc`, the hub's
+authenticated internal route, and receiver export/authority checks are available
+building blocks; they must be connected through the existing dispatcher with
+live caller and response ownership preserved. Do not create a second application
+RPC API or remove the local addressing checks without the complete boundary.
+
+Baseline verification passes 31 tests across policy, live access, framed
+transport, and the build-time export catalog. Remaining acceptance must originate
+in a real source workspace, traverse source and destination policy admission,
+invoke the exact exported receiver under ordinary authority, and return its
+result. Include denial before prompts, System ingress denial, existing context
+selection, revocation, streams/cancellation, and caller-bound result delivery.
+The accepted reviewed-receiver model applies; no per-invocation sandbox is
+required or implied by this integration.
+
+
+### Exact-source inspection and native acceptance follow-up (2026-09-08)
+
+Desktop and mobile now reject a response whose exact pin differs from the
+selected source, and withdraw stale review UI immediately when selection
+changes. Eight TemplateBrowser tests and nine mobile WorkspaceCreateSheet tests
+pass, including wrong-response rejection and prevention of creation from a stale
+inspection. The current mobile product seed has been regenerated.
+
+The dirty-checkout native replay reached the new workspace but exposed version
+skew in the isolated test checkout: concurrently updated Base panel transport
+imports the shared `bridgeTransport` export absent from that older Host copy.
+A subsequent partial Host refresh exposed coupled principal-type changes during
+infrastructure compilation. Neither run proves a product failure or current
+native acceptance. Refresh the complete paired Host source before replaying;
+do not keep adding individual dependency patches to the test environment.
+The native test now waits for the panel's canonical ready-or-failed presentation
+and reports a terminal failure directly before reading content. Whole-window
+capture uses the BaseWindow's exact desktop source, rather than BrowserWindow
+or the shell page underneath native panel views; capture acceptance is pending.
+
+
+Panel presentation/authenticated runtime readiness is committed in Host
+`3a1720c49`. The targeted ten-file change passed all normal commit gates,
+including host/workerd type checks, dependency and authority boundaries, lint,
+and formatting; 168 focused lifecycle tests passed before commit. The native
+E2E launcher now selects the same canonical immutable desktop generation as
+`pnpm dev`, preserving package identity and artifact lifetime. That harness
+change belongs with immutable-generation work and remains uncommitted pending
+native acceptance.
+
+
+The complete refreshed Host/Base dirty-checkout native replay passed as
+`template-dirty-checkout-20260908-r8` (47.7s test, 1.2m total), using the immutable
+desktop generation. It proves an uncommitted source with an unreachable origin
+can be reviewed and opened as a separate workspace with its exact pin, tree,
+focus, and initial rendered panel. Native view diagnostics confirm the initial
+panel is visible and topmost. Capturing that panel's own pixels before the
+owning display produces a correct composite; prior display-only captures raced
+compositor delivery despite readable DOM text and animation callbacks. The
+captured New Panel still shows loading suggestions, so this run does not prove
+catalog/history completion. The acceptance artifacts include both pixel captures
+and native presentation state; owned test processes exited.
+
+
+### Single-manifest commits and distribution validation (2026-09-08)
+
+Host `9da7f83e7` commits the single source manifest, inventory validation,
+source-path diagnostics, removal of generated-manifest repair, and build-template
+closure. All normal commit gates passed; 66 focused parser, bootstrap,
+distribution, and repository-exchange tests passed. Base `6aa7c82` moves its
+source inventory to `meta/vibestudio.yml` and updates publication/migration
+instructions; eight publication tests pass. Fresh generated Base, Personal,
+and System roots each passed standalone boot/inventory validation. The authoring
+Base checkout also contains reference-only upstream docs outside the distribution
+inventory, so validation applies to its generated roots, not a claim that every
+file in the authoring repository ships as a workspace.
+
+Examples `53baa03` commits the same single manifest plus the default, Svelte,
+and vanilla build templates. A clean temporary checkout of its complete staged
+index passed standalone inventory and dependency-specifier validation. Unrelated
+in-progress images/adventure source was deliberately not included; its visible
+worktree edits remain intact. Temporary validation directories were removed.
+
+### Workspace creation and onboarding integration (2026-09-08)
+
+Host `191a79465` exposes sanitized exact local checkpoint candidates through host
+discovery; 69 focused tests passed. Base `d4772a7` connects desktop and mobile
+creation to those candidates, rejects mismatched inspection responses, and keeps
+failed activation retryable without creating a second workspace. Desktop uses
+the same retained-owner activation path for the sidebar, chooser, and settings.
+A delayed catalog lookup cannot override a newer workspace selection; both its
+success and failure races are covered. The desktop component suites passed
+29 tests in total, mobile creation passed nine tests, and all three userland
+typecheck projects passed after the final change.
+
+Personal onboarding was updated in `9241a22`: its workspace action opens the
+chooser while preserving the conversation. Templates create separate workspaces;
+the onboarding agent no longer directs users to import them into Personal.
+The 12 focused onboarding tests passed. Native local-checkout evidence is recorded
+above; current mobile native acceptance and cross-workspace RPC native acceptance
+remain pending and must not be inferred from component tests.
+
+Android acceptance was restarted from an isolated Host/Base copy at
+`/tmp/vibestudio-mobile-acceptance-wsX60f`. Its full Host build passed all 29
+artifact contracts and its APK built and installed. The first native run failed
+before pairing: the common source-mode pairing launcher built prerequisites but
+omitted `VIBESTUDIO_HOST_ARTIFACT_ROOT` when spawning the server. The launcher now
+selects the prepared source generation and retains that exact root across child
+restarts. Packaged mode uses the shipped server's artifact directory without
+loading source-only build machinery. Four launcher tests and six packaging tests
+pass; the native replay is pending. The first run's owned emulator and server
+exited. Separately, 17 mobile drawer/directory tests passed against current source.
+
+The next Android replay exposed a native WebView construction crash: the newly
+added website notification listener used invalid `http://*` / `https://*`
+Android origin rules. Host `a55ec5bb0` uses the supported wildcard while keeping
+the existing native main-frame, HTTP(S), and same-origin admission checks. All
+normal commit gates passed. The subsequent native replay renders the Personal
+chat host and approval sheet beyond the previous crash; full recovery acceptance
+is still in progress. The smoke observer was also changed to report the app's
+AndroidRuntime crash directly rather than waiting for missing lifecycle phases;
+that observer change remains uncommitted.
+
+The outstanding `templates-cached-catalog` exact agentic test passed in run
+`st_ca380236343748dab95b3487ee9ae137`, with zero failed tool calls, after Base
+`dfa9813` documented the API's null result and entries array. The prompt and
+validators were unchanged. The preceding run correctly answered the question
+but failed on a needless missing-path search; no runtime catalog defect was
+found. Its managed instance was stopped. This closes the historical 50-name
+slate (50 passing names), not a claim that all 50 were rerun at the current tree.
+
+Android replay r3 completed with exit 0. It verified automatic Personal onboarding
+(three completed assistant messages), a nonblank panel capture, workspace-owned
+camera denial despite OS permission, System/Personal cookie isolation, retained
+Personal panel focus, and cold-start/server-restart reconnection with zero panel
+asset pipe misses. Its server, emulator, and inspectors were closed.
+
+Functional acceptance exposed an unresolved performance failure: creating a System
+New Panel stalled for approximately five minutes. Manifest retrieval was fast,
+prewarming failed, and multiple panel initialization attempts expired before their
+pending calls settled together. This is not acceptable activation performance.
+A similar stall was observed earlier with repaired native Iroh artifacts; the
+cancellation defect alone does not establish its cause. No timeout was increased.
+
+The Android drawer capture also exposed a missing Chat icon. Inspection found that
+manifest icon hydration lived only in Electron's orchestrator. It is now shared
+by PanelManager, and the mobile drawer reads hydrated registry decoration as the
+desktop does. The 127 manager/orchestrator tests, host/workerd type checks, and 16
+mobile icon/drawer/forest tests pass. Native visual verification of this change
+remains pending. Five existing onboarding suites were rechecked: 27 tests pass.
+
+Android replay r4 (`/tmp/vibestudio-mobile-acceptance-wsX60f/smoke-icons-r4.log`)
+completed with exit 0 after Host `e1acfc82b` and Base `544a51a`. The new drawer
+capture visibly shows Chat's SVG glyph. All prior functional assertions passed,
+including onboarding, native permission ownership, workspace cookies and focus,
+app cold-start and server-restart recovery with zero panel-asset pipe misses.
+System initialization completed in approximately 0.2–0.3 seconds this time; the
+prior five-minute stall remains an intermittent unresolved issue, not a proven
+performance fix. The server, emulator and inspector connections were closed;
+`adb devices` was empty after the runner exited. All three userland typecheck
+projects also passed. The migration passed normal Host commit gates.
+
+Host `1cc623967` makes native smoke failures explicit: the log observer identifies
+the tested Android package's crash, retains Java exception details, and rejects
+stale success phases after app/pairing failure or adb spawn/signal termination.
+The observer remains the runner's single phase source. Five behavioral tests and
+all normal Host commit gates passed; no timeout was increased. The preceding r4
+native replay exercised successful crash-aware observation. The extracted
+observer's failure paths are covered by focused tests, not a new emulator run.
+
+### Website agentic entry point audit (2026-09-08)
+
+Current production code defines `WebsiteAuthorityFact` and stores/revokes website
+subjects in `CapabilityGrantStore`, with focused authorization and acquisition
+tests. A search of non-test production call sites finds no invocation of
+`ensureWebsiteSubject` and no construction of a verified caller's `website` fact.
+`browserPreload.ts` exposes autofill and website notifications only; the general
+RPC preload is explicitly limited to app panels. These are absent end-to-end
+website capabilities, not evidence that the website agent/tool requirement passes.
+
+The remaining implementation must use the existing RPC and authority owners:
+attest document/origin/workspace at the trusted browser host, bind and invalidate
+that identity through document and connection lifecycle, carry its ceiling into
+agent execution and later tools, and reuse normal bounded approvals. A page must
+not supply its own trusted website fact. Verify one approved real effect, a denied
+effect, document replacement, revocation, and queued agent/tool work in both client
+hosts before marking this gate complete. Notification and camera acceptance remain
+separate evidence and cannot substitute for this route.
+
+Host `65ef77a16` closes the adjacent mutable-ref decoration cache bug inherited
+from the former Electron-only hydrator. Cache lookup and response application now
+include the panel's active build key, so rebuilding under the same `latest` ref
+re-observes decoration and an out-of-order old result cannot overwrite the new
+icon. No new metadata API or selector was added. The 128 focused panel tests and
+all normal Host commit gates passed. Base `ace4c71` aligns mobile panel rows with
+their tree indentation; its existing component test passes and a native visual
+replay for that alignment change remains outstanding.
+
+Website integration boundary findings: `ConnectionGrantService` already binds
+browser runtime principals to their authenticated viewer, and external panels have
+host-recorded `browser:` source URLs. Those facts can establish workspace, viewer,
+and origin, but the runtime principal alone is not a document identifier:
+`PanelRuntimeLeaseController.handleExternalDocumentCommitted` deliberately keeps
+identity on same-URL reload. Do not change ordinary panel incarnation semantics to
+manufacture a website permission boundary. Reuse a document-bound transport/session
+with native retirement on navigation, destruction and connection loss. The existing
+website notification bridge demonstrates native sender-frame attribution and
+retirement before delayed effects; permission authority still belongs to the normal
+server store and dispatcher.
+
+Synchronous RPC already carries an `authorizingCaller` through live authority-parent
+nonces. That is not proof for queued agents: the current task binding records
+workspace/context/channel, and `ExecutionAdmissionFact` has no website initiator
+binding. Agent ingress must capture the verified initiating document/subject binding
+at the existing task admission boundary, and later tools must validate its lifetime
+rather than resolving it anew from whichever page is currently in the panel. This
+must be tested through delayed execution and same-URL document replacement before
+website-to-agent calls can be exposed.
+
+Independent bounded review of Host `e1acfc82b`, `65ef77a16`, `1cc623967` and Base
+`544a51a`, `ace4c71` found no correctness issues. The reviewer checked per-workspace
+manager/registry ownership, the registry-to-mobile-directory revision path, mutable
+ref build invalidation and stale replies, and crash/reader-failure precedence in all
+smoke phase waits. This review does not close native cross-workspace acceptance:
+run6 was killed before readiness and never dispatched RPC. Its owned processes are
+stopped; the atomic merge test has the next isolated runtime window.
+
+### Acceptance reconciliation (2026-09-08, subsequent runs)
+
+The atomic panel/store publication scenario passed in
+`st_410258ff3404429e89d9ece1eec2df3c` with zero tool failures. Its validator
+distinguishes a manifest's declared authority from the independently stored,
+exact-version publication grant and verifies UI storage across reload/rebuild.
+It does not exercise subagent merging. The separate existing
+`subagent-diff-inspection` scenario passed in
+`st_c2a8303ca33349d1b24676b7b0238b57`, also with zero tool failures. The managed
+instance for both runs was stopped.
+
+Base `3cc040a` adds `subagent-reviewed-merge` without replacing inspection-only
+coverage. Its validator requires the exact terminal child event, a prior bounded
+diff, and a later complete, concluded merge with zero remaining coordinates.
+Five validator tests and all three userland typecheck projects pass; independent
+review found no issues. Its agentic run remains outstanding, so the reported
+subagent merge/compare integrity failure is not yet proven resolved.
+
+Base `97ef6d3` updates onboarding, architecture, and workspace development
+guidance to the implemented explicit-destination RPC contract and distinguishes
+opening a template as a workspace from editing imported template source.
+Independent review found no issues. Documentation is not native acceptance.
+
+Native cross-workspace runs 7–9 stopped during fixture preparation before the
+intended RPC call. The fixture is being corrected to create an authenticated
+second workspace from reviewed exact source, with its full dependency closure.
+Run 9 showed that a derived test checkout's local Git origin cannot be fed to
+the HTTP(S) source-selection path; review facts must come from validation of the
+already selected immutable fixture source. No production origin restriction was
+relaxed. Each run's owned processes were cleaned up.
+
+The first immutable-generation replay proved that publishing a later build
+did not change the running main process's artifact root and that a new panel
+entered the durable tree. It did not prove that the new panel rendered; that
+claim was withdrawn. A strengthened replay now checks canonical content
+readiness and rendered text. That strengthened replay passed as
+`20260908T040749524Z-2767037-941a4b8f` (38.2s test, 1.1m total): the newly
+created Help panel reached `contentReady`, rendered Help/About/Vibestudio text,
+and main retained the original artifact root. The reviewer confirmed no owned
+processes remained and the test's temporary root was removed. This proves the
+specific immutable-generation/new-panel lifecycle, not unrelated panel failures
+or the remaining cross-workspace RPC gate.
+
+Host `02ac6071b` commits the compiler-artifact generation ownership change with
+normal commit gates passing. Launchers retain the selected artifact root and
+runtime loaders resolve through that root. The generation includes a symlink to
+the checkout's installed `node_modules`; the proven guarantee concerns later
+compiler builds, not arbitrary dependency installation while a process runs.
+Generation disk retention and publication copy cost still need review as part
+of the requested startup/resource investigation.
+
+Base `406b9a8` commits the atomic publication validator and the system-test
+runner's exact dependency-attributed authority requests. The passing atomic run
+above used the full current shell source and its matching generated receipt.
+The shell's `workspace.gateway.access` declaration remains uncommitted with
+that shell source; it must be included in the coherent shell commit, without
+attesting unrelated unstaged source in a staged seed receipt.
+
+The broader runtime audit found an older stream routing bug: raw-response reads
+without a native raw hook bypassed the normal native stream/upload selection.
+Host `b10cccf4c` reuses the existing stream path; `8d6b0eb2f` adds the adjacent
+bridge-upload regression. All 40 RPC client tests and normal commit gates pass,
+with independent review finding no issues. This is not evidence that RPC client
+disposal, website document lifetime, or native process cleanup is complete.
+
+Cross-workspace discovery audit: the current native test addresses a known
+receiver directly. `workerService`'s existing `listServices` and `resolveService`
+are still local methods; the catalog returns local service rows rather than a
+remote-disclosure-filtered projection. `resolveService` may activate a Durable
+Object, so it is not a metadata-only discovery operation. Before declaring
+cross-workspace integration complete, extend the existing catalog owner to
+filter by deliberate receiver exposure and governing disclosure policy without
+activation or approval prompts. The shared service-client cache must also bind
+resolved targets to their selected workspace instead of treating a target ID
+as globally unique. Do not expose the existing unfiltered catalog merely by
+adding a method flag. Known-address call acceptance cannot substitute for this
+remaining requirement.
+
+Infrastructure-cache investigation: a test-only RPC edit invalidates the whole
+package tree digest and its six-package build closure. A subsequent clean
+`inspectInfrastructurePackageBuilds()` took 66 ms for 12 build packages and
+reported no dirty packages. No filename-based exclusion was added: TypeScript
+`exclude` removes root selection but does not prohibit imports of those files.
+Any narrower cache input set must come from actual compiler dependencies, not
+an assumption that `.test.ts` can never contribute to output. The current warm
+scan is not evidence of a material startup bottleneck.
+
+
+The complete existing onboarding suite passed on the current checkout: 47 tests
+across eight files, including the SetupHub chooser, registry-bound selection,
+capability routing, refresh, and visible failure behavior. It retains Personal's
+onboarding conversation while templates create separate workspaces. Host
+`882a123e1` unifies bodyless streaming responses (204/205/304); 50 focused RPC
+and codec tests and the normal commit checks passed, with two independent
+reviews finding no issues.
+
+A subsequent RPC audit reproduced loss of evaluated execution admission when
+`withExecutionAdmission(withCausalParent(rpc, parent), nonce)` is composed, as
+used by automation tool dispatch in `agent-vessel.ts`. The causal wrapper's
+object spread omitted the non-enumerable nonce. Both wrappers also returned the
+unscoped base peer, bypassing their bound options for peer calls/events. Two
+regressions failed before repair. The shared option-view/peer implementation now
+preserves internal facts through either wrapper order, including explicit
+workspace destinations. All 59 focused client, connectionless, and internal
+option tests and Host/workerd types pass. Host `24e86fe1a` commits the repair;
+normal commit checks pass and independent review found no issues.
+The admission wrapper and production composition date to August 24 (Host
+`44dbed45aa`, Base `36ea56bc`), rather than being demonstrated consequences of
+the workspace split. This evidence identifies an automation effect-binding bug;
+it does not establish the cause of every reported chat or panel failure.
+
+
+Base `e6034fb` and `2891fa6` commit Quickfire's exact channel targets across
+worker/core and desktop/mobile clients, plus notification/invite propagation,
+the Shell gateway declaration, and the reviewed install-row alignment. App seed
+receipts were generated from the exact staged source projection; working-tree
+receipts were regenerated separately for the remaining unstaged changes.
+
+The first actual `subagent-reviewed-merge` run exposed a separate lifecycle
+hole: a child completed successfully with dirty semantic work, so settlement
+had no committed source event to merge. The implementation now rejects only
+successful completion with uncommitted child work before writing the terminal
+wake/fence; clean observation-only and failed/cancelled outcomes retain their
+existing semantics. A regression verifies that the same child can commit then
+complete with its exact source event. All 141 chat-op tests and all three
+userland typecheck projections pass; root review found no issue. Fresh agentic
+replay remains required before claiming this scenario passes. This is distinct
+from the original compare/merge coverage-integrity error, which still requires
+its own decisive evidence.
+
+
+Native receive-cancellation evidence is now operation-level rather than an
+unexplained test timeout. In the retained stock Iroh 1.1.0 trace, `readExact(1)`
+was pending, `stop(33)` remained pending through a 500 ms observation, and a
+controlled peer byte then released both. The exact patched artifact instead
+settled stop and rejected the pending read with `stream locally stopped` in
+approximately 0.3 ms, without the peer byte. Both experiments closed their
+owned connections/endpoints. This demonstrates the specific read/stop
+serialization defect and its patched behavior; it does not prove that this is
+the sole cause of every intermittent mobile activation stall. Retained native
+regression coverage and production release artifacts/pins remain outstanding.
+
+Base `ddc5067` removes two remaining stale skill claims: mobile test tooling is
+workspace source rather than a template installed into an existing workspace,
+and explicit application RPC is distinct from selected source transfer rather
+than blanket-closed. Native run14 completed its exact peer creation approval;
+its subsequent navigation assertion failed because Radix's modal hides
+background controls from accessibility queries. The screenshot already showed
+the peer active in the title bar. There is no evidence that activation waits on
+the global approval queue. The fixture now clears only exact initial-workspace
+unit reviews before interacting with Settings; run15 is the next acceptance
+attempt, not yet a reported pass.
+
+
+2026-09-08 follow-up: native run17 confirmed that ordinary project fixtures
+now derive the minimal Base source rather than accidentally inheriting System
+programs. It still failed before the cross-workspace call: a visible unit review
+hid the navigation control, and retained artifacts did not identify whether this
+was the original creation review or a subsequent admission. The isolated helper
+now observes the exact creation review state after its click. That distinction
+must be established before changing approval behavior. Run17 is terminal and
+its owned processes and temporary state were cleaned; native acceptance is not
+claimed.
+
+Base `4e55e98` removes the duplicate panel-handle runtime and mutable module
+initialization bridge. Parent access, exported panel operations and error-debug
+chats now share one factory-owned runtime. Native/RPC child-event listeners are
+removed on destruction, and destroyed factories reject new subscriptions.
+All existing handle tests were preserved; 36 focused tests passed, including
+new cross-runtime isolation and cleanup tests, and all three userland type
+projections passed. Independent review found no correctness issues. Desktop
+host-command contributions still need owner-driven cleanup on document
+retirement; React unmount alone is not adequate crash/navigation evidence.
+
+
+2026-09-08 current follow-up evidence: Base `8503f0b` removes the unused
+panel credential singleton/export while retaining its OAuth behavior test on
+the shared factory; 8 credential and 16 hosted-runtime tests passed. Base
+`1e68215` aligns onboarding Devices wording and the cached-template comment.
+Host `32832b8b5` fixes notification retirement on same-document navigation;
+18 notification tests, Host/workerd types and all normal commit hooks passed,
+with independent review. None of these changes establishes website RPC
+admission acceptance.
+
+Base `7f79606` is the authoritative clean-child-completion commit. The exact
+reviewed-merge test functionally passed twice, but strict runs remained failed
+because the model supplied inspect limit 200 despite the published maximum
+100, then corrected it. An explicit Luna diagnostic is pending; limits and
+prompts were not loosened. Automation run
+`st_a294fbcb82b9469fbebddd3dbcc3bc10` observed a second incomplete turn and
+remains a lifecycle investigation, not a proven validator timing defect.
+The r2 managed instance was stopped and its owned state cleaned.
+
+2026-09-08 template checkout follow-up: `--workspace-checkout PATH` now
+uses the existing exact development checkpoint and ordinary startup creation
+intent to open a target as an additional workspace. Personal/System default
+pins remain separate. Startup identity incorporates the exact source pin,
+so a changed checkout does not silently reopen an older persistent workspace.
+The desktop launch explicitly requests creation when missing. Base write-back
+selects the root user's System workspace, never an arbitrary bootstrap project.
+The parser/environment/hub checks passed 68 tests; the existing exact-checkpoint
+suite passed 3 tests. Isolated native launch acceptance and template runtime
+verification remain in progress. Examples, Google, News, and Spectrolite are
+being audited; the latter three still contain obsolete Base copies and duplicate
+manifest files that must be removed during migration. Authored local app edits
+must be preserved. No compatibility format is being added.
+
+The explicit Luna merge diagnostic `st_1a87ae262ad047279a0f9c375977f362`
+completed with zero tool failures and a clean generic VCS compare/merge path,
+but failed the dedicated subagent inspection validator because it did not use
+`inspect_subagent`/`merge_subagent`. This does not establish dedicated-contract
+acceptance. Its owned managed instance was stopped.
+
+2026-09-08 checkout migration execution: root applied canonical minimal Base
+source to Examples, Google, News, and Spectrolite. All four inventory validators
+passed. App-owned directories were hashed before/after replacement and unchanged
+(22 Examples, 5 Google, 3 News, 2 Spectrolite repositories). Examples intentionally
+retains optional Svelte/scaffold/image units. The single manifest is now
+`meta/vibestudio.yml`; the three obsolete `meta/template.yml` files are removed.
+Exact second projection is `/tmp/vibestudio-template-migration-root-ajDNb9`,
+Base commit `3758a8cc3bd4688be136b83eb3944554236da8c8`; original backups are in
+`/tmp/vibestudio-template-migration-root-9CUd79/backups`. Application preserves
+current authored app edits; subsequent explicit website receiver declarations
+were added to Example game/sample workers and Google Gmail worker as required
+by the current Host contract. These receivers remain for installed workspace
+applications and agents.
+
+The distributed tests had referenced an undeclared `tests/helpers/ledgerTest.ts`.
+That trivial wrapper is removed from Base, with the exact same `ledger:*` test
+names expressed directly through `it`. All 8 affected evidence tests pass.
+`type-check-userland.ts` retains mandatory root checking and runs the existing
+client integration configs where present (the full Base authoring checkout
+still has all three). App-only workspaces no longer fail for nonexistent client
+integration projects. Google app suites pass 118 tests in 17 files. Examples
+currently has 28 passing/30 failing tests across 11 files; the main failures are
+Host's newly mandatory receiver exposure-policy argument missing in the older
+captured shared runtime, not yet a passing migrated runtime. A newer canonical
+Base refresh is required after those concurrent source changes, followed by
+focused reruns. News/Spectrolite app checks remain outstanding.
+
+Actual isolated `pnpm dev --workspace-checkout` launch passed before the latest
+refresh: Personal/System/Examples appeared separately, exact target source review
+was resolved, about/new connected and the Examples catalog rendered. Screenshot
+`/tmp/workspace-checkout-final-ui.png`. Its shutdown exposed orphaned descendants;
+only that instance's processes/state were cleaned. A proposed supervisor repair
+passed one native close and five tests, but root review rejected its permanent
+100ms process-table polling and stale bare-PGID retention. It remains uncommitted
+and must be replaced with sound process lifetime ownership, not counted complete.
+
+Template migration verification, 2026-09-08 (continued):
+
+- Refreshed all four templates from the exact captured minimal Base at
+  `/tmp/vibestudio-template-migration-root-w9jkDj`; retained Examples' four
+  intentional optional Base repositories and all app-owned source. Overwritten
+  shared source has per-template backups beneath that capture. The subsequent
+  canonical `sanitizePlacementHint` import move was copied to the same shared
+  runtime file in each template after verifying it still matched the capture.
+- All four root template inventories/dependency specifiers and RPC contracts
+  pass. Full semantic-projection typechecks passed for Examples, Google, News
+  and Spectrolite. Logs: `/tmp/template-{examples,google,news}-types-r3.log` and
+  `/tmp/template-spectrolite-types-r4.log`.
+- Google: 118 app tests passed. News: 82 app tests plus its repaired bootstrap
+  test passed. Spectrolite: 109 tests plus 11 DOM tests passed. News and
+  Spectrolite declared the missing testing-library DOM peer dependency; the
+  News hook-order test now mocks only the React hooks it actually substitutes,
+  avoiding accidental evaluation of unrelated image runtime components.
+- Examples: all 58 conventional tests passed after the canonical runtime
+  refresh. Two additional suites declare Workerd and import test-runtime; their
+  Vitest collection failure was a runner mismatch, not permission to rewrite
+  them. Running those through the actual workspace test runtime remains required.
+- Native launcher screenshot was visually reviewed: all three workspaces and
+  target app catalog render. The target display name still exposes its snapshot
+  suffix; this is usable but warrants later display-name refinement.
+- Shutdown review required explicit acknowledgement rejection/disconnect and
+  newly spawned child cleanup. The revised identity-registration implementation
+  is undergoing a new isolated native proof; do not count cleanup accepted yet.
+- Spectrolite channel bootstrap integration and runtime acceptance across all
+  templates remain outstanding. These results do not complete the overall plan.
+
+Further verification and landed changes:
+
+- Host `d2ddb9876` commits the exact-checkout additional-workspace developer
+  launcher, its conflict/product guards, and System writeback ownership. Full
+  normal commit gates passed (including host/workerd types, lint and format).
+- Spectrolite bootstrap now reads participants through its retained connected
+  PubSub client; independent contextless resolution was removed. Six focused
+  bootstrap/controller tests and the final template typecheck pass. The Base
+  participant regression proves the exact DO target is used without new service
+  resolution; that test was copied to all four distributions.
+- Explicit dev-runner child identity ownership passed normal shutdown and a
+  forced Electron SIGKILL in isolated native instances. Both checks found no
+  surviving owned processes, registry entries or temporary state. The agent is
+  now exercising Examples' two declared Workerd test suites on an owned instance.
+- Runtime API generated documentation was refreshed in Base and all templates.
+  Host CLI generated API documentation and product seed records were refreshed
+  to match current source. Formatter-only changes were applied to the 42 current
+  source files flagged by the repository gate; they are outside launcher commit.
+
+Template migration commits:
+
+- Google `b56852f`: standalone Base refresh and Gmail receiver policy.
+- News `14b3417`: shared Base refresh; `2a33ac0`: bootstrap test dependency/mock fix.
+- Spectrolite `d178e72`: shared Base refresh; `4d86eb2`: connected channel query and DOM test dependency.
+- Examples `62c91bc`: shared Base refresh; `a17f46b`: game/sample receiver declarations and template contract test. Concurrent adventure app edits were preserved and kept outside these commits.
+- The Host standalone typecheck-tool commit remains uncommitted: its normal hook
+  later encountered the concurrently edited websiteDocuments missing
+  `connectionConsentCurrent`. No hook bypass or unrelated website repair was
+  introduced to force this commit through.
+
+Latest bounded follow-up:
+
+- Base `7fa06a7` preserves the eight ledger evidence test names while removing
+  their undistributed helper; `f4c79cd` commits the exact connected-channel
+  participant API and regression. Root reviewed both commit file lists.
+- Examples `9da4da6` carries the canonical template skill, retaining catalog
+  invocation guidance; its contract test passes. Latest concurrently edited
+  adventure world/evaluation suites pass 28 tests (18 + 10).
+- App-owned string-RPC audit found no further production contextless channel
+  discovery or obsolete template import calls. Remaining resolveService strings
+  are test harness branches; Gmail's existing-object lookup remains deliberate.
+- The typecheck-tool commit is still pending normal repository hooks: current
+  external edits repeatedly change generated CLI docs and shell seed hashes.
+  The successfully committed launcher already passed the full hook suite; these
+  later failures must not be reported as a launcher verification failure or
+  bypassed to force another commit.
+
+Runtime acceptance currently in progress:
+
+- News and Spectrolite manifests now start `panels/news` and
+  `panels/spectrolite` respectively; both inventories validated. News native
+  checks passed exact checkout review, separate workspace creation, panel
+  mounting, and rendered branded content for both apps; owned cleanup completed.
+  Root visual review found News still connecting and Spectrolite still scanning,
+  so functional initialization is not yet proven. Follow-up checks must await
+  usable controls or a settled empty/list state. News commit `98a0781` records
+  its initial panel; Spectrolite's initial-panel commit remains pending.
+- Examples' declared Workerd suites passed in the owned r4 instance: world
+  16/16 and campaigns 17/17. That instance is stopped and cleaned up. These
+  results precede the latest RPC receiver contract; current-contract replay
+  remains required, and r5 did not register an instance because the concurrent
+  website/RPC migration did not yet build coherently.
+- Package-owned test suites exposed two generic artifact defects: runtime was
+  incorrectly constrained by source unit kind, and execution metadata retained
+  package kind. Both are repaired with worker/package and browser/package
+  coverage. Generated test registration now uses a typed `exposeTestRunner`
+  helper rather than embedding an unchecked RPC contract in generated source.
+- Fresh native startup exposed React dependencies in core template management.
+  The UI adapter has moved to the existing `@workspace/react/templates` entry;
+  core template management is React-free. UI consumers retain mandatory React
+  peer checks. Focused UI/core tests (9) and dependency audit tests (8) pass.
+- The recovered native cross-workspace RPC scenario exercises both a permitted
+  call and denial after outgoing policy removal, but has no passing current
+  native result yet. Its generated fixture must follow current receiver and
+  panel mounting contracts. It is not evidence for the full multi-user,
+  streaming, or revocation acceptance matrix.
+- A 51-name agentic slate is selected under
+  `/tmp/agentic-slate-selected-20260908.txt`. Source selection is preparation,
+  not passing evidence; managed doctor, catalog confirmation, runs, failure
+  inspection, and owned-instance cleanup remain required.
+- Native work uses isolated consistent snapshots. No original Host full-build
+  or user-instance restart is authorized by this test work.
+
+
+Native cancellation regression (2026-09-08):
+
+- `packages/iroh-transport/src/nodeFixture.test.ts` now retains the pending-read
+  cancellation regression: a peer sends no response data, local receive stop
+  must settle and reject the pending read, and the peer must receive STOP_SENDING.
+- The exact test fails against the currently installed production 1.1.0 binding:
+  `/tmp/iroh-pending-read-regression-current.log`, bounded cancellation observation
+  expires at 5 seconds. This is a test failure guard, not a runtime timeout fix.
+- The same test passes against the reproducibly repaired Linux native artifact
+  using the upstream loader's test override:
+  `/tmp/iroh-pending-read-regression-patched.log`. Both test processes terminated
+  and their fixture cleanup closed owned connections/endpoints.
+- Production platform dependency release/pins remain incomplete; the passing
+  override is not production acceptance and does not establish the Android
+  activation stall's root cause. Do not suppress this regression or relabel the
+  current production binding as passing.
+
+
+Latest retained verification:
+
+- The full native Node transport fixture passes 11/11 against the reproducibly
+  repaired Linux artifact (`/tmp/iroh-native-fixture-patched-current.log`),
+  including the new pending receive cancellation regression. This does not
+  change the production failure recorded above.
+- Base `9f437c9` commits the typed test-runner helper and its behavioral test.
+  Root reviewed the exact three-file diff; current-contract native replay is
+  still required independently of the helper's two passing focused tests.
+- The user reproduced `desktopEvents.watch: Unknown service` during ordinary
+  `pnpm dev` in the main checkout. Investigation now covers default startup
+  native-service readiness and shell transport workspace identity. Existing
+  EventsClient retry behavior is present; adding retries would not repair
+  incorrect ownership or premature readiness. Verification must use the default
+  dev path in an owned isolated copy, without restarting the user's app.
+
+
+Desktop navigation and steady-state event follow-up (2026-09-08):
+
+- The reported `vibestudio://surface?v=1&kind=workspace-chooser` failure was
+  reproduced at the desktop PanelView classification boundary: installed-panel
+  navigation handled panel locations but omitted shell surfaces. PanelView now
+  uses the shared shell-surface parser and delegates through the originating
+  workspace's existing surface callback. Both in-place links and new-window
+  links are covered; ordinary website popups remain outside this installed-panel
+  path. Mobile already routes these links through the same shared parser.
+- PanelView/window focused tests pass 32/32; the additional workspace callback
+  ownership check passes within the eight window-controller tests. Native
+  onboarding-link acceptance remains pending.
+- The user reports `desktopEvents.watch` errors persist well after startup. The
+  premature ready-promise publication is a demonstrated defect introduced in
+  Host `4fee76409`, but fixing that defect alone is not yet a sufficient causal
+  explanation or verified repair of the persistent error. The native steady-state
+  stream route and before/after startup timing remain required acceptance.
+- Typed test-runtime copies were byte-compared to Base `9f437c9` and committed
+  separately: Examples `5eeeac0`, Google `053ebcd`, News `1078976`, Spectrolite
+  `5523f5f`.
+- News's empty Inbox now has an actual Add a source button opening the existing
+  settings dialog, disabled until reader state is available. Its focused
+  typecheck passes; final frozen native interaction/screenshot remains pending.
+
+Persistent event-routing cause and repair scope (2026-09-08):
+
+- The System compositor's UI stream relay introduced in Host `b445eda44`
+  forwarded streams to the server without checking the owning native dispatcher.
+  Base's retained shell session stream bridge (`0d801e2`) exercises that route.
+  `desktopEvents` belongs to the native runtime, so retries continue reaching
+  the wrong receiver even after startup completes. This is separate from the
+  premature readiness publication above.
+- Repair both UI and installed-panel stream entry points through the same local
+  dispatcher operation, preserving caller identity, authority, cancellation,
+  workspace ownership, and the existing remote route. Check document retirement
+  again after awaiting runtime readiness. Do not add startup sleeps or another
+  event subscription channel. Native steady-state delivery and measured startup
+  remain pending acceptance.
+- Base `9241a22` changed onboarding to emit the chooser link without adding the
+  desktop panel navigation consumer. This was an integration omission, not an
+  intentional permission change. The current desktop link tests pass 32/32 on
+  the working source; verify the onboarding click against the native compositor.
+
+Onboarding selection contract regression (2026-09-08):
+
+- Base `1461b9a` changed SetupHub's template action to `create-workspace`, while
+  the independent routing helper and resolver retained `add`. Separate producer
+  and resolver tests passed without exercising their connection. The user's
+  exact Examples payload consequently failed before template review.
+- Base `93389a3` uses the existing typed interaction constructors in SetupHub
+  and makes workspace creation the sole template action. The existing UI test
+  now feeds the emitted button metadata into the real resolver. All 21 focused
+  onboarding UI, routing, and skill-contract tests pass. No legacy action alias
+  is accepted. Native workspace creation acceptance remains outstanding.
+- The same report shows `client_eval` guest failure recorded as terminal success.
+  Its returned `details.success` is opaque to the advertised-method executor;
+  explicit structured error result propagation is being repaired independently.
+
+Current verification follow-up:
+
+- Base `297d612` adds explicit final-result metadata to the existing advertised
+  method execution context and uses it for client-eval failures. Structured
+  failure details survive without interpreting arbitrary user payload shapes.
+  All 62 focused client-eval/RPC-client tests and all three Base type projections
+  pass. The audit found other advertised UI methods with the same reporting gap;
+  their migration is still in progress.
+- The fresh owned desktop pair at
+  `/tmp/vibestudio-desktop-events-current-pair` demonstrates actual approval
+  event delivery after startup: the queue progresses across System, Personal,
+  and credential approvals, and both workspace counters update. Root inspected
+  `/tmp/desktop-events-native-approved.png`. No `desktopEvents` unknown-service
+  errors were observed. Chooser interaction and owned cleanup are still pending.
+- This native run measured 29.68 seconds total, with 29.12 seconds hub startup,
+  85 ms post-connect, and 428 ms desktop mount. These are measured spans, not a
+  controlled before/after comparison or evidence of a performance improvement.
+- The paused agentic slate scheduler and its exact managed instance have been
+  stopped and their process census is empty. The retained ledger still has four
+  passing tests and a binary-input failure; the append-file hang has separate
+  captured evidence. Callback lifecycle repair and fresh-instance replay remain
+  necessary before resuming the remaining slate.
+
+- The real-database cross-workspace access regression now exercises Alice and
+  Bob through one retained read-only identity connection: one-sided policy
+  denial, Alice's permitted Personal access, denial for Bob, and immediate
+  policy/membership revocation. Access plus private-workspace suites pass 10
+  tests. This strengthens server integration evidence but does not substitute
+  for the required native two-user stream/reconnect scenarios.
+- Base `489bb1b` extends explicit failure reporting to the remaining browser and
+  headless advertised methods; `890925c` retains successful attachment-result
+  coverage for the shared method boundary. Focused tests and Base types pass.
+
+- Host `5a4a4b52c` commits the real-identity-reader regression. Its normal full
+  commit checks pass, including generated contracts, dependency boundaries,
+  Host/workerd types, lint, and formatting.
+- Base `9601353` repairs the caller side of the gated template metadata contract
+  from `f93dc5b`: chat, Workspaces, desktop, and mobile request the two capability
+  families on the exact templates receiver. Eight real-evaluator consumer cases
+  plus three chat authority tests pass; all Base type projections and independent
+  review pass. Native catalog approval/loading remains a separate open check.
+- Repaired agentic `append-file` passes as
+  `st_470cc0e5c3bb457db6a38a64907f69bc`. Subsequent directory, file-stat, rename/copy,
+  removal, and symlink cases pass. The ledger currently records 10 passing names
+  and one earlier binary-input failure; the 51-name slate is not complete.
+- Root visual review of the settled News capture found horizontal overflow from
+  full-width content/header boxes plus padding. Their shared style now uses
+  border-box sizing. Final native capture must verify the correction; the prior
+  screenshot proves the defect, not the repaired result.
