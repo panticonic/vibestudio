@@ -48,7 +48,7 @@ describe("shipped Personal first-run workspace", () => {
     expect(stateArgs["systemPrompt"]).toEqual(
       expect.stringContaining("executeOnboardingSelection")
     );
-    expect(stateArgs["systemPrompt"]).toEqual(
+    expect(stateArgs["systemPrompt"]).not.toEqual(
       expect.stringContaining("resolveOnboardingTemplateSelection")
     );
     expect(stateArgs["systemPrompt"]).toEqual(expect.stringContaining("SetupHub.tsx"));
