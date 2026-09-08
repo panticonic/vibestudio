@@ -351,6 +351,13 @@ export type GitOverwritePreview = z.infer<typeof gitOverwritePreviewSchema>;
 
 export const gitPushUpstreamOptionsSchema = z
   .object({
+    expectedMainEventId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Require the exported repository to match this reviewed event; unrelated workspace changes are allowed."
+      ),
     force: z
       .boolean()
       .optional()
@@ -488,6 +495,13 @@ export type GitRemoteDefaultBranchInput = z.infer<typeof gitRemoteDefaultBranchI
 
 export const gitPublishRepoInputSchema = z
   .object({
+    expectedMainEventId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Bind public repository contents to this reviewed event, allowing unrelated workspace configuration changes."
+      ),
     repoPath: z.string(),
     provider: z.string().optional(),
     name: z.string().optional(),

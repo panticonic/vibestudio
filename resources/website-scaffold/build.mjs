@@ -18,7 +18,7 @@ if (Object.values(result.metafile.outputs).some(file => file.imports.some(item =
   throw new Error("Static output contains an external package import");
 await writeFile(path.join(output, "index.html"), await readFile(path.join(root, "index.html")));
 await writeFile(path.join(output, ".nojekyll"), "");
-const inputs = ["App.tsx", "index.tsx", "site.tsx", "style.css", "index.html", "build.mjs", "package.json", "package-lock.json", "sdk.json"];
+const inputs = ["App.tsx", "index.tsx", "site.tsx", "style.css", "index.html", "build.mjs", "package.json", "package-lock.json", "sdk.json", "tsconfig.json", "assets.d.ts"];
 const source = Object.fromEntries(await Promise.all(inputs.sort().map(async file => [file, hash(await readFile(path.join(root, file)))])));
 const files = Object.fromEntries(await Promise.all((await readdir(output)).sort().map(async file => [file, hash(await readFile(path.join(output, file)))])));
 const manifest = { version: 1, sdk: JSON.parse(await readFile(path.join(root, "sdk.json"), "utf8")), source, files };
