@@ -1428,12 +1428,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     signal?: AbortSignal
   ): Promise<RegistryEntry & { activeBundleKey: string }> {
     await this.whenDeclarationsStaged();
+    // Declaration application can finish by deferring an onInvoke build. Wait
+    // for that target transition before deciding whether first use must build.
+    await this.waitForTargetActivation(name, signal);
     await this.prepareTargetBuild(name);
-    let entry = this.lookupForInvoke(name);
-    if (!entry) {
-      await this.waitForTargetActivation(name, signal);
-      entry = this.lookupForInvoke(name);
-    }
+    const entry = this.lookupForInvoke(name);
     if (!entry?.activeBundleKey) throw this.extensionUnavailableError(name, operation);
     return { ...entry, activeBundleKey: entry.activeBundleKey };
   }

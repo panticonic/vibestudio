@@ -1566,6 +1566,29 @@ describe("ExtensionHost activation", () => {
     await expect(preparation).resolves.toMatchObject({ payload: { effect: "open" } });
   });
 
+  it("materializes an on-invoke target when queued declaration application defers its build", async () => {
+    const { host, extensionNode, buildSystem } = makeHost({
+      installed: false,
+      activationEvents: ["onInvoke"],
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    await host.reconcileDeclared(declare(extensionNode.name));
+    await host.whenSettled();
+    host.registry.patch(extensionNode.name, { status: "building" });
+    const prepare =
+      host.createServiceDefinition().authorityPreparation!["extensions.invoke.userland-method"]!;
+    const preparation = Promise.resolve(
+      prepare(panelCtx("panel-1"), [extensionNode.name, "confirm", []])
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    host.registry.patch(extensionNode.name, { status: "available" });
+    await expect(preparation).resolves.toMatchObject({ payload: { effect: "open" } });
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main", {
+      priority: "interactive",
+    });
+  });
+
   it("fails with ENOTREADY when an extension is not running", async () => {
     const { host, extensionNode } = makeHost();
     vi.spyOn(host.processes, "isRunning").mockReturnValue(false);
