@@ -21,6 +21,11 @@ export function createLiveCallerGate(deps: {
   deviceAuthStore: Pick<DeviceAuthStore, "userFor" | "getAgentCredential">;
   entityCache: Pick<EntityCache, "resolveActive">;
   isLiveExtension: (callerId: string) => boolean;
+  /** Browser hosting proves the exact connected document, independently of code admission. */
+  isLiveWebsiteExecution?: (
+    runtimeId: string,
+    website: NonNullable<VerifiedCaller["website"]>
+  ) => boolean;
   isLiveSystemRuntime?: (
     callerId: string,
     callerKind: VerifiedCaller["runtime"]["kind"]
@@ -120,7 +125,12 @@ export function createLiveCallerGate(deps: {
       return (
         typeof authorizedBy === "string" &&
         issuerOwnsUser(authorizedBy, user.id) &&
-        exactActiveCodeIncarnation()
+        (caller.website
+          ? caller.runtime.kind === "panel" &&
+            caller.website.userId === `user:${user.id}` &&
+            caller.website.workspaceId === deps.workspaceId &&
+            (deps.isLiveWebsiteExecution?.(caller.runtime.id, caller.website) ?? false)
+          : exactActiveCodeIncarnation())
       );
     }
 

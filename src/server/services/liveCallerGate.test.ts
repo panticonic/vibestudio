@@ -24,6 +24,7 @@ describe("createLiveCallerGate", () => {
     let deviceLive = true;
     let agentLive = true;
     let extensionLive = true;
+    let websiteLive = true;
     let currentExecutionDigest = executionDigest;
     const gate = createLiveCallerGate({
       workspaceId: "ws_alpha",
@@ -95,6 +96,11 @@ describe("createLiveCallerGate", () => {
                   ownerUserId: runtimeOwnerUserId,
                 } as never),
       },
+      isLiveWebsiteExecution: (runtimeId, website) =>
+        websiteLive &&
+        runtimeId === "panel:website" &&
+        website.connected &&
+        website.binding.documentId === "document-1",
       isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
       isLiveSystemRuntime: (callerId, callerKind) =>
         callerId === "do:workers/workspace-source:GadWorkspaceDO:workspace" && callerKind === "do",
@@ -113,6 +119,9 @@ describe("createLiveCallerGate", () => {
       },
       revokeAgent: () => {
         agentLive = false;
+      },
+      retireWebsite: () => {
+        websiteLive = false;
       },
       retireExtension: () => {
         extensionLive = false;
@@ -161,6 +170,71 @@ describe("createLiveCallerGate", () => {
     state.revokeAgent();
     expect(state.gate(agent)).toBe(false);
   });
+
+  it("requires live document proof and the current authenticated viewer for website panels", () => {
+    const state = fixture();
+    const caller = {
+      ...createVerifiedCaller("panel:website", "panel", null, undefined, {
+        userId: "usr_alice",
+        handle: "alice",
+      }),
+      website: {
+        subject: "website:one" as const,
+        userId: "user:usr_alice" as const,
+        workspaceId: "ws_alpha",
+        origin: "https://example.test",
+        connected: true,
+        binding: { subject: "website:one" as const, generation: 0, documentId: "document-1" },
+      },
+    };
+    expect(state.gate(caller)).toBe(false);
+    expect(state.gate(caller, "shell:dev_1")).toBe(true);
+    expect(
+      state.gate(
+        { ...caller, website: { ...caller.website, workspaceId: "ws_other" } },
+        "shell:dev_1"
+      )
+    ).toBe(false);
+    expect(
+      state.gate(
+        { ...caller, website: { ...caller.website, userId: "user:usr_bob" } },
+        "shell:dev_1"
+      )
+    ).toBe(false);
+    state.retireWebsite();
+    expect(state.gate(caller, "shell:dev_1")).toBe(false);
+    // Code evidence cannot substitute for a retired document's proof.
+    expect(
+      state.gate(
+        { ...caller, code: codeIdentity("panel:website", "panel", "apps/shared") },
+        "shell:dev_1"
+      )
+    ).toBe(false);
+  });
+
+  it.each(["revokeUser", "removeMembership", "revokeDevice"] as const)(
+    "withdraws website transport when %s changes",
+    (withdraw) => {
+      const state = fixture();
+      const caller = {
+        ...createVerifiedCaller("panel:website", "panel", null, undefined, {
+          userId: "usr_alice",
+          handle: "alice",
+        }),
+        website: {
+          subject: "website:one" as const,
+          userId: "user:usr_alice" as const,
+          workspaceId: "ws_alpha",
+          origin: "https://example.test",
+          connected: true,
+          binding: { subject: "website:one" as const, generation: 0, documentId: "document-1" },
+        },
+      };
+      expect(state.gate(caller, "shell:dev_1")).toBe(true);
+      state[withdraw]();
+      expect(state.gate(caller, "shell:dev_1")).toBe(false);
+    }
+  );
 
   it("binds a shared app connection to its live grant issuer without assigning a global owner", () => {
     const state = fixture();
