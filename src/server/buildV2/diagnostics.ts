@@ -74,8 +74,18 @@ export class BuildDiagnosticsError extends Error {
 /** Structured refusal raised when publication's exact candidate build gate fails. */
 export class BuildGateFailedError extends RpcBoundaryError {
   constructor(diagnostics: BuildDiagnostic[], affectedUnits: string[], candidateState: string) {
-    const message = `Protected main push rejected: build/typecheck gate failed for candidate ${candidateState}`;
     const errorDiagnostics = diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+    const firstError = errorDiagnostics[0];
+    const summary = firstError
+      ? `${firstError.file || firstError.source}${firstError.line > 0 ? `:${firstError.line}` : ""}: ${firstError.message}`
+      : "";
+    const boundedSummary = summary.length > 600 ? `${summary.slice(0, 600)}…` : summary;
+    const message =
+      `Protected main push rejected: build/typecheck gate failed for candidate ${candidateState}` +
+      (boundedSummary ? `\n${boundedSummary}` : "") +
+      (errorDiagnostics.length > 1
+        ? `\n${errorDiagnostics.length - 1} more ${errorDiagnostics.length === 2 ? "error" : "errors"}; see the structured diagnostics.`
+        : "");
     const hasInfrastructureFailure = errorDiagnostics.some(
       (diagnostic) => diagnostic.source === "infrastructure"
     );

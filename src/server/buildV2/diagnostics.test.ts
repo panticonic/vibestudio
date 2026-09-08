@@ -64,6 +64,7 @@ describe("build diagnostics path normalization", () => {
     );
 
     expect(error.code).toBe("BuildGateFailed");
+    expect(error.message).toContain("packages/lib/src/index.ts:12: Type mismatch");
     expect(error.errorData).toMatchObject({
       code: "BuildGateFailed",
       candidateState: "state:candidate",
@@ -98,5 +99,37 @@ describe("build diagnostics path normalization", () => {
       retry: { policy: "reobserve", commandIdPolicy: "use-new-after-reobserve" },
       recovery: { action: "reobserve" },
     });
+  });
+
+  it("summarizes the first blocking error without losing full diagnostics", () => {
+    const diagnostic = {
+      source: "authority" as const,
+      severity: "error" as const,
+      file: "apps/shell/package.json",
+      line: 1,
+      column: 0,
+      message: "Missing declared gateway capability. " + "x".repeat(800),
+    };
+    const diagnostics = [
+      { ...diagnostic, severity: "warning" as const, message: "An earlier warning" },
+      diagnostic,
+      {
+        ...diagnostic,
+        file: "workers/system-test-runner/package.json",
+        message: "Missing dependency scope",
+      },
+    ];
+    const error = new BuildGateFailedError(
+      diagnostics,
+      ["@workspace-apps/shell"],
+      "state:candidate"
+    );
+    expect(error.message).toContain(
+      "apps/shell/package.json:1: Missing declared gateway capability."
+    );
+    expect(error.message).not.toContain("An earlier warning");
+    expect(error.message).toContain("1 more error; see the structured diagnostics.");
+    expect(error.message.length).toBeLessThan(800);
+    expect(error.errorData).toMatchObject({ diagnostics });
   });
 });
