@@ -81,7 +81,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   };
   const cdpHost = {
     registerTarget: (id: string, contents: number) => cdp?.registerTarget(id, contents),
-    unregisterTarget: (id: string) => cdp?.unregisterTarget(id),
+    unregisterTarget: (id: string, contentsId: number) => cdp?.unregisterTarget(id, contentsId),
     cleanupPanelAccess: (id: string) => cdp?.cleanupPanelAccess(id),
     isTargetUnderAutomation: (id: string) => cdp?.isTargetUnderAutomation(id) ?? false,
   };

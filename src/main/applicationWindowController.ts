@@ -29,7 +29,7 @@ const log = createDevLogger("ApplicationWindowController");
 
 interface CdpRegistrationAdapter {
   registerTarget(panelId: string, contentsId: number): void;
-  unregisterTarget(panelId: string): void;
+  unregisterTarget(panelId: string, contentsId: number): void;
   cleanupPanelAccess(panelId: string): void;
   isTargetUnderAutomation(targetId: string): boolean;
 }

@@ -46,7 +46,7 @@ const TRANSIENT_MAIN_FRAME_LOAD_RETRY_DELAY_MS = 500;
 // Narrow interfaces for dependencies
 interface CdpHostLike {
   registerTarget(panelId: string, contentsId: number): void;
-  unregisterTarget(panelId: string): void;
+  unregisterTarget(panelId: string, contentsId: number): void;
   cleanupPanelAccess(panelId: string): void;
 }
 
@@ -508,7 +508,7 @@ export class PanelView implements PanelViewLike {
     this.browserFaviconCleanup.delete(panelId);
     this.cleanupLinkInterception(panelId, contents);
     this.cdpHost.cleanupPanelAccess(panelId);
-    this.cdpHost.unregisterTarget(panelId);
+    if (contents) this.cdpHost.unregisterTarget(panelId, contents.id);
   }
 
   reloadView(panelId: string): Promise<boolean> {

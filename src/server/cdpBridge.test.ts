@@ -438,6 +438,7 @@ describe("CdpBridge authentication", () => {
       JSON.stringify({
         type: "cdp:unregister",
         targetId: "panel:tree/browser-1",
+        tabId: 123,
       })
     );
     provider.send(
@@ -473,6 +474,7 @@ describe("CdpBridge authentication", () => {
       JSON.stringify({
         type: "cdp:unregister",
         targetId: "panel:tree/browser-1",
+        tabId: 123,
       })
     );
     provider.close();
@@ -503,6 +505,7 @@ describe("CdpBridge authentication", () => {
       JSON.stringify({
         type: "cdp:unregister",
         targetId: "panel:tree/browser-1",
+        tabId: 123,
       })
     );
     provider.send(
@@ -836,13 +839,34 @@ describe("CdpBridge authentication", () => {
     provider.send(
       JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
     );
-    provider.send(JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/panel-1" }));
+    provider.send(
+      JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
 
     resolveKnown?.(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(false);
+  });
+
+  it("does not unregister a replacement target when old native teardown arrives late", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProviderOnly(harness, "desktop-host");
+
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
+    await waitForTargetRegistered(harness, "panel:tree/panel-1");
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 124 })
+    );
+    provider.send(
+      JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(true);
   });
 
   it("registers an authenticated lease target without waiting for panel metadata", async () => {
@@ -974,7 +998,7 @@ describe("CdpBridge authentication", () => {
     const otherProvider = await connectHostProviderOnly(harness, "headless-host");
 
     otherProvider.send(
-      JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/browser-1" })
+      JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/browser-1", tabId: 123 })
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 

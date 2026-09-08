@@ -241,12 +241,13 @@ export class CdpHostProvider {
     this.sendRegistration(targetId, webContentsId);
   }
 
-  unregisterTarget(targetId: string): void {
+  unregisterTarget(targetId: string, webContentsId: number): void {
+    if (this.targets.get(targetId) !== webContentsId) return;
     this.targets.delete(targetId);
     this.sentRegistrations.delete(targetId);
     this.activeCdpTargets.delete(targetId);
     this.detachConsoleHistory(targetId);
-    this.send({ type: "cdp:unregister", targetId: targetId });
+    this.send({ type: "cdp:unregister", targetId, tabId: webContentsId });
     this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
   }
 

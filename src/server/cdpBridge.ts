@@ -688,9 +688,11 @@ export class CdpBridge {
       }
 
       case "cdp:unregister": {
-        if (typeof msg.targetId !== "string") break;
+        if (typeof msg.targetId !== "string" || typeof msg.tabId !== "number") break;
         const registration = this.targetRegistry.get(msg.targetId);
-        if (registration?.hostConnectionId !== hostConnectionId) break;
+        if (!registration) break;
+        if (registration.hostConnectionId !== hostConnectionId || registration.tabId !== msg.tabId)
+          break;
         this.targetRegistry.delete(msg.targetId);
         log.info(`Target unregistered: ${msg.targetId}`);
 
