@@ -37,22 +37,26 @@ describe("Electron development runner lifecycle", () => {
     expect(exit).toHaveBeenCalledWith(130);
   });
 
-  it("force-reaps an Electron child that ignores graceful shutdown", () => {
+  it("waits beyond the former outer deadline for application-owned shutdown", () => {
     vi.useFakeTimers();
     try {
       const electron = child();
+      const activeChildren = new Set([electron]);
       const exit = vi.fn();
       const shutdown = createRunnerShutdown({
-        activeChildren: new Set([electron]),
+        activeChildren,
         exit,
-        graceMs: 100,
       });
 
       shutdown.request("SIGTERM");
-      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(60_000);
 
-      expect(electron.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(electron.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(electron.kill).toHaveBeenCalledOnce();
+      expect(electron.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(exit).not.toHaveBeenCalled();
+      electron.exitCode = 0;
+      activeChildren.delete(electron);
+      shutdown.childExited();
       expect(exit).toHaveBeenCalledWith(143);
     } finally {
       vi.useRealTimers();
