@@ -49,26 +49,6 @@ template: { name: Test }
     ).toThrow(/missing path/);
   });
 
-  it("carries the template registry into the self-contained runtime", () => {
-    const registry = {
-      url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
-      ref: "refs/heads/main",
-    };
-    const root = parseTemplateManifestContent(
-      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
-template:
-  repositories: []
-  files: []
-templateRegistry:
-  url: ${registry.url}
-  ref: ${registry.ref}
-`,
-      WORKSPACE_SYSTEM_EPOCH
-    );
-    expect(root.top.templateRegistry).toEqual(registry);
-    expect(rootRuntimeFromTemplateManifest(root).templateRegistry).toEqual(registry);
-  });
-
   it("projects a workspace snapshot manifest directly into its runtime", () => {
     const root = parseTemplateManifestContent(
       `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}

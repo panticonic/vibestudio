@@ -101,10 +101,6 @@ describe("WorkspaceRootTemplateBootstrap", () => {
   it("acquires, validates, and imports the exact root source without installed layers", async () => {
     const runtime = canonicalTemplateYaml({
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-      templateRegistry: {
-        url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
-        ref: "refs/heads/main",
-      },
       extensions: [{ source: "extensions/templates" }],
     });
     const rootSnapshot = snapshot([
@@ -120,10 +116,6 @@ describe("WorkspaceRootTemplateBootstrap", () => {
             name: "Base",
             repositories: ["extensions/templates"],
             files: ["README.md"],
-          },
-          templateRegistry: {
-            url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
-            ref: "refs/heads/main",
           },
           extensions: [{ source: "extensions/templates" }],
         }),

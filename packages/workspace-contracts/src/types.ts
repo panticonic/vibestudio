@@ -144,14 +144,6 @@ export function sameWorkspaceTemplatePin(
   );
 }
 
-/** Reviewed moving pointer used only by an explicit registry refresh. */
-export interface WorkspaceTemplateRegistryDeclaration {
-  url: string;
-  /** Canonical promotion branch or tag ref. */
-  ref: string;
-  credential?: string;
-}
-
 /**
  * What a template calls itself: a name and one sentence, as the template's own
  * manifest states them.
@@ -449,8 +441,6 @@ export interface WorkspaceConfig {
   id: string;
   /** Semantic storage, host projections, and workspace runtime ABI epoch. */
   systemEpoch: number;
-  /** Optional verified catalog for discovering upstream workspace snapshots. */
-  templateRegistry?: WorkspaceTemplateRegistryDeclaration;
   /**
    * Repo used as the base for bare VCS file paths such as `notes.md`.
    * This is workspace policy, not a host convention: omit it to require every

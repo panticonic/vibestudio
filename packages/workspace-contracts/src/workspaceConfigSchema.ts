@@ -1,11 +1,11 @@
 import { z } from "zod";
-import type {
-  WorkspaceConfig,
-  WorkspaceTemplateDeclaration,
-  WorkspaceTemplatePin,
-  WorkspaceTemplateRegistryDeclaration,
-  WorkspaceTemplatePresentation,
-  WorkspaceCreationDescriptor,
+import {
+  WORKSPACE_SERVICE_PRINCIPALS,
+  type WorkspaceConfig,
+  type WorkspaceCreationDescriptor,
+  type WorkspaceTemplateDeclaration,
+  type WorkspaceTemplatePin,
+  type WorkspaceTemplatePresentation,
 } from "./types.js";
 
 export type WorkspaceJsonValue =
@@ -125,15 +125,6 @@ export const WorkspaceTemplatePinSchema: z.ZodType<WorkspaceTemplatePin> =
     snapshot: WorkspaceGitSnapshotSchema,
   }).strict();
 
-export const WorkspaceTemplateRegistryDeclarationSchema: z.ZodType<WorkspaceTemplateRegistryDeclaration> =
-  z
-    .object({
-      url: z.string().trim().min(1),
-      ref: WorkspaceGitRefSchema,
-      credential: WorkspaceLogicalCredentialNameSchema.optional(),
-    })
-    .strict();
-
 // A template's name and one-sentence description, as the template says them.
 //
 // These two strings are the only self-asserted text this system carries about a
@@ -252,7 +243,7 @@ export const WorkspaceTemplateAuthoringMetadataSchema = z
     }
   });
 
-const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
+const WorkspaceServicePrincipalSchema = z.enum(WORKSPACE_SERVICE_PRINCIPALS);
 const WorkspaceServiceBindingSchema = z.union([
   z.enum(["consent", "declared"]),
   z
@@ -333,7 +324,6 @@ export const WorkspaceConfigSchema = z
   .object({
     id: z.string(),
     systemEpoch: z.number().int().nonnegative(),
-    templateRegistry: WorkspaceTemplateRegistryDeclarationSchema.optional(),
     defaultRepo: z.string().optional(),
     git: z
       .object({
