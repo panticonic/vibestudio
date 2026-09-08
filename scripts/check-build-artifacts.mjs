@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
+import { applicationSourceMaps, NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
 import { assertNodeRuntimeArtifacts, NODE_RUNTIME_TARGETS } from "./node-runtime-artifacts.mjs";
@@ -339,11 +339,7 @@ if (process.env.NODE_ENV === "production") {
     if (!target) throw new Error(`Unexpected Node distribution: ${name}`);
     await assertNodeRuntimeArtifacts(repoRoot, target);
   }
-  const maps = fs
-    .readdirSync(path.join(repoRoot, "dist"), { recursive: true })
-    .filter(
-      (entry) => !String(entry).startsWith(`node${path.sep}`) && String(entry).endsWith(".map")
-    );
+  const maps = applicationSourceMaps(path.join(repoRoot, "dist"));
   if (maps.length > 0) {
     throw new Error(`Production dist contains source maps: ${maps.join(", ")}`);
   }

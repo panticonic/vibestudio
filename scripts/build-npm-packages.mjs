@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DEVELOPMENT_DIST_ENTRIES } from "./build-artifact-contracts.mjs";
 // Stage the two publishable npm packages from a completed `pnpm build`:
 //
 //   dist-packages/server  → @panticonic/vibestudio-server  (slim headless server, no electron)
@@ -158,7 +159,8 @@ function stageApp(nativeArtifacts) {
   mkdirp(root);
 
   // Full host build (main + all preloads + server-electron + cli + headless-host).
-  copyTree(path.join(repoRoot, "dist"), path.join(root, "dist"), defaultSkip);
+  copyTree(path.join(repoRoot, "dist"), path.join(root, "dist"), (name, entry) =>
+    DEVELOPMENT_DIST_ENTRIES.has(name) || defaultSkip(name, entry));
   stageNativeIsolationArtifacts(root, nativeArtifacts);
 
   copyWorkerdWindowsMetadata(root);

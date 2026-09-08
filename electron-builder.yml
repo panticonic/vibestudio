@@ -10,6 +10,9 @@ directories:
 files:
   - "dist/**/*"
   - "!dist/node/**/*"
+  - "!dist/host-generations/**/*"
+  - "!dist/source-server-prerequisites.lock"
+  - "!dist/host-build.lock"
   - "scripts/cli/**/*"
   - "packages/**/*"
   - "node_modules/**/*"
