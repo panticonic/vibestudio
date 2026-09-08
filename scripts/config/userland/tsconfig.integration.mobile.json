@@ -7,11 +7,6 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true
   },
-  "include": [
-    "../tests/workspace-integration/mobile-appUpdatePrompt.test.ts",
-    "apps/mobile/**/*.ts",
-    "apps/mobile/**/*.tsx",
-    "packages/mobile-navigation/**/*.ts"
-  ],
+  "include": ["apps/mobile/**/*.ts", "apps/mobile/**/*.tsx", "packages/mobile-navigation/**/*.ts"],
   "exclude": ["node_modules", "../node_modules", "**/dist", "**/node_modules"]
 }

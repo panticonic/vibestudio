@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   prepareUserlandDependencyProjection,
+  requiresNativeHost,
   type UserlandDependencyProjection,
 } from "./lib/userland-dependency-projection.js";
 import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
@@ -42,11 +43,14 @@ try {
     path.join(appRoot, "node_modules"),
   ]);
 
-  for (const configName of [
-    "tsconfig.json",
-    "tsconfig.integration.json",
-    "tsconfig.integration.mobile.json",
-  ]) {
+  // Host integration tests validate the configured Base pair. An explicit
+  // workspace target validates only the units it actually contains.
+  const configs = ["tsconfig.json"];
+  if (workspaceArgumentIndex < 0) configs.push("tsconfig.integration.json");
+  if (projection.units.some((unit) => requiresNativeHost(unit, projection.graph))) {
+    configs.push("tsconfig.integration.mobile.json");
+  }
+  for (const configName of configs) {
     const projectedConfig = path.join(temporaryRoot, "workspace", configName);
     try {
       execFileSync(compiler, ["--project", projectedConfig, "--pretty", "false"], {
@@ -91,7 +95,14 @@ function projectCheckoutSource(
   for (const name of fs.readdirSync(path.join(appRoot, "scripts/config/userland"))) {
     const target = path.join(projectedWorkspace, name);
     fs.copyFileSync(path.join(appRoot, "scripts/config/userland", name), target);
-    if (name.endsWith(".json")) addDiscoveredPackagePaths(target, units);
+    if (name.endsWith(".json")) {
+      if (name === "tsconfig.integration.mobile.json" && workspaceArgumentIndex < 0) {
+        const config = JSON.parse(fs.readFileSync(target, "utf8"));
+        config.include.push("../tests/workspace-integration/mobile-appUpdatePrompt.test.ts");
+        fs.writeFileSync(target, JSON.stringify(config));
+      }
+      addDiscoveredPackagePaths(target, units);
+    }
   }
   for (const entry of ["apps", "packages", "src", "tests"]) {
     linkDirectory(path.join(appRoot, entry), path.join(targetRoot, entry));
