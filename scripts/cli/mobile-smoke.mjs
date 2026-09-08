@@ -21,6 +21,7 @@ import {
   waitForRootInvite,
 } from "./lib/smoke-remote-server.mjs";
 import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
+import { observeMobileSmokeLog } from "./lib/mobile-smoke-log.mjs";
 import { buildAndroidApp } from "./lib/mobile-native-android.mjs";
 import {
   androidEmulatorSerial,
@@ -642,9 +643,13 @@ async function assertWorkspaceBrowserIsolation(device, packageName, logcat, dead
       returnedDocument?.timeOrigin !== originalDocument.timeOrigin
     ) {
       const packet = path.join(screenshotDir, "personal-document-retention.json");
-      await fsp.writeFile(packet, JSON.stringify({ target: personal.target, originalDocument, returnedDocument }, null, 2), {
-        mode: 0o600,
-      });
+      await fsp.writeFile(
+        packet,
+        JSON.stringify({ target: personal.target, originalDocument, returnedDocument }, null, 2),
+        {
+          mode: 0o600,
+        }
+      );
       throw new Error(
         `Returning to Personal replaced its retained panel document; evidence: ${packet}`
       );
@@ -936,7 +941,7 @@ function findFreePort() {
   });
 }
 
-function startLogcat(device, expectedPhases, deadlineMs) {
+function startLogcat(device, expectedPhases, deadlineMs, packageName) {
   const child = spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
     cwd: repoRoot,
     env: process.env,
@@ -946,110 +951,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     // signal lands on the runner instead.
     detached: process.platform !== "win32",
   });
-  const phases = new Map();
-  const recentLines = [];
-  let buffer = "";
-  let stderr = "";
-
-  const recordLine = (line) => {
-    if (!line) return;
-    if (line.includes(smokePrefix) || line.includes("VibestudioMobileSmokeProbe")) {
-      console.log(`[smoke-log] ${line}`);
-      recentLines.push(line);
-      if (recentLines.length > 200) recentLines.shift();
-      const match = line.match(/\bphase=([A-Za-z0-9._-]+)/);
-      if (match) phases.set(match[1], (phases.get(match[1]) ?? 0) + 1);
-    } else if (
-      line.includes("ReactNativeJS") ||
-      line.includes("VibestudioMobileHost") ||
-      line.includes("VibestudioIroh") ||
-      line.includes("[InlineUiMessage]") ||
-      (line.includes("AndroidRuntime") && /FATAL EXCEPTION|Process:/.test(line))
-    ) {
-      if (line.includes("[InlineUiMessage]")) {
-        console.error(`[smoke-log] ${line}`);
-      }
-      recentLines.push(line);
-      if (recentLines.length > 200) recentLines.shift();
-    }
-  };
-
-  child.stdout?.on("data", (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) recordLine(line);
-  });
-  child.stderr?.on("data", (chunk) => {
-    stderr += chunk.toString();
-  });
-
-  child.once("error", (error) => {
-    stderr += `${error.message}\n`;
-  });
-
-  const throwIfTerminalFailure = () => {
-    if (!phases.has("embedded-pairing-failed")) return;
-    const recent = recentLines.length
-      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
-      : "";
-    throw new Error(`The mobile app reported a terminal pairing failure${recent}`);
-  };
-
-  const waitForPhase = async (phase, phaseDeadlineMs = deadlineMs) => {
-    while (Date.now() < phaseDeadlineMs) {
-      if (phases.has(phase)) return;
-      throwIfTerminalFailure();
-      if (child.exitCode != null) {
-        throw new Error(`adb logcat exited before phase ${phase}\n${stderr}`.trim());
-      }
-      await sleep(250);
-    }
-    const observed =
-      expectedPhases.filter((candidate) => phases.has(candidate)).join(", ") || "(none)";
-    const recent = recentLines.length
-      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
-      : "";
-    throw new Error(`Timed out waiting for smoke phase ${phase}. Observed: ${observed}${recent}`);
-  };
-
-  const hasPhase = (phase) => phases.has(phase);
-  const phaseCount = (phase) => phases.get(phase) ?? 0;
-  const waitForPhaseAfter = async (phase, previousCount, timeoutMs) => {
-    const occurrenceDeadlineMs = Date.now() + timeoutMs;
-    while (Date.now() < occurrenceDeadlineMs) {
-      if (phaseCount(phase) > previousCount) return;
-      throwIfTerminalFailure();
-      if (child.exitCode != null) {
-        throw new Error(`adb logcat exited before a new ${phase} phase\n${stderr}`.trim());
-      }
-      await sleep(250);
-    }
-    const recent = recentLines.length
-      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
-      : "";
-    throw new Error(`Timed out waiting for a new smoke phase ${phase}${recent}`);
-  };
-
-  const waitForAnyPhase = async (candidates, phaseDeadlineMs = deadlineMs) => {
-    while (Date.now() < phaseDeadlineMs) {
-      const observed = candidates.find((candidate) => phases.has(candidate));
-      if (observed) return observed;
-      throwIfTerminalFailure();
-      if (child.exitCode != null) {
-        throw new Error(
-          `adb logcat exited before any of: ${candidates.join(", ")}\n${stderr}`.trim()
-        );
-      }
-      await sleep(250);
-    }
-    const recent = recentLines.length
-      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
-      : "";
-    throw new Error(`Timed out waiting for any of: ${candidates.join(", ")}${recent}`);
-  };
-
-  return { child, waitForPhase, waitForPhaseAfter, waitForAnyPhase, hasPhase, phaseCount };
+  return observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packageName });
 }
 
 async function waitForLogcatReady(device, logcat) {
@@ -2253,7 +2155,7 @@ async function main() {
       "workspace-panel-asset-no-store",
     ];
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
-    const logcat = startLogcat(options.device, phases, pairingDeadlineMs);
+    const logcat = startLogcat(options.device, phases, pairingDeadlineMs, options.packageName);
     children.push(logcat.child);
     await waitForLogcatReady(options.device, logcat);
 
