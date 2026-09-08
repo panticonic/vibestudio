@@ -36,12 +36,7 @@ template: { name: Test }
 
   it("rejects missing and undeclared release bytes", () => {
     const inventory = { repositories: ["panels/test"], files: ["package.json"] };
-    const exact = [
-      "meta/template.yml",
-      "meta/vibestudio.yml",
-      "package.json",
-      "panels/test/index.tsx",
-    ];
+    const exact = ["meta/vibestudio.yml", "package.json", "panels/test/index.tsx"];
     expect(() => validateTemplateSnapshotInventory(inventory, exact)).not.toThrow();
     expect(() =>
       validateTemplateSnapshotInventory(inventory, [...exact, "panels/other/index.tsx"])
@@ -107,14 +102,16 @@ git:
   });
 
   it("rejects composition-only fields at manifest parsing", () => {
-    expect(() => parseTemplateManifestContent(
-      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
+    expect(() =>
+      parseTemplateManifestContent(
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}
 template:
   repositories: []
   files: []
 disable: [routes/example]
 `,
-      WORKSPACE_SYSTEM_EPOCH
-    )).toThrow(/unrecognized key.*disable/ui);
+        WORKSPACE_SYSTEM_EPOCH
+      )
+    ).toThrow(/unrecognized key.*disable/iu);
   });
 });

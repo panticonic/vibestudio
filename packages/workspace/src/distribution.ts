@@ -21,14 +21,46 @@ const INTERNAL_DEPENDENCY_SECTIONS = [
   "optionalDependencies",
   "devDependencies",
 ] as const;
-const GENERATED_PATHS = new Set(["meta/template.yml", "meta/vibestudio.yml"]);
+const GENERATED_PATHS = new Set(["meta/vibestudio.yml"]);
 
 interface PackageManifest {
   name?: unknown;
+  vibestudio?: unknown;
   dependencies?: unknown;
   peerDependencies?: unknown;
   optionalDependencies?: unknown;
   devDependencies?: unknown;
+}
+
+function panelTemplateDependency(
+  sourceRoot: string,
+  repoPath: string,
+  manifest: PackageManifest | null
+): string | null {
+  if (!repoPath.startsWith("panels/") || !manifest) return null;
+  const vibestudio = manifest.vibestudio;
+  const configured =
+    vibestudio && typeof vibestudio === "object" && !Array.isArray(vibestudio)
+      ? (vibestudio as Record<string, unknown>)["template"]
+      : undefined;
+  if (configured !== undefined && typeof configured !== "string") {
+    throw new Error(`Distribution repository ${repoPath} vibestudio.template must be a string`);
+  }
+  const name = configured ?? "default";
+  if (!name || name.includes("/") || name.includes("\\") || name === "." || name === "..") {
+    throw new Error(
+      `Distribution repository ${repoPath} has invalid build template ${JSON.stringify(name)}`
+    );
+  }
+  const template = `templates/${name}`;
+  const sourcePath = path.join(sourceRoot, "templates", name);
+  if (fs.existsSync(sourcePath) && fs.lstatSync(sourcePath).isDirectory()) return template;
+  if (configured !== undefined) {
+    throw new Error(
+      `Distribution repository ${repoPath} requires missing build template ${template}`
+    );
+  }
+  return null;
 }
 
 export type WorkspaceDistributionFile =
@@ -203,6 +235,11 @@ export function resolveDistributionInventory(
     const repoPath = pending.shift();
     if (!repoPath) break;
     const manifest = readPackageManifest(sourceRoot, repoPath);
+    const template = panelTemplateDependency(sourceRoot, repoPath, manifest);
+    if (template && !selected.has(template)) {
+      selected.add(template);
+      pending.push(template);
+    }
     for (const dependency of workspaceDependencies(repoPath, manifest)) {
       const matches = owners.get(dependency) ?? [];
       if (matches.length === 0) {
@@ -289,24 +326,18 @@ export function prepareWorkspaceDistribution(input: {
     },
   });
   const manifest = parseTemplateManifestContent(sourceManifest, input.expectedSystemEpoch);
-  const runtimeConfig = rootRuntimeFromTemplateManifest(manifest);
-  validateRuntimeInventory(sourceRoot, runtimeConfig, new Set(repositories));
-  const runtime = canonicalTemplateYaml(runtimeConfig);
+  validateRuntimeInventory(
+    sourceRoot,
+    rootRuntimeFromTemplateManifest(manifest),
+    new Set(repositories)
+  );
   const files = new Map<string, WorkspaceDistributionFile>([
-    [
-      "meta/template.yml",
-      {
-        path: "meta/template.yml",
-        mode: 0o644,
-        bytes: new TextEncoder().encode(sourceManifest),
-      },
-    ],
     [
       "meta/vibestudio.yml",
       {
         path: "meta/vibestudio.yml",
         mode: 0o644,
-        bytes: new TextEncoder().encode(runtime),
+        bytes: new TextEncoder().encode(sourceManifest),
       },
     ],
   ]);

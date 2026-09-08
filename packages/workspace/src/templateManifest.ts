@@ -1,7 +1,7 @@
 import YAML from "yaml";
-import { z } from "zod";
 import { sortForCanonicalJson } from "@vibestudio/content-addressing";
 import {
+  WorkspaceTemplateAuthoringMetadataSchema,
   WorkspaceConfigTopLayerSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
@@ -24,38 +24,15 @@ export interface ParsedTemplateManifest {
   presentation?: WorkspaceTemplatePresentation;
 }
 
-const CanonicalInventoryPathSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .refine(
-    (value) =>
-      !value.startsWith("/") &&
-      !value.includes("\\") &&
-      value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".."),
-    "must be a canonical relative path"
-  );
-
-const TemplateAuthoringMetadataSchema = z
-  .object({
-    name: z.unknown().optional(),
-    description: z.unknown().optional(),
-    repositories: z.array(CanonicalInventoryPathSchema),
-    files: z.array(CanonicalInventoryPathSchema),
-  })
-  .strict();
-
 function uniqueSortedPaths(paths: readonly string[], label: string): string[] {
   const unique = new Set(paths);
   if (unique.size !== paths.length) throw new Error(`${label} contains duplicate paths`);
   return [...unique].sort();
 }
 
-const GENERATED_TEMPLATE_PATHS = new Set([TEMPLATE_SOURCE_MANIFEST_PATH, "meta/vibestudio.yml"]);
-
 /**
- * Prove that every released byte has exactly one manifest owner. The two
- * manifests are intrinsic to the format; all other paths must belong to one
+ * Prove that every released byte has exactly one manifest owner. The source
+ * manifest is intrinsic to the format; all other paths must belong to one
  * declared semantic repository or be named explicitly as a support file.
  */
 export function validateTemplateSnapshotInventory(
@@ -84,7 +61,7 @@ export function validateTemplateSnapshotInventory(
   }
   const unowned = [...paths].filter(
     (file) =>
-      !GENERATED_TEMPLATE_PATHS.has(file) &&
+      file !== TEMPLATE_SOURCE_MANIFEST_PATH &&
       !inventory.files.includes(file) &&
       !inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
   );
@@ -98,11 +75,7 @@ export function canonicalTemplateYaml(value: unknown): string {
 }
 
 function runtimeManifest(top: ParsedTopLayer): Omit<WorkspaceConfig, "id"> {
-  const {
-    template: _template,
-    git,
-    ...accepted
-  } = top;
+  const { template: _template, git, ...accepted } = top;
   const upstreams =
     git?.upstreams === undefined
       ? undefined
@@ -157,7 +130,7 @@ export function parseTemplateManifestContent(
     throw new Error("template manifest must be a mapping");
   }
   const raw = document as Record<string, unknown>;
-  const authoring = TemplateAuthoringMetadataSchema.parse(raw["template"]);
+  const authoring = WorkspaceTemplateAuthoringMetadataSchema.parse(raw["template"]);
   const repositories = uniqueSortedPaths(authoring.repositories, "template.repositories");
   const files = uniqueSortedPaths(authoring.files, "template.files");
   for (const file of files) {

@@ -44,7 +44,7 @@ function fixture(systemEpoch: number): { host: string; base: string; checkpoint:
   fs.mkdirSync(path.join(base, "meta"), { recursive: true });
   fs.writeFileSync(path.join(base, "package.json"), '{"name":"@workspace/root","private":true}\n');
   fs.writeFileSync(
-    path.join(base, "meta", "template.yml"),
+    path.join(base, "meta", "vibestudio.yml"),
     `systemEpoch: ${systemEpoch}\ntemplate:\n  repositories:\n    - packages/base\n  files:\n    - package.json\n`
   );
   fs.mkdirSync(path.join(base, "packages", "base"), { recursive: true });

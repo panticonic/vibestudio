@@ -13,7 +13,10 @@ import {
   WORKSPACE_EXTENSION_PACKAGE_SCOPE,
   WORKSPACE_SOURCE_DIRS,
 } from "@vibestudio/workspace-contracts/sourceDirs";
-import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import {
+  WorkspaceConfigSchema,
+  WorkspaceTemplateAuthoringMetadataSchema,
+} from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { validateWorkspaceGitConfig } from "./remotes.js";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -42,9 +45,9 @@ export function parseWorkspaceSystemEpochEnvelope(content: string): number {
 /**
  * Read the single runtime manifest published at one immutable workspace state.
  *
- * Template declarations, relationship state, and layers are userland composition state.
- * The host deliberately neither discovers nor interprets them; the userland
- * composer publishes their flattened result to WORKSPACE_CONFIG_PATH.
+ * Source metadata is validated from this same manifest and omitted from the
+ * runtime configuration. There is no second generated manifest or composition
+ * layer to keep in sync.
  */
 export async function readWorkspaceConfig(
   reader: WorkspaceConfigReader,
@@ -84,10 +87,22 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
       "meta/vibestudio.yml: `id` is resolved by the host and must not be declared in workspace source"
     );
   }
+  const { template: _template, ...runtime } = yamlValue as Record<string, unknown>;
+  if (_template !== undefined) {
+    const metadata = WorkspaceTemplateAuthoringMetadataSchema.safeParse(_template);
+    if (!metadata.success) {
+      const issue = metadata.error.issues[0];
+      throw new Error(
+        issue
+          ? workspaceConfigIssueMessage({ ...issue, path: ["template", ...issue.path] })
+          : "Invalid meta/vibestudio.yml template metadata"
+      );
+    }
+  }
   let config: WorkspaceConfig;
   try {
     config = WorkspaceConfigSchema.parse({
-      ...yamlValue,
+      ...runtime,
       id,
     });
   } catch (error) {

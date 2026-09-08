@@ -79,7 +79,7 @@ describe("acquireRootTemplateSnapshot", () => {
     const commit = "c".repeat(40);
     const snapshot = canonicalSnapshotDigest([
       {
-        path: "meta/template.yml",
+        path: "meta/vibestudio.yml",
         mode: 0o100644,
         size: bytes.byteLength,
         contentHash: sha256Hex(bytes),
@@ -96,10 +96,10 @@ describe("acquireRootTemplateSnapshot", () => {
       clone,
       resolveCommit: vi.fn(async () => commit),
       getCurrentCommit: vi.fn(async () => commit),
-      statusMatrix: vi.fn(async () => [["meta/template.yml", 1, 1, 1]]),
+      statusMatrix: vi.fn(async () => [["meta/vibestudio.yml", 1, 1, 1]]),
       readCommitTree: vi.fn(async () => [
         {
-          path: "meta/template.yml",
+          path: "meta/vibestudio.yml",
           mode: 0o100644,
           type: "blob",
           oid: "d".repeat(40),
@@ -146,7 +146,7 @@ describe("acquireRootTemplateSnapshot", () => {
       getCurrentCommit: vi.fn(async () => commit),
       readCommitTree: vi.fn(async () => [
         {
-          path: "meta/template.yml",
+          path: "meta/vibestudio.yml",
           mode: 0o100644,
           type: "blob",
           oid: "f".repeat(40),
@@ -180,7 +180,7 @@ describe("acquireRootTemplateSnapshot", () => {
       branch: "candidate",
       commit,
       dirty: true,
-      files: [{ path: "meta/template.yml", status: "modified", staged: false, unstaged: true }],
+      files: [{ path: "meta/vibestudio.yml", status: "modified", staged: false, unstaged: true }],
     });
     await expect(
       discoverAndSeedRootTemplateSnapshotFromCheckout({
@@ -190,6 +190,6 @@ describe("acquireRootTemplateSnapshot", () => {
         git,
         sink,
       })
-    ).rejects.toThrow("tracked worktree changes: meta/template.yml");
+    ).rejects.toThrow("tracked worktree changes: meta/vibestudio.yml");
   });
 });

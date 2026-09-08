@@ -21,7 +21,7 @@ function fixture(): { workspace: string; checkout: string } {
     fs.mkdirSync(path.join(directory, "meta"), { recursive: true });
     fs.mkdirSync(path.join(directory, "apps", "one"), { recursive: true });
     fs.writeFileSync(
-      path.join(directory, "meta", "template.yml"),
+      path.join(directory, "meta", "vibestudio.yml"),
       [
         `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}`,
         "template:",
@@ -55,7 +55,7 @@ describe("template repository exchange", () => {
     expect(plan.conflicts).toEqual([]);
     expect(plan.untouched).toContain("notes.txt");
     const receipt = applyTemplateRepositoryExchange(plan);
-    expect(receipt.written.map((entry) => entry.path)).toEqual(["meta/vibestudio.yml"]);
+    expect(receipt.written).toEqual([]);
     expect(receipt.baselineAfter).toMatch(/^[a-f0-9]{64}$/u);
     expect(fs.readFileSync(path.join(fx.checkout, "notes.txt"), "utf8")).toBe("checkout-only\n");
   });
@@ -139,13 +139,14 @@ describe("template repository exchange", () => {
 
   it("rejects obsolete contribution manifests before modifying either workspace", () => {
     const fx = fixture();
-    const manifestPath = path.join(fx.workspace, "meta", "template.yml");
+    const manifestPath = path.join(fx.workspace, "meta", "vibestudio.yml");
     fs.appendFileSync(
       manifestPath,
       ["templates:", "  use:", "    - url: git+https://example.test/base.git", ""].join("\n")
     );
-    fs.copyFileSync(manifestPath, path.join(fx.checkout, "meta", "template.yml"));
+    fs.copyFileSync(manifestPath, path.join(fx.checkout, "meta", "vibestudio.yml"));
+    const before = fs.readFileSync(path.join(fx.checkout, "meta", "vibestudio.yml"), "utf8");
     expect(() => planTemplateRepositoryExchange({ ...fx, direction: "export" })).toThrow(/Unrecognized key.*templates/);
-    expect(fs.existsSync(path.join(fx.checkout, "meta", "vibestudio.yml"))).toBe(false);
+    expect(fs.readFileSync(path.join(fx.checkout, "meta", "vibestudio.yml"), "utf8")).toBe(before);
   });
 });

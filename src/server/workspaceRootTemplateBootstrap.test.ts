@@ -28,7 +28,7 @@ function snapshot(
   const bytesByPath = new Map(
     entries.map((entry) => [entry.path, new TextEncoder().encode(entry.text)])
   );
-  const files = entries.map((entry) => {
+  const files = [...new Map(entries.map((entry) => [entry.path, entry])).values()].map((entry) => {
     const bytes = bytesByPath.get(entry.path)!;
     return {
       path: entry.path,
@@ -113,7 +113,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         text: runtime,
       },
       {
-        path: "meta/template.yml",
+        path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
           template: {
@@ -141,8 +141,8 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     expect(fx.acquire).toHaveBeenCalledExactlyOnceWith(fx.pin);
     expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates.state.yml"))).toBe(false);
     expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"))).toBe(false);
-    expect(fs.readFileSync(path.join(fx.sourcePath, "meta/template.yml"), "utf8")).toBe(
-      new TextDecoder().decode(rootSnapshot.readFile("meta/template.yml")!)
+    expect(fs.readFileSync(path.join(fx.sourcePath, "meta/vibestudio.yml"), "utf8")).toBe(
+      new TextDecoder().decode(rootSnapshot.readFile("meta/vibestudio.yml")!)
     );
   });
 
@@ -153,7 +153,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }),
       },
       {
-        path: "meta/template.yml",
+        path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
           template: { repositories: [], files: [] },
@@ -173,7 +173,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }),
       },
       {
-        path: "meta/template.yml",
+        path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
           template: { repositories: [], files: [] },
@@ -195,7 +195,7 @@ describe("WorkspaceRootTemplateBootstrap", () => {
         text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }),
       },
       {
-        path: "meta/template.yml",
+        path: "meta/vibestudio.yml",
         text: canonicalTemplateYaml({
           systemEpoch: WORKSPACE_SYSTEM_EPOCH,
           template: { repositories: [], files: [] },
@@ -223,10 +223,10 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     expect(unavailableAcquire).not.toHaveBeenCalled();
   });
 
-  it("requires a flattened runtime manifest even when template source exists", async () => {
+  it("accepts template authoring metadata in the runtime manifest", async () => {
     const rootSnapshot = snapshot([
       {
-        path: "meta/template.yml",
+        path: "meta/vibestudio.yml",
         text:
           `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` +
           `template:\n  repositories: []\n  files: []\n`,
@@ -234,8 +234,9 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     ]);
     const fx = fixture(rootSnapshot);
 
-    await expect(fx.bootstrap.prepareInitialization()).rejects.toThrow(
-      /missing meta\/vibestudio\.yml/
-    );
+    await expect(fx.bootstrap.prepareInitialization()).resolves.toEqual({
+      pin: fx.pin,
+      repositories: enumerateRootTemplateRepositories(rootSnapshot),
+    });
   });
 });

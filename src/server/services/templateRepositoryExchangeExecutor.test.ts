@@ -34,7 +34,7 @@ async function fixture() {
   const writeTree = async (target: string, value: string) => {
     await fsp.mkdir(path.join(target, "meta"), { recursive: true });
     await fsp.mkdir(path.join(target, "apps", "one"), { recursive: true });
-    await fsp.writeFile(path.join(target, "meta", "template.yml"), manifest());
+    await fsp.writeFile(path.join(target, "meta", "vibestudio.yml"), manifest());
     await fsp.writeFile(path.join(target, "package.json"), "root\n");
     await fsp.writeFile(path.join(target, "apps", "one", "package.json"), value);
   };

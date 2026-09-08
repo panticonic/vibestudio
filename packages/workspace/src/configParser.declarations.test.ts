@@ -15,6 +15,31 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 const parse = (yaml: string) =>
   parseWorkspaceConfigContentWithId(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${yaml}`, "test-ws");
 
+describe("template authoring metadata", () => {
+  it.each([
+    ["scalar", "template: invalid\n"],
+    ["unknown key", "template:\n  repositories: []\n  files: []\n  mystery: true\n"],
+    ["noncanonical path", "template:\n  repositories: [../outside]\n  files: []\n"],
+    ["duplicate path", "template:\n  repositories: [panels/one, panels/one]\n  files: []\n"],
+  ])("rejects invalid metadata: %s", (_label, template) => {
+    expect(() => parse(template)).toThrow(/meta\/vibestudio\.yml: .*`template/);
+  });
+
+  it("reports runtime errors at their runtime path when metadata is present", () => {
+    const source = "template:\n  repositories: []\n  files: []\nproviders:\n  evalEngine: {}\n";
+    expect(() => parse(source)).toThrow(/`providers\.evalEngine\.source`/);
+    expect(() => parse(source)).not.toThrow(/`template\.providers/);
+  });
+
+  it("validates and removes authoring metadata from runtime configuration", () => {
+    expect(
+      parse(
+        "template:\n  name: Example\n  repositories: [panels/example]\n  files: [package.json]\n"
+      )
+    ).not.toHaveProperty("template");
+  });
+});
+
 describe("workspace epoch envelope", () => {
   it("reads a foreign epoch without interpreting future manifest fields", () => {
     expect(

@@ -77,7 +77,7 @@ it("customizes the selected Personal default pin while retaining the exact Syste
     workRoot: path.join(root, "case"),
     distribution: "personal",
     configureSource: (checkout) => {
-      const file = path.join(checkout, "meta/template.yml");
+      const file = path.join(checkout, "meta/vibestudio.yml");
       const config = YAML.parse(fs.readFileSync(file, "utf8"));
       expect(config.initPanels[0].source).toBe("panels/chat");
       config.initPanels[0].stateArgs = { initialPrompt: "Preserve the opening turn" };

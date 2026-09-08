@@ -216,6 +216,42 @@ export const WorkspaceTemplatePresentationSchema = z
   .unknown()
   .transform((value) => sanitizeTemplatePresentation(value));
 
+export const CanonicalWorkspaceInventoryPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(
+    (value) =>
+      !value.startsWith("/") &&
+      !value.includes("\\") &&
+      value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".."),
+    "must be a canonical relative path"
+  );
+
+/** Authoring-only facts carried beside runtime configuration in the one source manifest. */
+export const WorkspaceTemplateAuthoringMetadataSchema = z
+  .object({
+    name: z.unknown().optional(),
+    description: z.unknown().optional(),
+    repositories: z.array(CanonicalWorkspaceInventoryPathSchema),
+    files: z.array(CanonicalWorkspaceInventoryPathSchema),
+  })
+  .strict()
+  .superRefine(({ repositories, files }, ctx) => {
+    for (const [field, paths] of [
+      ["repositories", repositories],
+      ["files", files],
+    ] as const) {
+      if (new Set(paths).size !== paths.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} contains duplicate paths`,
+        });
+      }
+    }
+  });
+
 const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
 const WorkspaceServiceBindingSchema = z.union([
   z.enum(["consent", "declared"]),

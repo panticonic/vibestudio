@@ -51,7 +51,7 @@ export async function resolveDevelopmentBaseSelection(input: {
 
   const sourceCheckout = fs.realpathSync(path.resolve(selected));
   const templateManifest = parseTemplateManifestContent(
-    fs.readFileSync(path.join(sourceCheckout, "meta/template.yml"), "utf8"),
+    fs.readFileSync(path.join(sourceCheckout, "meta/vibestudio.yml"), "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
   const distributions = await prepareDevelopmentWorkspaceDistributions({

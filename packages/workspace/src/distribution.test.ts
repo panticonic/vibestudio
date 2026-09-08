@@ -73,6 +73,37 @@ describe("workspace distribution projection", () => {
     );
   });
 
+  it("includes explicit and implicit panel build templates in the source closure", () => {
+    const root = fixture();
+    write(
+      root,
+      "panels/svelte/package.json",
+      JSON.stringify({ name: "@workspace-panels/svelte", vibestudio: { template: "svelte" } })
+    );
+    write(root, "panels/vanilla/package.json", packageJson("@workspace-panels/vanilla"));
+    write(root, "templates/svelte/template.json", JSON.stringify({ framework: "svelte" }));
+    write(root, "templates/default/template.json", JSON.stringify({ framework: "react" }));
+
+    expect(resolveDistributionInventory(root, ["panels/svelte", "panels/vanilla"])).toEqual([
+      "panels/svelte",
+      "panels/vanilla",
+      "templates/default",
+      "templates/svelte",
+    ]);
+  });
+
+  it("rejects an explicit panel build template missing from the source", () => {
+    const root = fixture();
+    write(
+      root,
+      "panels/missing/package.json",
+      JSON.stringify({ name: "@workspace-panels/missing", vibestudio: { template: "missing" } })
+    );
+    expect(() => resolveDistributionInventory(root, ["panels/missing"])).toThrow(
+      /requires missing build template templates\/missing/u
+    );
+  });
+
   it("rejects runtime source declarations outside the explicit inventory", () => {
     const root = fixture();
     write(root, "panels/chat/package.json", packageJson("@workspace-panels/chat"));
@@ -120,7 +151,6 @@ initPanels:
 
     expect(prepared.repositories).toEqual(["packages/runtime", "panels/chat"]);
     expect(prepared.files.map((file) => file.path)).toEqual([
-      "meta/template.yml",
       "meta/vibestudio.yml",
       "package.json",
       "packages/runtime/index.ts",
@@ -128,7 +158,7 @@ initPanels:
       "panels/chat/index.ts",
       "panels/chat/package.json",
     ]);
-    const manifestFile = prepared.files.find((file) => file.path === "meta/template.yml")!;
+    const manifestFile = prepared.files.find((file) => file.path === "meta/vibestudio.yml")!;
     expect("bytes" in manifestFile ? new TextDecoder().decode(manifestFile.bytes) : "").toContain(
       "- packages/runtime\n"
     );

@@ -2,9 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  canonicalTemplateYaml,
   parseTemplateManifestContent,
-  rootRuntimeFromTemplateManifest,
   validateTemplateSnapshotInventory,
 } from "@vibestudio/workspace/templateManifest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -186,7 +184,7 @@ function projection(root: string): {
   files: string[];
   manifestDigest: string;
 } {
-  const manifestPath = path.join(root, "meta/template.yml");
+  const manifestPath = path.join(root, "meta/vibestudio.yml");
   const manifestBytes = fs.readFileSync(manifestPath);
   const manifest = parseTemplateManifestContent(
     manifestBytes.toString("utf8"),
@@ -197,27 +195,14 @@ function projection(root: string): {
     ...new Set([
       ...files.filter(
         (file) =>
-          file === "meta/template.yml" ||
+          file === "meta/vibestudio.yml" ||
           manifest.inventory.files.includes(file) ||
           manifest.inventory.repositories.some((repository) => file.startsWith(`${repository}/`))
       ),
-      "meta/vibestudio.yml",
     ]),
   ].sort();
   validateTemplateSnapshotInventory(manifest.inventory, projected);
   return { files: projected, manifestDigest: digest(manifestBytes) };
-}
-
-function generatedValue(root: string, relative: string): FileValue | null {
-  if (relative !== "meta/vibestudio.yml") return readValue(root, relative);
-  const manifestPath = path.join(root, "meta/template.yml");
-  if (!fs.existsSync(manifestPath)) return null;
-  const manifest = parseTemplateManifestContent(
-    fs.readFileSync(manifestPath, "utf8"),
-    WORKSPACE_SYSTEM_EPOCH
-  );
-  const bytes = Buffer.from(canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest)));
-  return { bytes, mode: 0o644, digest: digest(bytes) };
 }
 
 function baselinePaths(checkout: string): {
@@ -277,7 +262,7 @@ export function planTemplateRepositoryExchange(input: {
   const target = input.direction === "export" ? checkout : workspace;
   const selected = projection(source);
   const baseline = loadBaseline(checkout);
-  const targetProjection = fs.existsSync(path.join(target, "meta/template.yml"))
+  const targetProjection = fs.existsSync(path.join(target, "meta/vibestudio.yml"))
     ? projection(target).files
     : [];
   const paths = [
@@ -285,7 +270,7 @@ export function planTemplateRepositoryExchange(input: {
   ].sort();
   const results: ExchangePathResult[] = paths.map((relative) => {
     const base = baseline.values.get(relative) ?? null;
-    const sourceValue = selected.files.includes(relative) ? generatedValue(source, relative) : null;
+    const sourceValue = selected.files.includes(relative) ? readValue(source, relative) : null;
     const targetValue = readValue(target, relative);
     let status: ExchangePathResult["status"];
     if (same(sourceValue, targetValue)) status = "equal";
@@ -382,9 +367,7 @@ export function prepareTemplateRepositoryExchangeTarget(
   const deleted: string[] = [];
   const preserved: string[] = [];
   for (const entry of plan.paths) {
-    const source = plan.projection.includes(entry.path)
-      ? generatedValue(plan.source, entry.path)
-      : null;
+    const source = plan.projection.includes(entry.path) ? readValue(plan.source, entry.path) : null;
     if (entry.status === "update") {
       if (!source) throw new Error(`Reviewed source disappeared: ${entry.path}`);
       nextBaseline.set(entry.path, source);
@@ -415,7 +398,7 @@ export function applyPreparedTemplateRepositoryExchangeTarget(
   pending: PendingTemplateExchange
 ): void {
   for (const entry of pending.written) {
-    const source = generatedValue(plan.source, entry.path);
+    const source = readValue(plan.source, entry.path);
     if (!source || source.digest !== entry.digest || source.mode !== entry.mode) {
       throw new Error(`Reviewed source changed before apply: ${entry.path}`);
     }

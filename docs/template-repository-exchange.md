@@ -32,14 +32,12 @@ receipts live under the checkout's actual Git directory at
 `vibestudio/template-exchange/`, including linked-worktree `.git` files. They
 are checkout-local operation evidence, not template source or an ambient cache.
 
-The projection is derived from `meta/template.yml`:
+The projection is derived from `meta/vibestudio.yml`:
 
 - declared repository subtrees and declared support files are included;
 - undeclared paths are reported as `untouched` and never copied or deleted;
-- a dependency-free root includes a canonical generated
-  `meta/vibestudio.yml`; and
-- a contribution template with dependencies neither requires nor receives a
-  flattened runtime manifest.
+- the authored `meta/vibestudio.yml` is included as the single source and
+  runtime manifest.
 
 There is no Base flag. Root capability follows from the manifest's dependency
 graph. The same exchange works for Base and optional contribution repositories.

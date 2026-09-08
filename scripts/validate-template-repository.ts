@@ -3,9 +3,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import semver from "semver";
 import {
-  canonicalTemplateYaml,
   parseTemplateManifestContent,
-  rootRuntimeFromTemplateManifest,
   validateTemplateSnapshotInventory,
 } from "@vibestudio/workspace/templateManifest";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -61,27 +59,14 @@ export function validateExternalDependencySpecifiers(root: string, files: readon
 }
 
 /**
- * Validate a template checkout, and optionally repair what is mechanically
- * derivable.
- *
- * `meta/vibestudio.yml` is GENERATED from `meta/template.yml`, and the runtime
- * compares it by exact text. So an ordinary edit — even a re-wrapped long line
- * from an editor — makes every workspace built on that checkout fail to boot
- * with "not the canonical generated runtime manifest". Until now this script
- * could only report that, leaving the fix to be done by hand against a
- * serializer whose exact output nobody can predict. `--fix` writes what the
- * manifest says it should be.
- *
- * Returns whether anything was repaired, so callers can tell "was already fine"
- * from "is fine now".
+ * Validate one self-contained workspace source manifest and its declared files.
  */
 export function validateTemplateRepository(
   root: string,
-  options: { fix?: boolean; bootOnly?: boolean } = {}
-): { repaired: string[] } {
-  const repaired: string[] = [];
+  options: { bootOnly?: boolean } = {}
+): void {
   const manifest = parseTemplateManifestContent(
-    fs.readFileSync(path.join(root, "meta/template.yml"), "utf8"),
+    fs.readFileSync(path.join(root, "meta/vibestudio.yml"), "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
   const files = walkFiles(root);
@@ -97,44 +82,28 @@ export function validateTemplateRepository(
     const units = [...new Set(undeclared.map((p) => p.split("/").slice(0, 2).join("/")))];
     throw new Error(
       `${message}\n\n` +
-        `Add these to the \`template.repositories\` list in meta/template.yml (keep it sorted):\n` +
+        `Add these to the \`template.repositories\` list in meta/vibestudio.yml (keep it sorted):\n` +
         units.map((unit) => `    - ${unit}`).join("\n") +
         `\nOr delete the paths if they are scratch files.`
     );
   }
   if (!options.bootOnly) validateExternalDependencySpecifiers(root, files);
-  const runtimePath = path.join(root, "meta/vibestudio.yml");
-  if (!fs.existsSync(runtimePath))
-    throw new Error("Standalone workspace is missing meta/vibestudio.yml");
-  const expected = canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest));
-  if (fs.readFileSync(runtimePath, "utf8") !== expected) {
-    if (!options.fix) {
-      throw new Error(
-        "meta/vibestudio.yml is not the canonical self-contained root runtime — " +
-          "it is generated from meta/template.yml and compared by exact text. " +
-          "Re-run with --fix to regenerate it."
-      );
-    }
-    fs.writeFileSync(runtimePath, expected);
-    repaired.push("meta/vibestudio.yml");
-  }
-  return { repaired };
 }
 
 function main(): void {
   const args = process.argv.slice(2);
-  const fix = args.includes("--fix");
+  const unknownOption = args.find((arg) => arg.startsWith("--") && arg !== "--boot-only");
+  if (unknownOption) throw new Error(`Unknown option: ${unknownOption}`);
   const bootOnly = args.includes("--boot-only");
   const directoryArgument = args.find((arg) => !arg.startsWith("--"));
-  if (!directoryArgument) throw new Error("Usage: validate-template-repository DIR [--fix]");
+  if (!directoryArgument) throw new Error("Usage: validate-template-repository DIR [--boot-only]");
   const root = path.resolve(directoryArgument);
   const manifest = parseTemplateManifestContent(
-    fs.readFileSync(path.join(root, "meta/template.yml"), "utf8"),
+    fs.readFileSync(path.join(root, "meta/vibestudio.yml"), "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
   const files = walkFiles(root);
-  const { repaired } = validateTemplateRepository(root, { fix, bootOnly });
-  for (const file of repaired) process.stderr.write(`regenerated ${file}\n`);
+  validateTemplateRepository(root, { bootOnly });
   process.stdout.write(
     `${JSON.stringify(
       {

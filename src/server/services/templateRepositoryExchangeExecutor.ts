@@ -89,7 +89,7 @@ export class TemplateRepositoryExchangeExecutor {
       const sourcePlan = await this.deps.planSource({
         contextId: input.contextId,
         repositoryId: input.repositoryId,
-        requiredFiles: ["meta/template.yml"],
+        requiredFiles: ["meta/vibestudio.yml"],
       });
       if (
         sourcePlan.contextId !== input.contextId ||

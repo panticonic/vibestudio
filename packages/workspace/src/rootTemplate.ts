@@ -1,9 +1,6 @@
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
-import { parseWorkspaceConfigContentWithId } from "./configParser.js";
 import {
-  canonicalTemplateYaml,
   readTemplateManifest,
-  rootRuntimeFromTemplateManifest,
   validateTemplateSnapshotInventory,
   type ParsedTemplateManifest,
 } from "./templateManifest.js";
@@ -48,20 +45,5 @@ export function validateRootTemplateSource(input: {
     );
   }
 
-  const runtimeBytes = input.readFile("meta/vibestudio.yml");
-  if (!runtimeBytes) throw new Error("Root template is missing meta/vibestudio.yml");
-  const runtimeText = new TextDecoder("utf-8", { fatal: true }).decode(runtimeBytes);
-  const parsedRuntime = parseWorkspaceConfigContentWithId(runtimeText, input.workspaceId);
-  if (parsedRuntime.systemEpoch !== input.expectedSystemEpoch) {
-    throw new Error(
-      `Root runtime epoch ${parsedRuntime.systemEpoch} does not match host epoch ${input.expectedSystemEpoch}`
-    );
-  }
-  const canonicalRuntime = canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest));
-  if (runtimeText !== canonicalRuntime) {
-    throw new Error(
-      "Root meta/vibestudio.yml is not the canonical self-contained runtime manifest"
-    );
-  }
   return manifest;
 }

@@ -16,12 +16,10 @@ const TEMPLATE_NODE_ID_HEX_LENGTH = 12;
 export const TEMPLATE_RESERVED_PATH_POLICY = "exclude" as const;
 
 /**
- * Declarative source manifest of a template repository.
- *
- * This is intentionally distinct from `meta/vibestudio.yml`, which is the
- * flattened runtime manifest consumed by the host in a running workspace.
+ * Single source manifest for a distributable or running workspace. Template
+ * metadata and runtime declarations are validated from the same bytes.
  */
-export const TEMPLATE_SOURCE_MANIFEST_PATH = "meta/template.yml";
+export const TEMPLATE_SOURCE_MANIFEST_PATH = "meta/vibestudio.yml";
 
 /**
  * Template coordinates use `git+http(s)` as an identity scheme while Git

@@ -22,7 +22,6 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   canonicalTemplateYaml,
   parseTemplateManifestContent,
-  rootRuntimeFromTemplateManifest,
 } from "@vibestudio/workspace/templateManifest";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
@@ -146,22 +145,24 @@ function git(dir: string, args: readonly string[], env?: NodeJS.ProcessEnv): voi
 }
 
 /**
- * Republish `meta/vibestudio.yml` from the authored source manifest.
- *
- * In a root checkout the runtime manifest is the canonical self-contained
- * projection of `meta/template.yml`. A case therefore edits the source
- * manifest and republishes the runtime from it, exactly as the template
- * tooling does.
+ * Canonicalize the edited self-contained source manifest.
  */
-function regenerateRootRuntimeManifest(checkout: string): void {
-  const manifestPath = path.join(checkout, "meta", "template.yml");
+function canonicalizeRootManifest(checkout: string): void {
+  const manifestPath = path.join(checkout, "meta", "vibestudio.yml");
   const manifest = parseTemplateManifestContent(
     fs.readFileSync(manifestPath, "utf8"),
     WORKSPACE_SYSTEM_EPOCH
   );
   fs.writeFileSync(
-    path.join(checkout, "meta", "vibestudio.yml"),
-    canonicalTemplateYaml(rootRuntimeFromTemplateManifest(manifest)),
+    manifestPath,
+    canonicalTemplateYaml({
+      ...manifest.top,
+      template: {
+        ...(manifest.presentation ?? {}),
+        repositories: manifest.inventory.repositories,
+        files: manifest.inventory.files,
+      },
+    }),
     "utf8"
   );
 }
@@ -200,7 +201,7 @@ export async function deriveE2eRootTemplate(input: {
   });
   git(checkout, ["checkout", "-B", "vibestudio-e2e-case", selectedPin.commit]);
   input.configureSource(checkout);
-  regenerateRootRuntimeManifest(checkout);
+  canonicalizeRootManifest(checkout);
   git(checkout, ["add", "-A"]);
   git(checkout, [
     "-c",
