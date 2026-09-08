@@ -38,6 +38,10 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
 @property(nonatomic, copy) NSString *workspaceDocumentId;
 @property(nonatomic, copy) NSString *workspaceOrigin;
 @property(nonatomic, strong) NSMutableDictionary *workspaceCalls;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *workspaceMethods;
+@property(nonatomic, assign) NSTimeInterval workspaceInputAt;
+@property(nonatomic, assign) NSTimeInterval workspaceInputConsumedAt;
+@property(nonatomic, assign) BOOL workspaceConnected;
 @property(nonatomic, strong) NSMutableArray *workspaceMessages;
 @property(nonatomic, copy) void (^workspaceReceiver)(id, NSString *);
 @property(nonatomic, strong) WorkspaceRpcMessageHandler *workspaceMessageHandler;
@@ -59,6 +63,37 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
 @end
 
 @implementation WorkspaceWebView
+
+// Native input evidence cannot be supplied through the page's message payload.
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+  UIView *target = [super hitTest:point withEvent:event];
+  if (target && event && event.type == UIEventTypeTouches) _workspaceInputAt = event.timestamp;
+  return target;
+}
+
+- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
+  if (event) _workspaceInputAt = event.timestamp;
+  [super pressesBegan:presses withEvent:event];
+}
+
+- (void)invalidateWorkspaceConnection {
+  _workspaceConnected = NO;
+  for (NSString *requestId in _workspaceMethods.allKeys) {
+    if (![_workspaceMethods[requestId] isEqualToString:@"connect"]) continue;
+    void (^reply)(id, NSString *) = _workspaceCalls[requestId];
+    [_workspaceMethods removeObjectForKey:requestId];
+    [_workspaceCalls removeObjectForKey:requestId];
+    if (reply) reply(nil, @"Workspace connection was retired");
+  }
+}
+
+- (BOOL)consumeWorkspaceInput {
+  NSTimeInterval age = NSProcessInfo.processInfo.systemUptime - _workspaceInputAt;
+  if (_workspaceInputAt <= _workspaceInputConsumedAt || age < 0 || age > 5) return NO;
+  _workspaceInputConsumedAt = _workspaceInputAt;
+  return YES;
+}
+
 - (void)cancelPermissionRequests {
   NSDictionary *requests = [_permissionRequests copy];
   [_permissionRequests removeAllObjects];
@@ -199,7 +234,7 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
     origin.path = @""; origin.query = nil; origin.fragment = nil; origin.user = nil; origin.password = nil;
     if (([origin.scheme isEqualToString:@"https"] && port == 443) || ([origin.scheme isEqualToString:@"http"] && port == 80)) origin.port = nil;
     _workspaceOrigin = origin.string;
-    _workspaceCalls = [NSMutableDictionary new]; _workspaceMessages = [NSMutableArray new];
+    _workspaceCalls = [NSMutableDictionary new]; _workspaceMethods = [NSMutableDictionary new]; _workspaceMessages = [NSMutableArray new];
   }
   NSString *method = input[@"method"], *requestId = input[@"requestId"];
   if (![method isKindOfClass:NSString.class]) { reply(nil, @"Invalid workspace method"); return; }
@@ -210,6 +245,11 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
     return;
   }
   if (![method isKindOfClass:NSString.class] || ![requestId isKindOfClass:NSString.class] || requestId.length > 200 || _workspaceCalls[requestId]) { reply(nil, @"Invalid workspace request"); return; }
+  if ([method isEqualToString:@"connect"] && !_workspaceConnected && ![self consumeWorkspaceInput]) {
+    reply(nil, @"Connect requires a fresh interaction with this website"); return;
+  }
+  if ([method isEqualToString:@"disconnect"]) [self invalidateWorkspaceConnection];
+  _workspaceMethods[requestId] = method;
   NSData *args = [NSJSONSerialization dataWithJSONObject:input[@"args"] ?: @[] options:NSJSONWritingFragmentsAllowed error:nil];
   _workspaceCalls[requestId] = [reply copy];
   _onWorkspaceRequest(@{ @"documentId": _workspaceDocumentId, @"origin": _workspaceOrigin, @"requestId": requestId,
@@ -221,12 +261,17 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   void (^reply)(id, NSString *) = _workspaceCalls[requestId];
   if (!reply) return;
   [_workspaceCalls removeObjectForKey:requestId];
+  if (ok && [_workspaceMethods[requestId] isEqualToString:@"connect"]) _workspaceConnected = YES;
+  [_workspaceMethods removeObjectForKey:requestId];
   NSString *payload = [NSString stringWithFormat:@"{\"requestId\":%@,\"ok\":%@,\"value\":%@}", [self quotedJson:requestId], ok ? @"true" : @"false", valueJson];
   reply(payload, nil);
 }
 
 - (void)deliverWorkspaceMessage:(NSString *)documentId messageJson:(NSString *)messageJson {
   if (![_workspaceDocumentId isEqualToString:documentId]) return;
+  NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:[messageJson dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+  if (![payload isKindOfClass:NSDictionary.class]) return;
+  if ([payload[@"disconnected"] boolValue]) [self invalidateWorkspaceConnection];
   if (_workspaceReceiver) { void (^reply)(id, NSString *) = _workspaceReceiver; _workspaceReceiver = nil; reply(messageJson, nil); }
   else [_workspaceMessages addObject:messageJson];
 }
@@ -235,7 +280,8 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   if (_workspaceDocumentId && _onWorkspaceRequest) _onWorkspaceRequest(@{ @"documentId": _workspaceDocumentId, @"origin": _workspaceOrigin,
     @"requestId": NSUUID.UUID.UUIDString, @"method": @"retire", @"argsJson": @"[]", @"target": self.reactTag });
   for (void (^reply)(id, NSString *) in _workspaceCalls.allValues) reply(nil, @"Website document retired");
-  [_workspaceCalls removeAllObjects]; [_workspaceMessages removeAllObjects];
+  [_workspaceCalls removeAllObjects]; [_workspaceMethods removeAllObjects]; [_workspaceMessages removeAllObjects];
+  _workspaceConnected = NO; _workspaceInputAt = 0; _workspaceInputConsumedAt = 0;
   if (_workspaceReceiver) _workspaceReceiver(nil, @"Website document retired");
   _workspaceReceiver = nil; _workspaceDocumentId = nil; _workspaceOrigin = nil;
 }

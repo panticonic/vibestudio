@@ -1,6 +1,9 @@
 package app.vibestudio.mobile;
 
 import android.net.Uri;
+import android.os.SystemClock;
+import android.view.MotionEvent;
+import android.view.KeyEvent;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import androidx.webkit.JavaScriptReplyProxy;
@@ -48,7 +51,41 @@ final class WorkspaceWebView extends RNCWebView {
   private String workspaceDocumentId = UUID.randomUUID().toString();
   private String workspaceOrigin = "";
   private JavaScriptReplyProxy workspaceReply;
-  private final java.util.Set<String> workspaceCalls = new java.util.HashSet<>();
+  private final Map<String, String> workspaceCalls = new HashMap<>();
+  private long workspaceInputAt;
+  private long workspaceInputConsumedAt;
+  private boolean workspaceConnected;
+
+  @Override public boolean onTouchEvent(MotionEvent event) {
+    if (event.getActionMasked() == MotionEvent.ACTION_DOWN) workspaceInputAt = event.getEventTime();
+    return super.onTouchEvent(event);
+  }
+
+  @Override public boolean dispatchKeyEvent(KeyEvent event) {
+    if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0)
+      workspaceInputAt = event.getEventTime();
+    return super.dispatchKeyEvent(event);
+  }
+
+  private boolean consumeWorkspaceInput() {
+    long age = SystemClock.uptimeMillis() - workspaceInputAt;
+    if (workspaceInputAt <= workspaceInputConsumedAt || age < 0 || age > 5000) return false;
+    workspaceInputConsumedAt = workspaceInputAt;
+    return true;
+  }
+
+  private void invalidateWorkspaceConnection() {
+    workspaceConnected = false;
+    // A host reply already queued before disconnect must not reopen native admission.
+    var entries = workspaceCalls.entrySet().iterator();
+    while (entries.hasNext()) {
+      var entry = entries.next();
+      if (!"connect".equals(entry.getValue())) continue;
+      String requestId = entry.getKey();
+      entries.remove();
+      if (workspaceReply != null) workspaceReply.postMessage("{\"requestId\":" + JSONObject.quote(requestId) + ",\"ok\":false,\"value\":\"Workspace connection was retired\"}");
+    }
+  }
 
   void initializeWorkspaceBridge() {
     WebViewCompat.addWebMessageListener(this, "__vibestudioWorkspaceNative", java.util.Set.of("*"),
@@ -59,27 +96,42 @@ final class WorkspaceWebView extends RNCWebView {
         JSONObject input = new JSONObject(message.getData());
         String requestId = input.getString("requestId");
         String method = input.getString("method");
-        if (requestId.length() > 200 || workspaceCalls.contains(requestId)) return;
+        if (requestId.length() > 200 || workspaceCalls.containsKey(requestId)) return;
+        if ("connect".equals(method) && !workspaceConnected && !consumeWorkspaceInput()) {
+          reply.postMessage("{\"requestId\":" + JSONObject.quote(requestId) + ",\"ok\":false,\"value\":\"Connect requires a fresh interaction with this website\"}");
+          return;
+        }
+        if ("disconnect".equals(method)) invalidateWorkspaceConnection();
         workspaceOrigin = originOf(topLevelUrl);
         workspaceReply = reply;
-        workspaceCalls.add(requestId);
+        workspaceCalls.put(requestId, method);
         emitWorkspaceRequest(requestId, method, jsonValue(input.opt("args")));
       } catch (Exception ignored) {}
     });
   }
 
   void resolveWorkspaceRequest(String documentId, String requestId, boolean ok, String valueJson) {
-    if (!workspaceDocumentId.equals(documentId) || workspaceReply == null || !workspaceCalls.remove(requestId)) return;
+    if (!workspaceDocumentId.equals(documentId) || workspaceReply == null) return;
+    String method = workspaceCalls.remove(requestId);
+    if (method == null) return;
+    if ("connect".equals(method) && ok) workspaceConnected = true;
     workspaceReply.postMessage("{\"requestId\":" + JSONObject.quote(requestId) + ",\"ok\":" + ok + ",\"value\":" + valueJson + "}");
   }
 
   void deliverWorkspaceMessage(String documentId, String messageJson) {
-    if (workspaceDocumentId.equals(documentId) && workspaceReply != null) workspaceReply.postMessage(messageJson);
+    if (workspaceDocumentId.equals(documentId) && workspaceReply != null) {
+      try { if (new JSONObject(messageJson).optBoolean("disconnected")) invalidateWorkspaceConnection(); }
+      catch (Exception ignored) { return; }
+      workspaceReply.postMessage(messageJson);
+    }
   }
 
   private void retireWorkspaceDocument() {
     if (workspaceReply != null) emitWorkspaceRequest(UUID.randomUUID().toString(), "retire", "[]");
     workspaceReply = null;
+    workspaceConnected = false;
+    workspaceInputAt = 0;
+    workspaceInputConsumedAt = 0;
     workspaceCalls.clear();
     workspaceDocumentId = UUID.randomUUID().toString();
     workspaceOrigin = "";
