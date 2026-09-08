@@ -1216,6 +1216,27 @@ describe("createRpcClient", () => {
     expect(result.status).toBe(206);
     await expect(new Response(result.body).text()).resolves.toBe("native-body");
   });
+
+  it("preserves the bridge upload hook when requesting a raw response body", async () => {
+    const send = vi.fn(async () => {
+      throw new Error("Upload bodies must use the bridge upload hook");
+    });
+    const streamBody = vi.fn(async () => new Response("uploaded"));
+    const rpc = createRpcClient({
+      selfId: "panel:uploader",
+      transport: { send, onMessage: () => () => {}, streamBody },
+    });
+    const body = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+    const abort = new AbortController();
+    const result = await rpc.streamReadable("main", "upload", [], { body, signal: abort.signal });
+    expect(streamBody).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.objectContaining({ type: "stream-request" }) }),
+      abort.signal,
+      body
+    );
+    expect(send).not.toHaveBeenCalled();
+    await expect(new Response(result.body).text()).resolves.toBe("uploaded");
+  });
 });
 
 describe("createRpcClient — pending-call policy (§3.4)", () => {
