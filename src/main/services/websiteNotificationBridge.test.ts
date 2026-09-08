@@ -297,6 +297,19 @@ describe("website notification document ownership", () => {
     }
   );
 
+  it("keeps notifications active across same-document navigation", async () => {
+    const { first, bridge, show, eventService } = setup();
+    const id = await show();
+    first.frame.url = "https://site.test/page#details";
+    first.contents.emit("did-start-navigation", {}, first.frame.url, true, true);
+    expect(eventService.emit).not.toHaveBeenCalledWith("notification:dismiss", { id });
+    bridge.handleAction("workspace", id, "website-open");
+    expect(first.frame.send).toHaveBeenCalledWith("vibestudio:website-notification:event", {
+      id,
+      type: "click",
+    });
+  });
+
   it("does not deliver close/click to a same-origin replacement document", async () => {
     const { first, bridge, show, eventService } = setup();
     const id = await show();

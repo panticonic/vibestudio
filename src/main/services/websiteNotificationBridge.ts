@@ -113,10 +113,10 @@ export class WebsiteNotificationBridge {
     const onNavigation = (
       _event: Electron.Event,
       _url: string,
-      _isInPlace: boolean,
+      isInPlace: boolean,
       isMainFrame: boolean
     ) => {
-      if (isMainFrame) onRetire();
+      if (isMainFrame && !isInPlace) onRetire();
     };
     this.owned.add(notification);
     attribution.contents.once("destroyed", onRetire);
@@ -220,8 +220,10 @@ export class WebsiteNotificationBridge {
       !frame.detached &&
       frame === contents.mainFrame &&
       frame.origin === notification.origin &&
-      webUrl(frame.url)?.href === notification.pageUrl &&
-      webUrl(contents.getURL())?.href === notification.pageUrl &&
+      // Full navigations retire the captured document through its native listener.
+      // A fragment/history change can update its URL without replacing it.
+      webUrl(frame.url)?.origin === notification.origin &&
+      webUrl(contents.getURL())?.origin === notification.origin &&
       owner?.workspaceId === notification.workspaceId &&
       owner.panelId === notification.panelId &&
       owner.permissions === notification.permissions &&
