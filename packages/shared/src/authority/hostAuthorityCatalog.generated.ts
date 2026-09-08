@@ -4140,12 +4140,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "hubControl.createWorkspace": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "identity",
       family: "hubControl.create",
       rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+        "The transport leaf is open; the exact prepared creation request supplies the gated workspaces.create leaf.",
     },
     capability: "workspaces.create",
     presentation: {
