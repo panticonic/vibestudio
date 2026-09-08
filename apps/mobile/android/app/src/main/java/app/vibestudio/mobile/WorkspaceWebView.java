@@ -47,7 +47,9 @@ final class WorkspaceWebView extends RNCWebView {
 
   void initializeWebsiteNotifications() {
     WebViewCompat.addWebMessageListener(this, "__vibestudioWebsiteNotificationsNative",
-        java.util.Set.of("http://*", "https://*"), (view, message, sourceOrigin, isMainFrame, reply) -> {
+        // Android's origin-rule grammar has no scheme-wide wildcard. The
+        // callback admits only a matching HTTP(S) top-level document below.
+        java.util.Set.of("*"), (view, message, sourceOrigin, isMainFrame, reply) -> {
       String topLevelUrl = getUrl();
       if (!isMainFrame || sourceOrigin == null || topLevelUrl == null || !sameOrigin(sourceOrigin.toString(), topLevelUrl)) return;
       try {
