@@ -41,6 +41,10 @@ import {
   terminateOwnedProcessTree,
   type ProcessTreeTerminationResult,
 } from "../../scripts/owned-process-tree.mjs";
+import {
+  captureOwnedProcessIdentity,
+  type OwnedProcessIdentity,
+} from "../dev/ownedProcessIdentity.js";
 
 const log = createDevLogger("HubProcessManager");
 const READY_POLL_INTERVAL_MS = 250;
@@ -79,6 +83,7 @@ export interface HubProcessManagerConfig {
   logLevel?: string;
   centralData: CentralDataManager;
   onCrash: (code: number | null) => void;
+  onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
   /** Desktop-only confirmation before reusing a live detached hub. */
   confirmExistingHub?: (lease: HubProcessLeaseRecord) => Promise<"attach" | "replace" | "cancel">;
 }
@@ -404,11 +409,15 @@ export class HubProcessManager {
     child.on("error", () => {
       exitedWith = -1;
     });
-    child.unref();
-    if (child.pid) this.verifiedHubPids.add(child.pid);
-
     let ready: HubReadyFilePayload;
     try {
+      if (child.pid) {
+        this.verifiedHubPids.add(child.pid);
+        if (process.platform === "linux" || process.platform === "darwin") {
+          await this.config.onOwnedHubSpawn?.(captureOwnedProcessIdentity(child.pid));
+        }
+      }
+      child.unref();
       ready = parseHubReadyFile(
         await this.waitForReadyFile(readyFile, spawnedAt, () => exitedWith)
       );

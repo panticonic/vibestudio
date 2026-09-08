@@ -41,6 +41,7 @@ import { WorkspaceSessionDirectory } from "./workspaceSessionDirectory.js";
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { assertIrohReach, type ConnectPairing, type IrohReach } from "@vibestudio/iroh-transport";
 import { DesktopIrohConnectionSupervisor } from "./desktopIrohConnectionSupervisor.js";
+import { registerOwnedHubWithDevRunner } from "./devRunnerHubRegistration.js";
 import {
   FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
   LOCAL_STARTUP_CONNECTION_PHASES,
@@ -253,6 +254,7 @@ export async function establishServerSession(args: {
       console.error(`[App] Local hub died and could not be recovered (code ${code ?? "?"})`);
       relaunchApp({ exitCode: 1 });
     },
+    onOwnedHubSpawn: registerOwnedHubWithDevRunner,
   });
   const phase = createStartupPhaseReporter(
     "local connect",

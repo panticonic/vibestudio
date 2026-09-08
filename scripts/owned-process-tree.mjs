@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
+import { observeOwnedProcess } from "./owned-process-identity.mjs";
 
 const POLL_MS = 100;
 
@@ -21,12 +22,34 @@ export function processTreeAlive(pid, platform = process.platform) {
   return [...ownedProcessGroups(pid, platform)].some((group) => processGroupAlive(group));
 }
 
+export function processTreeContains(rootPid, candidatePid, platform = process.platform) {
+  if (platform === "win32") return false;
+  const table = readProcessTable(platform);
+  if (!table) return false;
+  let current = table.get(candidatePid);
+  while (current) {
+    if (current.pid === rootPid) return true;
+    if (current.ppid === current.pid) return false;
+    current = table.get(current.ppid);
+  }
+  return false;
+}
+
 export async function terminateOwnedProcessTree(
   pid,
-  { termTimeoutMs = 12_000, killTimeoutMs = 5_000, platform = process.platform } = {}
+  { termTimeoutMs = 12_000, killTimeoutMs = 5_000, platform = process.platform, identity } = {}
 ) {
   if (!Number.isInteger(pid) || pid <= 0) {
     throw new Error(`Invalid owned process-tree PID: ${pid}`);
+  }
+  if (identity) {
+    const ownership = observeOwnedProcess(identity);
+    if (ownership === "absent") return { gone: true, escalated: false };
+    if (ownership !== "owned" || identity.pid !== pid) {
+      throw Object.assign(new Error("Exact process-tree ownership can no longer be proven"), {
+        code: "EOWNERSHIP",
+      });
+    }
   }
   if (!processTreeAlive(pid, platform)) {
     return { gone: true, escalated: false };

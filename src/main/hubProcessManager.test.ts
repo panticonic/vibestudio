@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
+import type { OwnedProcessIdentity } from "../dev/ownedProcessIdentity.js";
 
 vi.mock("./paths.js", () => ({
   getServerProcessEntryPath: () => "/tmp/server-entry.js",
@@ -31,6 +32,15 @@ vi.mock("node:child_process", () => ({
 const terminateOwnedProcessTreeMock = vi.fn();
 vi.mock("../../scripts/owned-process-tree.mjs", () => ({
   terminateOwnedProcessTree: (...args: unknown[]) => terminateOwnedProcessTreeMock(...args),
+}));
+vi.mock("../dev/ownedProcessIdentity.js", () => ({
+  captureOwnedProcessIdentity: (pid: number) => ({
+    version: 1,
+    platform: "linux",
+    pid,
+    processGroupId: pid,
+    startCoordinate: "birth",
+  }),
 }));
 
 import { getLocalHubLogPath, HubProcessManager, parseHubReadyFile } from "./hubProcessManager.js";
@@ -118,6 +128,7 @@ function manager(
     ephemeral?: boolean;
     ephemeralLifecycle?: "replace" | "resume";
     workspaceName?: string | null;
+    onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
   } = {}
 ) {
   const ephemeral = options.ephemeral ?? false;
@@ -130,6 +141,7 @@ function manager(
     buildId: BUILD_ID,
     centralData: centralData as never,
     onCrash: vi.fn(),
+    ...(options.onOwnedHubSpawn ? { onOwnedHubSpawn: options.onOwnedHubSpawn } : {}),
   });
 }
 
@@ -689,6 +701,57 @@ describe("HubProcessManager", () => {
       "dev",
       "--ephemeral",
     ]);
+  });
+
+  it("keeps the detached hub referenced until its outer owner accepts the birth identity", async () => {
+    credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new Error("refused")))
+    );
+    let releaseOwner!: () => void;
+    const accepted = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    let unrefCount = 0;
+    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    child.pid = 42;
+    child.unref = () => {
+      unrefCount += 1;
+    };
+    spawnMock.mockReturnValue(child);
+    const register = vi.fn(() => accepted);
+
+    const connecting = manager(makeCentralData(), { onOwnedHubSpawn: register }).attachOrSpawn();
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
+    expect(unrefCount).toBe(0);
+
+    releaseOwner();
+    await vi.waitFor(() => expect(unrefCount).toBe(1));
+    child.emit("exit", 1);
+    await expect(connecting).rejects.toThrow("Local hub exited during startup");
+  });
+
+  it("cleans up the spawned hub when its outer owner rejects birth registration", async () => {
+    credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new Error("refused")))
+    );
+    let unrefCount = 0;
+    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    child.pid = 99_999_996;
+    child.unref = () => {
+      unrefCount += 1;
+    };
+    spawnMock.mockReturnValue(child);
+
+    await expect(
+      manager(makeCentralData(), {
+        onOwnedHubSpawn: () => Promise.reject(new Error("owner rejected")),
+      }).attachOrSpawn()
+    ).rejects.toThrow("owner rejected");
+    expect(unrefCount).toBe(0);
   });
 
   it("stops a newly spawned hub when workspace routing fails", async () => {

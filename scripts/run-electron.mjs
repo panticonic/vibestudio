@@ -3,6 +3,8 @@ import process from "node:process";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 import { createRunnerShutdown, signalExitCode } from "./run-electron-lifecycle.mjs";
 import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
+import { observeOwnedProcess } from "./owned-process-identity.mjs";
+import { processTreeContains, terminateOwnedProcessTree } from "./owned-process-tree.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 const hostGeneration = readCurrentHostBuildGeneration(process.cwd(), "desktop");
@@ -32,9 +34,14 @@ const activeChildren = new Set();
 let nextArgs = initialElectronArgs();
 let typeCheckStarted = false;
 let typeCheckChild = null;
+const ownedHubs = new Map();
 const shutdown = createRunnerShutdown({
   activeChildren,
-  exit: (code) => process.exit(code),
+  // The main loop owns final exit after it has reaped every registered hub.
+  // Signal completion records the shell status but must not bypass that tail.
+  exit: (code) => {
+    process.exitCode = code;
+  },
   requestGracefulStop: (electron, signal) => {
     if (electron.connected) {
       electron.send({ type: "vibestudio:dev-shutdown", signal });
@@ -111,6 +118,28 @@ async function runElectron(args) {
         relaunchArgs = message.args;
       }
       if (message && message.type === "vibestudio:dev-ready") startTypeCheck();
+      if (message && message.type === "vibestudio:dev-owned-hub") {
+        const accepted =
+          typeof message.registrationId === "string" &&
+          message.identity &&
+          currentChild.pid &&
+          processTreeContains(currentChild.pid, message.identity.pid) &&
+          observeOwnedProcess(message.identity) === "owned";
+        if (!currentChild.connected || typeof message.registrationId !== "string") return;
+        if (!accepted) {
+          currentChild.send({
+            type: "vibestudio:dev-owned-hub-rejected",
+            registrationId: message.registrationId,
+          });
+          return;
+        }
+        const identity = message.identity;
+        ownedHubs.set(identity.pid, identity);
+        currentChild.send({
+          type: "vibestudio:dev-owned-hub-accepted",
+          registrationId: message.registrationId,
+        });
+      }
     });
 
     currentChild.on("exit", (code, signal) => {
@@ -136,6 +165,20 @@ for (;;) {
 
   const signal = shutdown.requestedSignal() ?? result.signal;
   await stopTypeCheck();
+  for (const identity of ownedHubs.values()) {
+    const observation = observeOwnedProcess(identity);
+    if (observation === "owned") {
+      const retired = await terminateOwnedProcessTree(identity.pid, { identity });
+      if (!retired.gone) {
+        throw new Error(
+          retired.detail ?? `Owned hub process tree ${identity.pid} survived shutdown`
+        );
+      }
+    } else if (observation === "unknown") {
+      throw new Error(`Cannot prove ownership of registered hub ${identity.pid} during shutdown`);
+    }
+  }
+  ownedHubs.clear();
   if (result.signal && !shutdown.requestedSignal()) {
     console.error(
       `[dev] Electron terminated by ${result.signal} (shell exit ${signalExitCode(result.signal)})`
