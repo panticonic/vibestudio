@@ -82,6 +82,14 @@ export const workspaceCreationMethods = defineServiceMethods({
       rationale:
         "Creation results can disclose workspaces outside the initiating workspace and require scoped consent.",
     },
+    presentation: {
+      title: "Read a workspace creation result",
+      action: "read a workspace creation result",
+      description:
+        "Read the name, identifier, and status of the workspace created by this request.",
+      group: "accounts",
+      authorityCategory: { domain: "automation", verb: "see" },
+    },
     description:
       "Reconcile one previously submitted workspace creation without creating or opening anything.",
     args: z.tuple([z.object({ operationId: WorkspaceCreationOperationIdSchema }).strict()]),
