@@ -542,6 +542,39 @@ describe("PanelManager", () => {
   });
 
 
+  it("re-observes icons after a rebuild under the same mutable ref and rejects the old response", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    const creator = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const created = await creator.create("panels/chat", {
+      isRoot: true,
+      addAsRoot: true,
+      ref: "latest",
+    });
+    const panel = registry.getPanel(created.panelId)!;
+    panel.buildKey = "build-a";
+    const responses: ((value: import("./workspaceStateClient.js").PanelMetadata) => void)[] = [];
+    const getPanelMetadata = vi.fn(
+      () =>
+        new Promise<import("./workspaceStateClient.js").PanelMetadata>((resolve) =>
+          responses.push(resolve)
+        )
+    );
+    const reader = new PanelManager({ registry, ...deps, panelMetadata: { getPanelMetadata } });
+    await reader.getPanel(created.panelId);
+    panel.buildKey = "build-b";
+    await reader.getPanel(created.panelId);
+    expect(getPanelMetadata).toHaveBeenCalledTimes(2);
+    expect(getPanelMetadata).toHaveBeenNthCalledWith(2, "panels/chat", "latest");
+    responses[1]!({ source: "panels/chat", title: "Chat", icon: "./new.svg" });
+    await vi.waitFor(() => expect(panel.icon).toBe("./new.svg"));
+    responses[0]!({ source: "panels/chat", title: "Chat", icon: "./old.svg" });
+    await Promise.resolve();
+    expect(panel.icon).toBe("./new.svg");
+    await reader.getPanel(created.panelId);
+    expect(getPanelMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("opens panels installed into exact workspace state without requiring a disk checkout", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test",});
     const { deps } = makeManagerDeps("/path/with/no/installed/panels");

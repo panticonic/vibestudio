@@ -1552,14 +1552,21 @@ export class PanelManager {
     const snapshot = getCurrentSnapshot(panel);
     if (browserUrlFromPanelSource(snapshot.source) !== null) return;
     const ref = getPanelRef(panel) ?? `ctx:${snapshot.contextId}`;
-    this.refreshPanelMetadata(panel.id, snapshot.source, ref);
+    this.refreshPanelMetadata(panel.id, snapshot.source, ref, panel.buildKey ?? null);
   }
 
-  private refreshPanelMetadata(panelId: string, source: string, ref: string): void {
-    const key = `${source}\u0000${ref}`;
+  private refreshPanelMetadata(
+    panelId: string,
+    source: string,
+    ref: string,
+    buildKey: string | null
+  ): void {
+    // References such as latest and ctx: are mutable. A new active build must
+    // re-observe its decoration even when the source and requested ref match.
+    const key = JSON.stringify([source, ref, buildKey]);
     const cached = this.panelMetadataByRef.get(key);
     if (cached !== undefined || this.panelMetadataByRef.has(key)) {
-      if (cached) this.applyPanelMetadata(panelId, source, ref, cached);
+      if (cached) this.applyPanelMetadata(panelId, source, ref, buildKey, cached);
       return;
     }
     if (this.panelMetadataFlights.has(key)) return;
@@ -1577,7 +1584,7 @@ export class PanelManager {
         // result to every currently projected panel with that exact identity;
         // no caller needs to repeat the lookup to populate its own copy.
         for (const candidate of this.registry.getRootPanels()) {
-          this.applyPanelMetadataTree(candidate, source, ref, metadata);
+          this.applyPanelMetadataTree(candidate, source, ref, buildKey, metadata);
         }
       })
       .catch((error: unknown) => {
@@ -1599,23 +1606,27 @@ export class PanelManager {
     panel: Panel,
     source: string,
     ref: string,
+    buildKey: string | null,
     metadata: { icon?: string; iconVersion?: string; iconState?: string }
   ): void {
-    this.applyPanelMetadata(panel.id, source, ref, metadata);
-    for (const child of panel.children) this.applyPanelMetadataTree(child, source, ref, metadata);
+    this.applyPanelMetadata(panel.id, source, ref, buildKey, metadata);
+    for (const child of panel.children)
+      this.applyPanelMetadataTree(child, source, ref, buildKey, metadata);
   }
 
   private applyPanelMetadata(
     panelId: string,
     source: string,
     ref: string,
+    buildKey: string | null,
     metadata: { icon?: string; iconVersion?: string; iconState?: string }
   ): void {
     const current = this.registry.getPanel(panelId);
     if (!current) return;
     const snapshot = getCurrentSnapshot(current);
     const currentRef = getPanelRef(current) ?? `ctx:${snapshot.contextId}`;
-    if (snapshot.source !== source || currentRef !== ref) return;
+    if (snapshot.source !== source || currentRef !== ref || (current.buildKey ?? null) !== buildKey)
+      return;
     this.registry.updateIconDecoration(panelId, metadata);
   }
 
