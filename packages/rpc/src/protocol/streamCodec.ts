@@ -458,17 +458,19 @@ export async function decodeFramedResponseToStreaming(
   options?: DecodeFramedStreamOptions
 ): Promise<Response> {
   const decoded = await decodeFramedStream(wireBody, requestedUrl, callerSignal, options);
-  // `new Response` only accepts statuses 200-599; anything else (1xx, or a garbled
-  // frame) throws RangeError and crashes the decode. The loopback gateway returns
-  // in-range statuses, so clamping is purely defensive — map out-of-range to 502.
+  const response = responseFromDecodedStream(decoded);
+  // A null-body response has no reader to cancel the unused decoder. Iroh's
+  // onBodyCancel sends a remote cancellation, so let that decoder reach END.
+  if (!response.body && !options?.onBodyCancel) void decoded.body.cancel().catch(() => {});
+  return response;
+}
+
+/** One Response construction path for native and duplex framed RPC streams. */
+export function responseFromDecodedStream(decoded: DecodedFramedStream): Response {
+  // Response only accepts statuses 200-599; preserve the decoder's existing
+  // handling of malformed or informational-only headers.
   const status = decoded.status >= 200 && decoded.status <= 599 ? decoded.status : 502;
-  // The wire stream for a null-body status is empty (HEAD then END); pass null.
-  // Plain HTTP cancels the unused decoded stream to avoid a dangling reader.
-  // Iroh installs onBodyCancel as a wire-level stream-cancel hook, so leave the
-  // decoder running until END rather than turning this internal discard into a
-  // remote cancellation.
   const nullBody = NULL_BODY_STATUSES.has(status);
-  if (nullBody && !options?.onBodyCancel) void decoded.body.cancel().catch(() => {});
   const response = new Response(
     nullBody ? null : (decoded.body as unknown as ConstructorParameters<typeof Response>[0]),
     {

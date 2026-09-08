@@ -1058,6 +1058,32 @@ describe("createRpcClient", () => {
     await expect(new Response(response.body).text()).resolves.toBe("hello");
   });
 
+  it.each([204, 205, 304])(
+    "preserves bodyless status %s across framed and raw reads",
+    async (status) => {
+      const network = createInProcessNetwork();
+      const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
+      const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
+      b.exposeStreaming("empty", async (_request, sink) => {
+        await sink({
+          kind: "head",
+          status,
+          statusText: "",
+          headerPairs: [],
+          finalUrl: "https://example.test/empty",
+        });
+        await sink({ kind: "end", bytesIn: 0 });
+      });
+      const response = await a.stream("b", "empty", []);
+      expect(response.status).toBe(status);
+      expect(response.body).toBeNull();
+      expect(response.url).toBe("https://example.test/empty");
+      const raw = await a.streamReadable("b", "empty", []);
+      expect(raw.status).toBe(status);
+      await expect(raw.body.getReader().read()).resolves.toEqual({ done: true, value: undefined });
+    }
+  );
+
   it("allows a response body to remain idle after HEAD when explicitly unbounded", async () => {
     vi.useFakeTimers();
     try {

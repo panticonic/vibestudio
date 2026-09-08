@@ -1,3 +1,4 @@
+import { responseFromDecodedStream } from "./protocol/streamCodec.js";
 import { isLocalRpcDestination, rpcDestinationMatchesCaller } from "./destination.js";
 import type { RpcDestination } from "./types.js";
 import type {
@@ -895,13 +896,14 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     // Node transports can losslessly unwrap the ordinary Response path.
     if (!config.transport.streamReadable) {
       return streamWithProvenance(provenance, targetId, method, args, options).then((response) => {
-        if (!response.body) throw new Error("Streaming RPC response has no readable body");
         return {
           status: response.status,
           statusText: response.statusText,
           headers: [...response.headers.entries()],
           finalUrl: response.url,
-          body: response.body,
+          body:
+            response.body ??
+            new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
         };
       });
     }
@@ -1057,23 +1059,13 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       throw error;
     }
     const head = await headPromise;
-    const response = new Response(stream as unknown as ConstructorParameters<typeof Response>[0], {
+    return responseFromDecodedStream({
       status: head.status,
       statusText: head.statusText,
-      headers: new Headers(head.headerPairs),
+      headers: head.headerPairs,
+      finalUrl: head.finalUrl,
+      body: stream,
     });
-    if (head.finalUrl) {
-      try {
-        Object.defineProperty(response, "url", {
-          value: head.finalUrl,
-          writable: false,
-          configurable: true,
-        });
-      } catch {
-        // ignore
-      }
-    }
-    return response;
   }
 
   const client: RpcClient = {
