@@ -23,11 +23,7 @@ const output = path.resolve(argument("--out-dir") ?? path.join(hostRoot, "dist",
 const entry = path.join(workspaceRoot, "packages/runtime/src/panel/index.ts");
 const graph = discoverPackageGraph(workspaceRoot);
 const hostConfig = JSON.parse(fs.readFileSync(path.join(hostRoot, "tsconfig.json"), "utf8"));
-const baseConfig = JSON.parse(fs.readFileSync(path.join(workspaceRoot, "tsconfig.json"), "utf8"));
 const paths: Record<string, string[]> = {};
-for (const [specifier, targets] of Object.entries(baseConfig.compilerOptions.paths as Record<string, string[]>)) {
-  if (specifier.startsWith("@workspace/")) paths[specifier] = targets.map(target => path.resolve(workspaceRoot, target));
-}
 for (const [specifier, targets] of Object.entries(hostConfig.compilerOptions.paths as Record<string, string[]>))
   paths[specifier] = targets.map(target => path.resolve(hostRoot, target));
 for (const unit of graph.allNodes()) {

@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "../tests/workspace-integration/credentialService.test.ts",
+    "../tests/workspace-integration/vcsHost/**/*.test.ts"
+  ],
+  "exclude": ["apps/mobile/**/*", "node_modules", "../node_modules", "**/dist", "**/node_modules"]
+}

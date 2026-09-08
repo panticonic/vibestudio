@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "rootDir": "..",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "bundler",
+    "types": ["node", "vitest/globals"],
+    "paths": {}
+  },
+  "include": ["**/*"],
+  "exclude": [
+    "node_modules",
+    "../node_modules",
+    "**/dist",
+    "**/node_modules",
+    "apps/mobile/**/*",
+    "packages/mobile-navigation/**/*",
+    "apps/mobile/jest.setup.ts",
+    "apps/mobile/**/*.test.ts",
+    "apps/mobile/**/*.test.tsx"
+  ]
+}

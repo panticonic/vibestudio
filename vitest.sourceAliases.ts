@@ -7,14 +7,13 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Resolve one explicit host/Base pair's TypeScript package paths. */
-export function workspaceSourceAliases(hostRoot: string, workspaceRoot: string): Alias[] {
+/** Host source mappings belong to the host developer toolchain. */
+export function hostSourceAliases(hostRoot: string): Alias[] {
   hostRoot = path.resolve(hostRoot);
-  workspaceRoot = path.resolve(workspaceRoot);
-  const workspaceTsconfig = JSON.parse(
-    readFileSync(path.resolve(workspaceRoot, "tsconfig.json"), "utf8")
+  const hostTsconfig = JSON.parse(
+    readFileSync(path.resolve(hostRoot, "tsconfig.json"), "utf8")
   ) as { compilerOptions?: { paths?: Record<string, string[]> } };
-  const tsconfigPaths = workspaceTsconfig.compilerOptions?.paths ?? {};
+  const tsconfigPaths = hostTsconfig.compilerOptions?.paths ?? {};
   const aliases: Alias[] = [];
 
   // Subpath mappings must precede their less-specific bare-package mapping.
@@ -32,12 +31,12 @@ export function workspaceSourceAliases(hostRoot: string, workspaceRoot: string):
     if (importPath.includes("*") && sourcePath.includes("*")) {
       aliases.push({
         find: new RegExp(`^${escapeRegex(importPath).replace("\\*", "(.+)")}$`),
-        replacement: resolvePairPath(hostRoot, workspaceRoot, sourcePath).replace("*", "$1"),
+        replacement: path.resolve(hostRoot, sourcePath).replace("*", "$1"),
       });
     } else {
       aliases.push({
         find: importPath,
-        replacement: resolvePairPath(hostRoot, workspaceRoot, sourcePath),
+        replacement: path.resolve(hostRoot, sourcePath),
       });
     }
   }
@@ -51,16 +50,25 @@ export function discoveredUserlandSourceAliases(units: readonly GraphNode[]): Al
     .flatMap((unit): Alias[] => {
       const manifest = JSON.parse(readFileSync(path.join(unit.path, "package.json"), "utf8")) as {
         exports?: string | Record<string, unknown>;
+        main?: string;
+        vibestudio?: { entry?: string };
       };
-      return normalizedExports(manifest.exports).map(([subpath, target]) => ({
-        find: subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`,
-        replacement: path.resolve(unit.path, target),
-      }));
+      const exports = normalizedExports(manifest.exports);
+      const entry = manifest.vibestudio?.entry ?? manifest.main;
+      if (entry && !exports.some(([subpath]) => subpath === ".")) exports.push([".", entry]);
+      return exports
+        .filter(([, target]) => !/\.d\.[cm]?ts$/.test(target))
+        .map(([subpath, target]) => ({
+          find: subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`,
+          replacement: path.resolve(unit.path, target),
+        }));
     })
     .sort((left, right) => String(right.find).length - String(left.find).length);
 }
 
-function normalizedExports(exports: string | Record<string, unknown> | undefined): Array<[string, string]> {
+function normalizedExports(
+  exports: string | Record<string, unknown> | undefined
+): Array<[string, string]> {
   if (typeof exports === "string") return [[".", exports]];
   if (!exports) return [];
   return Object.entries(exports).flatMap(([subpath, value]) => {
@@ -85,12 +93,4 @@ function exportTarget(value: unknown): string | null {
     if (target) return target;
   }
   return null;
-}
-
-function resolvePairPath(hostRoot: string, workspaceRoot: string, sourcePath: string): string {
-  const normalized = sourcePath.replaceAll("\\", "/");
-  if (normalized.startsWith("../packages/")) {
-    return path.resolve(hostRoot, normalized.slice(3));
-  }
-  return path.resolve(workspaceRoot, sourcePath);
 }

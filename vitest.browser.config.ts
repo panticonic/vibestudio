@@ -1,9 +1,6 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
-import {
-  discoveredUserlandSourceAliases,
-  workspaceSourceAliases,
-} from "./vitest.sourceAliases";
+import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig";
@@ -25,7 +22,7 @@ export default defineConfig(async () => {
       alias: [
         ...(await userlandDependencyAliases(__dirname, workspaceRoot)),
         ...discoveredUserlandSourceAliases(dependencyProjection.units),
-        ...workspaceSourceAliases(__dirname, workspaceRoot),
+        ...hostSourceAliases(__dirname),
       ],
       dedupe: ["react", "react-dom"],
     },

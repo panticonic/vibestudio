@@ -46,7 +46,7 @@ try {
     "tsconfig.json",
     "tsconfig.integration.json",
     "tsconfig.integration.mobile.json",
-  ].filter((name) => name === "tsconfig.json" || fs.existsSync(path.join(workspaceRoot, name)))) {
+  ]) {
     const projectedConfig = path.join(temporaryRoot, "workspace", configName);
     try {
       execFileSync(compiler, ["--project", projectedConfig, "--pretty", "false"], {
@@ -86,10 +86,12 @@ function projectCheckoutSource(
     const source = path.join(workspaceRoot, entry.name);
     const target = path.join(projectedWorkspace, entry.name);
     if (entry.isDirectory()) linkDirectory(source, target);
-    else if (entry.name.startsWith("tsconfig") && entry.name.endsWith(".json")) {
-      fs.copyFileSync(source, target);
-      addDiscoveredPackagePaths(target, units);
-    }
+  }
+  // Checkout validation is a host development concern, not workspace source.
+  for (const name of fs.readdirSync(path.join(appRoot, "scripts/config/userland"))) {
+    const target = path.join(projectedWorkspace, name);
+    fs.copyFileSync(path.join(appRoot, "scripts/config/userland", name), target);
+    if (name.endsWith(".json")) addDiscoveredPackagePaths(target, units);
   }
   for (const entry of ["apps", "packages", "src", "tests"]) {
     linkDirectory(path.join(appRoot, entry), path.join(targetRoot, entry));
@@ -98,6 +100,9 @@ function projectCheckoutSource(
 
 interface UnitManifest {
   exports?: Record<string, unknown> | string;
+  types?: string;
+  main?: string;
+  vibestudio?: { entry?: string };
 }
 
 /**
@@ -137,6 +142,8 @@ function addDiscoveredPackagePaths(
     const manifest = JSON.parse(
       fs.readFileSync(path.join(unit.path, "package.json"), "utf8")
     ) as UnitManifest;
+    const entry = manifest.types ?? manifest.vibestudio?.entry ?? manifest.main;
+    if (entry) paths[unit.name] = [`./${unit.relativePath}/${entry.replace(/^\.\//, "")}`];
     for (const [subpath, target] of normalizedExports(manifest.exports)) {
       const specifier = subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`;
       paths[specifier] = [`./${unit.relativePath}/${target.replace(/^\.\//, "")}`];

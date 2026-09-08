@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 import { vitestSharedConfig } from "./vitest.sharedConfig";
-import { discoveredUserlandSourceAliases, workspaceSourceAliases } from "./vitest.sourceAliases";
+import { discoveredUserlandSourceAliases, hostSourceAliases } from "./vitest.sourceAliases";
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { exactPairTests } from "./vitest.exactPairTests";
@@ -95,7 +95,7 @@ export default defineConfig(async () => {
             ]
           : []),
         ...discoveredUserlandSourceAliases(dependencyProjection.units),
-        ...workspaceSourceAliases(__dirname, workspaceRoot),
+        ...hostSourceAliases(__dirname),
       ],
       // The terminal app renders through Ink, whose reconciler and scheduler
       // are React consumers the root `dedupe` list never named. Keep projected
