@@ -45,6 +45,66 @@ final class WorkspaceWebView extends RNCWebView {
 
   WorkspaceWebView(ThemedReactContext context) { super(context); }
 
+  private String workspaceDocumentId = UUID.randomUUID().toString();
+  private String workspaceOrigin = "";
+  private JavaScriptReplyProxy workspaceReply;
+  private final java.util.Set<String> workspaceCalls = new java.util.HashSet<>();
+
+  void initializeWorkspaceBridge() {
+    WebViewCompat.addWebMessageListener(this, "__vibestudioWorkspaceNative", java.util.Set.of("*"),
+        (view, message, sourceOrigin, isMainFrame, reply) -> {
+      String topLevelUrl = getUrl();
+      if (!isMainFrame || sourceOrigin == null || topLevelUrl == null || !sameOrigin(sourceOrigin.toString(), topLevelUrl)) return;
+      try {
+        JSONObject input = new JSONObject(message.getData());
+        String requestId = input.getString("requestId");
+        String method = input.getString("method");
+        if (requestId.length() > 200 || workspaceCalls.contains(requestId)) return;
+        workspaceOrigin = originOf(topLevelUrl);
+        workspaceReply = reply;
+        workspaceCalls.add(requestId);
+        emitWorkspaceRequest(requestId, method, jsonValue(input.opt("args")));
+      } catch (Exception ignored) {}
+    });
+  }
+
+  void resolveWorkspaceRequest(String documentId, String requestId, boolean ok, String valueJson) {
+    if (!workspaceDocumentId.equals(documentId) || workspaceReply == null || !workspaceCalls.remove(requestId)) return;
+    workspaceReply.postMessage("{\"requestId\":" + JSONObject.quote(requestId) + ",\"ok\":" + ok + ",\"value\":" + valueJson + "}");
+  }
+
+  void deliverWorkspaceMessage(String documentId, String messageJson) {
+    if (workspaceDocumentId.equals(documentId) && workspaceReply != null) workspaceReply.postMessage(messageJson);
+  }
+
+  private void retireWorkspaceDocument() {
+    if (workspaceReply != null) emitWorkspaceRequest(UUID.randomUUID().toString(), "retire", "[]");
+    workspaceReply = null;
+    workspaceCalls.clear();
+    workspaceDocumentId = UUID.randomUUID().toString();
+    workspaceOrigin = "";
+  }
+
+  private void emitWorkspaceRequest(String requestId, String method, String argsJson) {
+    WritableMap event = Arguments.createMap();
+    event.putString("documentId", workspaceDocumentId);
+    event.putString("origin", workspaceOrigin);
+    event.putString("requestId", requestId);
+    event.putString("method", method);
+    event.putString("argsJson", argsJson);
+    int tag = RNCWebViewWrapper.getReactTagFromWebView(this); event.putInt("target", tag);
+    var dispatcher = UIManagerHelper.getEventDispatcherForReactTag(getThemedReactContext(), tag);
+    if (dispatcher != null) dispatcher.dispatchEvent(new WorkspaceEvent(tag, event));
+  }
+
+  private static final class WorkspaceEvent extends Event<WorkspaceEvent> {
+    private final WritableMap data;
+    WorkspaceEvent(int tag, WritableMap data) { super(tag); this.data = data; }
+    @Override public String getEventName() { return "topWorkspaceRequest"; }
+    @Override public boolean canCoalesce() { return false; }
+    @Override protected WritableMap getEventData() { return data; }
+  }
+
   void initializeWebsiteNotifications() {
     WebViewCompat.addWebMessageListener(this, "__vibestudioWebsiteNotificationsNative",
         // Android's origin-rule grammar has no scheme-wide wildcard. The
@@ -146,12 +206,14 @@ final class WorkspaceWebView extends RNCWebView {
   }
 
   @Override public void onMainFrameNavigationStarted() {
+    retireWorkspaceDocument();
     cancelWebsiteNotifications();
     document++;
     cancelAll();
   }
 
   @Override public void destroy() {
+    retireWorkspaceDocument();
     cancelWebsiteNotifications();
     cancelAll();
     super.destroy();

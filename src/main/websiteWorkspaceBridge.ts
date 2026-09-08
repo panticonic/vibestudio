@@ -1,6 +1,6 @@
+import { runtimeConnectionInfoFromBootstrap } from "@vibestudio/rpc";
 import { randomUUID } from "node:crypto";
 import type { WebContents, IpcMainInvokeEvent } from "electron";
-import type { RuntimeConnectionInfo } from "@vibestudio/rpc";
 import type { ServerClient } from "./serverClient.js";
 
 interface DocumentConnection {
@@ -130,20 +130,7 @@ export class WebsiteWorkspaceBridge {
         throw new Error("Website document was replaced");
       if (allowed !== true) throw new Error("Workspace connection was declined");
       const raw = await owner.bootstrap();
-      if (!raw || typeof raw !== "object")
-        throw new Error("Browser runtime configuration is unavailable");
-      const config = raw as Record<string, unknown>;
-      if (config["entityId"] !== current.runtimeId || typeof config["contextId"] !== "string")
-        throw new Error("Browser runtime configuration does not match this document");
-      const bootstrap: RuntimeConnectionInfo = {
-        runtimeId: current.runtimeId,
-        slotId: typeof config["slotId"] === "string" ? config["slotId"] : current.runtimeId,
-        contextId: config["contextId"],
-        parentId: typeof config["parentId"] === "string" ? config["parentId"] : null,
-        parentEntityId:
-          typeof config["parentEntityId"] === "string" ? config["parentEntityId"] : null,
-        theme: config["theme"] === "dark" ? "dark" : "light",
-      };
+      const bootstrap = runtimeConnectionInfoFromBootstrap(raw, current.runtimeId);
       if (!this.current(contents, current) || current.executionId !== executionId)
         throw new Error("Website document was replaced");
       current.connected = true;

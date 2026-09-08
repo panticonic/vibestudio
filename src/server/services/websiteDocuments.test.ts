@@ -41,6 +41,46 @@ function fixture(decision: "session" | "always" | "deny" = "session") {
 }
 
 describe("website document admission", () => {
+  it("lists only the authenticated viewer's live website documents", async () => {
+    const f = fixture();
+    await f.documents.begin(f.input);
+    await f.documents.begin({
+      ...f.input,
+      runtimeId: "panel:bob",
+      documentId: "bob-document",
+      user: { userId: "usr_bob", handle: "bob" },
+      origin: "https://private.example",
+    });
+    expect(f.documents.list("usr_alice").map((doc) => doc.origin)).toEqual(["https://example.com"]);
+    expect(f.documents.list("usr_bob").map((doc) => doc.origin)).toEqual([
+      "https://private.example",
+    ]);
+    expect(f.documents.list("usr_eve")).toEqual([]);
+    await f.documents.end(f.input.runtimeId);
+    expect(f.documents.list("usr_alice")).toEqual([]);
+  });
+
+  it("forgetting access retires same-site documents and requires fresh consent", async () => {
+    const f = fixture("always");
+    await f.documents.begin(f.input);
+    await f.documents.connect(f.input.runtimeId, f.input.documentId, f.input.hostId);
+    const first = f.documents.fact(f.input.runtimeId)!;
+    await f.documents.begin({ ...f.input, runtimeId: "panel:second", documentId: "document-2" });
+    await f.documents.connect("panel:second", "document-2", f.input.hostId);
+    await expect(
+      f.documents.forget(f.input.runtimeId, f.input.documentId, "other-host")
+    ).rejects.toThrow("current");
+    expect(f.documents.isLive(f.input.runtimeId, first)).toBe(true);
+    await f.documents.forget(f.input.runtimeId, f.input.documentId, f.input.hostId);
+    expect(f.documents.list(f.input.user.userId)).toEqual([]);
+    expect(f.grants.getAuthoritySubject(first.subject)?.generation).toBe(
+      first.binding.generation + 1
+    );
+    await f.documents.begin({ ...f.input, documentId: "fresh-document" });
+    await f.documents.connect(f.input.runtimeId, "fresh-document", f.input.hostId);
+    expect(f.request).toHaveBeenCalledTimes(2);
+  });
+
   it("starts disconnected and retires a captured fact on replacement", async () => {
     const f = fixture();
     await f.documents.begin(f.input);

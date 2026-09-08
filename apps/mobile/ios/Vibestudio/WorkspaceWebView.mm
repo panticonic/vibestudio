@@ -28,8 +28,23 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
 @property(nonatomic, weak) WorkspaceWebView *owner;
 @end
 
+@interface WorkspaceRpcMessageHandler : NSObject <WKScriptMessageHandlerWithReply>
+@property(nonatomic, weak) WorkspaceWebView *owner;
+@end
+
 @interface WorkspaceWebView : RNCWebViewImpl
 @property(nonatomic, copy) NSString *workspaceProfile;
+@property(nonatomic, copy) RCTDirectEventBlock onWorkspaceRequest;
+@property(nonatomic, copy) NSString *workspaceDocumentId;
+@property(nonatomic, copy) NSString *workspaceOrigin;
+@property(nonatomic, strong) NSMutableDictionary *workspaceCalls;
+@property(nonatomic, strong) NSMutableArray *workspaceMessages;
+@property(nonatomic, copy) void (^workspaceReceiver)(id, NSString *);
+@property(nonatomic, strong) WorkspaceRpcMessageHandler *workspaceMessageHandler;
+- (void)receiveWorkspaceMessage:(WKScriptMessage *)message reply:(void (^)(id, NSString *))reply;
+- (void)resolveWorkspaceRequest:(NSString *)documentId requestId:(NSString *)requestId ok:(BOOL)ok valueJson:(NSString *)valueJson;
+- (void)deliverWorkspaceMessage:(NSString *)documentId messageJson:(NSString *)messageJson;
+
 @property(nonatomic, copy) RCTDirectEventBlock onWorkspacePermission;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *permissionRequests;
 @property(nonatomic, assign) NSUInteger documentEpoch;
@@ -55,12 +70,14 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+  [self retireWorkspaceDocument];
   [self cancelWebsiteNotifications];
   _documentEpoch++;
   [self cancelPermissionRequests];
 }
 
 - (void)removeFromSuperview {
+  [self retireWorkspaceDocument];
   [self cancelWebsiteNotifications];
   [self cancelPermissionRequests];
   [super removeFromSuperview];
@@ -125,6 +142,13 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   [configuration.userContentController addScriptMessageHandler:_notificationMessageHandler name:@"vibestudioWebsiteNotifications"];
   NSString *adapter = @"globalThis.__vibestudioWebsiteNotificationsNative={postMessage:function(value){window.webkit.messageHandlers.vibestudioWebsiteNotifications.postMessage(value)},onmessage:null};";
   [configuration.userContentController addUserScript:[[WKUserScript alloc] initWithSource:adapter injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+  _workspaceMessageHandler = [WorkspaceRpcMessageHandler new];
+  _workspaceMessageHandler.owner = self;
+  [configuration.userContentController addScriptMessageHandlerWithReply:_workspaceMessageHandler contentWorld:WKContentWorld.pageWorld name:@"vibestudioWorkspace"];
+  // WebKit replies target the requesting JavaScript context, including the receive
+  // wait. Never evaluate a reply into whichever document happens to be visible.
+  NSString *workspaceAdapter = @"(() => { const send = value => window.webkit.messageHandlers.vibestudioWorkspace.postMessage(value); const bridge = {onmessage:null,postMessage:value=>{void send(value).then(data=>bridge.onmessage?.({data}));}}; globalThis.__vibestudioWorkspaceNative=bridge; const receive=async()=>{try{for(;;){const data=await send(JSON.stringify({method:'receive'}));bridge.onmessage?.({data});}}catch(_){}}; void receive(); })();";
+  [configuration.userContentController addUserScript:[[WKUserScript alloc] initWithSource:workspaceAdapter injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
   return configuration;
 }
 
@@ -156,6 +180,64 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
   origin.path = @""; origin.query = nil; origin.fragment = nil; origin.user = nil; origin.password = nil;
   _onWorkspaceWebsiteNotification(@{ @"requestId": requestId, @"target": self.reactTag, @"origin": origin.string,
     @"topLevelUrl": url.absoluteString, @"method": method, @"argsJson": [[NSString alloc] initWithData:argsData encoding:NSUTF8StringEncoding], @"cancelled": @NO });
+}
+
+- (void)receiveWorkspaceMessage:(WKScriptMessage *)message reply:(void (^)(id, NSString *))reply {
+  NSURL *url = self.webView.URL;
+  WKSecurityOrigin *source = message.frameInfo.securityOrigin;
+  NSInteger port = url.port ? url.port.integerValue : ([url.scheme.lowercaseString isEqualToString:@"https"] ? 443 : 80);
+  NSInteger sourcePort = source.port ?: ([source.protocol.lowercaseString isEqualToString:@"https"] ? 443 : 80);
+  BOOL supported = [source.protocol isEqualToString:@"https"] || [source.protocol isEqualToString:@"http"];
+  if (!_onWorkspaceRequest || !supported || !message.frameInfo.mainFrame || ![message.body isKindOfClass:NSString.class] || ![source.host.lowercaseString isEqualToString:url.host.lowercaseString] || ![source.protocol.lowercaseString isEqualToString:url.scheme.lowercaseString] || port != sourcePort) {
+    reply(nil, @"Workspace bridge requires the current top-level website"); return;
+  }
+  id input = [NSJSONSerialization JSONObjectWithData:[message.body dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+  if (![input isKindOfClass:NSDictionary.class]) { reply(nil, @"Invalid workspace request"); return; }
+  if (!_workspaceDocumentId) {
+    _workspaceDocumentId = NSUUID.UUID.UUIDString;
+    NSURLComponents *origin = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    origin.path = @""; origin.query = nil; origin.fragment = nil; origin.user = nil; origin.password = nil;
+    if (([origin.scheme isEqualToString:@"https"] && port == 443) || ([origin.scheme isEqualToString:@"http"] && port == 80)) origin.port = nil;
+    _workspaceOrigin = origin.string;
+    _workspaceCalls = [NSMutableDictionary new]; _workspaceMessages = [NSMutableArray new];
+  }
+  NSString *method = input[@"method"], *requestId = input[@"requestId"];
+  if (![method isKindOfClass:NSString.class]) { reply(nil, @"Invalid workspace method"); return; }
+  if ([method isEqualToString:@"receive"]) {
+    if (_workspaceReceiver) { reply(nil, @"A document receive is already pending"); return; }
+    if (_workspaceMessages.count) { NSString *next = _workspaceMessages.firstObject; [_workspaceMessages removeObjectAtIndex:0]; reply(next, nil); }
+    else _workspaceReceiver = [reply copy];
+    return;
+  }
+  if (![method isKindOfClass:NSString.class] || ![requestId isKindOfClass:NSString.class] || requestId.length > 200 || _workspaceCalls[requestId]) { reply(nil, @"Invalid workspace request"); return; }
+  NSData *args = [NSJSONSerialization dataWithJSONObject:input[@"args"] ?: @[] options:NSJSONWritingFragmentsAllowed error:nil];
+  _workspaceCalls[requestId] = [reply copy];
+  _onWorkspaceRequest(@{ @"documentId": _workspaceDocumentId, @"origin": _workspaceOrigin, @"requestId": requestId,
+    @"method": method, @"argsJson": [[NSString alloc] initWithData:args encoding:NSUTF8StringEncoding], @"target": self.reactTag });
+}
+
+- (void)resolveWorkspaceRequest:(NSString *)documentId requestId:(NSString *)requestId ok:(BOOL)ok valueJson:(NSString *)valueJson {
+  if (![_workspaceDocumentId isEqualToString:documentId]) return;
+  void (^reply)(id, NSString *) = _workspaceCalls[requestId];
+  if (!reply) return;
+  [_workspaceCalls removeObjectForKey:requestId];
+  NSString *payload = [NSString stringWithFormat:@"{\"requestId\":%@,\"ok\":%@,\"value\":%@}", [self quotedJson:requestId], ok ? @"true" : @"false", valueJson];
+  reply(payload, nil);
+}
+
+- (void)deliverWorkspaceMessage:(NSString *)documentId messageJson:(NSString *)messageJson {
+  if (![_workspaceDocumentId isEqualToString:documentId]) return;
+  if (_workspaceReceiver) { void (^reply)(id, NSString *) = _workspaceReceiver; _workspaceReceiver = nil; reply(messageJson, nil); }
+  else [_workspaceMessages addObject:messageJson];
+}
+
+- (void)retireWorkspaceDocument {
+  if (_workspaceDocumentId && _onWorkspaceRequest) _onWorkspaceRequest(@{ @"documentId": _workspaceDocumentId, @"origin": _workspaceOrigin,
+    @"requestId": NSUUID.UUID.UUIDString, @"method": @"retire", @"argsJson": @"[]", @"target": self.reactTag });
+  for (void (^reply)(id, NSString *) in _workspaceCalls.allValues) reply(nil, @"Website document retired");
+  [_workspaceCalls removeAllObjects]; [_workspaceMessages removeAllObjects];
+  if (_workspaceReceiver) _workspaceReceiver(nil, @"Website document retired");
+  _workspaceReceiver = nil; _workspaceDocumentId = nil; _workspaceOrigin = nil;
 }
 
 - (void)resolveWebsiteNotification:(NSString *)requestId ok:(BOOL)ok valueJson:(NSString *)valueJson {
@@ -213,12 +295,30 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
 }
 @end
 
+@implementation WorkspaceRpcMessageHandler
+- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message replyHandler:(void (^)(id, NSString *))replyHandler {
+  if (_owner) [_owner receiveWorkspaceMessage:message reply:replyHandler];
+  else replyHandler(nil, @"Website host closed");
+}
+@end
+
 @interface WorkspaceWebViewManager : RNCWebViewManager
 @end
 
 @implementation WorkspaceWebViewManager
 RCT_EXPORT_MODULE(VibestudioWorkspaceWebView)
 RCT_EXPORT_VIEW_PROPERTY(workspaceProfile, NSString)
+RCT_EXPORT_VIEW_PROPERTY(onWorkspaceRequest, RCTDirectEventBlock)
+RCT_EXPORT_METHOD(resolveWorkspaceRequest:(nonnull NSNumber *)reactTag documentId:(NSString *)documentId requestId:(NSString *)requestId ok:(BOOL)ok valueJson:(NSString *)valueJson) {
+  [self.bridge.uiManager addUIBlock:^(__unused RCTUIManager *manager, NSDictionary<NSNumber *, UIView *> *views) {
+    UIView *view = views[reactTag]; if ([view isKindOfClass:WorkspaceWebView.class]) [(WorkspaceWebView *)view resolveWorkspaceRequest:documentId requestId:requestId ok:ok valueJson:valueJson];
+  }];
+}
+RCT_EXPORT_METHOD(deliverWorkspaceMessage:(nonnull NSNumber *)reactTag documentId:(NSString *)documentId messageJson:(NSString *)messageJson) {
+  [self.bridge.uiManager addUIBlock:^(__unused RCTUIManager *manager, NSDictionary<NSNumber *, UIView *> *views) {
+    UIView *view = views[reactTag]; if ([view isKindOfClass:WorkspaceWebView.class]) [(WorkspaceWebView *)view deliverWorkspaceMessage:documentId messageJson:messageJson];
+  }];
+}
 RCT_EXPORT_VIEW_PROPERTY(onWorkspacePermission, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onWorkspaceWebsiteNotification, RCTDirectEventBlock)
 RCT_EXPORT_METHOD(resolveWorkspacePermission:(nonnull NSNumber *)reactTag requestId:(NSString *)requestId allowed:(BOOL)allowed) {

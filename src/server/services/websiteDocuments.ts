@@ -40,7 +40,7 @@ export class WebsiteDocuments {
       };
       isHostForRuntime: (hostId: string, runtimeId: string, user: UserSubject) => boolean;
       retireRuntime: (runtimeId: string) => Promise<void>;
-      changed: (runtimeId: string, connected: boolean, documentId: string) => void;
+      changed: (runtimeId: string, connected: boolean, documentId: string, userId: string) => void;
     }
   ) {
     this.stopGrantWithdrawal = deps.grants.onGrantWithdrawal((grant) => {
@@ -51,9 +51,11 @@ export class WebsiteDocuments {
     });
   }
 
-  list(): Array<{ runtimeId: string; documentId: string; origin: string; connected: boolean }> {
+  list(
+    userId: string
+  ): Array<{ runtimeId: string; documentId: string; origin: string; connected: boolean }> {
     return [...this.documents.values()]
-      .filter((doc) => this.live(doc))
+      .filter((doc) => doc.user.userId === userId && this.live(doc))
       .map((doc) => ({
         runtimeId: doc.runtimeId,
         documentId: doc.documentId,
@@ -173,6 +175,13 @@ export class WebsiteDocuments {
     );
   }
 
+  async forget(runtimeId: string, documentId: string, hostId: string): Promise<void> {
+    const doc = this.documents.get(runtimeId);
+    if (!doc || doc.documentId !== documentId || doc.hostId !== hostId || !this.live(doc))
+      throw new Error("Website document is no longer current");
+    await this.revoke(doc.fact.subject);
+  }
+
   async end(runtimeId: string, documentId?: string, hostId?: string): Promise<void> {
     return this.transition(runtimeId, () => this.endDocument(runtimeId, documentId, hostId));
   }
@@ -194,7 +203,7 @@ export class WebsiteDocuments {
     doc.releaseExecution();
     doc.fact.connected = false;
     doc.lifetime.abort(new Error("Website document disconnected"));
-    this.deps.changed(runtimeId, false, doc.fact.binding.documentId!);
+    this.deps.changed(runtimeId, false, doc.fact.binding.documentId!, doc.user.userId);
     await this.deps.retireRuntime(runtimeId);
   }
 
@@ -263,6 +272,7 @@ export class WebsiteDocuments {
         title: `Connect ${doc.fact.origin} to this workspace?`,
         description: [
           "This website can request workspace operations. Access to additional resources is approved separately. Results you approve may be disclosed to this site.",
+          "Only connect websites you trust. This site’s code can change independently of Vibestudio. Its approved operations can change this workspace; disconnecting does not undo completed actions or automatically cancel accepted work.",
           "Remembered access follows this website origin as its content changes; it does not pin a reviewed code version.",
           ...(doc.fact.origin.startsWith("http:")
             ? [
@@ -317,7 +327,7 @@ export class WebsiteDocuments {
       expire();
     }
     doc.fact.connected = true;
-    this.deps.changed(doc.runtimeId, true, doc.fact.binding.documentId!);
+    this.deps.changed(doc.runtimeId, true, doc.fact.binding.documentId!, doc.user.userId);
     return true;
   }
 

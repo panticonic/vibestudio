@@ -20,6 +20,7 @@ export type {
   RpcStreamCancel,
   RpcRequestCancel,
   RpcMessage,
+  RpcExposure,
   RpcTransport,
   RpcCallOptions,
   RpcTargetOptions,
@@ -63,6 +64,8 @@ export {
 } from "./errors.js";
 export type {
   AuthorizationContext,
+  AuthoritySubjectBinding,
+  WebsiteAuthorityFact,
   AuthorizationOrigin,
   AuthorizationDecision,
   InvocationSnapshot,
@@ -142,6 +145,8 @@ export {
   stampEnvelopeCaller,
 } from "./envelope.js";
 export { createHandlerRegistry, createRpcInitiatorTransport } from "./transport-helpers.js";
+export { bridgeTransport, type EnvelopeBridge } from "./transports/bridge.js";
+export { PRINCIPAL_KINDS, isPrincipalKind } from "./authority.js";
 export type { DecodedFramedStream } from "./types.js";
 export {
   BRIDGE_STREAM_CHUNK_BYTES,
@@ -162,3 +167,7 @@ export {
   type BridgeStreamRelayDeps,
   type BridgeStreamShellSurface,
 } from "./bridgeStream.js";
+export type { WorkspaceProvider, RuntimeConnectionInfo } from "./provider.js";
+export { runtimeConnectionInfoFromBootstrap } from "./provider.js";
+
+export { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "./authority.js";

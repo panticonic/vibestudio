@@ -37,6 +37,7 @@ public final class WorkspaceWebViewManager extends RNCWebViewManager {
     }
     RNCWebView webView = new WorkspaceWebView(context);
     ((WorkspaceWebView) webView).initializeWebsiteNotifications();
+    ((WorkspaceWebView) webView).initializeWorkspaceBridge();
     WebViewCompat.setProfile(webView, profileName(scope));
     RNCWebViewWrapper view = super.createViewInstance(context, webView);
     scopes.put(view, scope);
@@ -55,10 +56,19 @@ public final class WorkspaceWebViewManager extends RNCWebViewManager {
     Map<String, Object> events = new HashMap<>(super.getExportedCustomDirectEventTypeConstants());
     events.put("topWorkspacePermission", Collections.singletonMap("registrationName", "onWorkspacePermission"));
     events.put("topWorkspaceWebsiteNotification", Collections.singletonMap("registrationName", "onWorkspaceWebsiteNotification"));
+    events.put("topWorkspaceRequest", Collections.singletonMap("registrationName", "onWorkspaceRequest"));
     return events;
   }
 
   @Override public void receiveCommand(RNCWebViewWrapper view, String command, ReadableArray args) {
+    if ("resolveWorkspaceRequest".equals(command)) {
+      if (args != null && args.size() == 4) ((WorkspaceWebView) view.getWebView()).resolveWorkspaceRequest(args.getString(0), args.getString(1), args.getBoolean(2), args.getString(3));
+      return;
+    }
+    if ("deliverWorkspaceMessage".equals(command)) {
+      if (args != null && args.size() == 2) ((WorkspaceWebView) view.getWebView()).deliverWorkspaceMessage(args.getString(0), args.getString(1));
+      return;
+    }
     if ("resolveWorkspacePermission".equals(command)) {
       if (args != null && args.size() == 2) {
         ((WorkspaceWebView) view.getWebView()).resolvePermission(args.getString(0), args.getBoolean(1));
