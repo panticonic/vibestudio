@@ -39,9 +39,9 @@ function profileHasWorkspace(): boolean {
 }
 
 async function main(): Promise<void> {
+  assertProductDesktopArguments(process.argv.slice(2));
   const templateOptions = extractDevelopmentTemplateCheckoutArguments(process.argv.slice(2));
   const forwarded = templateOptions.forwarded;
-  assertProductDesktopArguments(forwarded);
 
   const repoRoot = fs.realpathSync(process.cwd());
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-start-"));

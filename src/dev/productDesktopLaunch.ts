@@ -18,6 +18,7 @@ const DEVELOPMENT_ONLY_ARGUMENTS = new Set([
   RESUME_EPHEMERAL_WORKSPACE_ARG,
   "--instance",
   "--base-checkout",
+  "--workspace-checkout",
   "--production-base",
   "--dev-iroh-remote",
 ]);

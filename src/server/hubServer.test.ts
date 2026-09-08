@@ -103,12 +103,8 @@ describe("hub bootstrap workspace selection", () => {
       centralData.ensurePrivateWorkspaces("usr_member", templates);
       expect(selectDevelopmentWritebackWorkspaceId(state)).toBe(rootPair.system.workspaceId);
       const project = centralData.addWorkspace("explicit");
-      expect(
-        selectDevelopmentWritebackWorkspaceId({
-          ...state,
-          bootstrapWorkspaceId: project.workspaceId,
-        })
-      ).toBe(project.workspaceId);
+      const projectState = { ...state, bootstrapWorkspaceId: project.workspaceId };
+      expect(selectDevelopmentWritebackWorkspaceId(projectState)).toBe(rootPair.system.workspaceId);
     } finally {
       identityDb.close();
       centralData.close();

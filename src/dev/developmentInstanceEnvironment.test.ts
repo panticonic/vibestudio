@@ -111,3 +111,19 @@ describe("development instance environment", () => {
     );
   });
 });
+
+it("selects an exact additional checkout without changing the private workspace templates", () => {
+  const env = developmentInstanceEnvironment({
+    parent: {},
+    repoRoot: "/host",
+    instanceRoot: "/instance",
+    instanceId: "test",
+    sourceCoupled: false,
+    base,
+    templates,
+    initialWorkspaceTemplate: templates[0]!.pin,
+  });
+  expect(JSON.parse(env["VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE"]!)).toEqual(templates[0]!.pin);
+  expect(JSON.parse(env["VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES"]!)).toEqual(base.pins);
+  expect(JSON.parse(env["VIBESTUDIO_DEV_TEMPLATE_SOURCES"]!)).toContainEqual(templates[0]);
+});

@@ -223,10 +223,24 @@ pnpm server:live --template-checkout ../vibestudio-template-examples
 pnpm start --template-checkout ../vibestudio-template-examples
 ```
 
+To open a checkout immediately as an additional workspace alongside Personal and
+System, use:
+
+```bash
+pnpm dev --workspace-checkout ~/vibestudio-release-work/examples
+pnpm server:live --ephemeral --workspace-checkout ~/vibestudio-release-work/examples
+```
+
+The target uses the same exact snapshot and normal workspace creation approval.
+It does not import code into Personal or System. A changed snapshot selects a
+new workspace; an unchanged snapshot can reopen its existing workspace in a
+persistent instance. The target checkout is read-only to the running instance.
+Base write-back remains owned by System. `pnpm dev` is ephemeral by default.
+
 The launcher derives the template's canonical identity from its `origin`,
 snapshots tracked and untracked non-ignored worktree changes into a private
 exact commit, and makes that commit available to the ordinary catalog/direct
-URL installation flow. The normal template composition, approval, build, and
+URL workspace creation flow. The normal source review, approval, build, and
 provenance path is unchanged. Repeat the option to develop multiple templates
 together. Private checkpoints are removed when the owning launcher exits.
 

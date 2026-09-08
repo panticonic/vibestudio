@@ -33,6 +33,8 @@ describe("product desktop source launch", () => {
     "--resume-ephemeral-workspace",
     "--instance=other",
     "--base-checkout=/tmp/base",
+    "--workspace-checkout=/tmp/app",
+    "--workspace-checkout",
     "--production-base",
     "--dev-iroh-remote",
   ])("rejects developer-only option %s", (option) => {

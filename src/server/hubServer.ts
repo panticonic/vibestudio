@@ -955,9 +955,8 @@ export function selectBootstrapWorkspace(
 
 /** One source checkout has one writeback owner, independent of which member connects next. */
 export function selectDevelopmentWritebackWorkspaceId(
-  state: Pick<HubRuntimeState, "bootstrapWorkspaceId" | "centralData" | "identityDb" | "userStore">
+  state: Pick<HubRuntimeState, "centralData" | "identityDb" | "userStore">
 ): string | null {
-  if (state.bootstrapWorkspaceId) return state.bootstrapWorkspaceId;
   const root = state.userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
   if (!root) return null;
   return (
@@ -972,7 +971,7 @@ export function selectDevelopmentWritebackWorkspaceId(
 }
 
 function bindDevelopmentWritebackWorkspace(
-  state: Pick<HubRuntimeState, "bootstrapWorkspaceId" | "centralData" | "identityDb" | "userStore">
+  state: Pick<HubRuntimeState, "centralData" | "identityDb" | "userStore">
 ): void {
   const owner = process.env[DEVELOPMENT_WRITEBACK_ENV]
     ? selectDevelopmentWritebackWorkspaceId(state)
@@ -3272,7 +3271,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     const creator = userStore.listUsers().find((user) => user.role === "root" && !user.revokedAt);
     if (creator) membershipStore.add(creator.id, bootstrapWorkspaceId, creator.id);
   }
-  bindDevelopmentWritebackWorkspace({ bootstrapWorkspaceId, centralData, identityDb, userStore });
+  bindDevelopmentWritebackWorkspace({ centralData, identityDb, userStore });
   // Membership-governance records land in the host governance log (WP5 §5.1),
   // the same SQLite governance database that carries approval provenance.
   const governanceLog = new GovernanceLog();

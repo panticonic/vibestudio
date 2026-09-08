@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
@@ -294,6 +295,8 @@ async function main(): Promise<void> {
                    Boot from the checkout's visible worktree via a private checkpoint
   --template-checkout <path>
                    Use an optional template's visible worktree (repeatable)
+  --workspace-checkout <path>
+                   Open this checkout as an additional workspace
   --production-base Ignore the configured checkout and boot the pinned Base release
 `);
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "development" };
@@ -344,9 +347,40 @@ async function main(): Promise<void> {
       );
     }
     const developmentTemplates = await resolveDevelopmentTemplateSelections({
-      checkouts: templateOptions.checkouts,
+      checkouts: [
+        ...new Set(
+          [
+            ...templateOptions.checkouts,
+            ...(templateOptions.workspaceCheckout ? [templateOptions.workspaceCheckout] : []),
+          ].map((checkout) => fs.realpathSync(path.resolve(checkout)))
+        ),
+      ],
       checkpointRoot: templateCheckpointRoot,
     });
+    const targetWorkspace = templateOptions.workspaceCheckout
+      ? developmentTemplates.find(
+          (template) =>
+            template.sourceCheckout ===
+            fs.realpathSync(path.resolve(templateOptions.workspaceCheckout!))
+        )
+      : undefined;
+    if (templateOptions.workspaceCheckout && !targetWorkspace) {
+      throw new Error("The requested workspace checkout has no prepared template snapshot");
+    }
+    const launchArgs = targetWorkspace
+      ? [
+          ...parsed.forwarded,
+          ...(mode === "desktop" ? ["--workspace-create-if-missing"] : []),
+          mode === "server" ? "--bootstrap-workspace" : "--workspace",
+          `${path
+            .basename(targetWorkspace.sourceCheckout)
+            .replace(/[^a-zA-Z0-9_-]/g, "-")
+            .slice(
+              0,
+              30
+            )}-${createHash("sha256").update(JSON.stringify(targetWorkspace.pin)).digest("hex").slice(0, 24)}`,
+        ]
+      : parsed.forwarded;
     const sourceCoupled = id === "source" && !disposable;
     const env = developmentInstanceEnvironment({
       parent: process.env,
@@ -355,6 +389,7 @@ async function main(): Promise<void> {
       instanceId: id,
       sourceCoupled,
       ...(developmentBase ? { base: developmentBase } : {}),
+      ...(targetWorkspace ? { initialWorkspaceTemplate: targetWorkspace.pin } : {}),
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;
@@ -380,6 +415,11 @@ async function main(): Promise<void> {
         );
       }
     }
+    if (targetWorkspace) {
+      console.log(
+        `[instance:${id}] Opening additional workspace from ${targetWorkspace.sourceCheckout}`
+      );
+    }
     for (const template of developmentTemplates) {
       console.log(
         `[instance:${id}] Template candidate: ${template.pin.url}@${template.pin.commit} from ${template.sourceCheckout}`
@@ -395,8 +435,8 @@ async function main(): Promise<void> {
     }
     process.exitCode =
       mode === "server"
-        ? await runServer(parsed.forwarded, env, instance)
-        : await runDesktop(parsed.forwarded, env, root);
+        ? await runServer(launchArgs, env, instance)
+        : await runDesktop(launchArgs, env, root);
   } finally {
     if (!disposable) await prunePersistentInstanceBuildCache(root, id);
     fs.rmSync(checkpointTarget, { recursive: true, force: true });

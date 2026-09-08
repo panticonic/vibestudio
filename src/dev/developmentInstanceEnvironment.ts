@@ -23,6 +23,7 @@ export function developmentInstanceEnvironment(input: {
   instanceId: string;
   sourceCoupled: boolean;
   base?: DevelopmentBaseEnvironmentSelection;
+  initialWorkspaceTemplate?: import("@vibestudio/workspace-contracts/types").WorkspaceTemplatePin;
   templates?: ReadonlyArray<
     import("@vibestudio/workspace/developmentTemplateSources").DevelopmentTemplateSource
   >;
@@ -74,5 +75,8 @@ export function developmentInstanceEnvironment(input: {
         }
       : {}),
   });
+  if (input.initialWorkspaceTemplate) {
+    env[INITIAL_WORKSPACE_TEMPLATE_ENV] = JSON.stringify(input.initialWorkspaceTemplate);
+  }
   return env;
 }
