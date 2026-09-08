@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createWorkspaceCreationService } from "./workspaceCreationService.js";
+import { WORKSPACE_CREATION_AUTHORITY_RESOLVER } from "@vibestudio/service-schemas/workspaceCreation";
 
 const input = { operationId: "creation_operation_1", workspace: "Example" };
 function fixture() {
@@ -14,6 +15,45 @@ function context(kind: "panel" | "worker", id: string): ServiceContext {
 }
 
 describe("workspace creation runtime entry", () => {
+  it("seals the requested workspace and exact template into shared approval presentation", async () => {
+    const f = fixture();
+    const rootTemplate = {
+      url: "https://github.com/example/template.git",
+      ref: "refs/heads/main",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      snapshot: "v1-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    };
+    const prepared = await f.service.authorityPreparation![WORKSPACE_CREATION_AUTHORITY_RESOLVER]!(
+      context("panel", "panel:one"),
+      [{ ...input, rootTemplate }]
+    );
+    expect(prepared.payload).toEqual({ ...input, rootTemplate });
+    expect(prepared.selections).toEqual([
+      expect.objectContaining({
+        capability: "workspaces.create",
+        resourceKey: input.operationId,
+        challenge: expect.objectContaining({
+          title: "Create “Example” workspace",
+          resource: { type: "workspace", label: "Workspace", value: "Example" },
+          details: [
+            { label: "Template source", value: rootTemplate.url },
+            { label: "Template ref", value: rootTemplate.ref },
+            { label: "Template commit", value: rootTemplate.commit },
+            { label: "Template snapshot", value: rootTemplate.snapshot },
+            { label: "Request ID", value: input.operationId, format: "code" },
+          ],
+          substance: expect.objectContaining({
+            facts: expect.arrayContaining([
+              { label: "Workspace", value: "Example" },
+              { label: "Template source", value: rootTemplate.url },
+              { label: "Template commit", value: rootTemplate.commit },
+            ]),
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it.each(["panel", "worker"] as const)(
     "uses the same owner for %s creation and receipt recovery",
     async (kind) => {

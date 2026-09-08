@@ -8821,6 +8821,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "credentials.resolveCredential": ["credential.use"],
   "externalOpen.openExternal": ["external.open"],
   "hostTerminal.open": ["host-terminal.open"],
+  "hubControl.createWorkspace": ["workspaces.create"],
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.evaluate": ["context.boundary"],
   "panelCdp.getCdpEndpoint": ["context.boundary"],

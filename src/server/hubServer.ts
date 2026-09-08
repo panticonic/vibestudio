@@ -91,6 +91,7 @@ import {
 } from "./hostCore/deviceAuthStore.js";
 import { RootBootstrapInviteLifecycle } from "./rootBootstrapInviteLifecycle.js";
 import { updateAccountProfile } from "./hostCore/accountProfile.js";
+import { workspaceCreationAuthorityPreparation } from "./services/workspaceCreationAuthority.js";
 import {
   WorkspaceChildAgentCredentialMintInputSchema,
   WorkspaceChildAgentCredentialRevokeEntityInputSchema,
@@ -2131,6 +2132,7 @@ export function createDirectHubControlService(state: HubRuntimeState): ServiceDe
     description: "Machine-level workspace and account control",
     authority: { principals: ["user", "host"] },
     methods: hubControlMethods,
+    authorityPreparation: workspaceCreationAuthorityPreparation,
     handler: defineServiceHandler(
       "hubControl",
       hubControlMethods,

@@ -1,10 +1,15 @@
 /** One creation and receipt contract for shell, panel, worker and website callers. */
 import { z } from "zod";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 export const WorkspaceCreationOperationIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
+export const WORKSPACE_CREATION_AUTHORITY_RESOLVER =
+  "hubControl.createWorkspace.exactRequest" as const;
 export const WorkspaceCreationReceiptSchema = z
   .object({
     operationId: WorkspaceCreationOperationIdSchema,
@@ -28,14 +33,26 @@ export const workspaceCreationMethods = defineServiceMethods({
         "workspaces.create"
       ),
       resource: { kind: "argument", index: 0, path: ["operationId"] },
+      prepared: {
+        resolver: WORKSPACE_CREATION_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: "workspaces.create",
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["user", "host", "code", "website"], "workspaces.create")
+            ),
+            tier: "gated",
+          },
+        ],
+      },
     },
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "identity",
       family: "hubControl.create",
       rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+        "The transport leaf is open; the exact prepared creation request supplies the gated workspaces.create leaf.",
     },
     presentation: {
       title: "Create a workspace",

@@ -19694,9 +19694,55 @@
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspaces.create\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "durable-owner-scoped-workspace-creation",
-        "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+        "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace. The shared prepared resolver seals the parsed workspace name and exact template coordinates into the same operation-scoped review; it retains the existing workspaces.create principal requirement and gated tier."
       },
       "capability": "service:hubControl.createWorkspace",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hubControl.createWorkspace#capability:workspaces.create",
+      "rpcPlane": "host-service",
+      "owner": "hubControl",
+      "method": "createWorkspace",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "hubControl.create",
+      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+      "capability": "workspaces.create",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "hubControl.createWorkspace.exactRequest"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspaces.create\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"website\",\"capability\":\"workspaces.create\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {

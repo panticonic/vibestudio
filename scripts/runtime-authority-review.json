@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:fdece0351c890acac7b837f8d78ca217b729f32f6fabdcd4337945b60b3f8355",
+  "censusDigest": "sha256:ca4afdc04716937f45eb888af6b397694016b977417f047bc42aed2a83382f18",
   "decisions": {
     "host:authority.acquireForCurrentTask": {
       "review": "host-attested-current-task-acquisition",
@@ -852,7 +852,7 @@
     },
     "host:hubControl.createWorkspace": {
       "review": "durable-owner-scoped-workspace-creation",
-      "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace."
+      "change": "Uses the shared hub/workspace contract for exact-template creation and independent receipt reads. Both operations require current permission and host-attested durable ownership. Native acceptance verifies creation, document retirement, reconnection, and fresh receipt consent without creating a duplicate workspace. The shared prepared resolver seals the parsed workspace name and exact template coordinates into the same operation-scoped review; it retains the existing workspaces.create principal requirement and gated tier."
     },
     "host:hubControl.workspaceCreationReceipt": {
       "review": "durable-owner-scoped-workspace-creation",

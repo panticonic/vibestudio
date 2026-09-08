@@ -3,6 +3,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspaceChildHubPort } from "../workspaceChildHubPort.js";
+import { workspaceCreationAuthorityPreparation } from "./workspaceCreationAuthority.js";
 
 /** Host-attested entry to the hub's existing lifecycle owner; no local creation state. */
 export function createWorkspaceCreationService(deps: {
@@ -26,6 +27,7 @@ export function createWorkspaceCreationService(deps: {
     description: "Scoped workspace creation through the authenticated owning hub",
     methods: workspaceCreationMethods,
     authority: { principals: ["user", "host", "code", "website"] },
+    authorityPreparation: workspaceCreationAuthorityPreparation,
     handler: defineServiceHandler("hubControl", workspaceCreationMethods, {
       createWorkspace: (ctx, [input]) =>
         deps.hub.createWorkspace({ requester: requester(ctx), input }),
