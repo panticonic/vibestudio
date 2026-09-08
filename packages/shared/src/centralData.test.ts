@@ -29,6 +29,67 @@ describe("CentralDataManager SQLite control store", () => {
     return new CentralDataManager({ databasePath, ...(now ? { now } : {}) });
   }
 
+  function addCreationUser(id = "usr_creator") {
+    const db = new DatabaseSync(databasePath);
+    db.prepare("INSERT INTO users (id, handle, display_name, role, created_at) VALUES (?, ?, ?, 'member', 1)")
+      .run(id, id, id);
+    db.close();
+  }
+
+  it("keeps one creation receipt and audit across restart, initialization, deletion, and exact retries", () => {
+    const central = manager();
+    addCreationUser();
+    const owner = { userId: "usr_creator" };
+    const input = { operationId: "client-operation-0001", workspace: "new-workspace", rootTemplate: ROOT_TEMPLATE };
+    const created = central.createWorkspaceOperation(owner, input, () => ROOT_TEMPLATE, () => {});
+    expect(created.state).toBe("registered");
+    expect(central.pendingWorkspaceCreationAudits()).toHaveLength(1);
+    central.close();
+    const reopened = manager();
+    expect(reopened.createWorkspaceOperation(owner, input, () => { throw new Error("Retry must use its retained pin"); }, () => {})).toEqual(created);
+    expect(reopened.listWorkspaces()).toHaveLength(1);
+    expect(() => reopened.createWorkspaceOperation(owner, { ...input, workspace: "other" }, () => ROOT_TEMPLATE, () => {})).toThrow(/different inputs/);
+    reopened.completeWorkspaceCreation(created.workspaceId);
+    expect(reopened.workspaceCreationReceipt(owner, input.operationId)?.state).toBe("ready");
+    reopened.removeWorkspace(created.name);
+    expect(reopened.workspaceCreationReceipt(owner, input.operationId)?.state).toBe("deleted");
+    expect(reopened.createWorkspaceOperation(owner, input, () => ROOT_TEMPLATE, () => {})).toMatchObject({ ...created, state: "deleted" });
+    expect(reopened.listWorkspaces()).toHaveLength(0);
+    const audit = reopened.pendingWorkspaceCreationAudits()[0]!;
+    reopened.acknowledgeWorkspaceCreationAudit(audit.operationId!);
+    expect(reopened.pendingWorkspaceCreationAudits()).toEqual([]);
+    reopened.close();
+  });
+
+  it("rolls back registry, membership, receipt, and audit if live authority ends at the effect boundary", () => {
+    const central = manager(); addCreationUser();
+    let checks = 0;
+    const input = { operationId: "client-operation-0002", workspace: "no-effect" };
+    expect(() => central.createWorkspaceOperation({ userId: "usr_creator" }, input, () => ROOT_TEMPLATE,
+      () => { if (++checks === 2) throw new Error("Document retired"); })).toThrow("Document retired");
+    expect(central.listWorkspaces()).toEqual([]);
+    expect(central.pendingWorkspaceCreationAudits()).toEqual([]);
+    expect(central.workspaceCreationReceipt({ userId: "usr_creator" }, input.operationId)).toBeNull();
+    const db = new DatabaseSync(databasePath);
+    expect(db.prepare("SELECT count(*) AS count FROM membership").get()?.["count"]).toBe(0);
+    db.close(); central.close();
+  });
+
+  it("isolates durable website owners and refuses reconciliation after source membership is removed", () => {
+    const central = manager(); addCreationUser();
+    central.addWorkspace("source", "ws_source");
+    const db = new DatabaseSync(databasePath);
+    db.exec("INSERT INTO membership VALUES ('usr_creator', 'ws_source', 'usr_creator', 1, 'admin')");
+    const owner = { userId: "usr_creator", source: { workspaceId: "ws_source", subject: "website:authenticated-site" } };
+    const input = { operationId: "client-operation-0003", workspace: "installed" };
+    central.createWorkspaceOperation(owner, input, () => ROOT_TEMPLATE, () => {});
+    expect(central.workspaceCreationReceipt({ ...owner, source: { ...owner.source, subject: "website:other-site" } }, input.operationId)).toBeNull();
+    expect(central.workspaceCreationReceipt({ userId: owner.userId }, input.operationId)).toBeNull();
+    db.exec("DELETE FROM membership WHERE workspace_id = 'ws_source'");
+    expect(() => central.workspaceCreationReceipt(owner, input.operationId)).toThrow(/source membership/);
+    db.close(); central.close();
+  });
+
   it("registers a caller-allocated id used by an external creation descriptor", () => {
     const central = manager();
     expect(central.addWorkspace("external", "ws_preallocated").workspaceId).toBe("ws_preallocated");

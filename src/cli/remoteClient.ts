@@ -8,7 +8,10 @@ import {
   type HubWorkspaceEntry,
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
-import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import type {
+  WorkspaceCreationReceipt,
+  WorkspaceTemplatePin,
+} from "@vibestudio/workspace-contracts/types";
 import type { CliStoredPairing } from "./credentialStore.js";
 import { canonicalStoredPairing } from "./credentialStore.js";
 import { AuthError, UsageError } from "./output.js";
@@ -36,6 +39,7 @@ export interface InviteUserOptions {
 }
 
 export interface CreateRemoteWorkspaceOptions {
+  operationId: string;
   workspace: string;
   rootTemplate?: WorkspaceTemplatePin;
 }
@@ -183,10 +187,11 @@ export async function ensureRemoteUserWorkspaces(
 export async function createRemoteWorkspace(
   creds: DeviceCredential,
   options: CreateRemoteWorkspaceOptions
-): Promise<RemoteWorkspaceEntry> {
+): Promise<WorkspaceCreationReceipt> {
   return await withControl(creds, (client) =>
     client.createWorkspace({
       workspace: options.workspace,
+      operationId: options.operationId,
       ...(options.rootTemplate ? { rootTemplate: options.rootTemplate } : {}),
     })
   );

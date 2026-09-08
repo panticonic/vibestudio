@@ -46,6 +46,19 @@ function membershipRecord(
   };
 }
 
+it("deduplicates replayed creation audit records and rejects a changed effect under the same operation", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "creation-audit-"));
+  const log = new GovernanceLog({ databasePath: path.join(root, "governance.db") });
+  try {
+    const record = membershipRecord({ operationId: "workspace-creation:retained-operation" });
+    await log.append(record);
+    await log.append(record);
+    expect(await log.query()).toEqual([record]);
+    await expect(log.append({ ...record, workspaceId: "different-workspace" })).rejects.toThrow(/Conflicting governance replay/);
+    expect(await log.query()).toEqual([record]);
+  } finally { await log.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 describe("GovernanceLog", () => {
   let dir: string;
   let databasePath: string;
@@ -130,6 +143,20 @@ describe("GovernanceLog", () => {
     expect(await log.query({ filter: { recordKind: "membership" } })).toEqual([]);
   });
 
+  it("migrates v1 audit records without changing or losing their payloads", async () => {
+    const records = [approvalRecord(), membershipRecord()];
+    await log.appendMany(records);
+    await log.close();
+    const old = new DatabaseSync(databasePath);
+    old.exec("DROP INDEX governance_membership_operation_idx; PRAGMA user_version = 1");
+    old.close();
+    log = new GovernanceLog({ databasePath });
+    expect(await log.query()).toEqual([...records].reverse());
+    const operation = membershipRecord({ operationId: "created-after-migration" });
+    await log.append(operation); await log.append(operation);
+    expect(await log.query()).toHaveLength(3);
+  });
+
   it("recovers a transaction interrupted before commit on restart", async () => {
     const first = approvalRecord();
     await log.append(first);
@@ -152,7 +179,7 @@ describe("GovernanceLog", () => {
     raw.close();
     const before = readFileSync(databasePath);
 
-    expect(() => new GovernanceLog({ databasePath })).toThrow(/schema version is 0, expected 1/);
+    expect(() => new GovernanceLog({ databasePath })).toThrow(/schema version is 0, expected 2/);
     expect(readFileSync(databasePath)).toEqual(before);
   });
 

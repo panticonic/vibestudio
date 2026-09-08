@@ -135,6 +135,8 @@ export interface ApprovalProvenanceRecord {
  */
 export interface MembershipGovernanceRecord {
   kind: "membership";
+  /** Host-owned durable operation identity, when the effect is replayable. */
+  operationId?: string;
   op: "invite-user" | "revoke-user" | "add-member" | "remove-member" | "role-change";
   /** Who performed it (verified subject). */
   actor: { userId: string; handle: string; deviceId?: string };

@@ -166,7 +166,6 @@ export interface WorkspaceTemplatePresentation {
   description?: string;
 }
 
-
 /** Host-owned bootstrap intent for a workspace created from an external root. */
 export interface WorkspaceCreationDescriptor {
   version: 1;
@@ -241,6 +240,16 @@ export interface WorkspaceSingletonObjectDecl {
 
 export type WorkspaceServiceBinding = "consent" | "declared" | { declaredFor: string[] };
 
+export const WORKSPACE_SERVICE_PRINCIPALS = [
+  "host",
+  "user",
+  "code",
+  "session",
+  "mission",
+  "website",
+] as const;
+export type WorkspaceServicePrincipal = (typeof WORKSPACE_SERVICE_PRINCIPALS)[number];
+
 /** Workspace-authored service declaration in `workspace/meta/vibestudio.yml`. */
 export type WorkspaceServiceDecl = {
   source: string;
@@ -262,7 +271,7 @@ export type WorkspaceServiceDecl = {
   };
   protocols?: string[];
   authority: {
-    principals: ("host" | "user" | "code" | "session" | "mission")[];
+    principals: WorkspaceServicePrincipal[];
     /**
      * `consent` makes use of the service itself a permission. `declared` treats
      * every manifest-confined consumer as reviewed wiring. `declaredFor` does
@@ -557,4 +566,17 @@ export interface CentralConfigPaths {
   secretsPath: string;
   /** Absolute path to .env */
   envPath: string;
+}
+/** Authenticated durable requester; proof and live grants are owned by the calling host. */
+export interface WorkspaceCreationOwner {
+  userId: string;
+  source?: { workspaceId: string; subject: string };
+}
+
+/** A receipt conveys no connection, membership, or RPC authority over the result. */
+export interface WorkspaceCreationReceipt {
+  operationId: string;
+  state: "registered" | "ready" | "deleted";
+  workspaceId: string;
+  name: string;
 }

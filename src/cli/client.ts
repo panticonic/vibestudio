@@ -401,14 +401,23 @@ async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
     const loaded = loadCliCredentials();
     if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
     const credentials = requireDeviceCliCredentials(loaded, "remote workspace creation");
+    const operationId =
+      typeof inv.flags["operation-id"] === "string" ? inv.flags["operation-id"] : "";
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(operationId))
+      throw new UsageError(
+        "--operation-id is required (16–128 letters, digits, underscores or hyphens). Retain it and reuse it for exact retries."
+      );
     const created = await createRemoteWorkspace(credentials, {
+      operationId,
       workspace,
       ...(rootTemplate ? { rootTemplate } : {}),
     });
     printResult(created, {
       json,
       human: () => {
-        console.log(`created workspace: ${created.name}`);
+        console.log(
+          `${created.state} workspace: ${created.name} (operation ${created.operationId})`
+        );
         if (rootTemplate) {
           console.log(`root template: ${rootTemplate.url}@${rootTemplate.commit}`);
         }
@@ -810,8 +819,13 @@ const remoteCommands: CliCommand[] = [
     name: "create-workspace",
     summary: "Create a workspace from the standard setup or one exact external root",
     usage:
-      "vibestudio remote create-workspace NAME [--template URL --template-ref REF --template-commit SHA --template-snapshot DIGEST]",
+      "vibestudio remote create-workspace NAME --operation-id ID [--template URL --template-ref REF --template-commit SHA --template-snapshot DIGEST]",
     flags: [
+      {
+        name: "operation-id",
+        takesValue: true,
+        description: "Persisted client operation ID; reuse only for exact retries",
+      },
       { name: "template", takesValue: true, description: "External root-template Git URL" },
       {
         name: "template-ref",

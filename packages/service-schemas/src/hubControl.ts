@@ -9,6 +9,7 @@ import {
 } from "@vibestudio/iroh-transport";
 import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { RevokedUserCleanupResultSchema } from "@vibestudio/identity/revocationCleanup";
 import { WorkspaceRpcPolicySchema } from "@vibestudio/identity/workspaceRpcPolicy";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
@@ -19,6 +20,13 @@ const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
 const adminAccess = { sensitivity: "admin" as const };
 const destructiveAccess = { sensitivity: "destructive" as const };
+
+export const WorkspaceCreationOperationIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
+export const WorkspaceCreationReceiptSchema = z.object({
+  operationId: WorkspaceCreationOperationIdSchema,
+  state: z.enum(["registered", "ready", "deleted"]),
+  workspaceId: z.string(), name: z.string(),
+}).strict();
 
 export const HubWorkspaceEntrySchema = z
   .object({
@@ -218,6 +226,7 @@ const HubWorkspaceMemberSchema = HubWorkspaceMembershipSchema.extend({
 
 export const hubControlMethods = defineServiceMethods({
   ensureUserWorkspaces: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.create",
     tier: {
       tier: "gated",
@@ -243,6 +252,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   getWorkspaceRpcPolicy: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.rpcPolicy.read",
     tier: {
       tier: "gated",
@@ -271,6 +281,7 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   setWorkspaceRpcPolicy: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.rpcPolicy.write",
     tier: {
       tier: "gated",
@@ -308,6 +319,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   listWorkspaces: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.read",
     tier: {
       tier: "gated",
@@ -333,6 +345,7 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   listTemplateCandidates: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.read",
     tier: {
       tier: "gated",
@@ -355,6 +368,7 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   routeWorkspace: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.open",
     tier: {
       tier: "gated",
@@ -381,7 +395,12 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   createWorkspace: {
+    website: {"kind":"eligible","rationale":"Workspace installation requires exact template review and durable operation ownership."} as const,
     capability: "workspaces.create",
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code", "website"], "workspaces.create"),
+      resource: { kind: "argument", index: 0, path: ["operationId"] },
+    },
     tier: {
       tier: "gated",
       session: "family",
@@ -404,15 +423,29 @@ export const hubControlMethods = defineServiceMethods({
     args: z.tuple([
       z
         .object({
+          operationId: WorkspaceCreationOperationIdSchema,
           workspace: z.string().min(1),
           rootTemplate: WorkspaceTemplatePinSchema.optional(),
         })
         .strict(),
     ]),
-    returns: HubWorkspaceEntrySchema,
+    returns: WorkspaceCreationReceiptSchema,
     access: writeAccess,
   },
+  workspaceCreationReceipt: {
+    website: { kind: "eligible", rationale: "Only the authenticated durable owner can read the scoped minimal creation receipt with current permission." },
+    capability: "workspaces.creation.read",
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code", "website"], "workspaces.creation.read"),
+      resource: { kind: "argument", index: 0, path: ["operationId"] },
+    },
+    tier: { tier: "gated", session: "family", residency: "identity", family: "hubControl.creationReceipt", rationale: "Creation results can disclose workspaces outside the initiating workspace and require scoped consent." },
+    description: "Reconcile one previously submitted workspace creation without creating or opening anything.",
+    args: z.tuple([z.object({ operationId: WorkspaceCreationOperationIdSchema }).strict()]),
+    returns: WorkspaceCreationReceiptSchema.nullable(), access: readAccess,
+  },
   ensureEphemeralWorkspace: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.create",
     tier: {
       tier: "gated",
@@ -438,6 +471,7 @@ export const hubControlMethods = defineServiceMethods({
     access: adminAccess,
   },
   deleteWorkspace: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspaces.delete",
     tier: {
       tier: "critical",
@@ -463,6 +497,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   addWorkspaceMember: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspace.members.manage",
     tier: {
       tier: "gated",
@@ -500,6 +535,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   removeWorkspaceMember: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspace.members.remove",
     tier: {
       tier: "critical",
@@ -529,6 +565,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   listWorkspaceMembers: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspace.members.read",
     tier: {
       tier: "gated",
@@ -558,6 +595,7 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   listUserPresence: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "presence.read",
     tier: {
       tier: "gated",
@@ -583,6 +621,7 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   inviteUser: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspace.members.manage",
     tier: {
       tier: "gated",
@@ -622,6 +661,7 @@ export const hubControlMethods = defineServiceMethods({
     access: adminAccess,
   },
   pairDevice: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "devices.pair",
     tier: {
       tier: "gated",
@@ -657,6 +697,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   listDevices: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "devices.read",
     tier: {
       tier: "gated",
@@ -682,6 +723,7 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   revokeDevice: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "devices.revoke",
     tier: {
       tier: "critical",
@@ -706,6 +748,7 @@ export const hubControlMethods = defineServiceMethods({
     access: destructiveAccess,
   },
   revokeUser: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "users.revoke",
     tier: {
       tier: "critical",
@@ -738,6 +781,7 @@ export const hubControlMethods = defineServiceMethods({
     access: destructiveAccess,
   },
   setRole: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "workspace.members.manage",
     tier: {
       tier: "gated",
@@ -772,6 +816,7 @@ export const hubControlMethods = defineServiceMethods({
     access: adminAccess,
   },
   updateProfile: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "account.profile.update",
     tier: {
       tier: "gated",
@@ -807,6 +852,7 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   getProfile: {
+    website: {"kind":"closed","reason":"The hubControl receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
     capability: "account.profile.read",
     tier: {
       tier: "gated",

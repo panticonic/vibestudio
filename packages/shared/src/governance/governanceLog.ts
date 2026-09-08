@@ -113,6 +113,7 @@ export const ApprovalRecordSchema = z
 const MembershipRecordSchema = z
   .object({
     kind: z.literal("membership"),
+    operationId: z.string().min(1).optional(),
     op: z.enum(["invite-user", "revoke-user", "add-member", "remove-member", "role-change"]),
     actor: UserActorSchema,
     target: z.object({ userId: z.string().min(1), handle: z.string().min(1).optional() }).strict(),
@@ -124,8 +125,10 @@ const MembershipRecordSchema = z
 
 export const GovernanceRecordSchema = z.union([MembershipRecordSchema, ApprovalRecordSchema]);
 
+const MEMBERSHIP_OPERATION_INDEX_SQL = `CREATE UNIQUE INDEX governance_membership_operation_idx
+  ON governance_records (json_extract(payload, '$.operationId')) WHERE record_kind = 'membership'`;
 const GOVERNANCE_SCHEMA: CanonicalSqliteSchema = {
-  version: 1,
+  version: 2,
   objects: [
     {
       type: "table",
@@ -165,6 +168,7 @@ const GOVERNANCE_SCHEMA: CanonicalSqliteSchema = {
       sql: `CREATE INDEX governance_records_time_idx
         ON governance_records (timestamp DESC, sequence DESC)`,
     },
+    { type: "index", name: "governance_membership_operation_idx", sql: MEMBERSHIP_OPERATION_INDEX_SQL },
     {
       type: "index",
       name: "governance_records_membership_idx",
@@ -250,6 +254,7 @@ export class GovernanceLog {
     try {
       openCanonicalSqliteDatabase(this.db, GOVERNANCE_SCHEMA, {
         description: `governance database ${databasePath}`,
+        migrations: [{ fromVersion: 1, toVersion: 2, migrate: db => { db.exec(MEMBERSHIP_OPERATION_INDEX_SQL); } }],
       });
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA synchronous = FULL");
@@ -362,6 +367,15 @@ export class GovernanceLog {
           payload
         );
       return;
+    }
+    if (record.operationId) {
+      const existing = this.db.prepare(`SELECT payload FROM governance_records
+        WHERE record_kind = 'membership' AND json_extract(payload, '$.operationId') = ?`).get(record.operationId);
+      if (existing) {
+        const parsed = MembershipRecordSchema.parse(JSON.parse(String(existing["payload"])));
+        if (JSON.stringify(parsed) !== payload) throw new Error(`Conflicting governance replay for membership operation ${record.operationId}`);
+        return;
+      }
     }
     this.db
       .prepare(

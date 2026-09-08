@@ -2,10 +2,24 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 15 is the current schema. The explicitly enumerated final
+ * Version 16 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 15;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 16;
+
+// No foreign key to workspaces: deletion must retain retry/deduplication evidence.
+const WORKSPACE_CREATION_OPERATIONS_SQL = `CREATE TABLE workspace_creation_operations (
+  owner_key TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  workspace_id TEXT NOT NULL UNIQUE,
+  workspace_name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('registered', 'ready', 'deleted')),
+  audit_json TEXT NOT NULL,
+  audit_delivered INTEGER NOT NULL DEFAULT 0 CHECK(audit_delivered IN (0, 1)),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(owner_key, operation_id)
+)`;
 
 const USER_WORKSPACES_SQL = `CREATE TABLE user_workspaces (
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -24,6 +38,7 @@ const WORKSPACE_RPC_POLICY_SQL = `CREATE TABLE workspace_rpc_policy (
 export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: IDENTITY_DATABASE_SCHEMA_VERSION,
   objects: [
+    { type: "table", name: "workspace_creation_operations", sql: WORKSPACE_CREATION_OPERATIONS_SQL },
     {
       type: "table",
       name: "users",
@@ -200,6 +215,11 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 15,
+    toVersion: 16,
+    migrate(db) { db.exec(WORKSPACE_CREATION_OPERATIONS_SQL); },
+  },
   {
     fromVersion: 14,
     toVersion: 15,

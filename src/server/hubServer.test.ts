@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { GovernanceLog } from "@vibestudio/shared/governance/governanceLog";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
@@ -1062,6 +1063,68 @@ describe("hub RPC pairing surfacing (§5)", () => {
     };
     return { state, shellToken, rootUserId: root.id, rootDeviceId: rootDevice.deviceId };
   }
+
+  it("retains committed creation through audit failure and reconciles the exact operation after retry", async () => {
+    const { state, rootUserId, rootDeviceId } = makeState(fakeRuntime(9, {}));
+    const central = new CentralDataManager({ databasePath: state.identityDbPath });
+    state.centralData = central;
+    const governance = new GovernanceLog({
+      databasePath: path.join(path.dirname(state.identityDbPath), "governance.db"),
+    });
+    state.governanceLog = governance;
+    const append = vi
+      .spyOn(governance, "append")
+      .mockRejectedValueOnce(new Error("Audit unavailable"));
+    const subject = {
+      userId: rootUserId,
+      deviceId: rootDeviceId,
+      handle: "root",
+      role: "root" as const,
+    };
+    const input = {
+      operationId: "retained-creation-0001",
+      workspace: "created-once",
+      rootTemplate: {
+        url: "git+https://example.test/root.git",
+        ref: "refs/tags/v1",
+        commit: "a".repeat(40),
+        snapshot: `v1-sha256:${"b".repeat(64)}`,
+      },
+    };
+    try {
+      await expect(
+        executeHubControl(state, subject, "createWorkspace", [input], vi.fn())
+      ).rejects.toThrow("Audit unavailable");
+      const entry = central.getWorkspaceEntry(input.workspace)!;
+      expect(entry).not.toBeNull();
+      expect(state.membershipStore.isAdmin(rootUserId, entry.workspaceId)).toBe(true);
+      expect(central.pendingWorkspaceCreationAudits()).toHaveLength(1);
+      const reply = vi.fn();
+      await executeHubControl(
+        state,
+        subject,
+        "workspaceCreationReceipt",
+        [{ operationId: input.operationId }],
+        reply
+      );
+      expect(reply).toHaveBeenCalledWith({
+        operationId: input.operationId,
+        state: "registered",
+        workspaceId: entry.workspaceId,
+        name: input.workspace,
+      });
+      await executeHubControl(state, subject, "createWorkspace", [input], vi.fn());
+      expect(central.getWorkspaceEntry(input.workspace)?.workspaceId).toBe(entry.workspaceId);
+      expect(central.pendingWorkspaceCreationAudits()).toEqual([]);
+      expect(append).toHaveBeenCalledTimes(2);
+      expect(await governance.query()).toHaveLength(1);
+    } finally {
+      await governance.close();
+      central.close();
+      state.identityDb.close();
+      fs.rmSync(path.dirname(state.identityDbPath), { recursive: true, force: true });
+    }
+  });
 
   it("offers exact selected template reviews without exposing checkout paths", async () => {
     const runtime = fakeRuntime(9, {});

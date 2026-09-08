@@ -372,6 +372,17 @@ function requireRole(subject: HubSubject, role: "admin"): HubSubject {
   throw authError("EACCES", `Requires the ${role} role`, 403);
 }
 
+function requireLiveHubSubject(state: HubRuntimeState, subject: HubSubject): void {
+  const user = state.userStore.getUser(subject.userId);
+  if (!user || user.revokedAt !== undefined)
+    throw new Error("Authenticated account is no longer active");
+  if (subject.deviceId) {
+    const device = state.identityDb.getDevice(subject.deviceId);
+    if (!device || device.userId !== subject.userId || device.revokedAt !== undefined)
+      throw new Error("Authenticated device is no longer active");
+  }
+}
+
 /** Display name → opaque stable workspaceId via the registry (WP2 §4). */
 function requireWorkspaceId(state: HubRuntimeState, name: string): string {
   const workspaceId = state.centralData.getWorkspaceIdByName(name);
@@ -473,6 +484,15 @@ function findTargetUser(
  */
 async function recordMembershipOp(state: HubRuntimeState, input: MembershipOpInput): Promise<void> {
   await state.governanceLog?.append(membershipGovernanceRecord(input));
+}
+
+/** Replay the creation owner's committed audit outbox; the ledger deduplicates exact records. */
+async function flushWorkspaceCreationAudits(state: HubRuntimeState): Promise<void> {
+  if (!state.governanceLog) return;
+  for (const record of state.centralData.pendingWorkspaceCreationAudits()) {
+    await state.governanceLog.append(record);
+    state.centralData.acknowledgeWorkspaceCreationAudit(record.operationId!);
+  }
 }
 
 interface MembershipOpInput {
@@ -1615,25 +1635,37 @@ export async function executeHubControl(
     const rootTemplate = opts["rootTemplate"]
       ? WorkspaceTemplatePinSchema.parse(opts["rootTemplate"])
       : undefined;
-    const selectedRoot = selectWorkspaceCreationRootTemplate({
-      appRoot: state.appRoot,
-      ...(rootTemplate ? { requested: rootTemplate } : {}),
-    });
-    const entry = state.centralData.addWorkspaceCreation(name, selectedRoot);
-    try {
-      state.membershipStore.add(subject.userId, entry.workspaceId, subject.userId, "admin");
-      await recordMembershipOp(state, {
-        op: "add-member",
-        actor: subject,
-        target: { userId: subject.userId, handle: subject.handle },
-        workspaceId: entry.workspaceId,
-      });
-    } catch (error) {
-      deleteAndUnregisterWorkspace(name, state.centralData, nativeWorkspaceCleanup(state.appRoot));
-      throw error;
-    }
+    const receipt = state.centralData.createWorkspaceOperation(
+      { userId: subject.userId },
+      {
+        operationId: String(opts["operationId"] ?? ""),
+        workspace: name,
+        ...(rootTemplate ? { rootTemplate } : {}),
+      },
+      () =>
+        selectWorkspaceCreationRootTemplate({
+          appRoot: state.appRoot,
+          ...(rootTemplate ? { requested: rootTemplate } : {}),
+        }),
+      () => {
+        requireLiveHubSubject(state, subject);
+      }
+    );
+    // Failure to deliver an audit or response must never remove a committed workspace.
+    await flushWorkspaceCreationAudits(state);
     emitWorkspaceCatalogChanged(state);
-    respond({ ...entry, running: false, pendingApprovalCount: 0 });
+    respond(receipt);
+    return;
+  }
+  if (method === "workspaceCreationReceipt") {
+    const opts = asRecord(args[0]) ?? {};
+    requireLiveHubSubject(state, subject);
+    respond(
+      state.centralData.workspaceCreationReceipt(
+        { userId: subject.userId },
+        String(opts["operationId"] ?? "")
+      )
+    );
     return;
   }
   if (method === "ensureEphemeralWorkspace") {
@@ -3311,6 +3343,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     runtimes: new Map(),
     shuttingDown: false,
   };
+  await flushWorkspaceCreationAudits(state);
   const activeState = state;
   await startHubControlTransport(activeState, getCentralDataPath());
 
