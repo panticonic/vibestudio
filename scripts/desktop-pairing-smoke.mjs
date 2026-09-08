@@ -46,16 +46,16 @@ import {
   chromePage,
   nativeRpc,
   runSharedMemberRevocation,
+  approveVisibleBrowserImport,
+  browserImportApprovalIdentity,
+  browserImportApprovalRejection,
+  until,
 } from "./lib/desktop-shared-revocation.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mainPath = path.join(repoRoot, "dist", "main.cjs");
-const defaultReadyFile = path.join(
-  os.tmpdir(),
-  `vibestudio-desktop-smoke-ready-${process.pid}.json`
-);
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = "@workspace-apps/shell";
 const ELECTRON_EVALUATE_TIMEOUT_MS = 5_000;
@@ -66,6 +66,224 @@ const sharedDerivedCacheDir = getSharedDerivedDataPath();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function writeBrowserImportFixture(tempRoot) {
+  const profile = path.join(tempRoot, "xdg", "chromium", "Default");
+  await fsp.mkdir(profile, { recursive: true, mode: 0o700 });
+  await fsp.writeFile(path.join(profile, "Preferences"), "{}\n", { mode: 0o600 });
+  await fsp.writeFile(
+    path.join(profile, "Bookmarks"),
+    `${JSON.stringify({
+      version: 1,
+      roots: {
+        bookmark_bar: {
+          type: "folder",
+          name: "Bookmarks bar",
+          children: [
+            {
+              type: "url",
+              id: "fixture-bookmark",
+              name: "Vibestudio browser import fixture",
+              url: "https://fixture.invalid/browser-import",
+              date_added: "13348540800000000",
+            },
+          ],
+        },
+        other: { type: "folder", name: "Other bookmarks", children: [] },
+        synced: { type: "folder", name: "Mobile bookmarks", children: [] },
+      },
+    })}\n`,
+    { mode: 0o600 }
+  );
+}
+
+async function runBrowserImportApprovalAcceptance(app, workspaceId, deadline) {
+  const existingPages = new Set(app.context().pages());
+  if (
+    !(await waitAndClickHostedShellButton(
+      app,
+      /^New panel$/i,
+      Math.max(1_000, deadline - Date.now())
+    ))
+  ) {
+    throw new Error("Personal workspace did not expose its New panel control");
+  }
+  const launcher = await until(
+    async () => {
+      for (const page of app.context().pages()) {
+        if (page.isClosed() || existingPages.has(page)) continue;
+        const source = await page
+          .evaluate(() => globalThis.__vibestudioSourceRepo ?? null)
+          .catch(() => null);
+        if (source === "about/new") return page;
+      }
+      return null;
+    },
+    "opening the Personal panel launcher",
+    deadline
+  );
+  const launcherInput = launcher.getByRole("combobox", {
+    name: "Search panels and history, enter a web address, or start a chat",
+  });
+  await launcherInput.fill("Browser Migration");
+  const browserMigration = launcher.locator('a[href*="about/browser-import-inspector"]').first();
+  await until(
+    () => browserMigration.isVisible().catch(() => false),
+    "finding Browser Migration in the panel launcher",
+    deadline
+  );
+  await fsp.mkdir(screenshotDir, { recursive: true, mode: 0o700 });
+  const launcherScreenshot = path.join(screenshotDir, `browser-import-launcher-${Date.now()}.png`);
+  await launcher.screenshot({ path: launcherScreenshot });
+  console.log(`[desktop-smoke] Browser Import launcher screenshot: ${launcherScreenshot}`);
+  await browserMigration.click();
+
+  let panelPage = null;
+  const approvalIds = [];
+  const decidedImportOperations = new Map();
+  const decidedImportPhases = new Map();
+  const approveNext = async (beforeDecision, predicate) => {
+    const approval = await approveVisibleBrowserImport(
+      app,
+      workspaceId,
+      deadline,
+      beforeDecision,
+      predicate,
+      browserImportApprovalRejection
+    );
+    if (approval) approvalIds.push(approval.approvalId);
+    return approval;
+  };
+  const isFixtureImportApproval = (entry) => browserImportApprovalIdentity(entry) !== null;
+  const rememberImportDecision = (entry) => {
+    const identity = browserImportApprovalIdentity(entry);
+    if (!identity) throw new Error("Browser import selected an unrelated approval");
+    const previous = decidedImportOperations.get(identity.logicalKey);
+    if (previous) {
+      throw new Error(
+        `Browser import repeated its ${identity.phase} authority operation after Allow once: ${previous}`
+      );
+    }
+    const previousPhase = decidedImportPhases.get(identity.phase);
+    if (previousPhase) {
+      throw new Error(
+        `Browser import requested a second ${identity.phase} authority operation after Allow once: ${previousPhase}`
+      );
+    }
+    decidedImportOperations.set(identity.logicalKey, entry.approvalId);
+    decidedImportPhases.set(identity.phase, entry.approvalId);
+    console.log(
+      `[desktop-smoke] Browser Import ${identity.phase} authority ready: capability=${entry.capability}; operationId=${entry.operationId}`
+    );
+  };
+  while (Date.now() < deadline && !panelPage) {
+    for (const page of app.context().pages()) {
+      if (page.isClosed()) continue;
+      const source = await page
+        .evaluate(() => globalThis.__vibestudioSourceRepo ?? null)
+        .catch(() => null);
+      if (source === "about/browser-import-inspector") {
+        panelPage = page;
+        break;
+      }
+    }
+    await approveNext(rememberImportDecision, isFixtureImportApproval);
+    if (!panelPage) await sleep(100);
+  }
+  if (!panelPage) throw new Error("Browser migration product panel did not load");
+
+  const waitForUi = async (read, label) => {
+    while (Date.now() < deadline) {
+      const value = await read();
+      if (value) return value;
+      await approveNext(rememberImportDecision, isFixtureImportApproval);
+      await sleep(100);
+    }
+    throw new Error(`Timed out ${label}`);
+  };
+  const chromium = panelPage
+    .getByRole("button")
+    .filter({
+      has: panelPage.getByText("Chromium", { exact: true }),
+      hasText: "1 local data set",
+    })
+    .first();
+  await waitForUi(() => chromium.isVisible().catch(() => false), "discovering the fixture browser");
+  await chromium.click();
+  const categories = panelPage.getByRole("checkbox");
+  await waitForUi(
+    async () => ((await categories.count()) > 0 ? true : null),
+    "loading browser import choices"
+  );
+  for (const category of await categories.all()) {
+    const label = await category.evaluate(
+      (element) => element.closest("label")?.textContent?.replace(/\s+/g, " ").trim() ?? ""
+    );
+    const shouldSelect = label.startsWith("Bookmarks");
+    const isSelected = (await category.getAttribute("aria-checked")) === "true";
+    if (isSelected !== shouldSelect) await category.click();
+  }
+  const selectedCategories = [];
+  for (const category of await categories.all()) {
+    if ((await category.getAttribute("aria-checked")) !== "true") continue;
+    selectedCategories.push(
+      await category.evaluate(
+        (element) => element.closest("label")?.textContent?.replace(/\s+/g, " ").trim() ?? ""
+      )
+    );
+  }
+  if (selectedCategories.length !== 1 || !selectedCategories[0].startsWith("Bookmarks")) {
+    throw new Error(
+      `Browser import selection was not exactly Bookmarks: ${JSON.stringify(selectedCategories)}`
+    );
+  }
+  const importButton = panelPage.getByRole("button", { name: "Import 1 category" });
+  await importButton.click();
+
+  let importApproval = null;
+  while (Date.now() < deadline && !importApproval) {
+    importApproval = await approveNext(async (entry, card) => {
+      rememberImportDecision(entry);
+      if (!(await importButton.isDisabled())) {
+        throw new Error("Browser migration UI did not remain pending during approval");
+      }
+      if (
+        await panelPage
+          .getByText("Browser records complete", { exact: true })
+          .isVisible()
+          .catch(() => false)
+      ) {
+        throw new Error("Browser import completed before its visible approval was decided");
+      }
+      const approvalScreenshot = path.join(
+        screenshotDir,
+        `browser-import-approval-${Date.now()}.png`
+      );
+      await card.screenshot({ path: approvalScreenshot });
+      await fsp.chmod(approvalScreenshot, 0o600);
+      console.log(`[desktop-smoke] Browser Import approval screenshot: ${approvalScreenshot}`);
+    }, isFixtureImportApproval);
+    if (!importApproval) await sleep(100);
+  }
+  if (!importApproval) throw new Error("Browser import did not request visible approval");
+  const completed = panelPage.getByText("Browser records complete", { exact: true });
+  await waitForUi(() => completed.isVisible().catch(() => false), "resuming the approved import");
+  if (!decidedImportPhases.has("store") || !decidedImportPhases.has("read")) {
+    throw new Error(
+      `Browser import did not traverse both authority owners: ${JSON.stringify([...decidedImportPhases.keys()])}`
+    );
+  }
+  const bookmarkResult = panelPage
+    .getByText("Bookmarks", { exact: true })
+    .locator("..")
+    .locator("..");
+  if (!(await bookmarkResult.getByText("1 stored", { exact: true }).isVisible())) {
+    throw new Error(`Fixture bookmark row did not report one stored record`);
+  }
+  console.log(
+    `[desktop-smoke] Browser import approval passed through product UI; approvals=${approvalIds.length}`
+  );
 }
 
 function evaluateElectron(app, pageFunction, arg, label, timeoutMs = ELECTRON_EVALUATE_TIMEOUT_MS) {
@@ -85,9 +303,10 @@ function parseArgs(argv) {
   const options = {
     timeoutMs: 600_000,
     launchTimeoutMs: 180_000,
-    readyFile: defaultReadyFile,
+    readyFile: null,
     productionBase: false,
     sharedMemberRevocation: false,
+    browserImportApproval: false,
     local: false,
     baseCheckout: null,
     help: false,
@@ -111,6 +330,8 @@ function parseArgs(argv) {
       options.local = true;
     } else if (arg === "--shared-member-revocation") {
       options.sharedMemberRevocation = true;
+    } else if (arg === "--browser-import-approval") {
+      options.browserImportApproval = true;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -145,6 +366,7 @@ Runner options:
                             the selected development checkout.
   --local                  Verify account-only local startup instead of remote pairing.
   --shared-member-revocation Also exercise a second member with an open approval.
+  --browser-import-approval Import fixture bookmarks after visible native approval.
   --help                    Show this help message.
 
 The smoke consumes the hub's one-time root desktop invite and connects through
@@ -1109,9 +1331,12 @@ async function waitForPersonalPanel(app, workspaceId, expectedSource, deadline) 
       if (layout.privateOwnerBands !== 0)
         throw new Error("Private workspaces should show one panel tree without owner bands");
       const page = await chromePage(app, deadline);
-      const snapshot = await nativeRpc(page, workspaceId, "view.getLocalPresentation", [
-        layout.panelId,
-      ]);
+      const snapshot = await nativeRpc(
+        page,
+        { kind: "workspace", workspaceId },
+        "view.getLocalPresentation",
+        [layout.panelId]
+      );
       if (snapshot.presentation.state === "failed")
         throw new Error(`Initial Personal panel failed: ${JSON.stringify(snapshot.presentation)}`);
       if (snapshot.presentation.state !== "ready") {
@@ -1569,9 +1794,11 @@ async function main() {
         }
         await waitForChildExit(child, 30_000);
       }
-      try {
-        await fsp.unlink(options.readyFile);
-      } catch {}
+      if (options.readyFile) {
+        try {
+          await fsp.unlink(options.readyFile);
+        } catch {}
+      }
       for (const environment of desktopEnvironments.toReversed()) {
         try {
           await environment.dispose?.();
@@ -1600,10 +1827,17 @@ async function main() {
   });
 
   try {
-    try {
-      await fsp.unlink(options.readyFile);
-    } catch {}
+    if (options.readyFile) {
+      try {
+        await fsp.unlink(options.readyFile);
+      } catch {}
+    }
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
+    // The implicit ready record belongs to this exact smoke root. Keeping it
+    // inside that root makes process-tree cleanup sufficient even when an
+    // outer test runner terminates the harness before its signal handler runs.
+    options.readyFile ??= path.join(tempRoot, "server-ready.json");
+    if (options.browserImportApproval) await writeBrowserImportFixture(tempRoot);
     desktopEnvironment =
       process.platform === "darwin"
         ? createMacosTestKeychain({ home: path.join(tempRoot, "home"), electronBinary })
@@ -1640,7 +1874,7 @@ async function main() {
     if (developmentBase) {
       serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentBase.pins);
       serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(developmentBase.pins.system);
-      serverEnv.VIBESTUDIO_DEV_TEMPLATE_SOURCES = JSON.stringify(
+      serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
         Object.keys(developmentBase.pins).map((name) => ({
           pin: developmentBase.pins[name],
           checkout: developmentBase.checkouts[name],
@@ -1666,7 +1900,7 @@ async function main() {
           [
             "VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES",
             "VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE",
-            "VIBESTUDIO_DEV_TEMPLATE_SOURCES",
+            "VIBESTUDIO_WORKSPACE_SOURCES",
             "VIBESTUDIO_SHARED_DERIVED_CACHE_DIR",
             "VIBESTUDIO_SERVER_ENTRY",
           ].includes(key)
@@ -1685,7 +1919,7 @@ async function main() {
       await waitForDesktopShell(electronApp, Math.max(1000, deadlineMs - Date.now()));
       await waitForShellOverlayCleared(electronApp, Math.max(1000, deadlineMs - Date.now()));
       const page = await chromePage(electronApp, deadlineMs);
-      const catalog = await nativeRpc(page, undefined, "hubControl.listWorkspaces", []);
+      const catalog = await nativeRpc(page, { kind: "hub" }, "hubControl.listWorkspaces", []);
       if (
         catalog.length !== 2 ||
         !catalog.some((entry) => entry.privateRole === "personal") ||
@@ -1806,7 +2040,12 @@ async function main() {
         ""
     );
     const pairedChrome = await chromePage(electronApp, deadlineMs);
-    const pairedCatalog = await nativeRpc(pairedChrome, undefined, "hubControl.listWorkspaces", []);
+    const pairedCatalog = await nativeRpc(
+      pairedChrome,
+      { kind: "hub" },
+      "hubControl.listWorkspaces",
+      []
+    );
     const pairedPersonal = pairedCatalog.find((entry) => entry.privateRole === "personal");
     if (!pairedPersonal) throw new Error("Paired account is missing Personal");
     await selectWorkspace(electronApp, "Personal", Math.max(1000, deadlineMs - Date.now()));
@@ -1819,6 +2058,9 @@ async function main() {
     console.log(
       `[desktop-smoke] Initial Personal onboarding completed: ${JSON.stringify(onboarding)}`
     );
+    if (options.browserImportApproval) {
+      await runBrowserImportApprovalAcceptance(electronApp, pairedPersonal.workspaceId, deadlineMs);
+    }
     // Native testApi intentionally captures the immutable System controller.
     // Select that same workspace visibly before asserting its panel tree/readiness.
     await selectWorkspace(electronApp, "System", Math.max(1000, deadlineMs - Date.now()));
@@ -1887,7 +2129,7 @@ async function main() {
     const ownerChrome = await chromePage(electronApp, deadlineMs);
     const privateWorkspaces = await nativeRpc(
       ownerChrome,
-      undefined,
+      { kind: "hub" },
       "hubControl.listWorkspaces",
       []
     );
@@ -1934,7 +2176,12 @@ async function main() {
     }
     await selectWorkspace(electronApp, "Personal", 30000);
     const restoredChrome = await chromePage(electronApp, deadlineMs);
-    await nativeRpc(restoredChrome, personalWorkspace.workspaceId, "vcs.mainState", []);
+    await nativeRpc(
+      restoredChrome,
+      { kind: "workspace", workspaceId: personalWorkspace.workspaceId },
+      "vcs.mainState",
+      []
+    );
     const personalIdsAfter = await workspaceTreeIds(electronApp, "Personal", 30000);
     if (JSON.stringify(personalIdsAfter) !== JSON.stringify(personalIdsBefore)) {
       throw new Error("Reconnect changed the retained Personal panel tree");
@@ -1998,14 +2245,14 @@ async function main() {
         },
         prepareWorkspace: async (app, workspace) => {
           const page = await chromePage(app, deadlineMs);
-          await nativeRpc(page, undefined, "hubControl.routeWorkspace", [
+          await nativeRpc(page, { kind: "hub" }, "hubControl.routeWorkspace", [
             { workspaceId: workspace.workspaceId },
           ]);
           await selectWorkspace(app, workspace.name, Math.max(1000, deadlineMs - Date.now()));
           while (Date.now() < deadlineMs) {
             const state = await nativeRpc(
               page,
-              workspace.workspaceId,
+              { kind: "workspace", workspaceId: workspace.workspaceId },
               "shellApproval.getWorkspaceCreationReviewState",
               []
             );

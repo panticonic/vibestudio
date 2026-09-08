@@ -70,8 +70,8 @@ export async function assertBaseCheckoutBootable({ repoRoot, checkout }) {
     .join("\n");
   throw new Error(
     `Base checkout at ${checkout} cannot boot a workspace:\n${detail}\n\n` +
-      `Fix the checkout (for a stale generated manifest: ` +
-      `npx tsx scripts/validate-template-repository.ts ${checkout} --fix), ` +
+      `Fix the source manifest or inventory, then validate with ` +
+      `npx tsx scripts/validate-template-repository.ts ${checkout}, ` +
       `or point this run elsewhere with --base-checkout <dir>.`
   );
 }

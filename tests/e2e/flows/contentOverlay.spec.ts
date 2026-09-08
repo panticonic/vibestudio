@@ -267,7 +267,7 @@ test.describe("Content overlay", () => {
   test("floats the approval card in a native overlay above a live panel", async () => {
     workspacePath = await createManagedTestWorkspace({
       configureSource: (sourceRoot) => {
-        const configPath = path.join(sourceRoot, "meta", "template.yml");
+        const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
         const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as {
           initPanels?: Array<{ source: string }>;
         };

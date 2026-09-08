@@ -36,9 +36,9 @@ describe("Iroh product E2E entry points", () => {
     expect(help("scripts/desktop-pairing-smoke.mjs")).toContain("vibestudio desktop pairing smoke");
     expect(desktop).toContain("waitForShellOverlayCleared");
     expect(desktop).toContain("Approved workspace install review");
-    expect(desktop).toContain("waitForRenderedPanel");
+    expect(desktop).toContain("waitForSystemNewPanel");
     expect(desktop).toContain("createAndWaitForNewPanel");
-    expect(desktop).toContain("Launching Electron with Iroh pairing deep link");
+    expect(desktop).toContain("with Iroh pairing deep link");
   });
 
   it("drives native Android approvals, panels, app relaunch, and server recovery over Iroh", () => {
@@ -48,7 +48,7 @@ describe("Iroh product E2E entry points", () => {
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
       "workspace-panel-ready",
-      "Create new panel",
+      "New panel in System",
       "workspace-recovery-complete",
       "server-restart",
     ]) {

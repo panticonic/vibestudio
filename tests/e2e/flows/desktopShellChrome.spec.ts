@@ -5,7 +5,7 @@ import { viewMethods } from "@vibestudio/service-schemas/view";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
-import type { RpcEnvelope } from "@vibestudio/rpc";
+import { nativeUiRead } from "../support/nativeUiRead";
 
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
@@ -212,66 +212,6 @@ async function approveStartupUnitsIfNeeded(testApp: TestApp): Promise<void> {
     .toBe(true);
 }
 
-/** Read-only assertions use the same admitted native System UI transport as the product. */
-async function nativeWorkspaceRead<T>(
-  page: Page,
-  workspaceId: string | undefined,
-  method: string,
-  args: unknown[]
-): Promise<T> {
-  return page.evaluate(
-    async ({ workspaceId, method, args }) => {
-      const bridge = (
-        window as unknown as {
-          __vibestudioTransport: {
-            identity: { runtimeId: string; workspaceId: string };
-            send(envelope: RpcEnvelope): Promise<void>;
-            onMessage(handler: (envelope: RpcEnvelope) => void): () => void;
-          };
-        }
-      ).__vibestudioTransport;
-      const requestId = `e2e-copy-read-${crypto.randomUUID()}`;
-      return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          off();
-          reject(new Error(`Timed out reading ${method}`));
-        }, 30_000);
-        const off = bridge.onMessage(({ message, delivery }) => {
-          if (message.type !== "response" || message.requestId !== requestId) return;
-          clearTimeout(timer);
-          off();
-          if (delivery.caller.workspaceId !== (workspaceId ?? bridge.identity.workspaceId)) {
-            reject(new Error(`Received ${method} from a different workspace`));
-            return;
-          }
-          if ("error" in message) reject(new Error(message.error));
-          else resolve(message.result as T);
-        });
-        const caller = {
-          callerId: bridge.identity.runtimeId,
-          callerKind: "app" as const,
-          workspaceId: bridge.identity.workspaceId,
-        };
-        void bridge
-          .send({
-            from: caller.callerId,
-            target: "main",
-            destination: { kind: "workspace", workspaceId: workspaceId ?? caller.workspaceId },
-            delivery: { caller },
-            provenance: [caller],
-            message: { type: "request", requestId, fromId: caller.callerId, method, args },
-          })
-          .catch((error) => {
-            clearTimeout(timer);
-            off();
-            reject(error);
-          });
-      });
-    },
-    { workspaceId, method, args }
-  );
-}
-
 test.describe("Desktop Shell Chrome", () => {
   test.setTimeout(240_000);
 
@@ -435,8 +375,7 @@ test.describe("Desktop Shell Chrome", () => {
       const hub = createTypedServiceClient(
         "hubControl",
         hubControlMethods,
-        (service, method, args) =>
-          nativeWorkspaceRead(page, undefined, `${service}.${method}`, args)
+        (service, method, args) => nativeUiRead(page, { kind: "hub" }, `${service}.${method}`, args)
       );
       const workspaces = await hub.listWorkspaces();
       const personal = workspaces.find((workspace) => workspace.privateRole === "personal")!;
@@ -448,7 +387,7 @@ test.describe("Desktop Shell Chrome", () => {
           "shellApproval",
           shellApprovalMethods,
           (service, method, args) =>
-            nativeWorkspaceRead(page, workspaceId, `${service}.${method}`, args)
+            nativeUiRead(page, { kind: "workspace", workspaceId }, `${service}.${method}`, args)
         );
         await expect
           .poll(async () => (await approvals.getWorkspaceCreationReviewState()).status, {
@@ -520,7 +459,7 @@ test.describe("Desktop Shell Chrome", () => {
       await approveVisibleStartupReviews(personal.workspaceId);
       const vcs = (workspaceId: string) =>
         createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
-          nativeWorkspaceRead(page, workspaceId, `${service}.${method}`, args)
+          nativeUiRead(page, { kind: "workspace", workspaceId }, `${service}.${method}`, args)
         );
       const sourceVcs = vcs(personal.workspaceId);
       const targetVcs = vcs(system.workspaceId);
@@ -548,7 +487,12 @@ test.describe("Desktop Shell Chrome", () => {
         "view",
         viewMethods,
         (service, method, args) =>
-          nativeWorkspaceRead(page, personal.workspaceId, `${service}.${method}`, args)
+          nativeUiRead(
+            page,
+            { kind: "workspace", workspaceId: personal.workspaceId },
+            `${service}.${method}`,
+            args
+          )
       );
       const panelId = await page
         .locator("[data-native-panel-slot-id][data-panel-id]")

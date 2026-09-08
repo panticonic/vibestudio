@@ -4,6 +4,11 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { storageCommands } from "./storageCommands.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, statfsSync: vi.fn(actual.statfsSync) };
+});
+
 const originalXdg = process.env["XDG_CONFIG_HOME"];
 const originalInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
 const roots: string[] = [];
@@ -60,6 +65,9 @@ function lastJson(log: ReturnType<typeof vi.spyOn>): { roots: ReportedRoot[] } {
 
 describe("storage commands", () => {
   it("reports and considers only the declared live-safe roots", async () => {
+    // This case covers the size ceiling, independently of the machine's free-disk pressure.
+    const disk = fs.statfsSync(os.tmpdir());
+    vi.spyOn(fs, "statfsSync").mockReturnValue({ ...disk, bavail: 1024 * 1024 * 1024 });
     const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-storage-cli-"));
     roots.push(testRoot);
     process.env["XDG_CONFIG_HOME"] = path.join(testRoot, "xdg");

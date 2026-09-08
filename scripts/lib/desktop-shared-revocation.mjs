@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
 
-async function until(read, label, deadline) {
+export async function until(read, label, deadline) {
   while (Date.now() < deadline) {
     const value = await read();
     if (value) return value;
@@ -26,9 +27,20 @@ export async function chromePage(app, deadline) {
 }
 
 /** Uses the same authenticated native UI carrier as the existing selected-copy E2E. */
-export async function nativeRpc(page, workspaceId, method, args, timeoutMs = 30_000) {
+export async function nativeRpc(page, destination, method, args, timeoutMs = 30_000) {
+  if (
+    !destination ||
+    (destination.kind !== "hub" &&
+      !(
+        destination.kind === "workspace" &&
+        typeof destination.workspaceId === "string" &&
+        destination.workspaceId.length > 0
+      ))
+  ) {
+    throw new Error(`Native RPC ${method} requires an explicit hub or workspace destination`);
+  }
   return page.evaluate(
-    async ({ workspaceId, method, args, timeoutMs }) => {
+    async ({ destination, method, args, timeoutMs }) => {
       const bridge = window.__vibestudioTransport;
       if (!bridge) throw new Error("Native workspace transport is unavailable");
       const requestId = `e2e-revocation-${crypto.randomUUID()}`;
@@ -37,10 +49,18 @@ export async function nativeRpc(page, workspaceId, method, args, timeoutMs = 30_
           off();
           reject(new Error(`Timed out calling ${method}`));
         }, timeoutMs);
-        const off = bridge.onMessage(({ message }) => {
+        const off = bridge.onMessage(({ message, delivery }) => {
           if (message.type !== "response" || message.requestId !== requestId) return;
           clearTimeout(timer);
           off();
+          const responseWorkspaceId = delivery?.caller?.workspaceId;
+          if (
+            (destination.kind === "workspace" && responseWorkspaceId !== destination.workspaceId) ||
+            (destination.kind === "hub" && responseWorkspaceId !== undefined)
+          ) {
+            reject(new Error(`Native RPC ${method} response came from the wrong owner`));
+            return;
+          }
           if ("error" in message) {
             reject(
               Object.assign(new Error(message.error), {
@@ -60,7 +80,7 @@ export async function nativeRpc(page, workspaceId, method, args, timeoutMs = 30_
           .send({
             from: caller.callerId,
             target: "main",
-            destination: { kind: "workspace", workspaceId: workspaceId ?? caller.workspaceId },
+            destination,
             delivery: { caller },
             provenance: [caller],
             message: { type: "request", requestId, fromId: caller.callerId, method, args },
@@ -72,7 +92,7 @@ export async function nativeRpc(page, workspaceId, method, args, timeoutMs = 30_
           });
       });
     },
-    { workspaceId, method, args, timeoutMs }
+    { destination, method, args, timeoutMs }
   );
 }
 
@@ -91,6 +111,133 @@ async function visibleCard(app, approvalId) {
   return (await visibleCards(app, approvalId))[0] ?? null;
 }
 
+const BROWSER_IMPORT_APPROVAL_CAPABILITIES = [
+  { pattern: "userland:workers/browser-data/browser-data.write#*", phase: "store" },
+  { pattern: "service:browserEnvironment.startImportRead", phase: "read" },
+];
+
+/** Identify one authority operation owned by the Browser Data extension's fixture import. */
+export function browserImportApprovalIdentity(entry) {
+  if (
+    entry?.kind !== "capability" ||
+    entry.repoPath !== "extensions/browser-data" ||
+    (entry.requester?.repoPath !== undefined &&
+      entry.requester.repoPath !== "extensions/browser-data")
+  ) {
+    return null;
+  }
+  const matched = BROWSER_IMPORT_APPROVAL_CAPABILITIES.find(({ pattern }) =>
+    capabilityPatternCovers(pattern, entry.capability)
+  );
+  if (!matched || typeof entry.operationId !== "string" || entry.operationId.length === 0)
+    return null;
+  return {
+    phase: matched.phase,
+    logicalKey: JSON.stringify({
+      capability: entry.capability,
+      operationId: entry.operationId,
+      securityIdentity: entry.securityIdentity ?? null,
+      grantResourceKey: entry.grantResourceKey ?? null,
+      resource: entry.resource ?? null,
+    }),
+  };
+}
+
+/** Return bounded identity evidence for a Browser Data approval the harness cannot classify. */
+export function browserImportApprovalRejection(entry) {
+  if (
+    entry?.kind !== "capability" ||
+    (entry.repoPath !== "extensions/browser-data" &&
+      entry.requester?.repoPath !== "extensions/browser-data") ||
+    browserImportApprovalIdentity(entry)
+  ) {
+    return null;
+  }
+  return {
+    approvalId: entry.approvalId ?? null,
+    repoPath: entry.repoPath ?? null,
+    requesterRepoPath: entry.requester?.repoPath ?? null,
+    capability: entry.capability ?? null,
+    operationId: entry.operationId ?? null,
+  };
+}
+
+/** Wait until the queue acknowledges resolution of the exact card that was clicked. */
+export async function waitForApprovalSettlement(readPending, approvalId, deadline) {
+  await until(
+    async () =>
+      (await readPending()).some((entry) => entry.approvalId === approvalId) ? null : true,
+    `settling browser-import approval ${approvalId}`,
+    deadline
+  );
+}
+
+/** Resolve the next browser-import acquisition through its exact visible native card. */
+export async function approveVisibleBrowserImport(
+  app,
+  workspaceId,
+  deadline,
+  beforeDecision,
+  predicate = () => true,
+  rejectedCandidate = () => null
+) {
+  const chrome = await chromePage(app, deadline);
+  while (Date.now() < deadline) {
+    const pending = await nativeRpc(
+      chrome,
+      { kind: "workspace", workspaceId },
+      "shellApproval.listPending",
+      []
+    );
+    const next = pending.find(
+      (entry) =>
+        entry.kind === "capability" &&
+        predicate(entry) &&
+        /browser|import/iu.test(
+          `${entry.capability ?? ""} ${entry.title ?? ""} ${entry.description ?? ""}`
+        )
+    );
+    if (!next) {
+      const rejected = pending.map(rejectedCandidate).find((entry) => entry !== null);
+      if (rejected) {
+        throw new Error(
+          `Browser import exposed an unclassified approval: ${JSON.stringify(rejected)}`
+        );
+      }
+      return null;
+    }
+    const card = await until(
+      async () => {
+        const displayed = await visibleCard(app, next.approvalId);
+        if (displayed) return displayed;
+        for (const page of app.context().pages()) {
+          if (page.isClosed()) continue;
+          const pill = page.locator("[data-approval-pill]:visible").first();
+          if (await pill.isVisible().catch(() => false)) await pill.click();
+        }
+        return null;
+      },
+      `displaying browser-import approval ${next.approvalId}`,
+      deadline
+    );
+    const once = card.locator('[data-approval-decision="once"]');
+    if (!(await once.isEnabled()))
+      throw new Error("Browser-import approval has no enabled one-time decision");
+    await beforeDecision?.(next, card);
+    await once.click();
+    await waitForApprovalSettlement(
+      () => nativeRpc(chrome, { kind: "workspace", workspaceId }, "shellApproval.listPending", []),
+      next.approvalId,
+      deadline
+    );
+    console.log(
+      `[desktop-smoke] Approved and settled browser-import acquisition ${next.approvalId} through visible chrome`
+    );
+    return next;
+  }
+  return null;
+}
+
 /** Additional native acceptance using the smoke's existing launch/cleanup owner.
  * launchMember must isolate both profile and native credential-store state and
  * register the application for teardown before waiting for its readiness.
@@ -105,11 +252,11 @@ export async function runSharedMemberRevocation({
   const deadline = Date.now() + timeoutMs;
   const owner = await chromePage(ownerApp, deadline);
   const workspaceName = `approval-revocation-${randomUUID().slice(0, 8)}`;
-  const workspace = await nativeRpc(owner, undefined, "hubControl.createWorkspace", [
-    { workspace: workspaceName },
+  const workspace = await nativeRpc(owner, { kind: "hub" }, "hubControl.createWorkspace", [
+    { operationId: randomUUID(), workspace: workspaceName },
   ]);
   await prepareWorkspace(ownerApp, workspace);
-  const invitation = await nativeRpc(owner, undefined, "hubControl.inviteUser", [
+  const invitation = await nativeRpc(owner, { kind: "hub" }, "hubControl.inviteUser", [
     {
       handle: `revocation-${randomUUID().slice(0, 8)}`,
       displayName: "Revocation acceptance member",
@@ -121,7 +268,35 @@ export async function runSharedMemberRevocation({
   const memberApp = await launchMember(invitation.pairing.deepLink);
   const member = await chromePage(memberApp, deadline);
   const memberWorkspace = await prepareWorkspace(memberApp, workspace);
-  const membership = await nativeRpc(owner, undefined, "hubControl.listWorkspaceMembers", [
+  const ownerCatalog = await nativeRpc(owner, { kind: "hub" }, "hubControl.listWorkspaces", []);
+  const memberCatalog = await nativeRpc(member, { kind: "hub" }, "hubControl.listWorkspaces", []);
+  const privatePair = (rows) =>
+    rows.filter((entry) => entry.privateRole === "personal" || entry.privateRole === "system");
+  const ownerPrivate = privatePair(ownerCatalog);
+  const memberPrivate = privatePair(memberCatalog);
+  for (const [label, rows] of [
+    ["owner", ownerPrivate],
+    ["member", memberPrivate],
+  ]) {
+    if (
+      rows.length !== 2 ||
+      !rows.some((entry) => entry.privateRole === "personal") ||
+      !rows.some((entry) => entry.privateRole === "system")
+    ) {
+      throw new Error(`${label} did not receive exactly one Personal/System pair`);
+    }
+  }
+  const ownerPrivateIds = new Set(ownerPrivate.map((entry) => entry.workspaceId));
+  const memberPrivateIds = new Set(memberPrivate.map((entry) => entry.workspaceId));
+  if ([...ownerPrivateIds].some((workspaceId) => memberPrivateIds.has(workspaceId)))
+    throw new Error("Two authenticated users were assigned the same private workspace");
+  if (
+    memberCatalog.some((entry) => ownerPrivateIds.has(entry.workspaceId)) ||
+    ownerCatalog.some((entry) => memberPrivateIds.has(entry.workspaceId))
+  ) {
+    throw new Error("A private workspace appeared in the other user's authenticated catalog");
+  }
+  const membership = await nativeRpc(owner, { kind: "hub" }, "hubControl.listWorkspaceMembers", [
     { workspace: workspaceName },
   ]);
   const memberRow = membership.members.find((entry) => entry.userId === invitation.user.userId);
@@ -151,7 +326,7 @@ export async function runSharedMemberRevocation({
   let settledRequest;
   const requestOutcome = nativeRpc(
     member,
-    workspace.workspaceId,
+    { kind: "workspace", workspaceId: workspace.workspaceId },
     "browserPermissions.request",
     [
       {
@@ -177,7 +352,12 @@ export async function runSharedMemberRevocation({
   const pending = await until(
     async () => {
       requirePendingRequest();
-      const rows = await nativeRpc(member, workspace.workspaceId, "shellApproval.listPending", []);
+      const rows = await nativeRpc(
+        member,
+        { kind: "workspace", workspaceId: workspace.workspaceId },
+        "shellApproval.listPending",
+        []
+      );
       requirePendingRequest();
       return rows.find(
         (entry) => entry.kind === "browser-permission" && entry.panelId === panel.id
@@ -190,7 +370,7 @@ export async function runSharedMemberRevocation({
     throw new Error("Website approval belongs to a different account");
   const ownerPending = await nativeRpc(
     owner,
-    workspace.workspaceId,
+    { kind: "workspace", workspaceId: workspace.workspaceId },
     "shellApproval.listPending",
     []
   );
@@ -231,7 +411,7 @@ export async function runSharedMemberRevocation({
   ];
   let removalChallenge;
   try {
-    await nativeRpc(owner, undefined, "hubControl.removeWorkspaceMember", removalArgs);
+    await nativeRpc(owner, { kind: "hub" }, "hubControl.removeWorkspaceMember", removalArgs);
   } catch (error) {
     removalChallenge = error;
   }
@@ -251,9 +431,14 @@ export async function runSharedMemberRevocation({
   }
   const removalPending = await until(
     async () => {
-      const workspaces = await nativeRpc(owner, undefined, "hubControl.listWorkspaces", []);
+      const workspaces = await nativeRpc(owner, { kind: "hub" }, "hubControl.listWorkspaces", []);
       for (const candidate of workspaces) {
-        const rows = await nativeRpc(owner, candidate.workspaceId, "shellApproval.listPending", []);
+        const rows = await nativeRpc(
+          owner,
+          { kind: "workspace", workspaceId: candidate.workspaceId },
+          "shellApproval.listPending",
+          []
+        );
         const pending = rows.find(
           (entry) => entry.kind === "capability" && entry.title === "Remove a workspace member"
         );
@@ -297,7 +482,7 @@ export async function runSharedMemberRevocation({
   );
   const removal = await nativeRpc(
     owner,
-    undefined,
+    { kind: "hub" },
     "hubControl.removeWorkspaceMember",
     removalArgs
   );
@@ -308,10 +493,12 @@ export async function runSharedMemberRevocation({
   // session, even if revocation already removed its visible card.
   let staleDecisionError;
   try {
-    await nativeRpc(member, workspace.workspaceId, "shellApproval.resolve", [
-      pending.approvalId,
-      "once",
-    ]);
+    await nativeRpc(
+      member,
+      { kind: "workspace", workspaceId: workspace.workspaceId },
+      "shellApproval.resolve",
+      [pending.approvalId, "once"]
+    );
   } catch (error) {
     staleDecisionError = error.message;
   }
@@ -341,13 +528,23 @@ export async function runSharedMemberRevocation({
     throw new Error("Revoked member granted the pending website permission");
   if (outcome.error && /Timed out/.test(outcome.error))
     throw new Error("Revocation left the original approval request unresolved");
-  const memberWorkspaces = await nativeRpc(member, undefined, "hubControl.listWorkspaces", []);
+  const memberWorkspaces = await nativeRpc(
+    member,
+    { kind: "hub" },
+    "hubControl.listWorkspaces",
+    []
+  );
   if (memberWorkspaces.some((entry) => entry.workspaceId === workspace.workspaceId))
     throw new Error("Revoked workspace remains available to the member");
-  const ownerWorkspaces = await nativeRpc(owner, undefined, "hubControl.listWorkspaces", []);
+  const ownerWorkspaces = await nativeRpc(owner, { kind: "hub" }, "hubControl.listWorkspaces", []);
   if (!ownerWorkspaces.some((entry) => entry.workspaceId === workspace.workspaceId))
     throw new Error("Member revocation removed the owner's access");
-  const ownerState = await nativeRpc(owner, workspace.workspaceId, "vcs.mainState", []);
+  const ownerState = await nativeRpc(
+    owner,
+    { kind: "workspace", workspaceId: workspace.workspaceId },
+    "vcs.mainState",
+    []
+  );
   if (ownerState.kind !== "event")
     throw new Error("Owner workspace reads stopped after revocation");
   const receipt = {
@@ -359,6 +556,8 @@ export async function runSharedMemberRevocation({
     removalApprovalWorkspaceId: removalPending.workspaceId,
     visibleBeforeRevocation: true,
     ordinaryMember: true,
+    uniquePrivatePairs: true,
+    privateCatalogsIsolated: true,
     ownerCouldNotSeePrivateApproval: true,
     removal,
     staleDecisionRejected: true,

@@ -2746,7 +2746,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     // Both outbound calls carried the SAME run signal in their options.
     expect(seenOptions).toHaveLength(2);
     for (const { options } of seenOptions) {
-      expect((options as { signal?: AbortSignal }).signal).toBe(controller.signal);
+      expect((options as { signal?: AbortSignal }).signal?.aborted).toBe(false);
       expect((options as RpcCallOptions).causalParent).toEqual({
         kind: "trajectory-invocation",
         logId: "trajectory:bound",
@@ -2754,8 +2754,13 @@ describe("EvalDO cancellation + forced recovery", () => {
         invocationId: "invocation:parent",
       });
     }
-    // And aborting the run's controller would unwind those calls (rpc client honors options.signal).
-    expect(controller.signal.aborted).toBe(false);
+    // The run composes caller cancellation with callback-failure cancellation.
+    // Both outbound operations must still observe the caller's abort.
+    controller.abort(new Error("cancel test run"));
+    for (const { options } of seenOptions) {
+      expect((options as { signal?: AbortSignal }).signal?.aborted).toBe(true);
+      expect((options as { signal?: AbortSignal }).signal?.reason).toBe(controller.signal.reason);
+    }
   });
 
   it("detaches only post-settlement cleanup calls from the aborted run signal", async () => {

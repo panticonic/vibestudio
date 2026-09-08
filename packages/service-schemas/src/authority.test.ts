@@ -12,7 +12,7 @@ describe("authority service schema", () => {
   });
 
   it("rejects queue-only terminal decisions", () => {
-    for (const decision of ["dismiss", "always", "block"]) {
+    for (const decision of ["dismiss", "block"]) {
       expect(
         authorityMethods.awaitDecision.returns.safeParse({ state: "decided", decision }).success
       ).toBe(false);

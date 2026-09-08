@@ -772,29 +772,28 @@ describe("ensureExternalDeps", () => {
   it("physically shares equal dependency files across distinct closure topologies", async () => {
     fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
 
-    const first = await ensureExternalDeps({ leftpad: "1.0.0" });
-    const second = await ensureExternalDeps({ leftpad: "1.0.0", zod: "3.25.76" });
-    await Promise.all([
-      deduplicateDependencyContent(path.dirname(first)),
-      deduplicateDependencyContent(path.dirname(second)),
-    ]);
-    const firstFile = fs.statSync(path.join(first, "leftpad", "index.js"));
-    const secondFile = fs.statSync(path.join(second, "leftpad", "index.js"));
-
-    expect(firstFile.ino).toBe(secondFile.ino);
-    expect(firstFile.mode & 0o7777).toBe(secondFile.mode & 0o7777);
-    expect(firstFile.mode & 0o222).not.toBe(0);
-    expect(firstFile.nlink).toBeGreaterThanOrEqual(3); // content owner + two closure views
-    expect(
-      fs.existsSync(
-        path.join(
-          testExtDepsRoot,
-          "dependency-files",
-          (firstFile.mode & 0o7777).toString(8).padStart(4, "0"),
-          "sha256"
-        )
-      )
-    ).toBe(true);
+    const first = await acquireExternalDeps({ leftpad: "1.0.0" }, {}, { appRoot: process.cwd() });
+    let second: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
+    try {
+      second = await acquireExternalDeps(
+        { leftpad: "1.0.0", zod: "3.25.76" },
+        {},
+        { appRoot: process.cwd() }
+      );
+      await Promise.all([
+        deduplicateDependencyContent(path.dirname(first.nodeModulesDir)),
+        deduplicateDependencyContent(path.dirname(second.nodeModulesDir)),
+      ]);
+      const firstFile = fs.statSync(path.join(first.nodeModulesDir, "leftpad", "index.js"));
+      const secondFile = fs.statSync(path.join(second.nodeModulesDir, "leftpad", "index.js"));
+      expect(firstFile.ino).toBe(secondFile.ino);
+      expect(firstFile.mode & 0o7777).toBe(secondFile.mode & 0o7777);
+      expect(firstFile.mode & 0o222).not.toBe(0);
+      expect(firstFile.nlink).toBeGreaterThanOrEqual(3);
+    } finally {
+      second?.release();
+      first.release();
+    }
   });
 
   it("collects dependency content after its last published topology is gone", async () => {

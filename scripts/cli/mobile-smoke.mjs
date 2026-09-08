@@ -2080,7 +2080,7 @@ async function main() {
     if (developmentBase) {
       serverEnv.VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES = JSON.stringify(developmentBase.pins);
       serverEnv.VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE = JSON.stringify(developmentBase.pins.base);
-      serverEnv.VIBESTUDIO_DEV_TEMPLATE_SOURCES = JSON.stringify(
+      serverEnv.VIBESTUDIO_WORKSPACE_SOURCES = JSON.stringify(
         Object.keys(developmentBase.pins).map((name) => ({
           pin: developmentBase.pins[name],
           checkout: developmentBase.checkouts[name],

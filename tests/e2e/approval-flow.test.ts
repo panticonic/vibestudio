@@ -77,7 +77,10 @@ async function createHarness(): Promise<Harness> {
     isMember: (userId: string) => userId === "u-member",
     isAdmin: () => false,
   };
-  const approvalQueue = createApprovalQueue({ eventService: new EventService(), workspaceAccess });
+  const approvalQueue = createApprovalQueue({
+    eventService: new EventService(),
+    scopeAccess: workspaceAccess,
+  });
   const metrics = createPushMetrics();
   const pushService = createPushService({
     workspaceId: "ws-test",
@@ -94,7 +97,7 @@ async function createHarness(): Promise<Harness> {
   const shellApprovalService = createShellApprovalService({
     approvalQueue,
     metrics,
-    workspaceAccess,
+    scopeAccess: workspaceAccess,
   });
   const services = {
     push: pushService.definition,
@@ -116,7 +119,7 @@ async function createHarness(): Promise<Harness> {
     // The single member whose devices (mobile + desktop) form the push
     // audience for this workspace's approvals (WP4 §4.4).
     workspaceMemberUserIds: () => ["u-member"],
-    workspaceAccess,
+    scopeAccess: workspaceAccess,
   });
   return {
     approvalQueue,

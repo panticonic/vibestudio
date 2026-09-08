@@ -11,6 +11,7 @@ import {
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
+  getPanelReadiness,
   getPanelText,
   hasElectronDisplay,
   launchTestApp,
@@ -21,7 +22,7 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function configureWithoutBrowserDataExtension(sourceRoot: string): void {
-  const configPath = path.join(sourceRoot, "meta", "template.yml");
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as {
     initPanels?: Array<{ source: string }>;
     extensions?: Array<{ source: string }>;
@@ -40,7 +41,9 @@ test.describe("Browser panel startup", () => {
     test.setTimeout(240_000);
     const server = http.createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      response.end("<!doctype html><title>Browser fixture</title><p>Browser panel is ready</p>");
+      response.end(
+        '<!doctype html><title>Browser fixture</title><p>Browser panel is ready</p><a id="add-workspace" href="vibestudio://surface?v=1&amp;kind=workspace-chooser&amp;source=https%3A%2F%2Fexample.test%2Flinked-workspace.git">Add linked workspace</a>'
+      );
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -71,6 +74,32 @@ test.describe("Browser panel startup", () => {
           timeout: 30_000,
         })
         .toContain("Browser panel is ready");
+
+      const browserReadiness = await getPanelReadiness(testApp, readiness.panelId);
+      if (browserReadiness.presentation.state !== "ready")
+        throw new Error("Browser panel did not reach native readiness");
+      await testApp.app.evaluate(async ({ webContents }, webContentsId) => {
+        const contents = webContents.fromId(webContentsId);
+        if (!contents) throw new Error("Browser panel WebContents is unavailable");
+        await contents.executeJavaScript(
+          `document.querySelector('#add-workspace').click()`
+        );
+      }, browserReadiness.presentation.webContentsId);
+      let shell: import("@playwright/test").Page | undefined;
+      await expect
+        .poll(async () => {
+          for (const page of testApp!.app.context().pages()) {
+            if (await page.getByRole("textbox", { name: "Workspace source address" }).count()) {
+              shell = page;
+              return true;
+            }
+          }
+          return false;
+        })
+        .toBe(true);
+      await expect(shell!.getByRole("textbox", { name: "Workspace source address" })).toHaveValue(
+        "https://example.test/linked-workspace.git"
+      );
     } finally {
       await testApp?.cleanup();
       removeManagedTestWorkspace(workspacePath);

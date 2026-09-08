@@ -43,7 +43,7 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function configureInitialPanel(sourceRoot: string, source: string): void {
-  const configPath = path.join(sourceRoot, "meta", "template.yml");
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config["initPanels"] = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");

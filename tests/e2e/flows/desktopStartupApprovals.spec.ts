@@ -22,6 +22,7 @@ import {
   executePanelScript,
   type TestApp,
 } from "../../setup/electronSetup";
+import { findWorkspaceShellPage } from "../support/workspaceCreation";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -165,7 +166,7 @@ function configureWorkspaceSourceForApproval(
     ].join("\n"),
     "utf8"
   );
-  const configPath = path.join(sourceRoot, "meta", "template.yml");
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
     template?: { repositories?: string[] };
     defaultAgentConfig?: { model?: string };
@@ -1538,6 +1539,25 @@ test.describe("Desktop Startup Approvals", () => {
           { timeout: 30_000, intervals: [250, 500, 1000] }
         )
         .toBe(true);
+      const shellPage = await findWorkspaceShellPage(testApp);
+      expect(
+        await executePanelScript<boolean>(
+          testApp,
+          onboardingPanel.id,
+          `(() => {
+            const link = Array.from(document.querySelectorAll('a')).find(
+              (candidate) => candidate.textContent?.trim() === 'Open workspace chooser'
+            );
+            if (!(link instanceof HTMLAnchorElement)) return false;
+            link.click();
+            return true;
+          })()`
+        )
+      ).toBe(true);
+      await expect(
+        shellPage.getByRole("button", { name: "New workspace", exact: true })
+      ).toBeVisible({ timeout: 30_000 });
+      await shellPage.keyboard.press("Escape");
       const readiness = await callTestApi<PanelReadinessSnapshot>(testApp, "getPanelReadiness", [
         onboardingPanel.id,
       ]);
@@ -1720,7 +1740,7 @@ test.describe("Desktop Startup Approvals", () => {
       workspaceKind: "personal",
       configureSource: (sourceRoot) => {
         configureWorkspaceSourceForApproval(sourceRoot);
-        const configPath = path.join(sourceRoot, "meta", "template.yml");
+        const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
         const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
           initPanels?: unknown[];
         };
