@@ -279,6 +279,11 @@ test("website SDK requires explicit connection and retires access on document re
     await clickPanelSelector(app, panel.id, "#create");
     const creationApproval = await visibleConnectionApproval("workspaces.create");
     await expect(creationApproval).toContainText(`127.0.0.1:${address.port}`);
+    await expect(creationApproval).toContainText(
+      "Create “website-installation-acceptance” workspace"
+    );
+    await expect(creationApproval).toContainText(templatePin.url);
+    await expect(creationApproval).toContainText(templatePin.commit);
     await clickApproval(creationApproval.getByRole("button", { name: "Allow once", exact: true }));
     await expect.poll(text).toContain("created:ws_");
     await reloadPanel(app, panel.id);
