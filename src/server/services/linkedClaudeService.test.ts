@@ -6,6 +6,7 @@ import { claudeLaunchProfile } from "@vibestudio/shared/claudeLaunchProfile";
 import {
   assertLinkedClaudeBinding,
   createLinkedClaudeService,
+  linkedClaudeHeadlessArguments,
   type LinkedClaudeExecution,
   type LinkedClaudeServiceDeps,
 } from "./linkedClaudeService.js";
@@ -45,16 +46,20 @@ function caller(connection = new AbortController()): {
   };
 }
 async function execution() {
-  const child = spawn(
-    process.execPath,
-    ["-e", 'process.stdout.write("ready\\n");setInterval(()=>{},1000)'],
-    { stdio: ["ignore", "pipe", "pipe"] }
-  );
-  await once(child, "spawn");
+  const start = async () => {
+    const child = spawn(
+      process.execPath,
+      ["-e", 'process.stdout.write("ready\\n");setInterval(()=>{},1000)'],
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
+    await once(child, "spawn");
+    return child;
+  };
+  const child = await start();
   const cleanup = vi.fn(async () => {
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
   });
-  return { child, cleanup };
+  return { child, cleanup, continue: vi.fn(start) };
 }
 function fixture(launch: NonNullable<LinkedClaudeServiceDeps["launch"]>) {
   const service = createLinkedClaudeService({
@@ -76,6 +81,16 @@ function fixture(launch: NonNullable<LinkedClaudeServiceDeps["launch"]>) {
   return service;
 }
 describe("trusted linked Claude generation lifetime", () => {
+  it("pins the first conversation id and resumes that exact id on follow-up", () => {
+    expect(linkedClaudeHeadlessArguments(input, undefined, reference.generationId)).toEqual(
+      expect.arrayContaining(["--session-id", reference.generationId])
+    );
+    const resumed = linkedClaudeHeadlessArguments({ prompt: "follow up" }, reference.generationId);
+    expect(resumed).toEqual(
+      expect.arrayContaining(["--resume", reference.generationId, "-p", "follow up"])
+    );
+    expect(resumed).not.toContain("--session-id");
+  });
   it("binds inspection and stop to the actual live connection, not a copied runtime identity", async () => {
     const owned = await execution();
     const service = fixture(async () => owned);
@@ -156,15 +171,46 @@ describe("trusted linked Claude generation lifetime", () => {
     const service = fixture(async () => owned);
     const owner = caller();
     await service.handler(owner.ctx, "start", [input]);
-    // Natural exit attempts cleanup. Its failure must not lose the generation.
+    // Natural exit retains the profile so the conversation remains resumable.
     owned.child.kill();
-    await once(owned.child, "exit");
-    await vi.waitFor(() => expect(owned.cleanup).toHaveBeenCalledOnce());
+    await once(owned.child, "close");
+    expect(owned.cleanup).not.toHaveBeenCalled();
     expect(await service.handler(owner.ctx, "inspect", [reference])).toMatchObject({
       state: "exited",
     });
+    await expect(service.handler(owner.ctx, "stop", [reference])).rejects.toThrow("cleanup denied");
     await service.handler(owner.ctx, "stop", [reference]);
     expect(owned.cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues an exited conversation in the retained generation", async () => {
+    const owned = await execution();
+    const service = fixture(async () => owned);
+    const owner = caller();
+    await service.handler(owner.ctx, "start", [input]);
+    owned.child.kill();
+    await once(owned.child, "close");
+
+    const resumed = await service.handler(owner.ctx, "continue", [
+      {
+        ...reference,
+        sessionId: "123e4567-e89b-12d3-a456-426614174000",
+        prompt: "follow up",
+      },
+    ]);
+    expect(owned.continue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "123e4567-e89b-12d3-a456-426614174000",
+        prompt: "follow up",
+      })
+    );
+    expect(resumed).toMatchObject({ state: "running", exit: null });
+    expect(owned.cleanup).not.toHaveBeenCalled();
+    await service.handler(owner.ctx, "interrupt", [reference]);
+    expect(owned.cleanup).not.toHaveBeenCalled();
+    expect(await service.handler(owner.ctx, "inspect", [reference])).toMatchObject({
+      state: "exited",
+    });
   });
 });
 

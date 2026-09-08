@@ -26,6 +26,19 @@ export const linkedClaudeStartSchema = z
   })
   .strict();
 export type LinkedClaudeStart = z.infer<typeof linkedClaudeStartSchema>;
+export const linkedClaudeContinueSchema = z
+  .object({
+    entityId: id,
+    generationId: id,
+    sessionId: z.string().uuid(),
+    prompt: z
+      .string()
+      .min(1)
+      .max(1024 * 1024),
+    options: linkedClaudeOptionsSchema.optional(),
+  })
+  .strict();
+export type LinkedClaudeContinue = z.infer<typeof linkedClaudeContinueSchema>;
 export const linkedClaudeSnapshotSchema = z
   .object({
     generationId: id,
@@ -73,6 +86,31 @@ export const linkedClaudeMethods = defineServiceMethods({
         "Runs a linked provider only for an active agent session owned by the authenticated caller",
     },
     args: z.tuple([linkedClaudeStartSchema]),
+    returns: linkedClaudeSnapshotSchema,
+    access: { sensitivity: "write" },
+  },
+  continue: {
+    website: {
+      kind: "closed",
+      reason:
+        "The linkedClaude receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    description: "Continue an owned linked Claude conversation in its retained host profile",
+    tier: controlTier,
+    args: z.tuple([linkedClaudeContinueSchema]),
+    returns: linkedClaudeSnapshotSchema,
+    access: { sensitivity: "write" },
+  },
+  interrupt: {
+    website: {
+      kind: "closed",
+      reason:
+        "The linkedClaude receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    description:
+      "Stop the active turn of an owned linked Claude conversation without retiring its profile",
+    tier: controlTier,
+    args: z.tuple([reference]),
     returns: linkedClaudeSnapshotSchema,
     access: { sensitivity: "write" },
   },

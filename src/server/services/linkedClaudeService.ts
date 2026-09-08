@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   linkedClaudeMethods,
+  type LinkedClaudeContinue,
   type LinkedClaudeStart,
   type LinkedClaudeSnapshot,
 } from "@vibestudio/service-schemas/linkedClaude";
@@ -71,6 +72,7 @@ export interface LinkedClaudeResources {
 }
 export interface LinkedClaudeExecution extends LinkedClaudeResources {
   child: ChildProcess;
+  continue(input: LinkedClaudeContinue): Promise<ChildProcess>;
 }
 export interface LinkedClaudeServiceDeps {
   appRoot: string;
@@ -86,7 +88,11 @@ export interface LinkedClaudeServiceDeps {
   ) => Promise<LinkedClaudeExecution>;
 }
 
-function headlessArguments(input: LinkedClaudeStart): string[] {
+export function linkedClaudeHeadlessArguments(
+  input: Pick<LinkedClaudeStart, "prompt" | "options">,
+  resumeSessionId?: string,
+  initialSessionId?: string
+): string[] {
   const options = input.options ?? {};
   const args = ["--permission-mode", options.permissionMode ?? "auto"];
   for (const [key, flag] of [
@@ -99,6 +105,11 @@ function headlessArguments(input: LinkedClaudeStart): string[] {
   }
   return [
     ...args,
+    ...(resumeSessionId
+      ? ["--resume", resumeSessionId]
+      : initialSessionId
+        ? ["--session-id", initialSessionId]
+        : []),
     "--output-format",
     "stream-json",
     "--verbose",
@@ -225,24 +236,40 @@ export function createLinkedClaudeService(
       // Register owner resources before any preparation can reject. The same
       // retirement operation retries them even when no child was ever created.
       retain(resources);
-      materialized.argv.push(...headlessArguments(input));
-      const confined = await prepareInstalledClaudeLaunch(
-        materialized,
-        paths.contextDirectory,
-        deps.appRoot
-      );
-      const child = spawn(confined.command, confined.args, {
-        cwd: paths.contextDirectory,
-        env: confined.env,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      await new Promise<void>((resolve, reject) => {
-        child.once("spawn", resolve);
-        child.once("error", reject);
-      });
+      const baseArgv = [...materialized.argv];
+      const start = async (
+        turn: Pick<LinkedClaudeStart, "prompt" | "options">,
+        sessionId?: string,
+        initialSessionId?: string
+      ) => {
+        materialized.argv = [
+          ...baseArgv,
+          ...linkedClaudeHeadlessArguments(turn, sessionId, initialSessionId),
+        ];
+        const confined = await prepareInstalledClaudeLaunch(
+          materialized,
+          paths.contextDirectory,
+          deps.appRoot
+        );
+        const child = spawn(confined.command, confined.args, {
+          cwd: paths.contextDirectory,
+          env: confined.env,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+        await new Promise<void>((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+        return child;
+      };
+      const child = await start(input, undefined, input.profile.launchId);
       started = true;
-      return { child, cleanup: resources.cleanup };
+      return {
+        child,
+        cleanup: resources.cleanup,
+        continue: (next) => start(next, next.sessionId),
+      };
     });
   const requireSession = (
     ctx: ServiceContext,
@@ -259,6 +286,33 @@ export function createLinkedClaudeService(
         code: "EACCES",
       });
     return session;
+  };
+  const observeChild = (session: Session, child: ChildProcess) => {
+    session.execution!.child = child;
+    session.snapshot = {
+      ...session.snapshot,
+      state: "running",
+      pid: child.pid ?? null,
+      exit: null,
+      log: { bytes: 0, tail: "", truncated: false },
+    };
+    for (const stream of [child.stdout, child.stderr])
+      stream?.on("data", (chunk) => {
+        const log = session.snapshot.log;
+        log.bytes += Buffer.byteLength(chunk);
+        log.tail = Buffer.from(log.tail + String(chunk))
+          .subarray(-262144)
+          .toString("utf8");
+        log.truncated = log.bytes > Buffer.byteLength(log.tail);
+      });
+    const exited = (code: number | null, signal: string | null) => {
+      session.snapshot.state = "exited";
+      session.snapshot.exit = { code, signal, at: new Date().toISOString() };
+    };
+    child.once("close", exited);
+    child.on("error", (error) => console.warn("Linked Claude process error", error.message));
+    if (child.exitCode !== null || child.signalCode !== null)
+      exited(child.exitCode, child.signalCode);
   };
   return {
     name: "linkedClaude",
@@ -305,28 +359,7 @@ export function createLinkedClaudeService(
           } finally {
             prepared();
           }
-          const child = session.execution.child;
-          session.snapshot.pid = child.pid ?? null;
-          for (const stream of [child.stdout, child.stderr])
-            stream?.on("data", (chunk) => {
-              const log = session.snapshot.log;
-              log.bytes += Buffer.byteLength(chunk);
-              log.tail = Buffer.from(log.tail + String(chunk))
-                .subarray(-262144)
-                .toString("utf8");
-              log.truncated = log.bytes > Buffer.byteLength(log.tail);
-            });
-          const exited = (code: number | null, signal: string | null) => {
-            session.snapshot.state = "exited";
-            session.snapshot.exit = { code, signal, at: new Date().toISOString() };
-            void finish(session).catch((error) =>
-              console.warn("Linked Claude cleanup failed", error.message)
-            );
-          };
-          child.once("close", exited);
-          child.on("error", (error) => console.warn("Linked Claude process error", error.message));
-          if (child.exitCode !== null || child.signalCode !== null)
-            exited(child.exitCode, child.signalCode);
+          observeChild(session, session.execution.child);
           if (stopped || identity.connection.aborted) {
             await retire(session);
             throw new Error("Linked Claude caller disconnected during startup");
@@ -352,6 +385,24 @@ export function createLinkedClaudeService(
           }
           throw error;
         }
+      },
+      continue: async (ctx, [input]) => {
+        const session = requireSession(ctx, input);
+        if (session.snapshot.state !== "exited" || !session.execution)
+          throw new Error("Linked Claude generation is not idle");
+        const child = await session.execution.continue(input);
+        observeChild(session, child);
+        return structuredClone(session.snapshot);
+      },
+      interrupt: async (ctx, [reference]) => {
+        const session = requireSession(ctx, reference);
+        const child = session.execution?.child;
+        if (child && child.exitCode === null && child.signalCode === null) {
+          const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+          child.kill("SIGTERM");
+          await closed;
+        }
+        return structuredClone(session.snapshot);
       },
       inspect: (ctx, [reference]) => structuredClone(requireSession(ctx, reference).snapshot),
       stop: async (ctx, [reference]) => {
